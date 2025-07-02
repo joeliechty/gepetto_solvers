@@ -1,0 +1,56 @@
+# Build directories
+/build/
+/cmake-build-debug/
+/cmake-build-release/
+/out/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Executables and libraries
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+
+# Object files and intermediate files
+*.o
+*.obj
+*.lo
+*.la
+*.al
+*.libs
+
+# Debug files
+*.pdb
+*.ilk
+*.idb
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# GTSAM specific: if you built GTSAM inside your repo (not recommended)
+gtsam/build/
+gtsam/cmake-build-debug/
+gtsam/cmake-build-release/
+
+# User-specific files
+*.user
+*.userprefs
