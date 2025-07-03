@@ -29,6 +29,7 @@ ament_target_dependencies(tendon_robot_solver
   rclcpp
   geometry_msgs
   sensor_msgs
+  visualization_msgs
 )
 
 

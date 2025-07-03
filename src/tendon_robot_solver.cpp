@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -9,18 +10,16 @@
 
 #include "tendon_robot_gtsam.h"
 
-void publish_uncertainty_cloud(
+sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
     const std::vector<gtsam::Pose3>& poses,
     const std::vector<gtsam::Matrix6>& covariances,
-    const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr& cloud_pub,
+    const int num_samples_per_pose,
+    const std::string frame_id,
     const rclcpp::Time& now)
 {
     using sensor_msgs::msg::PointCloud2;
     using sensor_msgs::PointCloud2Modifier;
     using sensor_msgs::PointCloud2Iterator;
-
-    const int num_samples_per_pose = 25;
-    const std::string frame_id = "world";
 
     PointCloud2 cloud_msg;
     cloud_msg.header.frame_id = frame_id;
@@ -66,7 +65,205 @@ void publish_uncertainty_cloud(
         }
     }
 
-    cloud_pub->publish(cloud_msg);
+    return cloud_msg;
+}
+
+visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
+    const std::vector<gtsam::Pose3>& poses,
+    const gtsam::TendonDiscConfig& config,
+    const std::string& frame_id,
+    const rclcpp::Time& stamp)
+{
+    using visualization_msgs::msg::Marker;
+    using geometry_msgs::msg::Point;
+    visualization_msgs::msg::MarkerArray array_msg;
+    int marker_id = 0;
+
+    // === Draw disc cylinders ===
+    for (size_t disc_idx = 0; disc_idx < config.num_discs; ++disc_idx) {
+        
+        int pose_idx = config.disc_pose_idx[disc_idx];
+
+        const gtsam::Pose3& pose = poses[pose_idx];
+        gtsam::Point3 center = pose.translation();
+        gtsam::Quaternion q = pose.rotation().toQuaternion();
+
+        Marker disc_marker;
+        disc_marker.header.frame_id = frame_id;
+        disc_marker.header.stamp = stamp;
+        disc_marker.ns = "discs";
+        disc_marker.id = marker_id++;
+        disc_marker.type = Marker::CYLINDER;
+        disc_marker.action = Marker::ADD;
+        disc_marker.pose.position.x = center.x();
+        disc_marker.pose.position.y = center.y();
+        disc_marker.pose.position.z = center.z();
+        disc_marker.pose.orientation.x = q.x();
+        disc_marker.pose.orientation.y = q.y();
+        disc_marker.pose.orientation.z = q.z();
+        disc_marker.pose.orientation.w = q.w();
+        disc_marker.scale.x = config.disc_radius * 2;
+        disc_marker.scale.y = config.disc_radius * 2;
+        disc_marker.scale.z = 0.0005;  // Disc thickness
+        disc_marker.color.r = 0.6;
+        disc_marker.color.g = 0.6;
+        disc_marker.color.b = 0.7;
+        disc_marker.color.a = 0.5;
+        disc_marker.lifetime = rclcpp::Duration::from_seconds(0.0);
+
+        // If its the base frame, draw a square instead
+        if(disc_idx == 0){
+            disc_marker.type = Marker::CUBE;
+            disc_marker.scale.x = 4 * config.disc_radius * 2;
+            disc_marker.scale.y = 4 * config.disc_radius * 2;
+            disc_marker.scale.z = 0.001;
+            disc_marker.color.r = 0.6;
+            disc_marker.color.g = 0.6;
+            disc_marker.color.b = 0.6;
+            disc_marker.color.a = 1.0;
+        }
+
+        array_msg.markers.push_back(disc_marker);
+    }
+
+    // === Draw tendons as line segments between holes ===
+    for (int tendon_idx = 0; tendon_idx < config.num_tendons; ++tendon_idx) {
+        for (size_t disc_idx = 0; disc_idx + 1 < config.num_discs; ++disc_idx) {
+            const gtsam::Pose3& pose_1 = poses[config.disc_pose_idx[disc_idx]];
+            const gtsam::Pose3& pose_2 = poses[config.disc_pose_idx[disc_idx + 1]];
+
+            const gtsam::Vector3& local_hole_1 = config.local_hole_locations[disc_idx][tendon_idx];
+            const gtsam::Vector3& local_hole_2 = config.local_hole_locations[disc_idx + 1][tendon_idx];
+
+            gtsam::Point3 hole_1 = pose_1.transformFrom(local_hole_1);
+            gtsam::Point3 hole_2 = pose_2.transformFrom(local_hole_2);
+
+            // Compute center, direction, and length
+            gtsam::Vector3 center = 0.5 * (hole_1 + hole_2);
+            gtsam::Vector3 delta = hole_1 - hole_2;
+            double length = delta.norm();
+            gtsam::Vector3 z_axis = delta.normalized();
+
+            // Orientation: align Z-axis to the direction vector
+            Eigen::Vector3d up(0, 0, 1);
+            Eigen::Quaterniond q;
+
+            if ((z_axis - up).norm() < 1e-6) {
+                q = Eigen::Quaterniond::Identity();
+            } else if ((z_axis + up).norm() < 1e-6) {
+                q = Eigen::Quaterniond(Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX()));
+            } else {
+                Eigen::Vector3d axis = up.cross(z_axis).normalized();
+                double angle = acos(up.dot(z_axis));
+                q = Eigen::Quaterniond(Eigen::AngleAxisd(angle, axis));
+            }
+
+            Marker cyl;
+            cyl.header.frame_id = frame_id;
+            cyl.header.stamp = stamp;
+            cyl.ns = "tendons";
+            cyl.id = marker_id++;
+            cyl.type = Marker::CYLINDER;
+            cyl.action = Marker::ADD;
+            cyl.pose.position.x = center.x();
+            cyl.pose.position.y = center.y();
+            cyl.pose.position.z = center.z();
+            cyl.pose.orientation.x = q.x();
+            cyl.pose.orientation.y = q.y();
+            cyl.pose.orientation.z = q.z();
+            cyl.pose.orientation.w = q.w();
+            cyl.scale.x = 0.0002;  // radius
+            cyl.scale.y = 0.0002;
+            cyl.scale.z = length; // height
+            cyl.color.r = 0.0;
+            cyl.color.g = 0.0;
+            cyl.color.b = 0.0;
+            cyl.color.a = 0.8;
+            cyl.lifetime = rclcpp::Duration::from_seconds(0.0);
+
+            if (tendon_idx == 0){
+                cyl.color.r = 0.7;
+                cyl.color.g = 0.1;
+                cyl.color.b = 0.1;
+            }
+
+            if (tendon_idx == 1){
+                cyl.color.r = 0.0;
+                cyl.color.g = 0.5;
+                cyl.color.b = 0.1;
+            }
+
+            if (tendon_idx == 2){
+                cyl.color.r = 0.1;
+                cyl.color.g = 0.3;
+                cyl.color.b = 0.8;
+            }
+
+            if (tendon_idx == 3){
+                cyl.color.r = 0.8;
+                cyl.color.g = 0.6;
+                cyl.color.b = 0.1;
+            }
+            
+            array_msg.markers.push_back(cyl);
+        }
+    }
+
+    // === Draw rod backbone ===
+    for (size_t pose_idx = 0; pose_idx + 1 < poses.size(); ++pose_idx) {
+        const gtsam::Pose3& pose_1 = poses[pose_idx];
+        const gtsam::Pose3& pose_2 = poses[pose_idx + 1];
+
+        gtsam::Point3 p_1 = pose_1.translation();
+        gtsam::Point3 p_2 = pose_2.translation();
+
+        // Compute center, direction, and length
+        gtsam::Vector3 center = 0.5 * (p_1 + p_2);
+        gtsam::Vector3 delta = p_1 - p_2;
+        double length = delta.norm();
+        gtsam::Vector3 z_axis = delta.normalized();
+
+        // Orientation: align Z-axis to the direction vector
+        Eigen::Vector3d up(0, 0, 1);
+        Eigen::Quaterniond q;
+
+        if ((z_axis - up).norm() < 1e-6) {
+            q = Eigen::Quaterniond::Identity();
+        } else if ((z_axis + up).norm() < 1e-6) {
+            q = Eigen::Quaterniond(Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX()));
+        } else {
+            Eigen::Vector3d axis = up.cross(z_axis).normalized();
+            double angle = acos(up.dot(z_axis));
+            q = Eigen::Quaterniond(Eigen::AngleAxisd(angle, axis));
+        }
+
+        Marker cyl;
+        cyl.header.frame_id = frame_id;
+        cyl.header.stamp = stamp;
+        cyl.ns = "backbone";
+        cyl.id = marker_id++;
+        cyl.type = Marker::CYLINDER;
+        cyl.action = Marker::ADD;
+        cyl.pose.position.x = center.x();
+        cyl.pose.position.y = center.y();
+        cyl.pose.position.z = center.z();
+        cyl.pose.orientation.x = q.x();
+        cyl.pose.orientation.y = q.y();
+        cyl.pose.orientation.z = q.z();
+        cyl.pose.orientation.w = q.w();
+        cyl.scale.x = 0.0005;  // radius
+        cyl.scale.y = 0.0005;
+        cyl.scale.z = length; // height
+        cyl.color.r = 0.1;
+        cyl.color.g = 0.1;
+        cyl.color.b = 0.1;
+        cyl.color.a = 0.8;
+        cyl.lifetime = rclcpp::Duration::from_seconds(0.0);
+
+        array_msg.markers.push_back(cyl);
+    }
+
+    return array_msg;
 }
 
 geometry_msgs::msg::PoseArray get_pose_array_msg(
@@ -121,6 +318,8 @@ public:
         uncertainty_cloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/tendon_robot/uncertainty_cloud", 1);
         
+        disc_marker_array_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/tendon_robot/disc_marker_array", 10);
 
         solver_ = gtsam::TendonRobotGtsam();
 
@@ -145,13 +344,23 @@ private:
 
         RCLCPP_INFO(this->get_logger(), "GTSAM solve time (ms):  %.3f", solution.solve_time_ms);
 
-        // for(int i = 0; i < solution.backbone_pose_mean.size(); i++)
-        //     std::cout << solution.backbone_pose_mean[i] << std::endl;
-
-        // Publish outer tube pose array and uncertainty cloud
+        // Publish outer tube pose array
         auto pose_array_msg = get_pose_array_msg(solution.backbone_pose_mean, "world", this->now());
         backbone_pose_pub_->publish(pose_array_msg);
+
+        // Publish disc markers 
+        auto disc_marker_array_msg = get_disc_marker_array_msg(solution.backbone_pose_mean, solution.tendon_disc_config, "world", this->now());
+        disc_marker_array_pub_->publish(disc_marker_array_msg);
+
+        sensor_msgs::msg::PointCloud2 cloud_msg = get_uncertainty_cloud(
+            solution.backbone_pose_mean,
+            solution.backbone_pose_cov,
+            100,
+            "world",
+            this->now());
         
+        uncertainty_cloud_pub_->publish(cloud_msg);
+
         // publish_uncertainty_cloud(outer_poses, outer_covs, outer_cloud_pub_, this->now());
 
 
@@ -194,6 +403,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr backbone_pose_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr uncertainty_cloud_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr tip_pose_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr disc_marker_array_pub_;
 
     gtsam::TendonRobotGtsam solver_;
 };

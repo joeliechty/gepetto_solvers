@@ -18,6 +18,98 @@
 
 namespace gtsam{
 
+enum class RoutingAngleFunction {
+    CONSTANT = 0,
+    LINEAR = 1
+};
+
+struct RoutingParams {
+    double offset = 0.0;  // Starting angle (radians)
+    double angle = 0.0;   // For LINEAR: total angle change across the rod
+};
+
+struct TendonDiscConfig {
+    int num_tendons;
+    int num_discs;
+    double disc_radius;
+    double routing_radius;
+    std::vector<int> disc_pose_idx;
+    std::vector<std::vector<Vector3>> local_hole_locations;  // (disc, tendon)
+};
+
+TendonDiscConfig generate_tendon_disc_config(
+    int num_discs,
+    int num_poses,
+    double routing_radius,
+    double disc_radius,
+    const std::vector<RoutingAngleFunction>& angle_functions, 
+    const std::vector<RoutingParams>& angle_params)
+{
+    int num_tendons = angle_functions.size();
+
+    TendonDiscConfig config;
+    
+    config.num_tendons = num_tendons;
+    config.num_discs = num_discs;
+    config.disc_pose_idx.reserve(num_discs);
+    config.disc_radius = disc_radius;
+    config.routing_radius = routing_radius;
+    config.local_hole_locations.reserve(num_discs);
+
+    // Compute normalized arc-length positions for poses and discs
+    std::vector<double> pose_s(num_poses);
+    std::vector<double> disc_s(num_discs);
+
+    for (int i = 0; i < num_poses; ++i)
+        pose_s[i] = static_cast<double>(i) / (num_poses - 1);
+
+    for (int i = 0; i < num_discs; ++i)
+        disc_s[i] = static_cast<double>(i) / (num_discs - 1);
+
+    // For each disc, find the closest pose index
+    for (int disc_idx = 0; disc_idx < num_discs; ++disc_idx) {
+        double s = disc_s[disc_idx];
+
+        // Find closest pose index to this disc
+        int closest_pose_idx = 0;
+        double min_dist = std::abs(s - pose_s[0]);
+
+        for (int i = 1; i < num_poses; ++i) {
+            double dist = std::abs(s - pose_s[i]);
+            if (dist < min_dist) {
+                min_dist = dist;
+                closest_pose_idx = i;
+            }
+        }
+
+        config.disc_pose_idx.push_back(closest_pose_idx);
+        std::vector<Vector3> holes;
+        holes.reserve(num_tendons);
+
+        for (int tendon_idx = 0; tendon_idx < num_tendons; ++tendon_idx) {
+            double theta;
+            if (angle_functions[tendon_idx] == RoutingAngleFunction::CONSTANT) {
+                theta = angle_params[tendon_idx].offset;
+            } else if (angle_functions[tendon_idx] == RoutingAngleFunction::LINEAR) {
+                theta = angle_params[tendon_idx].offset + s * angle_params[tendon_idx].angle;
+            } else {
+                theta = 0.0;
+            }
+
+            double x = routing_radius * std::cos(theta);
+            double y = routing_radius * std::sin(theta);
+            double z = 0.0;
+
+            holes.emplace_back(x, y, z);
+        }
+
+        config.local_hole_locations.push_back(holes);
+    }
+
+    return config;
+}
+
+
 struct TendonRobotSolution {
     std::vector<Pose3> backbone_pose_mean;
     std::vector<Matrix6> backbone_pose_cov;
@@ -29,22 +121,23 @@ struct TendonRobotSolution {
     Matrix4 tensions_cov;
 
     double solve_time_ms;
+
+    TendonDiscConfig tendon_disc_config;
 };
 
 using symbol_shorthand::T;
 using symbol_shorthand::F;
 using symbol_shorthand::S;
-// using symbol_shorthand::Q;
+using symbol_shorthand::Q;
 // using symbol_shorthand::D;
 
 class TendonRobotGtsam {
 public:
-    TendonRobotGtsam(size_t num_backbone_poses = 20) {
+    TendonRobotGtsam(int num_backbone_poses = 30, int num_discs = 2) {
         backbone_idx_start_ = 0;
         backbone_idx_end_ = backbone_idx_start_ + num_backbone_poses - 1;
 
-        // tip_wrench_key_ = F(0);
-        // tensions_key_ = Q(0);
+        tensions_key_ = Q(0);
 
         K_ = Matrix66::Zero();
         K_(0, 0) = k_bending_;
@@ -57,21 +150,40 @@ public:
         K_inv_ = K_.inverse();
 
         ds_ = rod_length_ / (num_backbone_poses - 1);
+
+        std::vector<RoutingAngleFunction> angle_functions;
+        angle_functions.push_back(RoutingAngleFunction::CONSTANT);
+        angle_functions.push_back(RoutingAngleFunction::CONSTANT);
+        angle_functions.push_back(RoutingAngleFunction::LINEAR);
+        angle_functions.push_back(RoutingAngleFunction::LINEAR);
+        
+        std::vector<RoutingParams> angle_params;
+        angle_params.push_back({M_PI / 2,     0.0});
+        angle_params.push_back({3 * M_PI / 2, 0.0});
+        angle_params.push_back({0.0,          M_PI});
+        angle_params.push_back({M_PI,        -0.5 * M_PI});
+
+        double routing_radius = 0.005;
+        double disc_radius = 1.1 * routing_radius;
+
+        tendon_config_ = generate_tendon_disc_config(
+            num_discs, num_backbone_poses, routing_radius, disc_radius, angle_functions, angle_params);
     }
 
 private:
     int backbone_idx_start_;
     int backbone_idx_end_;
 
+    TendonDiscConfig tendon_config_;
+
     double ds_;
 
-    // Key tip_wrench_key_;
-    // Key tensions_key_;
+    Key tensions_key_;
 
     Values last_result_;
 
     // Parameters
-    static constexpr double tension_std = 1e-3;
+    static constexpr double tension_std = 1e-2;
 
     static constexpr double cosserat_twist_r_std_ = 1e0; // This just looks right
     static constexpr double small_r_std_ = 1e-3;
@@ -101,9 +213,9 @@ public:
         Values initial_values;
 
         // Tendon tensions prior
-        // auto tensions_cov = noiseModel::Isotropic::Sigma(4, tension_std);
-        // graph.add(PriorFactor<Vector4>(tensions_key_, tensions_mean, tensions_cov));
-        // initial_values.insert(tensions_key_, tensions_mean);
+        auto tensions_cov = noiseModel::Isotropic::Sigma(4, tension_std);
+        graph.add(PriorFactor<Vector4>(tensions_key_, tensions_mean, tensions_cov));
+        initial_values.insert(tensions_key_, tensions_mean);
 
         // Tip force prior
         // auto tip_wrench_cov = noiseModel::Diagonal::Sigmas((Vector(6) << tip_moment_std_, tip_moment_std_, tip_moment_std_, tip_force_std_, tip_force_std_, tip_force_std_).finished());
@@ -136,16 +248,34 @@ public:
         // Priors for forces
         double small_force_std = 1e-5;
         double small_moment_std = 1e-5;
-        auto small_wrench_cov = noiseModel::Diagonal::Sigmas((Vector(6) << small_moment_std, small_moment_std, small_moment_std, small_force_std, small_force_std, small_force_std).finished());
+        auto small_wrench_cov = noiseModel::Diagonal::Sigmas(
+            (Vector(6) << small_moment_std, small_moment_std, small_moment_std, 
+                          small_force_std, small_force_std, small_force_std).finished());
         
-        int mid_idx_ = 10;
-        for(int i = 1; i <= backbone_idx_end_; i++){
-            if(i == mid_idx_) continue;
+        for(int i = 1; i < backbone_idx_end_; i++){
+            // If i is a disc pose, add a tendon wrench factor 
+            // if (std::find(tendon_config_.disc_pose_idx.begin(),
+            //               tendon_config_.disc_pose_idx.end(), i) != tendon_config_.disc_pose_idx.end()) {
+            //     // Add this when adding interior discs later
+            //     continue;
+            // }
             graph.add(PriorFactor<Vector6>(F(i), Vector6(Vector6::Zero()), small_wrench_cov));
         }
+
+        // For the last force, use a tip tendon wrench factor instead
+        double disc_force_std = 1e-2;
+        double disc_moment_std = 1e-3;
+        auto disc_wrench_cov = noiseModel::Diagonal::Sigmas(
+            (Vector(6) << disc_moment_std, disc_moment_std, disc_moment_std, 
+                          disc_force_std, disc_force_std, disc_force_std).finished());
         
-        Vector6 mid_wrench = ((Vector(6) << 0, tensions_mean[0], tensions_mean[1], tensions_mean[2], 0, tensions_mean[3]).finished());
-        graph.add(PriorFactor<Vector6>(F(mid_idx_), mid_wrench, small_wrench_cov));
+        graph.add(TipTendonDiscWrenchFactor(T(backbone_idx_end_ - 1),
+                                            T(backbone_idx_end_),
+                                            F(backbone_idx_end_),
+                                            tensions_key_,
+                                            tendon_config_.local_hole_locations[tendon_config_.num_discs - 2],
+                                            tendon_config_.local_hole_locations[tendon_config_.num_discs - 1],
+                                            disc_wrench_cov));
 
         // Base frame constraint
         auto base_frame_cov = noiseModel::Diagonal::Sigmas((Vector(6) << small_r_std_, small_r_std_, small_r_std_, small_p_std_, small_p_std_, small_p_std_).finished());
@@ -224,6 +354,7 @@ public:
         auto end_solve = std::chrono::high_resolution_clock::now();
         output.solve_time_ms = std::chrono::duration<double, std::milli>(end_solve - start_solve).count();
 
+        output.tendon_disc_config = tendon_config_;
 
         last_result_ = result;
 

@@ -64,7 +64,7 @@ public:
         const Pose3& pose_1, 
         const Vector6& stress_0, 
         const Vector6& stress_1, 
-        const Vector6& wrench,
+        const Vector6& wrench_1,
         OptionalMatrixType H1, 
         OptionalMatrixType H2, 
         OptionalMatrixType H3, 
@@ -81,7 +81,7 @@ public:
 
         Vector6 twist_predicted = ds_ * (K_inv_ * stress_mid + nominal_strain);
 
-        Vector6 stress_predicted = propagate_wrench_backward(pose_0, pose_1, wrench + stress_1, nullptr, nullptr, nullptr);
+        Vector6 stress_predicted = propagate_wrench_backward(pose_0, pose_1, wrench_1 + stress_1, nullptr, nullptr, nullptr);
         
         Vector12 error;
         error.head<6>() = twist_predicted - twist;
@@ -91,7 +91,7 @@ public:
         if (H1) {
             *H1 = numericalDerivative11<Vector12, Pose3>(
                 [&](const Pose3& pose_0_) {
-                    return this->evaluateError(pose_0_, pose_1, stress_0, stress_1, wrench,
+                    return this->evaluateError(pose_0_, pose_1, stress_0, stress_1, wrench_1,
                                             nullptr, nullptr, nullptr, nullptr, nullptr);
                 }, pose_0);
 
@@ -101,7 +101,7 @@ public:
         if (H2) {
             *H2 = numericalDerivative11<Vector12, Pose3>(
                 [&](const Pose3& pose_1_) {
-                    return this->evaluateError(pose_0, pose_1_, stress_0, stress_1, wrench,
+                    return this->evaluateError(pose_0, pose_1_, stress_0, stress_1, wrench_1,
                                             nullptr, nullptr, nullptr, nullptr, nullptr);
                 }, pose_1);
 
@@ -111,7 +111,7 @@ public:
         if (H3) {
             *H3 = numericalDerivative11<Vector12, Vector6>(
                 [&](const Vector6& stress_0_) {
-                    return this->evaluateError(pose_0, pose_1, stress_0_, stress_1, wrench,
+                    return this->evaluateError(pose_0, pose_1, stress_0_, stress_1, wrench_1,
                                             nullptr, nullptr, nullptr, nullptr, nullptr);
                 }, stress_0);
 
@@ -121,7 +121,7 @@ public:
         if (H4) {
             *H4 = numericalDerivative11<Vector12, Vector6>(
                 [&](const Vector6& stress_1_) {
-                    return this->evaluateError(pose_0, pose_1, stress_0, stress_1_, wrench,
+                    return this->evaluateError(pose_0, pose_1, stress_0, stress_1_, wrench_1,
                                             nullptr, nullptr, nullptr, nullptr, nullptr);
                 }, stress_1);
 
@@ -133,7 +133,7 @@ public:
                 [&](const Vector6& wrench_) {
                     return this->evaluateError(pose_0, pose_1, stress_0, stress_1, wrench_,
                                             nullptr, nullptr, nullptr, nullptr, nullptr);
-                }, wrench);
+                }, wrench_1);
 
             // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -155,40 +155,37 @@ public:
                               Key pose_tip_key,
                               Key tip_wrench_key,
                               Key tensions_key,
-                              std::vector<Point2> xy_hole_loc_prev,
-                              std::vector<Point2> xy_hole_loc_tip,
+                              std::vector<Point3> xy_hole_loc_prev,
+                              std::vector<Point3> xy_hole_loc_tip,
                               const SharedNoiseModel& model): 
         NoiseModelFactor4(model, pose_prev_key, pose_tip_key, tip_wrench_key, tensions_key) {
-
-        auto lift_to_3D = [](const Point2& v) {
-            return Point3(v(0), v(1), 0.0);
-        };
-
-        for (const auto& h : xy_hole_loc_prev)
-            hole_loc_prev_.push_back(lift_to_3D(h));
-
-        for (const auto& h : xy_hole_loc_tip)
-            hole_loc_tip_.push_back(lift_to_3D(h));  
+            hole_loc_prev_ = xy_hole_loc_prev;
+            hole_loc_tip_ = xy_hole_loc_tip;
     }
 
     Vector evaluateError(const Pose3& pose_prev, const Pose3& pose_tip, const Vector6& tip_wrench, const Vector4& tensions,
         OptionalMatrixType H1, OptionalMatrixType H2, OptionalMatrixType H3, OptionalMatrixType H4) const override {
         
         // Get disc routing hole locations in world frame
-        Point3 hole_0_prev_world = pose_prev.transformFrom(hole_loc_prev_[0]);
-        Point3 hole_0_tip_world = pose_tip.transformFrom(hole_loc_tip_[0]);
+        Vector6 wrench_total = Vector6::Zero();
 
-        Vector3 force_0_world = tensions[0] * (hole_0_prev_world - hole_0_tip_world).normalized();
-        Vector3 force_0 = pose_tip.rotation().unrotate(force_0_world);
-        
-        Vector3 moment_0 = hole_loc_tip_[0].cross(force_0);
-        
-        Vector6 wrench_0;
-        wrench_0 << moment_0, force_0;
+        for (int tendon_idx = 0; tendon_idx < tensions.size(); ++tendon_idx) {
+            Point3 hole_prev_world = pose_prev.transformFrom(hole_loc_prev_[tendon_idx]);
+            Point3 hole_tip_world  = pose_tip.transformFrom(hole_loc_tip_[tendon_idx]);
 
-        Vector6 wrench_error = tip_wrench - wrench_0;
+            Vector3 delta = hole_prev_world - hole_tip_world;
+            Vector3 force_world = tensions[tendon_idx] * delta.normalized();
+            Vector3 force = pose_tip.rotation().unrotate(force_world);
+
+            Vector3 moment = hole_loc_tip_[tendon_idx].cross(force);
+
+            Vector6 wrench;
+            wrench << moment, force;
+            wrench_total += wrench;
+        }
+
+        Vector6 wrench_error = tip_wrench - wrench_total;
     
-
         if (H1) {
             *H1 = numericalDerivative11<Vector6, Pose3>(
                 [&](const Pose3& pose_prev_) {
