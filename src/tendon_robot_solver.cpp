@@ -102,8 +102,8 @@ visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
         disc_marker.pose.orientation.y = q.y();
         disc_marker.pose.orientation.z = q.z();
         disc_marker.pose.orientation.w = q.w();
-        disc_marker.scale.x = config.disc_radius * 2;
-        disc_marker.scale.y = config.disc_radius * 2;
+        disc_marker.scale.x = 1.1 * config.routing_radius * 2;
+        disc_marker.scale.y = 1.1 * config.routing_radius * 2;
         disc_marker.scale.z = 0.0005;  // Disc thickness
         disc_marker.color.r = 0.6;
         disc_marker.color.g = 0.6;
@@ -114,8 +114,8 @@ visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
         // If its the base frame, draw a square instead
         if(disc_idx == 0){
             disc_marker.type = Marker::CUBE;
-            disc_marker.scale.x = 4 * config.disc_radius * 2;
-            disc_marker.scale.y = 4 * config.disc_radius * 2;
+            disc_marker.scale.x = 4 * config.routing_radius * 2;
+            disc_marker.scale.y = 4 * config.routing_radius * 2;
             disc_marker.scale.z = 0.001;
             disc_marker.color.r = 0.6;
             disc_marker.color.g = 0.6;

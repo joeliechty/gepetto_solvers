@@ -31,7 +31,6 @@ struct RoutingParams {
 struct TendonDiscConfig {
     int num_tendons;
     int num_discs;
-    double disc_radius;
     double routing_radius;
     std::vector<int> disc_pose_idx;
     std::vector<std::vector<Vector3>> local_hole_locations;  // (disc, tendon)
@@ -41,7 +40,6 @@ TendonDiscConfig generate_tendon_disc_config(
     int num_discs,
     int num_poses,
     double routing_radius,
-    double disc_radius,
     const std::vector<RoutingAngleFunction>& angle_functions, 
     const std::vector<RoutingParams>& angle_params)
 {
@@ -52,7 +50,6 @@ TendonDiscConfig generate_tendon_disc_config(
     config.num_tendons = num_tendons;
     config.num_discs = num_discs;
     config.disc_pose_idx.reserve(num_discs);
-    config.disc_radius = disc_radius;
     config.routing_radius = routing_radius;
     config.local_hole_locations.reserve(num_discs);
 
@@ -133,7 +130,8 @@ using symbol_shorthand::Q;
 
 class TendonRobotGtsam {
 public:
-    TendonRobotGtsam(int num_backbone_poses = 30, int num_discs = 2) {
+    TendonRobotGtsam(int num_discs = 10, int poses_between_each = 5) {
+        int num_backbone_poses = num_discs + (num_discs - 1) * poses_between_each;
         backbone_idx_start_ = 0;
         backbone_idx_end_ = backbone_idx_start_ + num_backbone_poses - 1;
 
@@ -161,13 +159,11 @@ public:
         angle_params.push_back({M_PI / 2,     0.0});
         angle_params.push_back({3 * M_PI / 2, 0.0});
         angle_params.push_back({0.0,          M_PI});
-        angle_params.push_back({M_PI,        -0.5 * M_PI});
+        angle_params.push_back({0.0,         -M_PI});
 
         double routing_radius = 0.005;
-        double disc_radius = 1.1 * routing_radius;
-
         tendon_config_ = generate_tendon_disc_config(
-            num_discs, num_backbone_poses, routing_radius, disc_radius, angle_functions, angle_params);
+            num_discs, num_backbone_poses, routing_radius, angle_functions, angle_params);
     }
 
 private:
@@ -252,23 +248,37 @@ public:
             (Vector(6) << small_moment_std, small_moment_std, small_moment_std, 
                           small_force_std, small_force_std, small_force_std).finished());
         
-        for(int i = 1; i < backbone_idx_end_; i++){
-            // If i is a disc pose, add a tendon wrench factor 
-            // if (std::find(tendon_config_.disc_pose_idx.begin(),
-            //               tendon_config_.disc_pose_idx.end(), i) != tendon_config_.disc_pose_idx.end()) {
-            //     // Add this when adding interior discs later
-            //     continue;
-            // }
-            graph.add(PriorFactor<Vector6>(F(i), Vector6(Vector6::Zero()), small_wrench_cov));
-        }
-
-        // For the last force, use a tip tendon wrench factor instead
         double disc_force_std = 1e-2;
         double disc_moment_std = 1e-3;
         auto disc_wrench_cov = noiseModel::Diagonal::Sigmas(
             (Vector(6) << disc_moment_std, disc_moment_std, disc_moment_std, 
                           disc_force_std, disc_force_std, disc_force_std).finished());
         
+        for (int i = 1; i < backbone_idx_end_; i++) {
+            auto it = std::find(tendon_config_.disc_pose_idx.begin(),
+                                tendon_config_.disc_pose_idx.end(), i);
+            
+            // If we are at a disc, add a disc wrench factor
+            if (it != tendon_config_.disc_pose_idx.end()) {
+                int disc_idx = std::distance(tendon_config_.disc_pose_idx.begin(), it);
+                int pose_idx_prev = tendon_config_.disc_pose_idx[disc_idx - 1];
+                int pose_idx_next = tendon_config_.disc_pose_idx[disc_idx + 1];
+
+                auto factor = TendonDiscWrenchFactor(
+                    T(pose_idx_prev), T(i), T(pose_idx_next), F(i), tensions_key_,
+                    tendon_config_.local_hole_locations[disc_idx - 1],
+                    tendon_config_.local_hole_locations[disc_idx],
+                    tendon_config_.local_hole_locations[disc_idx + 1],
+                    disc_wrench_cov);
+                
+                graph.add(factor);
+
+            } else {
+                graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov));
+            }
+        }
+
+        // For the last force, use a tip tendon wrench factor instead
         graph.add(TipTendonDiscWrenchFactor(T(backbone_idx_end_ - 1),
                                             T(backbone_idx_end_),
                                             F(backbone_idx_end_),
@@ -327,6 +337,7 @@ public:
             }
         }
         
+        graph.saveGraph("factor_graph.dot", initial_values);
 
         TendonRobotSolution output;
 

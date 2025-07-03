@@ -221,4 +221,108 @@ public:
         return wrench_error;
     }
 };
+
+class TendonDiscWrenchFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6, Vector4> {
+    std::vector<Point3> hole_loc_prev_;  // Previous disc hole location in local frame of previous disc, z = 0
+    std::vector<Point3> hole_loc_;   // Tip disc hole locations in local frame of tip disc
+    std::vector<Point3> hole_loc_next_;
+public:
+
+    using NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6, Vector4>::evaluateError;
+  
+    TendonDiscWrenchFactor(Key pose_prev_key,
+                           Key pose_key,
+                           Key pose_next_key,
+                           Key wrench_key,
+                           Key tensions_key,
+                           std::vector<Point3> xy_hole_loc_prev,
+                           std::vector<Point3> xy_hole_loc,
+                           std::vector<Point3> xy_hole_loc_next,
+                           const SharedNoiseModel& model): 
+        NoiseModelFactor5(model, pose_prev_key, pose_key, pose_next_key, wrench_key, tensions_key) {
+            hole_loc_prev_ = xy_hole_loc_prev;
+            hole_loc_ = xy_hole_loc;
+            hole_loc_next_ = xy_hole_loc_next;
+    }
+
+    Vector evaluateError(const Pose3& pose_prev, const Pose3& pose, const Pose3& pose_next, const Vector6& wrench, const Vector4& tensions,
+        OptionalMatrixType H1, OptionalMatrixType H2, OptionalMatrixType H3, OptionalMatrixType H4, OptionalMatrixType H5) const override {
+        
+        // Get disc routing hole locations in world frame
+        Vector6 wrench_total = Vector6::Zero();
+
+        for (int tendon_idx = 0; tendon_idx < tensions.size(); ++tendon_idx) {
+            // Force from previous disc
+            Point3 hole_prev_world = pose_prev.transformFrom(hole_loc_prev_[tendon_idx]);
+            Point3 hole_world  = pose.transformFrom(hole_loc_[tendon_idx]);
+
+            Vector3 delta_prev = hole_prev_world - hole_world;
+            Vector3 force_world_prev = tensions[tendon_idx] * delta_prev.normalized();
+            Vector3 force_prev = pose.rotation().unrotate(force_world_prev);
+
+            Vector3 moment_prev = hole_loc_[tendon_idx].cross(force_prev);
+
+            Vector6 wrench_prev;
+            wrench_prev << moment_prev, force_prev;
+            wrench_total += wrench_prev;
+
+            // Force from next disc
+            Point3 hole_next_world = pose_next.transformFrom(hole_loc_next_[tendon_idx]);
+
+            Vector3 delta_next = hole_next_world - hole_world;
+            Vector3 force_world_next = tensions[tendon_idx] * delta_next.normalized();
+            Vector3 force_next = pose.rotation().unrotate(force_world_next);
+
+            Vector3 moment_next = hole_loc_[tendon_idx].cross(force_next);
+
+            Vector6 wrench_next;
+            wrench_next << moment_next, force_next;
+            wrench_total += wrench_next;
+        }
+
+        Vector6 wrench_error = wrench - wrench_total;
+    
+        if (H1) {
+            *H1 = numericalDerivative11<Vector6, Pose3>(
+                [&](const Pose3& pose_prev_) {
+                    return this->evaluateError(pose_prev_, pose, pose_next, wrench, tensions,
+                                               nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, pose_prev);
+        }
+
+        if (H2) {
+            *H2 = numericalDerivative11<Vector6, Pose3>(
+                [&](const Pose3& pose_) {
+                    return this->evaluateError(pose_prev, pose_, pose_next, wrench, tensions,
+                                               nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, pose);
+        }
+
+        if (H3) {
+            *H3 = numericalDerivative11<Vector6, Pose3>(
+                [&](const Pose3& pose_next_) {
+                    return this->evaluateError(pose_prev, pose, pose_next_, wrench, tensions,
+                                               nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, pose_next);
+        }
+
+        if (H4) {
+            *H4 = numericalDerivative11<Vector6, Vector6>(
+                [&](const Vector6& wrench_) {
+                    return this->evaluateError(pose_prev, pose, pose_next, wrench_, tensions,
+                                               nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, wrench);
+        }
+
+        if (H5) {
+            *H5 = numericalDerivative11<Vector6, Vector4>(
+                [&](const Vector4& tensions_) {
+                    return this->evaluateError(pose_prev, pose, pose_next, wrench, tensions_,
+                                               nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, tensions);
+        }
+
+        return wrench_error;
+    }
+};
 }

@@ -10,6 +10,10 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 
+# Factor graph stuff
+*.pdf
+*.dot
+
 # Executables and libraries
 *.exe
 *.out
