@@ -1,11 +1,4 @@
 
-
-
-
-
-
-
-
 namespace gtsam{
 
 Vector6 propagate_wrench_backward(
@@ -46,111 +39,107 @@ Vector6 propagate_wrench_backward(
     return wrench;
 }
 
-class CosseratTwistFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6> {
+class CosseratRodFactor: public NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6, Vector6> {
     double ds_;  // segment length
     gtsam::Matrix66 K_inv_;  // Assuming constant stiffness inverse per factor
 
 public:
 
-    using NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6>::evaluateError;
+    using NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6, Vector6>::evaluateError;
   
-    CosseratTwistFactor(Key pose_i_key,
-                        Key pose_ip1_key,
-                        Key pose_tip_key,
-                        Key tip_wrench_key,
-                        double ds,
-                        const Matrix66& K_inv,
-                        const SharedNoiseModel& model): 
-        NoiseModelFactorN(model, pose_i_key, pose_ip1_key, pose_tip_key, tip_wrench_key),
+    CosseratRodFactor(Key pose_0_key,
+                      Key pose_1_key,
+                      Key stress_0_key,
+                      Key stress_1_key,
+                      Key wrench_key,
+                      double ds,
+                      const Matrix66& K_inv,
+                      const SharedNoiseModel& model): 
+        NoiseModelFactorN(model, pose_0_key, pose_1_key, stress_0_key, stress_1_key, wrench_key),
         ds_(ds),
         K_inv_(K_inv) {}
 
-    Vector evaluateError(const Pose3& pose_i, const Pose3& pose_ip1, const Pose3& pose_tip, const Vector6& tip_wrench,
-        OptionalMatrixType H1, OptionalMatrixType H2, OptionalMatrixType H3, OptionalMatrixType H4) const override {
+    Vector evaluateError(
+        const Pose3& pose_0, 
+        const Pose3& pose_1, 
+        const Vector6& stress_0, 
+        const Vector6& stress_1, 
+        const Vector6& wrench,
+        OptionalMatrixType H1, 
+        OptionalMatrixType H2, 
+        OptionalMatrixType H3, 
+        OptionalMatrixType H4,
+        OptionalMatrixType H5) const override {
         
-        Matrix6 d_delta_d_pose_i, d_delta_d_pose_ip1;
-        Pose3 delta = pose_i.between(pose_ip1, d_delta_d_pose_i, d_delta_d_pose_ip1);
+        Pose3 delta = pose_0.between(pose_1);
+        Vector6 twist = Pose3::Logmap(delta);
+        
+        Vector6 stress_mid = 0.5 * (stress_0 + stress_1);
+        
+        Vector6 nominal_strain = Vector6::Zero();
+        nominal_strain[5] = 1.0;  // Straight rod: linear velocity in z direction only
 
-        Matrix6 d_twist_d_delta;
-        Vector6 twist = Pose3::Logmap(delta, d_twist_d_delta);
-        
-        Matrix d_stress_i_d_pose_i, d_stress_i_d_pose_tip, d_stress_i_d_tip_wrench;
-        Vector6 stress_i = propagate_wrench_backward(
-            pose_i,
-            pose_tip,
-            tip_wrench,
-            H1 ? &d_stress_i_d_pose_i : nullptr,
-            H3 ? &d_stress_i_d_pose_tip : nullptr,
-            H4 ? &d_stress_i_d_tip_wrench : nullptr);
+        Vector6 twist_predicted = ds_ * (K_inv_ * stress_mid + nominal_strain);
 
-        Matrix d_stress_ip1_d_pose_ip1, d_stress_ip1_d_pose_tip, d_stress_ip1_d_tip_wrench;
-        Vector6 stress_ip1 = propagate_wrench_backward(
-            pose_ip1, 
-            pose_tip, 
-            tip_wrench, 
-            H2 ? &d_stress_ip1_d_pose_ip1 : nullptr,
-            H3 ? &d_stress_ip1_d_pose_tip : nullptr,
-            H4 ? &d_stress_ip1_d_tip_wrench : nullptr);
+        Vector6 stress_predicted = propagate_wrench_backward(pose_0, pose_1, wrench + stress_1, nullptr, nullptr, nullptr);
         
-        Vector6 stress = 0.5 * (stress_i + stress_ip1);  // More accurate than just stress_i: kind of like a midpoint rule
-        
-        Vector6 nominal_strain;
-        nominal_strain.head<3>() << 0.0, 0.0, 0.0;          // First three elements from curvature
-        nominal_strain.tail<3>() << 0.0, 0.0, 1.0;
-
-        Vector6 predicted_twist = ds_ * (K_inv_ * stress + nominal_strain);
-        Vector6 twist_error = predicted_twist - twist;
+        Vector12 error;
+        error.head<6>() = twist_predicted - twist;
+        error.tail<6>() = stress_predicted - stress_0;
     
 
         if (H1) {
-            *H1 = ds_ * K_inv_ * 0.5 * d_stress_i_d_pose_i - d_twist_d_delta * d_delta_d_pose_i;
-
-            // Matrix6 H1_check = numericalDerivative11<Vector6, Pose3>(
-            //     [&](const Pose3& pose_i_) {
-            //         return this->evaluateError(pose_i_, pose_ip1, pose_tip, tip_wrench, curvature,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
-            //     }, pose_i);
+            *H1 = numericalDerivative11<Vector12, Pose3>(
+                [&](const Pose3& pose_0_) {
+                    return this->evaluateError(pose_0_, pose_1, stress_0, stress_1, wrench,
+                                            nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, pose_0);
 
             // std::cout << "H1 check: " << (*H1 - H1_check).cwiseAbs().maxCoeff() << std::endl;
         }
 
         if (H2) {
-            *H2 = ds_ * K_inv_ * 0.5 * d_stress_ip1_d_pose_ip1 - d_twist_d_delta * d_delta_d_pose_ip1;
-
-            // Matrix6 H2_check = numericalDerivative11<Vector6, Pose3>(
-            //     [&](const Pose3& pose_ip1_) {
-            //         return this->evaluateError(pose_i, pose_ip1_, pose_tip, tip_wrench, curvature,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
-            //     }, pose_ip1);
+            *H2 = numericalDerivative11<Vector12, Pose3>(
+                [&](const Pose3& pose_1_) {
+                    return this->evaluateError(pose_0, pose_1_, stress_0, stress_1, wrench,
+                                            nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, pose_1);
 
             // std::cout << "H2 check: " << (*H2 - H2_check).cwiseAbs().maxCoeff() << std::endl;
         }
 
         if (H3) {
-            *H3 = ds_ * K_inv_ * 0.5 * (d_stress_i_d_pose_tip + d_stress_ip1_d_pose_tip);
-
-            // Matrix6 H3_check = numericalDerivative11<Vector6, Pose3>(
-            //     [&](const Pose3& pose_tip_) {
-            //         return this->evaluateError(pose_i, pose_ip1, pose_tip_, tip_wrench, curvature,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
-            //     }, pose_tip);
-
-            // std::cout << "H3 check: " << (*H3 - H3_check).cwiseAbs().maxCoeff() << std::endl;
-        }
-
-        if (H4) {
-            *H4 = ds_ * K_inv_ * 0.5 * (d_stress_i_d_tip_wrench + d_stress_ip1_d_tip_wrench);
-
-            // Matrix6 H4_check = numericalDerivative11<Vector6, Vector6>(
-            //     [&](const Vector6& tip_wrench_) {
-            //         return this->evaluateError(pose_i, pose_ip1, pose_tip, tip_wrench_, curvature,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
-            //     }, tip_wrench);
+            *H3 = numericalDerivative11<Vector12, Vector6>(
+                [&](const Vector6& stress_0_) {
+                    return this->evaluateError(pose_0, pose_1, stress_0_, stress_1, wrench,
+                                            nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, stress_0);
 
             // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
         }
         
-        return twist_error;
+        if (H4) {
+            *H4 = numericalDerivative11<Vector12, Vector6>(
+                [&](const Vector6& stress_1_) {
+                    return this->evaluateError(pose_0, pose_1, stress_0, stress_1_, wrench,
+                                            nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, stress_1);
+
+            // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
+        }
+
+        if (H5) {
+            *H5 = numericalDerivative11<Vector12, Vector6>(
+                [&](const Vector6& wrench_) {
+                    return this->evaluateError(pose_0, pose_1, stress_0, stress_1, wrench_,
+                                            nullptr, nullptr, nullptr, nullptr, nullptr);
+                }, wrench);
+
+            // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
+        }
+
+
+        return error;
     }
 };
 
