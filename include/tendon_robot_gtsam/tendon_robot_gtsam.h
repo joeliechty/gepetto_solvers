@@ -130,7 +130,7 @@ using symbol_shorthand::Q;
 
 class TendonRobotGtsam {
 public:
-    TendonRobotGtsam(int num_discs = 10, int poses_between_each = 5) {
+    TendonRobotGtsam(int num_discs = 12, int poses_between_each = 5) {
         int num_backbone_poses = num_discs + (num_discs - 1) * poses_between_each;
         backbone_idx_start_ = 0;
         backbone_idx_end_ = backbone_idx_start_ + num_backbone_poses - 1;
@@ -150,18 +150,18 @@ public:
         ds_ = rod_length_ / (num_backbone_poses - 1);
 
         std::vector<RoutingAngleFunction> angle_functions;
+        angle_functions.push_back(RoutingAngleFunction::LINEAR);
         angle_functions.push_back(RoutingAngleFunction::CONSTANT);
         angle_functions.push_back(RoutingAngleFunction::CONSTANT);
-        angle_functions.push_back(RoutingAngleFunction::LINEAR);
-        angle_functions.push_back(RoutingAngleFunction::LINEAR);
-        
-        std::vector<RoutingParams> angle_params;
-        angle_params.push_back({M_PI / 2,     0.0});
-        angle_params.push_back({3 * M_PI / 2, 0.0});
-        angle_params.push_back({0.0,          M_PI});
-        angle_params.push_back({0.0,         -M_PI});
+        angle_functions.push_back(RoutingAngleFunction::CONSTANT);
 
-        double routing_radius = 0.005;
+        std::vector<RoutingParams> angle_params;
+        angle_params.push_back({0.0,     2 * M_PI});
+        angle_params.push_back({M_PI,         0.0});
+        angle_params.push_back({3 * M_PI / 2, 0.0});
+        angle_params.push_back({0.0,          0.0});
+
+        double routing_radius = 0.008;
         tendon_config_ = generate_tendon_disc_config(
             num_discs, num_backbone_poses, routing_radius, angle_functions, angle_params);
     }
@@ -181,14 +181,14 @@ private:
     // Parameters
     static constexpr double tension_std = 1e-2;
 
-    static constexpr double cosserat_twist_r_std_ = 1e0; // This just looks right
+    static constexpr double cosserat_twist_r_std_ = 1e-1; // This just looks right
     static constexpr double small_r_std_ = 1e-3;
     static constexpr double small_p_std_ = 1e-5;
 
     static constexpr double tip_force_std_ = 1e-3;
     static constexpr double tip_moment_std_ = 1e-3;
 
-    static constexpr double rod_length_ = 0.05; 
+    static constexpr double rod_length_ = 0.2; 
     static constexpr double rod_diameter_ = 1.0e-3;
     static constexpr double youngs_modulus_ = 35.0e9;  // Nitinol
     static constexpr double shear_modulus_ = 12.0e9;  // Nitinol
@@ -248,11 +248,11 @@ public:
             (Vector(6) << small_moment_std, small_moment_std, small_moment_std, 
                           small_force_std, small_force_std, small_force_std).finished());
         
-        double disc_force_std = 1e-2;
-        double disc_moment_std = 1e-3;
-        auto disc_wrench_cov = noiseModel::Diagonal::Sigmas(
-            (Vector(6) << disc_moment_std, disc_moment_std, disc_moment_std, 
-                          disc_force_std, disc_force_std, disc_force_std).finished());
+        // double disc_force_std = 1e-2;
+        // double disc_moment_std = 1e-3;
+        // auto disc_wrench_cov = noiseModel::Diagonal::Sigmas(
+        //     (Vector(6) << disc_moment_std, disc_moment_std, disc_moment_std, 
+        //                   disc_force_std, disc_force_std, disc_force_std).finished());
         
         for (int i = 1; i < backbone_idx_end_; i++) {
             auto it = std::find(tendon_config_.disc_pose_idx.begin(),
@@ -269,7 +269,7 @@ public:
                     tendon_config_.local_hole_locations[disc_idx - 1],
                     tendon_config_.local_hole_locations[disc_idx],
                     tendon_config_.local_hole_locations[disc_idx + 1],
-                    disc_wrench_cov);
+                    small_wrench_cov);
                 
                 graph.add(factor);
 
@@ -279,13 +279,13 @@ public:
         }
 
         // For the last force, use a tip tendon wrench factor instead
-        graph.add(TipTendonDiscWrenchFactor(T(backbone_idx_end_ - 1),
-                                            T(backbone_idx_end_),
+        graph.add(TipTendonDiscWrenchFactor(T(tendon_config_.disc_pose_idx[tendon_config_.num_discs - 2]),
+                                            T(tendon_config_.disc_pose_idx[tendon_config_.num_discs - 1]),
                                             F(backbone_idx_end_),
                                             tensions_key_,
                                             tendon_config_.local_hole_locations[tendon_config_.num_discs - 2],
                                             tendon_config_.local_hole_locations[tendon_config_.num_discs - 1],
-                                            disc_wrench_cov));
+                                            small_wrench_cov));
 
         // Base frame constraint
         auto base_frame_cov = noiseModel::Diagonal::Sigmas((Vector(6) << small_r_std_, small_r_std_, small_r_std_, small_p_std_, small_p_std_, small_p_std_).finished());

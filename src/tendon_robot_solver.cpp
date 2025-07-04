@@ -104,7 +104,7 @@ visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
         disc_marker.pose.orientation.w = q.w();
         disc_marker.scale.x = 1.1 * config.routing_radius * 2;
         disc_marker.scale.y = 1.1 * config.routing_radius * 2;
-        disc_marker.scale.z = 0.0005;  // Disc thickness
+        disc_marker.scale.z = 0.1 * config.routing_radius;  // Disc thickness
         disc_marker.color.r = 0.6;
         disc_marker.color.g = 0.6;
         disc_marker.color.b = 0.7;
@@ -116,7 +116,7 @@ visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
             disc_marker.type = Marker::CUBE;
             disc_marker.scale.x = 4 * config.routing_radius * 2;
             disc_marker.scale.y = 4 * config.routing_radius * 2;
-            disc_marker.scale.z = 0.001;
+            disc_marker.scale.z = 0.7 * config.routing_radius;
             disc_marker.color.r = 0.6;
             disc_marker.color.g = 0.6;
             disc_marker.color.b = 0.6;
@@ -172,8 +172,8 @@ visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
             cyl.pose.orientation.y = q.y();
             cyl.pose.orientation.z = q.z();
             cyl.pose.orientation.w = q.w();
-            cyl.scale.x = 0.0002;  // radius
-            cyl.scale.y = 0.0002;
+            cyl.scale.x = 0.1 * config.routing_radius;  // radius
+            cyl.scale.y = 0.1 * config.routing_radius;
             cyl.scale.z = length; // height
             cyl.color.r = 0.0;
             cyl.color.g = 0.0;
@@ -251,8 +251,8 @@ visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
         cyl.pose.orientation.y = q.y();
         cyl.pose.orientation.z = q.z();
         cyl.pose.orientation.w = q.w();
-        cyl.scale.x = 0.0005;  // radius
-        cyl.scale.y = 0.0005;
+        cyl.scale.x = 0.3 * config.routing_radius;  // radius
+        cyl.scale.y = 0.3 * config.routing_radius;
         cyl.scale.z = length; // height
         cyl.color.r = 0.1;
         cyl.color.g = 0.1;
