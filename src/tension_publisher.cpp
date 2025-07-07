@@ -35,14 +35,14 @@ private:
 
     // Map keys to tension changes
     switch (c) {
-      case 'q': tensions_[0] += 0.01; break;
-      case 'a': tensions_[0] -= 0.01; break;
-      case 'w': tensions_[1] += 0.01; break;
-      case 's': tensions_[1] -= 0.01; break;
-      case 'e': tensions_[2] += 0.01; break;
-      case 'd': tensions_[2] -= 0.01; break;
-      case 'r': tensions_[3] += 0.01; break;
-      case 'f': tensions_[3] -= 0.01; break;
+      case 'q': tensions_[0] += 0.05; break;
+      case 'a': tensions_[0] -= 0.05; break;
+      case 'w': tensions_[1] += 0.05; break;
+      case 's': tensions_[1] -= 0.05; break;
+      case 'e': tensions_[2] += 0.05; break;
+      case 'd': tensions_[2] -= 0.05; break;
+      case 'r': tensions_[3] += 0.05; break;
+      case 'f': tensions_[3] -= 0.05; break;
       case 'z': rclcpp::shutdown(); return;
       default: break;
     }

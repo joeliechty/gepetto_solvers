@@ -10,10 +10,66 @@
 
 #include "tendon_robot_gtsam.h"
 
+// sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
+//     const std::vector<gtsam::Pose3>& poses,
+//     const std::vector<gtsam::Matrix6>& covariances,
+//     const int num_samples_per_pose,
+//     const std::string frame_id,
+//     const rclcpp::Time& now)
+// {
+//     using sensor_msgs::msg::PointCloud2;
+//     using sensor_msgs::PointCloud2Modifier;
+//     using sensor_msgs::PointCloud2Iterator;
+
+//     PointCloud2 cloud_msg;
+//     cloud_msg.header.frame_id = frame_id;
+//     cloud_msg.header.stamp = now;
+//     cloud_msg.height = 1;
+//     cloud_msg.is_dense = false;
+
+//     size_t total_points = poses.size() * num_samples_per_pose;
+//     PointCloud2Modifier modifier(cloud_msg);
+//     modifier.setPointCloud2FieldsByString(1, "xyz");
+//     modifier.resize(total_points);
+
+//     PointCloud2Iterator<float> iter_x(cloud_msg, "x");
+//     PointCloud2Iterator<float> iter_y(cloud_msg, "y");
+//     PointCloud2Iterator<float> iter_z(cloud_msg, "z");
+
+//     static std::mt19937 gen(std::random_device{}());
+//     std::normal_distribution<double> dist(0.0, 1.0);
+
+//     for (size_t i = 0; i < poses.size(); ++i) {
+//         const gtsam::Matrix6& cov = covariances[i];
+//         Eigen::SelfAdjointEigenSolver<gtsam::Matrix6> solver(cov);
+//         gtsam::Matrix6 sqrt_cov = solver.operatorSqrt();
+
+//         const gtsam::Pose3& pose = poses[i];
+
+//         for (int j = 0; j < num_samples_per_pose; ++j) {
+//             gtsam::Vector6 noise;
+//             for (int k = 0; k < 6; ++k)
+//                 noise(k) = dist(gen);
+
+//             gtsam::Vector6 scaled_noise = sqrt_cov * noise;
+//             gtsam::Pose3 sample = pose.retract(scaled_noise);
+//             const gtsam::Point3& p = sample.translation();
+
+//             *iter_x = static_cast<float>(p.x());
+//             *iter_y = static_cast<float>(p.y());
+//             *iter_z = static_cast<float>(p.z());
+
+//             ++iter_x;
+//             ++iter_y;
+//             ++iter_z;
+//         }
+//     }
+
+//     return cloud_msg;
+// }
+
 sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
-    const std::vector<gtsam::Pose3>& poses,
-    const std::vector<gtsam::Matrix6>& covariances,
-    const int num_samples_per_pose,
+    const std::vector<std::vector<gtsam::Pose3>> backbone_pose_samples,
     const std::string frame_id,
     const rclcpp::Time& now)
 {
@@ -27,7 +83,10 @@ sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
     cloud_msg.height = 1;
     cloud_msg.is_dense = false;
 
-    size_t total_points = poses.size() * num_samples_per_pose;
+    size_t poses_per_sample = backbone_pose_samples[0].size();
+    size_t num_samples = backbone_pose_samples.size();
+    size_t total_points = poses_per_sample * num_samples;
+    
     PointCloud2Modifier modifier(cloud_msg);
     modifier.setPointCloud2FieldsByString(1, "xyz");
     modifier.resize(total_points);
@@ -36,24 +95,11 @@ sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
     PointCloud2Iterator<float> iter_y(cloud_msg, "y");
     PointCloud2Iterator<float> iter_z(cloud_msg, "z");
 
-    static std::mt19937 gen(std::random_device{}());
-    std::normal_distribution<double> dist(0.0, 1.0);
+    for (size_t sample_idx = 0; sample_idx < num_samples; ++sample_idx) {
+        const auto& sample_set = backbone_pose_samples[sample_idx];
 
-    for (size_t i = 0; i < poses.size(); ++i) {
-        const gtsam::Matrix6& cov = covariances[i];
-        Eigen::SelfAdjointEigenSolver<gtsam::Matrix6> solver(cov);
-        gtsam::Matrix6 sqrt_cov = solver.operatorSqrt();
-
-        const gtsam::Pose3& pose = poses[i];
-
-        for (int j = 0; j < num_samples_per_pose; ++j) {
-            gtsam::Vector6 noise;
-            for (int k = 0; k < 6; ++k)
-                noise(k) = dist(gen);
-
-            gtsam::Vector6 scaled_noise = sqrt_cov * noise;
-            gtsam::Pose3 sample = pose.retract(scaled_noise);
-            const gtsam::Point3& p = sample.translation();
+        for (size_t pose_idx = 0; pose_idx < sample_set.size(); ++pose_idx) {
+            const gtsam::Point3& p = sample_set[pose_idx].translation();
 
             *iter_x = static_cast<float>(p.x());
             *iter_y = static_cast<float>(p.y());
@@ -353,9 +399,7 @@ private:
         disc_marker_array_pub_->publish(disc_marker_array_msg);
 
         sensor_msgs::msg::PointCloud2 cloud_msg = get_uncertainty_cloud(
-            solution.backbone_pose_mean,
-            solution.backbone_pose_cov,
-            100,
+            solution.backbone_pose_samples,
             "world",
             this->now());
         
