@@ -10,63 +10,63 @@
 
 #include "tendon_robot_gtsam.h"
 
-// sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
-//     const std::vector<gtsam::Pose3>& poses,
-//     const std::vector<gtsam::Matrix6>& covariances,
-//     const int num_samples_per_pose,
-//     const std::string frame_id,
-//     const rclcpp::Time& now)
-// {
-//     using sensor_msgs::msg::PointCloud2;
-//     using sensor_msgs::PointCloud2Modifier;
-//     using sensor_msgs::PointCloud2Iterator;
+sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
+    const std::vector<gtsam::Pose3>& poses,
+    const std::vector<gtsam::Matrix6>& covariances,
+    const int num_samples_per_pose,
+    const std::string frame_id,
+    const rclcpp::Time& now)
+{
+    using sensor_msgs::msg::PointCloud2;
+    using sensor_msgs::PointCloud2Modifier;
+    using sensor_msgs::PointCloud2Iterator;
 
-//     PointCloud2 cloud_msg;
-//     cloud_msg.header.frame_id = frame_id;
-//     cloud_msg.header.stamp = now;
-//     cloud_msg.height = 1;
-//     cloud_msg.is_dense = false;
+    PointCloud2 cloud_msg;
+    cloud_msg.header.frame_id = frame_id;
+    cloud_msg.header.stamp = now;
+    cloud_msg.height = 1;
+    cloud_msg.is_dense = false;
 
-//     size_t total_points = poses.size() * num_samples_per_pose;
-//     PointCloud2Modifier modifier(cloud_msg);
-//     modifier.setPointCloud2FieldsByString(1, "xyz");
-//     modifier.resize(total_points);
+    size_t total_points = poses.size() * num_samples_per_pose;
+    PointCloud2Modifier modifier(cloud_msg);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(total_points);
 
-//     PointCloud2Iterator<float> iter_x(cloud_msg, "x");
-//     PointCloud2Iterator<float> iter_y(cloud_msg, "y");
-//     PointCloud2Iterator<float> iter_z(cloud_msg, "z");
+    PointCloud2Iterator<float> iter_x(cloud_msg, "x");
+    PointCloud2Iterator<float> iter_y(cloud_msg, "y");
+    PointCloud2Iterator<float> iter_z(cloud_msg, "z");
 
-//     static std::mt19937 gen(std::random_device{}());
-//     std::normal_distribution<double> dist(0.0, 1.0);
+    static std::mt19937 gen(std::random_device{}());
+    std::normal_distribution<double> dist(0.0, 1.0);
 
-//     for (size_t i = 0; i < poses.size(); ++i) {
-//         const gtsam::Matrix6& cov = covariances[i];
-//         Eigen::SelfAdjointEigenSolver<gtsam::Matrix6> solver(cov);
-//         gtsam::Matrix6 sqrt_cov = solver.operatorSqrt();
+    for (size_t i = 0; i < poses.size(); ++i) {
+        const gtsam::Matrix6& cov = covariances[i];
+        Eigen::SelfAdjointEigenSolver<gtsam::Matrix6> solver(cov);
+        gtsam::Matrix6 sqrt_cov = solver.operatorSqrt();
 
-//         const gtsam::Pose3& pose = poses[i];
+        const gtsam::Pose3& pose = poses[i];
 
-//         for (int j = 0; j < num_samples_per_pose; ++j) {
-//             gtsam::Vector6 noise;
-//             for (int k = 0; k < 6; ++k)
-//                 noise(k) = dist(gen);
+        for (int j = 0; j < num_samples_per_pose; ++j) {
+            gtsam::Vector6 noise;
+            for (int k = 0; k < 6; ++k)
+                noise(k) = dist(gen);
 
-//             gtsam::Vector6 scaled_noise = sqrt_cov * noise;
-//             gtsam::Pose3 sample = pose.retract(scaled_noise);
-//             const gtsam::Point3& p = sample.translation();
+            gtsam::Vector6 scaled_noise = sqrt_cov * noise;
+            gtsam::Pose3 sample = pose.retract(scaled_noise);
+            const gtsam::Point3& p = sample.translation();
 
-//             *iter_x = static_cast<float>(p.x());
-//             *iter_y = static_cast<float>(p.y());
-//             *iter_z = static_cast<float>(p.z());
+            *iter_x = static_cast<float>(p.x());
+            *iter_y = static_cast<float>(p.y());
+            *iter_z = static_cast<float>(p.z());
 
-//             ++iter_x;
-//             ++iter_y;
-//             ++iter_z;
-//         }
-//     }
+            ++iter_x;
+            ++iter_y;
+            ++iter_z;
+        }
+    }
 
-//     return cloud_msg;
-// }
+    return cloud_msg;
+}
 
 sensor_msgs::msg::PointCloud2 get_uncertainty_cloud(
     const std::vector<std::vector<gtsam::Pose3>> backbone_pose_samples,
@@ -178,8 +178,8 @@ visualization_msgs::msg::MarkerArray get_disc_marker_array_msg(
             const gtsam::Pose3& pose_1 = poses[config.disc_pose_idx[disc_idx]];
             const gtsam::Pose3& pose_2 = poses[config.disc_pose_idx[disc_idx + 1]];
 
-            const gtsam::Vector3& local_hole_1 = config.local_hole_locations[disc_idx][tendon_idx];
-            const gtsam::Vector3& local_hole_2 = config.local_hole_locations[disc_idx + 1][tendon_idx];
+            const gtsam::Vector3& local_hole_1 = config.local_holes[disc_idx][tendon_idx];
+            const gtsam::Vector3& local_hole_2 = config.local_holes[disc_idx + 1][tendon_idx];
 
             gtsam::Point3 hole_1 = pose_1.transformFrom(local_hole_1);
             gtsam::Point3 hole_2 = pose_2.transformFrom(local_hole_2);
@@ -345,7 +345,11 @@ geometry_msgs::msg::PoseArray get_pose_array_msg(
 
 class TendonRobotSolver : public rclcpp::Node {
 public:
-    TendonRobotSolver() : Node("ves_solver") {
+    TendonRobotSolver() : 
+        Node("ves_solver"), 
+        solver_(gtsam::get_default_config()),
+        last_tip_force_(gtsam::Vector3::Zero())
+    {
         tip_force_sub_ = this->create_subscription<geometry_msgs::msg::Vector3>(
             "/tendon_robot/tip_force", 10,
             std::bind(&TendonRobotSolver::tip_force_callback, this, std::placeholders::_1));
@@ -366,10 +370,6 @@ public:
         
         disc_marker_array_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/tendon_robot/disc_marker_array", 10);
-
-        solver_ = gtsam::TendonRobotGtsam();
-
-        last_tip_force_ = gtsam::Vector3::Zero();
     }
 
 private:
@@ -386,7 +386,7 @@ private:
         tip_wrench.head<3>() = gtsam::Vector3::Zero();
         tip_wrench.tail<3>() = last_tip_force_;
 
-        gtsam::TendonRobotSolution solution = solver_.update(tip_wrench, tensions);
+        gtsam::TendonRobotSolution solution = solver_.solve(tip_wrench, tensions);
 
         RCLCPP_INFO(this->get_logger(), "GTSAM solve time (ms):  %.3f", solution.solve_time_ms);
 
@@ -399,14 +399,13 @@ private:
         disc_marker_array_pub_->publish(disc_marker_array_msg);
 
         sensor_msgs::msg::PointCloud2 cloud_msg = get_uncertainty_cloud(
-            solution.backbone_pose_samples,
+            solution.backbone_pose_mean,
+            solution.backbone_pose_cov,
+            50,
             "world",
             this->now());
         
         uncertainty_cloud_pub_->publish(cloud_msg);
-
-        // publish_uncertainty_cloud(outer_poses, outer_covs, outer_cloud_pub_, this->now());
-
 
         // Publish tip pose with covariance
         const auto& tip_pose = solution.backbone_pose_mean.back();

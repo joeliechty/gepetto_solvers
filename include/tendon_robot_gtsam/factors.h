@@ -5,35 +5,35 @@ Vector6 propagate_wrench_backward(
     const Pose3& pose,
     const Pose3& tip_pose,
     const Vector6& tip_wrench,
-    const OptionalMatrixType d_wrench_d_pose,
-    const OptionalMatrixType d_wrench_d_tip_pose,
-    const OptionalMatrixType d_wrench_d_tip_wrench)
+    OptionalJacobian<6, 6> H_pose = {},
+    OptionalJacobian<6, 6> H_tip_pose = {},
+    OptionalJacobian<6, 6> H_tip_wrench = {})
 {
     Matrix66 d_tip_pose_inv_d_tip_pose;
     Matrix66 d_delta_d_tip_pose_inv, d_delta_d_pose;
     Matrix66 d_wrench_d_delta, d_wrench_d_tip_wrench_;
 
     Pose3 tip_pose_inv = tip_pose.inverse(
-        (d_wrench_d_tip_pose ? &d_tip_pose_inv_d_tip_pose : nullptr));
+        (H_pose ? &d_tip_pose_inv_d_tip_pose : 0));
 
     Pose3 delta = tip_pose_inv.compose(pose,
-        (d_wrench_d_tip_pose ? &d_delta_d_tip_pose_inv : nullptr),
-        (d_wrench_d_pose ? &d_delta_d_pose : nullptr));
+        (H_tip_pose ? &d_delta_d_tip_pose_inv : 0),
+        (H_pose ? &d_delta_d_pose : 0));
 
     Vector6 wrench = delta.AdjointTranspose(
         tip_wrench,
-        (d_wrench_d_pose || d_wrench_d_tip_pose ? &d_wrench_d_delta : nullptr),
-        (d_wrench_d_tip_wrench ? &d_wrench_d_tip_wrench_ : nullptr));
+        (H_pose || H_tip_pose ? &d_wrench_d_delta : 0),
+        (H_tip_wrench ? &d_wrench_d_tip_wrench_ : 0));
 
     // Assign Jacobians if needed
-    if (d_wrench_d_pose) {
-        *d_wrench_d_pose = d_wrench_d_delta * d_delta_d_pose;
+    if (H_pose) {
+        *H_pose = d_wrench_d_delta * d_delta_d_pose;
     }
-    if (d_wrench_d_tip_pose) {
-        *d_wrench_d_tip_pose = d_wrench_d_delta * d_delta_d_tip_pose_inv * d_tip_pose_inv_d_tip_pose;
+    if (H_tip_pose) {
+        *H_tip_pose = d_wrench_d_delta * d_delta_d_tip_pose_inv * d_tip_pose_inv_d_tip_pose;
     }
-    if (d_wrench_d_tip_wrench) {
-        *d_wrench_d_tip_wrench = d_wrench_d_tip_wrench_;
+    if (H_tip_wrench) {
+        *H_tip_wrench = d_wrench_d_tip_wrench_;
     }
 
     return wrench;
@@ -73,23 +73,23 @@ public:
         
         Matrix66 d_delta_d_pose_0, d_delta_d_pose_1;
         Pose3 delta = pose_0.between(pose_1,
-            H1 ? OptionalJacobian<6, 6>(d_delta_d_pose_0) : std::nullopt,
-            H2 ? OptionalJacobian<6, 6>(d_delta_d_pose_1) : std::nullopt);
+            H1 ? &d_delta_d_pose_0 : 0,
+            H2 ? &d_delta_d_pose_1 : 0);
 
         Matrix66 d_twist_d_delta;
         Vector6 twist = Pose3::Logmap(delta, 
-            H1 || H2 ? OptionalJacobian<6, 6>(d_twist_d_delta) : std::nullopt);
+            H1 || H2 ? &d_twist_d_delta : 0);
         
         Vector6 stress_mid = 0.5 * (stress_0 + stress_1);
         Vector6 nominal_strain = Vector6::Zero();
         nominal_strain[5] = 1.0;  // Straight rod: linear velocity in z direction only
         Vector6 twist_p = ds_ * (K_inv_ * stress_mid + nominal_strain);
         
-        Matrix d_stress_p_d_pose_0, d_stress_p_d_pose_1, d_stress_p_d_wrench_sum;
+        Matrix6 d_stress_p_d_pose_0, d_stress_p_d_pose_1, d_stress_p_d_wrench_sum;
         Vector6 stress_p = propagate_wrench_backward(pose_0, pose_1, wrench_1 + stress_1, 
-            H1 ? &d_stress_p_d_pose_0 : nullptr,
-            H2 ? &d_stress_p_d_pose_1 : nullptr,
-            H4 || H5 ? &d_stress_p_d_wrench_sum : nullptr);
+            H1 ? &d_stress_p_d_pose_0 : 0,
+            H2 ? &d_stress_p_d_pose_1 : 0,
+            H4 || H5 ? &d_stress_p_d_wrench_sum : 0);
         
         Vector12 error;
         error.head<6>() = twist_p - twist;
@@ -179,30 +179,31 @@ Vector6 get_single_tendon_wrench(
     const Pose3 pose_other, 
     const Point3 hole, 
     const Point3 hole_other,
-    const OptionalMatrixType d_wrench_d_tension,
-    const OptionalMatrixType d_wrench_d_pose,
-    const OptionalMatrixType d_wrench_d_pose_other)
+    OptionalJacobian<6, 1> H_tension = {},
+    OptionalJacobian<6, 6> H_pose = {},
+    OptionalJacobian<6, 6> H_pose_other = {})
 {
     Matrix36 d_hole_other_world_d_pose_other;
-    Point3 hole_other_world = pose_other.transformFrom(hole_other, d_hole_other_world_d_pose_other);
+    Point3 hole_other_world = pose_other.transformFrom(hole_other, 
+        H_pose_other ? &d_hole_other_world_d_pose_other : 0);
     
     Matrix36 d_hole_other_local_d_pose;
     Matrix3 d_hole_other_local_d_hole_other_world;
-    Point3 hole_other_local = pose.transformTo(
-        hole_other_world,
-        d_hole_other_local_d_pose,
+    Point3 hole_other_local = pose.transformTo(hole_other_world,
+        H_pose? &d_hole_other_local_d_pose : 0,
         d_hole_other_local_d_hole_other_world);
 
     Vector3 hole_diff = hole_other_local - hole;
     double norm = hole_diff.norm();
+
     Vector3 force_dir;
-    Matrix3 d_force_dir_d_hole_diff;
+    Matrix3 d_force_dir_d_hole_diff = Matrix3::Zero();
 
     if (norm > 1e-9 && std::isfinite(norm)) {
-        force_dir = normalize(hole_diff, d_force_dir_d_hole_diff);
+        force_dir = normalize(hole_diff, 
+            H_pose || H_pose_other ? &d_force_dir_d_hole_diff : 0);
     } else {
         force_dir = Vector3::Zero();
-        d_force_dir_d_hole_diff = Matrix3::Zero();
     }
 
     Vector3 force = tension * force_dir;
@@ -210,44 +211,39 @@ Vector6 get_single_tendon_wrench(
     Matrix33 d_force_d_force_dir = tension * Matrix3::Identity();
 
     Matrix33 d_moment_d_force;
-    Vector3 moment = cross(hole, force, nullptr, d_moment_d_force);
+    Vector3 moment = cross(hole, force, nullptr, 
+         H_tension || H_pose || H_pose_other ? &d_moment_d_force : 0);
 
     Vector6 wrench;
     wrench << moment, force;
 
-    if (d_wrench_d_tension) {
-        *d_wrench_d_tension = (Vector6() << 
-            d_moment_d_force * d_force_d_tension,
-            d_force_d_tension).finished();  // 6×1
+    if (H_tension) {
+        H_tension->head<3>() = d_moment_d_force * d_force_d_tension;
+        H_tension->tail<3>() = d_force_d_tension;
     }
 
-    // d_wrench/d_pose
-    if (d_wrench_d_pose) {
-        // chain rule: d_force_dir/d_pose = d_force_dir/d_hole_diff * d_hole_diff/d_pose
-        //            = d_force_dir/d_hole_diff * d_hole_other_local/d_pose
-        Matrix36 d_force_dir_d_pose = d_force_dir_d_hole_diff * d_hole_other_local_d_pose;  // 3×6
-        Matrix36 d_force_d_pose = d_force_d_force_dir * d_force_dir_d_pose;  // 3×6
-        Matrix36 d_moment_d_pose = d_moment_d_force * d_force_d_pose;        // 3×6
+    if (H_pose) {
+        Matrix36 d_force_dir_d_pose = d_force_dir_d_hole_diff * d_hole_other_local_d_pose;
+        Matrix36 d_force_d_pose = d_force_d_force_dir * d_force_dir_d_pose;
+        Matrix36 d_moment_d_pose = d_moment_d_force * d_force_d_pose;
 
-        *d_wrench_d_pose = Matrix66();
-        d_wrench_d_pose->block<3,6>(0,0) = d_moment_d_pose;
-        d_wrench_d_pose->block<3,6>(3,0) = d_force_d_pose;
+        H_pose->block<3,6>(0,0) = d_moment_d_pose;
+        H_pose->block<3,6>(3,0) = d_force_d_pose;
     }
 
-    // d_wrench/d_pose_other
-    if (d_wrench_d_pose_other) {
-    Matrix36 d_force_dir_d_pose_other =
-        d_force_dir_d_hole_diff *
-        d_hole_other_local_d_hole_other_world *
-        d_hole_other_world_d_pose_other;
+    if (H_pose_other) {
+        Matrix36 d_force_dir_d_pose_other =
+            d_force_dir_d_hole_diff *
+            d_hole_other_local_d_hole_other_world *
+            d_hole_other_world_d_pose_other;
 
-    Matrix36 d_force_d_pose_other = d_force_d_force_dir * d_force_dir_d_pose_other;
-    Matrix36 d_moment_d_pose_other = d_moment_d_force * d_force_d_pose_other;
+        Matrix36 d_force_d_pose_other = d_force_d_force_dir * d_force_dir_d_pose_other;
+        Matrix36 d_moment_d_pose_other = d_moment_d_force * d_force_d_pose_other;
 
-    *d_wrench_d_pose_other = Matrix66();
-    d_wrench_d_pose_other->block<3,6>(0,0) = d_moment_d_pose_other;
-    d_wrench_d_pose_other->block<3,6>(3,0) = d_force_d_pose_other;
-}
+        H_pose_other->block<3,6>(0,0) = d_moment_d_pose_other;
+        H_pose_other->block<3,6>(3,0) = d_force_d_pose_other;
+    }
+
     return wrench;
 }
 
@@ -291,22 +287,16 @@ public:
     {
         Vector6 wrench_total = Vector6::Zero();
         
-        Matrix64 d_wrench_d_tensions;
-        d_wrench_d_tensions.setZero();
-
-        Matrix66 d_wrench_d_pose;
-        d_wrench_d_pose.setZero();
-
-        Matrix66 d_wrench_d_pose_prev;
-        d_wrench_d_pose_prev.setZero();
-
-        Matrix66 d_wrench_d_pose_next;
-        d_wrench_d_pose_next.setZero();
+        Matrix64 d_wrench_d_tensions = Matrix64::Zero();
+        Matrix66 d_wrench_d_pose = Matrix66::Zero();
+        Matrix66 d_wrench_d_pose_prev = Matrix66::Zero();
+        Matrix66 d_wrench_d_pose_next = Matrix66::Zero();
 
         // Sum up all tendon wrenches on this disc
         for (int tendon_idx = 0; tendon_idx < tensions.size(); ++tendon_idx) {
             // Wrench from previous disc
-            Matrix d_wrench_prev_d_tension, d_wrench_prev_d_pose, d_wrench_prev_d_pose_prev;
+            Vector6 d_wrench_prev_d_tension;
+            Matrix6 d_wrench_prev_d_pose, d_wrench_prev_d_pose_prev;
 
             Vector6 wrench_prev = get_single_tendon_wrench(
                 tensions[tendon_idx],
@@ -314,9 +304,9 @@ public:
                 pose_prev,
                 holes_[tendon_idx],
                 holes_prev_[tendon_idx],
-                &d_wrench_prev_d_tension,
-                &d_wrench_prev_d_pose,
-                &d_wrench_prev_d_pose_prev);
+                H5 ? &d_wrench_prev_d_tension : 0,
+                H2 ? &d_wrench_prev_d_pose : 0,
+                H1 ? &d_wrench_prev_d_pose_prev : 0);
             
             wrench_total += wrench_prev;
             Vector6 d_wrench_d_tension = d_wrench_prev_d_tension;
@@ -325,7 +315,8 @@ public:
             
             // Wrench from next disc. Ignore if we are at the tip
             if (!is_tip_){
-                Matrix d_wrench_next_d_tension, d_wrench_next_d_pose, d_wrench_next_d_pose_next;
+                Vector6 d_wrench_next_d_tension;
+                Matrix6 d_wrench_next_d_pose, d_wrench_next_d_pose_next;
 
                 Vector6 wrench_next = get_single_tendon_wrench(
                     tensions[tendon_idx], 
@@ -333,9 +324,9 @@ public:
                     pose_next, 
                     holes_[tendon_idx],
                     holes_next_[tendon_idx],
-                    &d_wrench_next_d_tension,
-                    &d_wrench_next_d_pose,
-                    &d_wrench_next_d_pose_next);
+                    H5 ? &d_wrench_next_d_tension : 0,
+                    H2 ? &d_wrench_next_d_pose : 0,
+                    H3 ? &d_wrench_next_d_pose_next : 0);
                 
                 wrench_total += wrench_next;
                 d_wrench_d_tension += d_wrench_next_d_tension;
