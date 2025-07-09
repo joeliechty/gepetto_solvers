@@ -34,13 +34,21 @@ ament_target_dependencies(tendon_robot_solver
 
 
 
+add_executable(tip_force_publisher src/tip_force_publisher.cpp)
+
+ament_target_dependencies(tip_force_publisher
+  rclcpp
+  geometry_msgs
+)
+
+
+
 add_executable(tension_publisher src/tension_publisher.cpp)
 
 ament_target_dependencies(tension_publisher
   rclcpp
   sensor_msgs
 )
-
 
 
 add_executable(tendon_robot_viz src/tendon_robot_viz.cpp)
@@ -59,6 +67,11 @@ ament_target_dependencies(tendon_robot_viz
 
 install(TARGETS
   tension_publisher
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS
+  tip_force_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
 

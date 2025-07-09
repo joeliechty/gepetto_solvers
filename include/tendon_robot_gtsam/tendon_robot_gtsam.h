@@ -253,7 +253,7 @@ private:
 
     void initialize_values(const Vector4 tensions, const Vector6 tip_wrench){
         initial_values_.clear();
-
+        // TODO init tip_wrench
         initial_values_.insert(Q(0), tensions);
 
         for (size_t i = backbone_idx_start_; i <= backbone_idx_end_; ++i) {
@@ -261,8 +261,8 @@ private:
             if (last_values_.exists(T(i))) {
                 initial_values_.insert(T(i), last_values_.at<Pose3>(T(i)));
             } else {
-                // Initialize pose to be pure z translation, TODO change if base frame is not identity.
-                initial_values_.insert(T(i), Pose3(Rot3::Roll(0.01 * i), Point3(0.0, 0.0, i * ds_)));
+                // Initialize pose to be pure z translation, TODO change if base frame is not identity. This is actually wrong
+                initial_values_.insert(T(i), Pose3(Rot3::Roll(0.01 * i), Point3(0.0, 0.01 * i, i * ds_)));
             }
 
             // Initialize stress
@@ -285,12 +285,12 @@ private:
 
 public:
 
-    TendonRobotSolution solve(const Vector6& tip_wrench_mean, const Vector4& tensions_mean) {
+    TendonRobotSolution solve(const Vector6& tip_wrench, const Vector4& tensions) {
         graph_.resize(0);
-        initialize_values(tensions_mean, tip_wrench_mean);
+        initialize_values(tensions, tip_wrench);
 
         // Tendon tensions prior
-        graph_.add(PriorFactor<Vector4>(Q(0), tensions_mean, tensions_cov_));
+        graph_.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
         
         // Tip force prior
         // auto tip_wrench_cov = noiseModel::Diagonal::Sigmas((Vector(6) << tip_moment_std_, tip_moment_std_, tip_moment_std_, tip_force_std_, tip_force_std_, tip_force_std_).finished());
@@ -320,7 +320,8 @@ public:
                 graph_.add(factor);
 
             } else {
-                graph_.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov_));
+                Vector6 tip_wrench_mean = (i == backbone_idx_end_ - 1) ? tip_wrench : Vector6::Zero();
+                graph_.add(PriorFactor<Vector6>(F(i), tip_wrench_mean, small_wrench_cov_));
             }
         }
 
@@ -358,6 +359,7 @@ public:
         auto start_solve = std::chrono::high_resolution_clock::now();
 
         LevenbergMarquardtParams params;
+        params.setMaxIterations(15);
         params.setVerbosityLM("SUMMARY");
         params.setLinearSolverType("MULTIFRONTAL_QR");
         LevenbergMarquardtOptimizer optimizer(graph_, initial_values_, params);
@@ -391,8 +393,8 @@ public:
         //     output.backbone_pose_samples.push_back(backbone_pose_sample);
         // }
 
-        // output.tip_wrench_mean = result.at<Vector6>(F(t_));
-        // output.tip_wrench_cov = marginals.marginalCovariance(F(t_));
+        output.tip_wrench_mean = result.at<Vector6>(F(backbone_idx_end_ - 1));
+        output.tip_wrench_cov = marginals.marginalCovariance(F(backbone_idx_end_ - 1));
 
         output.tensions_mean = result.at<Vector4>(Q(0));
         output.tensions_cov = marginals.marginalCovariance(Q(0));

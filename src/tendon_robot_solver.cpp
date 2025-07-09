@@ -348,7 +348,8 @@ public:
     TendonRobotSolver() : 
         Node("ves_solver"), 
         solver_(gtsam::get_default_config()),
-        last_tip_force_(gtsam::Vector3::Zero())
+        tip_wrench_(gtsam::Vector6::Zero()),
+        tensions_(gtsam::Vector4::Zero())
     {
         tip_force_sub_ = this->create_subscription<geometry_msgs::msg::Vector3>(
             "/tendon_robot/tip_force", 10,
@@ -370,23 +371,33 @@ public:
         
         disc_marker_array_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
             "/tendon_robot/disc_marker_array", 10);
+
+        tip_force_marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(
+            "tendon_robot/tip_force_marker", 10);
     }
 
 private:
 
     void tensions_callback(const sensor_msgs::msg::JointState::SharedPtr msg) {
-        gtsam::Vector4 tensions;
+        tensions_ << msg->position[0],
+                     msg->position[1],
+                     msg->position[2],
+                     msg->position[3];
 
-        tensions << msg->position[0],
-                    msg->position[1],
-                    msg->position[2],
-                    msg->position[3];
+        update();
+    }
 
-        gtsam::Vector6 tip_wrench;
-        tip_wrench.head<3>() = gtsam::Vector3::Zero();
-        tip_wrench.tail<3>() = last_tip_force_;
+    void tip_force_callback(const geometry_msgs::msg::Vector3::SharedPtr msg) {
+        gtsam::Vector3 tip_force = gtsam::Vector3(msg->x, msg->y, msg->z);
 
-        gtsam::TendonRobotSolution solution = solver_.solve(tip_wrench, tensions);
+        tip_wrench_.head<3>() = gtsam::Vector3::Zero();
+        tip_wrench_.tail<3>() = tip_force;
+
+        update();
+    }
+
+    void update(){
+        gtsam::TendonRobotSolution solution = solver_.solve(tip_wrench_, tensions_);
 
         RCLCPP_INFO(this->get_logger(), "GTSAM solve time (ms):  %.3f", solution.solve_time_ms);
 
@@ -432,13 +443,54 @@ private:
                 tip_pose_msg.pose.covariance[r * 6 + c] = tip_cov(r, c);
 
         tip_pose_pub_->publish(tip_pose_msg);
+
+        
+        // Publish tip force marker
+        geometry_msgs::msg::Point start_point;
+        start_point.x = t.x();
+        start_point.y = t.y();
+        start_point.z = t.z();
+
+        double scale = 0.6;
+
+        Eigen::Vector3d tip_force_local = solution.tip_wrench_mean.tail<3>();
+
+        // Rotate tip force into world frame:
+        Eigen::Vector3d tip_force_global = tip_pose.rotation() * tip_force_local;
+
+        geometry_msgs::msg::Point end_point;
+        end_point.x = start_point.x + scale * tip_force_global.x();
+        end_point.y = start_point.y + scale * tip_force_global.y();
+        end_point.z = start_point.z + scale * tip_force_global.z();
+
+        // Create the marker
+        visualization_msgs::msg::Marker marker;
+        marker.header.frame_id = "world";
+        marker.header.stamp = this->now();
+        marker.ns = "tip_force";
+        marker.id = 0;
+        marker.type = visualization_msgs::msg::Marker::ARROW;
+        marker.action = visualization_msgs::msg::Marker::ADD;
+
+        marker.points.push_back(start_point);
+        marker.points.push_back(end_point);
+
+        marker.scale.x = 0.002;  // shaft diameter
+        marker.scale.y = 0.005;  // head diameter
+        marker.scale.z = 0.003;  // head length
+
+        marker.color.r = 0.6;
+        marker.color.g = 0.1;
+        marker.color.b = 0.9;
+        marker.color.a = 1.0;
+
+        marker.lifetime = rclcpp::Duration::from_seconds(0.1);  // Optional: how long it stays
+
+        tip_force_marker_pub_->publish(marker);
     }
 
-    void tip_force_callback(const geometry_msgs::msg::Vector3::SharedPtr msg) {
-        last_tip_force_ = gtsam::Vector3(msg->x, msg->y, msg->z);
-    }
-
-    gtsam::Vector3 last_tip_force_;
+    gtsam::Vector6 tip_wrench_;
+    gtsam::Vector4 tensions_;
 
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr tip_force_sub_;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr tensions_sub_;
@@ -447,6 +499,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr uncertainty_cloud_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr tip_pose_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr disc_marker_array_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr tip_force_marker_pub_;
 
     gtsam::TendonRobotGtsam solver_;
 };
