@@ -397,9 +397,10 @@ private:
     }
 
     void update(){
-        gtsam::TendonRobotSolution solution = solver_.solve(tip_wrench_, tensions_);
+        gtsam::TendonRobotSolution solution = solver_.solve(tensions_, tip_wrench_);
 
-        RCLCPP_INFO(this->get_logger(), "GTSAM solve time (ms):  %.3f", solution.solve_time_ms);
+        RCLCPP_INFO(this->get_logger(), "GTSAM solve time (ms):  %.3f    (init: %.3f, solve: %.3f, extract: %.3f)", 
+            solution.total_time_ms, solution.init_time_ms, solution.solve_time_ms, solution.extract_time_ms);
 
         // Publish outer tube pose array
         auto pose_array_msg = get_pose_array_msg(solution.backbone_pose_mean, "world", this->now());
