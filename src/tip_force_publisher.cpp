@@ -21,9 +21,9 @@ private:
     time_ += dt_;
 
     // Smooth changing direction components
-    double a = 0.10 * time_;
-    double b = 0.11 * time_;
-    double c = 0.12 * time_;
+    double a = 0.08 * time_;
+    double b = 0.12* time_;
+    double c = 0.16 * time_;
 
     double x = std::sin(a);
     double y = std::sin(b);
