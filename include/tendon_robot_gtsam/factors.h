@@ -39,23 +39,22 @@ Vector6 propagate_wrench_backward(
     return wrench;
 }
 
-class CosseratRodFactor: public NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6, Vector6> {
+class CosseratRodTwistFactor: public NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6> {
     double ds_;  // segment length
     gtsam::Matrix66 K_inv_;  // Assuming constant stiffness inverse per factor
 
 public:
 
-    using NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6, Vector6>::evaluateError;
+    using NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6>::evaluateError;
   
-    CosseratRodFactor(Key pose_0_key,
-                      Key pose_1_key,
-                      Key stress_0_key,
-                      Key stress_1_key,
-                      Key wrench_key,
-                      double ds,
-                      const Matrix66& K_inv,
-                      const SharedNoiseModel& model): 
-        NoiseModelFactorN(model, pose_0_key, pose_1_key, stress_0_key, stress_1_key, wrench_key),
+    CosseratRodTwistFactor(Key pose_0_key,
+                           Key pose_1_key,
+                           Key stress_0_key,
+                           Key stress_1_key,
+                           double ds,
+                           const Matrix66& K_inv,
+                           const SharedNoiseModel& model): 
+        NoiseModelFactorN(model, pose_0_key, pose_1_key, stress_0_key, stress_1_key),
         ds_(ds),
         K_inv_(K_inv) {}
 
@@ -64,12 +63,10 @@ public:
         const Pose3& pose_1, 
         const Vector6& stress_0, 
         const Vector6& stress_1, 
-        const Vector6& wrench_1,
         OptionalMatrixType H1, 
         OptionalMatrixType H2, 
         OptionalMatrixType H3, 
-        OptionalMatrixType H4,
-        OptionalMatrixType H5) const override {
+        OptionalMatrixType H4) const override {
         
         Matrix66 d_delta_d_pose_0, d_delta_d_pose_1;
         Pose3 delta = pose_0.between(pose_1,
@@ -85,20 +82,10 @@ public:
         nominal_strain[5] = 1.0;  // Straight rod: linear velocity in z direction only
         Vector6 twist_p = ds_ * (K_inv_ * stress_mid + nominal_strain);
         
-        Matrix6 d_stress_p_d_pose_0, d_stress_p_d_pose_1, d_stress_p_d_wrench_sum;
-        Vector6 stress_p = propagate_wrench_backward(pose_0, pose_1, wrench_1 + stress_1, 
-            H1 ? &d_stress_p_d_pose_0 : 0,
-            H2 ? &d_stress_p_d_pose_1 : 0,
-            H4 || H5 ? &d_stress_p_d_wrench_sum : 0);
-        
-        Vector12 error;
-        error.head<6>() = twist_p - twist;
-        error.tail<6>() = stress_p - stress_0;
+        Vector6 twist_error = twist_p - twist;
 
         if (H1) {
-            *H1 = (Eigen::Matrix<double, 12, 6>() <<
-                -d_twist_d_delta * d_delta_d_pose_0,
-                d_stress_p_d_pose_0).finished();
+            *H1 = -d_twist_d_delta * d_delta_d_pose_0;
 
             // Eigen::Matrix<double, 12, 6> H1_check = numericalDerivative11<Vector12, Pose3>(
             //     [&](const Pose3& pose_0_) {
@@ -110,9 +97,7 @@ public:
         }
 
         if (H2) {
-            *H2 = (Eigen::Matrix<double, 12, 6>() <<
-                -d_twist_d_delta * d_delta_d_pose_1,
-                d_stress_p_d_pose_1).finished();
+            *H2 = -d_twist_d_delta * d_delta_d_pose_1;
 
             // Eigen::Matrix<double, 12, 6> H2_check = numericalDerivative11<Vector12, Pose3>(
             //     [&](const Pose3& pose_1_) {
@@ -126,9 +111,7 @@ public:
         if (H3) {
             double d_stress_mid_d_stress_0 = 0.5;
 
-            *H3 = (Eigen::Matrix<double, 12, 6>() << 
-                ds_ * K_inv_ * d_stress_mid_d_stress_0, 
-                -Matrix6::Identity()).finished();
+            *H3 = ds_ * K_inv_ * d_stress_mid_d_stress_0;
 
             // Eigen::Matrix<double, 12, 6> H3_check = numericalDerivative11<Vector12, Vector6>(
             //     [&](const Vector6& stress_0_) {
@@ -142,9 +125,93 @@ public:
         if (H4) {
             double d_stress_mid_d_stress_1 = 0.5;
 
-            *H4 = (Eigen::Matrix<double, 12, 6>() << 
-                ds_ * K_inv_ * d_stress_mid_d_stress_1,
-                d_stress_p_d_wrench_sum).finished();
+            *H4 = ds_ * K_inv_ * d_stress_mid_d_stress_1;
+
+            // Eigen::Matrix<double, 12, 6> H4_check = numericalDerivative11<Vector12, Vector6>(
+            //     [&](const Vector6& stress_1_) {
+            //         return this->evaluateError(pose_0, pose_1, stress_0, stress_1_, wrench_1,
+            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //     }, stress_1);
+
+            // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
+        }
+
+        return twist_error;
+    }
+};
+
+class CosseratRodStressFactor: public NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6, Vector6> {
+
+public:
+
+    using NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6, Vector6>::evaluateError;
+  
+    CosseratRodStressFactor(Key pose_0_key,
+                            Key pose_1_key,
+                            Key stress_0_key,
+                            Key stress_1_key,
+                            Key wrench_key,
+                            const SharedNoiseModel& model): 
+        NoiseModelFactorN(model, pose_0_key, pose_1_key, stress_0_key, stress_1_key, wrench_key) {}
+
+    Vector evaluateError(
+        const Pose3& pose_0, 
+        const Pose3& pose_1, 
+        const Vector6& stress_0, 
+        const Vector6& stress_1, 
+        const Vector6& wrench_1,
+        OptionalMatrixType H1, 
+        OptionalMatrixType H2, 
+        OptionalMatrixType H3, 
+        OptionalMatrixType H4,
+        OptionalMatrixType H5) const override {
+        
+        Matrix6 d_stress_p_d_pose_0, d_stress_p_d_pose_1, d_stress_p_d_wrench_sum;
+        Vector6 stress_p = propagate_wrench_backward(pose_0, pose_1, wrench_1 + stress_1, 
+            H1 ? &d_stress_p_d_pose_0 : 0,
+            H2 ? &d_stress_p_d_pose_1 : 0,
+            H4 || H5 ? &d_stress_p_d_wrench_sum : 0);
+        
+        Vector6 stress_error = stress_p - stress_0;
+
+        if (H1) {
+            *H1 = d_stress_p_d_pose_0;
+
+            // Eigen::Matrix<double, 12, 6> H1_check = numericalDerivative11<Vector12, Pose3>(
+            //     [&](const Pose3& pose_0_) {
+            //         return this->evaluateError(pose_0_, pose_1, stress_0, stress_1, wrench_1,
+            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //     }, pose_0);
+
+            // std::cout << "H1 check: " << (*H1 - H1_check).cwiseAbs().maxCoeff() << std::endl;
+        }
+
+        if (H2) {
+            *H2 = d_stress_p_d_pose_1;
+
+            // Eigen::Matrix<double, 12, 6> H2_check = numericalDerivative11<Vector12, Pose3>(
+            //     [&](const Pose3& pose_1_) {
+            //         return this->evaluateError(pose_0, pose_1_, stress_0, stress_1, wrench_1,
+            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //     }, pose_1);
+
+            // std::cout << "H2 check: " << (*H2 - H2_check).cwiseAbs().maxCoeff() << std::endl;
+        }
+
+        if (H3) {
+            *H3 = -Matrix6::Identity();
+
+            // Eigen::Matrix<double, 12, 6> H3_check = numericalDerivative11<Vector12, Vector6>(
+            //     [&](const Vector6& stress_0_) {
+            //         return this->evaluateError(pose_0, pose_1, stress_0_, stress_1, wrench_1,
+            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //     }, stress_0);
+
+            // std::cout << "H3 check: " << (*H3 - H3_check).cwiseAbs().maxCoeff() << std::endl;
+        }
+        
+        if (H4) {
+            *H4 = d_stress_p_d_wrench_sum;
 
             // Eigen::Matrix<double, 12, 6> H4_check = numericalDerivative11<Vector12, Vector6>(
             //     [&](const Vector6& stress_1_) {
@@ -156,9 +223,7 @@ public:
         }
 
         if (H5) {
-            *H5 = (Eigen::Matrix<double, 12, 6>() << 
-                Matrix6::Zero(),
-                d_stress_p_d_wrench_sum).finished();
+            *H5 = d_stress_p_d_wrench_sum;
 
             // Eigen::Matrix<double, 12, 6> H5_check = numericalDerivative11<Vector12, Vector6>(
             //     [&](const Vector6& wrench_) {
@@ -169,7 +234,7 @@ public:
             // std::cout << "H5 check: " << (*H5 - H5_check).cwiseAbs().maxCoeff() << std::endl;
         }
 
-        return error;
+        return stress_error;
     }
 };
 
@@ -198,12 +263,14 @@ Vector6 get_single_tendon_wrench(
 
     Vector3 force_dir;
     Matrix3 d_force_dir_d_hole_diff = Matrix3::Zero();
-
-    if (norm > 1e-9 && std::isfinite(norm)) {
-        force_dir = normalize(hole_diff, 
-            H_pose || H_pose_other ? &d_force_dir_d_hole_diff : 0);
+    
+    bool valid = hole_diff.allFinite() && norm > 1e-6;
+    
+    if (valid) {
+        force_dir = normalize(hole_diff, H_pose || H_pose_other ? &d_force_dir_d_hole_diff : 0);
     } else {
         force_dir = Vector3::Zero();
+        d_force_dir_d_hole_diff.setZero();
     }
 
     Vector3 force = tension * force_dir;

@@ -66,7 +66,6 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("tension_std", &TendonRobotGtsamConfig::tension_std)
         .def_readwrite("small_force_std", &TendonRobotGtsamConfig::small_force_std)
         .def_readwrite("small_moment_std", &TendonRobotGtsamConfig::small_moment_std)
-        .def_readwrite("small_stress_std", &TendonRobotGtsamConfig::small_stress_std)
         .def_readwrite("cosserat_twist_r_std", &TendonRobotGtsamConfig::cosserat_twist_r_std)
         .def_readwrite("small_r_std", &TendonRobotGtsamConfig::small_r_std)
         .def_readwrite("small_p_std", &TendonRobotGtsamConfig::small_p_std)
@@ -82,5 +81,6 @@ PYBIND11_MODULE(tendon_robot, m) {
     .def("solve", &TendonRobotGtsam::solve,
          py::arg("tensions"),
          py::arg("tip_wrench"),
+         py::arg("num_samples"),
          py::call_guard<py::gil_scoped_release>());
 }

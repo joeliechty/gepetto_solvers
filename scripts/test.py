@@ -6,20 +6,19 @@ from plotting import plot_robot
 cfg = TendonRobotGtsamConfig()
 
 cfg.num_discs = 9
-cfg.poses_between_discs = 2
+cfg.poses_between_discs = 3
 cfg.rod_length = 0.25
 cfg.rod_diameter = 1.2e-3
 cfg.youngs_modulus = 40.0e9
 cfg.shear_modulus = 15.0e9
 
-cfg.tension_std = 5e-3
+cfg.tension_std = 1e-3
 cfg.small_force_std = 1e-5
 cfg.small_moment_std = 1e-5
-cfg.small_stress_std = 1e-5
 cfg.cosserat_twist_r_std = 1e-3
-cfg.small_r_std = 1e-2
-cfg.small_p_std = 1e-3
-cfg.tip_force_std = 1e-1
+cfg.small_r_std = 1e-3
+cfg.small_p_std = 1e-4
+cfg.tip_force_std = 1e-5
 
 cfg.routing_radius = 0.01
 
@@ -41,7 +40,10 @@ solver = TendonRobotGtsam(cfg)
 
 
 tip_wrench = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-tensions = np.array([5.0, 1.0, 1.0, 1.0])
-solution = solver.solve(tensions, tip_wrench)
+tensions = np.array([8.0, 1.0, 3.0, 1.0])
+num_samples = 100
+solution = solver.solve(tensions, tip_wrench, num_samples)
+
+print(f"elapsed time: {solution.total_time_ms:.2f} ms")
 
 plot_robot(solution, title='Test')

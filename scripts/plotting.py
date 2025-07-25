@@ -183,13 +183,10 @@ def plot_robot(solution, title=''):
     arrow = get_arrow(p_tip, f_tip_scale * f_tip_mean)
     plotter.add_mesh(arrow, color='blue', opacity=0.5)
     
-    # if T_samples is not None:
-    #     for ii in range(len(T_samples)):
-    #         T_i = T_samples[ii]
-    #         T_i = se3_math.batch_inverse_transform(T_i)
-            
-    #         tube = get_tube(T_i, radius=0.00025)
-    #         plotter.add_mesh(tube, color='red', specular=0.8, specular_power=10, opacity=0.05, smooth_shading=True, lighting="light_kit")
+    backbone_sample_radius = 0.03 * solution.tendon_disc_config.routing_radius
+    for backbone_sample in solution.backbone_pose_samples:
+        tube = get_tube(backbone_sample, radius=backbone_sample_radius)
+        plotter.add_mesh(tube, color='red', specular=0.8, specular_power=10, opacity=0.2, smooth_shading=True, lighting="light_kit")
 
     #         if f_tip_samples is not None:
     #             f_i = R_tip @ f_tip_samples[ii]  # World frame
@@ -230,7 +227,7 @@ def plot_robot(solution, title=''):
     
     plotter.add_title(title, font_size=12, font='times')
     plotter.add_axes()
-    plotter.enable_depth_peeling(10)
+    # plotter.enable_depth_peeling(10)
     plotter.enable_anti_aliasing()
     light = pv.Light(light_type='headlight')
     light.intensity = 0.8

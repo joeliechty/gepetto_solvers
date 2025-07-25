@@ -50,8 +50,7 @@ struct TendonRobotGtsamConfig{
     double tension_std = 5e-2;
     double small_force_std = 1e-5;
     double small_moment_std = 1e-5;
-    double small_stress_std = 1e-5;
-    double cosserat_twist_r_std = 1e-1; // This just looks right
+    double cosserat_twist_r_std = 1e-1;
     double small_r_std = 1e-3;
     double small_p_std = 1e-5;
     double tip_force_std = 1e-4;
