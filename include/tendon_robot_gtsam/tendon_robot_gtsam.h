@@ -5,6 +5,7 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtParams.h>
 #include <gtsam/nonlinear/GaussNewtonOptimizer.h>
+#include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/linear/GaussianBayesNet.h>
 #include <gtsam/geometry/Pose3.h>
@@ -169,6 +170,9 @@ public:
         tip_stress_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             config.small_stress_std, config.small_stress_std, config.small_stress_std, 
             config.small_stress_std, config.small_stress_std, config.small_stress_std).finished());
+
+        prior_pose_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
+            5 * M_PI, 5 * M_PI, 5 * M_PI, 5 * config.rod_length, 5 * config.rod_length, 5 * config.rod_length).finished());
     }
 
 private:
@@ -184,6 +188,7 @@ private:
     noiseModel::Diagonal::shared_ptr base_frame_cov_;
     noiseModel::Diagonal::shared_ptr cosserat_cov_;
     noiseModel::Diagonal::shared_ptr tip_stress_cov_;
+    noiseModel::Diagonal::shared_ptr prior_pose_cov_;
 
     Values values_;
 
@@ -252,8 +257,13 @@ private:
                                           tendon_config_.local_holes[0], // Dummy, not used 
                                           small_wrench_cov_));
 
-        // Base frame soft constraint
+        // Base frame soft constraint?
         graph.add(PriorFactor<Pose3>(T(0), Pose3::Identity(), base_frame_cov_));
+
+        // Soft pose prior for stability
+        for (int i = 0; i < num_backbone_poses_; ++i) {
+            graph.add(PriorFactor<Pose3>(T(i), Pose3::Identity(), prior_pose_cov_));
+        }
 
         // Cosserat twist factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
@@ -277,56 +287,22 @@ private:
 
     void solve_graph(const NonlinearFactorGraph& graph)
     {
-        LevenbergMarquardtParams params;
-        params.setMaxIterations(10);
-        params.setVerbosityLM("SUMMARY");
-        params.setLinearSolverType("MULTIFRONTAL_QR");
+        // LevenbergMarquardtParams params;
+        // params.setVerbosityLM("SUMMARY");
+        // // params.setLinearSolverType("MULTIFRONTAL_QR");
+        // LevenbergMarquardtOptimizer optimizer(graph, values_, params);
 
-        LevenbergMarquardtOptimizer optimizer(graph, values_, params);
+        DoglegParams params;
+        params.setDeltaInitial(1.0);
+        params.setVerbosity("ERROR");
+        // params.setLinearSolverType("MULTIFRONTAL_QR");
+        DoglegOptimizer optimizer(graph, values_, params);
 
         values_ = optimizer.optimize();
-
-        KeyVector pose_keys;
-        for (int i = 0; i < num_backbone_poses_; ++i) {
-            pose_keys.push_back(T(i));
-        }
-
-        Marginals marginals(graph, values_);
-        Matrix jointCov = marginals.jointMarginalCovariance(pose_keys).fullMatrix();
-
-        const size_t dim = jointCov.rows();
-
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<> normal(0.0, 1.0);
-
-        Vector z(dim);
-        for (size_t i = 0; i < dim; ++i)
-            z(i) = normal(gen);
-
-        Eigen::LLT<Matrix> llt(jointCov);
-        Vector delta = llt.matrixL() * z;
-
-        // Now split delta into VectorValues by key:
-        VectorValues deltaVectorValues;
-        size_t idx = 0;
-        for (const auto& key : pose_keys) {
-            Vector6 increment = delta.segment(idx, 6);  // Pose3 tangent dim is 6
-            deltaVectorValues.insert(key, increment);
-            idx += 6;
-        }
-
-        // Retract the delta increments on the MAP values to get a sample:
-        Values sample = values_.retract(deltaVectorValues);
-
-        std::cout << "MAP: " << values_.at<Pose3>(T(num_backbone_poses_ - 1)) << std::endl;
-        std::cout << "Sample: " << sample.at<Pose3>(T(num_backbone_poses_ - 1)) << std::endl;
     }
 
-    TendonRobotSolution extract_solution(const NonlinearFactorGraph& graph){
+    TendonRobotSolution extract_solution(const NonlinearFactorGraph& graph, const Marginals& marginals){
         TendonRobotSolution solution;
-
-        Marginals marginals(graph, values_);
 
         for (int i = 0; i < num_backbone_poses_; ++i) {
             solution.backbone_pose_mean.push_back(values_.at<Pose3>(T(i)).matrix());
@@ -342,6 +318,53 @@ private:
         solution.tendon_disc_config = tendon_config_;
 
         return solution;
+    }
+
+    Vector sample_joint_cov(Matrix cov) {
+        const int dim = cov.rows();
+        Eigen::LLT<Matrix> llt(cov);
+        Matrix L = llt.matrixL();
+
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::normal_distribution<> normal(0.0, 1.0);
+
+        Vector z(dim);
+        for (int i = 0; i < dim; ++i)
+            z(i) = normal(gen);
+
+        Vector delta = L * z;
+
+        return delta;
+    }
+
+    void sample_solution(
+        const NonlinearFactorGraph& graph, 
+        const Marginals& marginals, 
+        TendonRobotSolution& solution) 
+    {
+        KeyVector pose_keys;
+        for (int i = 0; i < num_backbone_poses_; ++i) {
+            pose_keys.push_back(T(i));
+        }
+
+        Matrix pose_joint_cov = marginals.jointMarginalCovariance(pose_keys).fullMatrix();
+        Vector delta = sample_joint_cov(pose_joint_cov);
+
+        // Now split delta into VectorValues by key:
+        VectorValues deltaVectorValues;
+        size_t idx = 0;
+        for (const auto& key : pose_keys) {
+            Vector6 increment = delta.segment(idx, 6);  // Pose3 tangent dim is 6
+            deltaVectorValues.insert(key, increment);
+            idx += 6;
+        }
+
+        // Retract the delta increments on the MAP values to get a sample:
+        Values sample = values_.retract(deltaVectorValues);
+
+        std::cout << "MAP: " << values_.at<Pose3>(T(num_backbone_poses_ - 1)) << std::endl;
+        std::cout << "Sample: " << sample.at<Pose3>(T(num_backbone_poses_ - 1)) << std::endl;
     }
         
 public:
@@ -366,7 +389,9 @@ public:
 
         auto start_extract = std::chrono::high_resolution_clock::now();
 
-        TendonRobotSolution solution = extract_solution(graph);
+        Marginals marginals(graph, values_);
+        TendonRobotSolution solution = extract_solution(graph, marginals);
+        sample_solution(graph, marginals, solution);
 
         auto end_extract = std::chrono::high_resolution_clock::now();
 
