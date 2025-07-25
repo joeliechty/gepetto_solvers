@@ -285,6 +285,42 @@ private:
         LevenbergMarquardtOptimizer optimizer(graph, values_, params);
 
         values_ = optimizer.optimize();
+
+        KeyVector pose_keys;
+        for (int i = 0; i < num_backbone_poses_; ++i) {
+            pose_keys.push_back(T(i));
+        }
+
+        Marginals marginals(graph, values_);
+        Matrix jointCov = marginals.jointMarginalCovariance(pose_keys).fullMatrix();
+
+        const size_t dim = jointCov.rows();
+
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::normal_distribution<> normal(0.0, 1.0);
+
+        Vector z(dim);
+        for (size_t i = 0; i < dim; ++i)
+            z(i) = normal(gen);
+
+        Eigen::LLT<Matrix> llt(jointCov);
+        Vector delta = llt.matrixL() * z;
+
+        // Now split delta into VectorValues by key:
+        VectorValues deltaVectorValues;
+        size_t idx = 0;
+        for (const auto& key : pose_keys) {
+            Vector6 increment = delta.segment(idx, 6);  // Pose3 tangent dim is 6
+            deltaVectorValues.insert(key, increment);
+            idx += 6;
+        }
+
+        // Retract the delta increments on the MAP values to get a sample:
+        Values sample = values_.retract(deltaVectorValues);
+
+        std::cout << "MAP: " << values_.at<Pose3>(T(num_backbone_poses_ - 1)) << std::endl;
+        std::cout << "Sample: " << sample.at<Pose3>(T(num_backbone_poses_ - 1)) << std::endl;
     }
 
     TendonRobotSolution extract_solution(const NonlinearFactorGraph& graph){

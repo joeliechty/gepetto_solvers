@@ -33,6 +33,7 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def(py::init<>())
         .def_readwrite("backbone_pose_mean", &TendonRobotSolution::backbone_pose_mean)
         .def_readwrite("backbone_pose_cov", &TendonRobotSolution::backbone_pose_cov)
+        .def_readwrite("backbone_pose_samples", &TendonRobotSolution::backbone_pose_samples)
         .def_readwrite("tip_wrench_mean", &TendonRobotSolution::tip_wrench_mean)
         .def_readwrite("tip_wrench_cov", &TendonRobotSolution::tip_wrench_cov)
         .def_readwrite("tensions_mean", &TendonRobotSolution::tensions_mean)

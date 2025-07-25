@@ -21,6 +21,7 @@ struct TendonDiscConfig {
 struct TendonRobotSolution {
     std::vector<Matrix4> backbone_pose_mean;
     std::vector<Matrix6> backbone_pose_cov;
+    std::vector<std::vector<Matrix4>> backbone_pose_samples;
 
     Vector6 tip_wrench_mean;
     Matrix6 tip_wrench_cov;
