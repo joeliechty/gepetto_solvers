@@ -58,3 +58,20 @@ gtsam/cmake-build-release/
 # User-specific files
 *.user
 *.userprefs
+
+# Python
+*.pyc
+__pycache__/
+
+# Virtual environment
+venv/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Pybind wheels and caches
+*.so
+*.whl
+.cache/

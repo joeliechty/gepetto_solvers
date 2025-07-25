@@ -4,3 +4,6 @@ echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/gtsam.conf
 sudo ldconfig
 
 
+setup virtual environment with pip etc.
+pip install .
+run test scripts
