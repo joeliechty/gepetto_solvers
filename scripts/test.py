@@ -17,7 +17,7 @@ cfg.small_force_std = 1e-4
 cfg.small_moment_std = 1e-5
 cfg.cosserat_twist_r_std = 1e0
 cfg.small_r_std = 1e-3
-cfg.small_p_std = 1e-4
+cfg.small_p_std = 1e-5
 cfg.tip_force_std = 1e-4
 
 cfg.routing_radius = 0.01
