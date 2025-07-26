@@ -233,8 +233,8 @@ private:
                     tendon_config_.local_holes[disc_idx + 1],
                     small_wrench_cov_));
             } else {
-                // graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov_));
-                graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), noiseModel::Constrained::All(6)));
+                graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov_));
+                // graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), noiseModel::Constrained::All(6)));
             }
         }
 

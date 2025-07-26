@@ -183,10 +183,10 @@ def plot_robot(solution, title=''):
     arrow = get_arrow(p_tip, f_tip_scale * f_tip_mean)
     plotter.add_mesh(arrow, color='blue', opacity=0.5)
     
-    backbone_sample_radius = 0.03 * solution.tendon_disc_config.routing_radius
+    backbone_sample_radius = 0.05 * solution.tendon_disc_config.routing_radius
     for backbone_sample in solution.backbone_pose_samples:
         tube = get_tube(backbone_sample, radius=backbone_sample_radius)
-        plotter.add_mesh(tube, color='red', specular=0.8, specular_power=10, opacity=0.2, smooth_shading=True, lighting="light_kit")
+        plotter.add_mesh(tube, color='red', specular=0.8, specular_power=10, opacity=0.05, smooth_shading=True, lighting="light_kit")
 
     #         if f_tip_samples is not None:
     #             f_i = R_tip @ f_tip_samples[ii]  # World frame

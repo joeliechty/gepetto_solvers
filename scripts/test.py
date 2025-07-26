@@ -12,13 +12,13 @@ cfg.rod_diameter = 1.2e-3
 cfg.youngs_modulus = 40.0e9
 cfg.shear_modulus = 15.0e9
 
-cfg.tension_std = 1e-3
-cfg.small_force_std = 1e-5
+cfg.tension_std = 1e-1
+cfg.small_force_std = 1e-4
 cfg.small_moment_std = 1e-5
-cfg.cosserat_twist_r_std = 1e-3
+cfg.cosserat_twist_r_std = 1e0
 cfg.small_r_std = 1e-3
 cfg.small_p_std = 1e-4
-cfg.tip_force_std = 1e-5
+cfg.tip_force_std = 1e-4
 
 cfg.routing_radius = 0.01
 
@@ -38,12 +38,15 @@ cfg.angle_params = [
 
 solver = TendonRobotGtsam(cfg)
 
-
-tip_wrench = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-tensions = np.array([8.0, 1.0, 3.0, 1.0])
 num_samples = 100
-solution = solver.solve(tensions, tip_wrench, num_samples)
+tip_wrench = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
+tensions = np.array([8.0, 1.0, 3.0, 1.0])
+solution = solver.solve(tensions, tip_wrench, num_samples)
+print(f"elapsed time: {solution.total_time_ms:.2f} ms")
+
+tensions = np.array([8.1, 1.1, 3.0, 1.0])
+solution = solver.solve(tensions, tip_wrench, num_samples)
 print(f"elapsed time: {solution.total_time_ms:.2f} ms")
 
 plot_robot(solution, title='Test')
