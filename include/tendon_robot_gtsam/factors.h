@@ -87,11 +87,13 @@ public:
         if (H1) {
             *H1 = -d_twist_d_delta * d_delta_d_pose_0;
 
-            // Eigen::Matrix<double, 12, 6> H1_check = numericalDerivative11<Vector12, Pose3>(
+            // Eigen::Matrix<double, 6, 6> H1_check = numericalDerivative11<Vector6, Pose3>(
             //     [&](const Pose3& pose_0_) {
-            //         return this->evaluateError(pose_0_, pose_1, stress_0, stress_1, wrench_1,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //         return this->evaluateError(pose_0_, pose_1, stress_0, stress_1,
+            //                                 nullptr, nullptr, nullptr, nullptr);
             //     }, pose_0);
+            
+            // *H1 = H1_check;
 
             // std::cout << "H1 check: " << (*H1 - H1_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -99,39 +101,43 @@ public:
         if (H2) {
             *H2 = -d_twist_d_delta * d_delta_d_pose_1;
 
-            // Eigen::Matrix<double, 12, 6> H2_check = numericalDerivative11<Vector12, Pose3>(
+            // Eigen::Matrix<double, 6, 6> H2_check = numericalDerivative11<Vector6, Pose3>(
             //     [&](const Pose3& pose_1_) {
-            //         return this->evaluateError(pose_0, pose_1_, stress_0, stress_1, wrench_1,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //         return this->evaluateError(pose_0, pose_1_, stress_0, stress_1,
+            //                                 nullptr, nullptr, nullptr, nullptr);
             //     }, pose_1);
+            
+            // *H2 = H2_check;
 
             // std::cout << "H2 check: " << (*H2 - H2_check).cwiseAbs().maxCoeff() << std::endl;
         }
 
         if (H3) {
             double d_stress_mid_d_stress_0 = 0.5;
-
             *H3 = ds_ * K_inv_ * d_stress_mid_d_stress_0;
 
-            // Eigen::Matrix<double, 12, 6> H3_check = numericalDerivative11<Vector12, Vector6>(
+            // Eigen::Matrix<double, 6, 6> H3_check = numericalDerivative11<Vector6, Vector6>(
             //     [&](const Vector6& stress_0_) {
-            //         return this->evaluateError(pose_0, pose_1, stress_0_, stress_1, wrench_1,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //         return this->evaluateError(pose_0, pose_1, stress_0_, stress_1,
+            //                                 nullptr, nullptr, nullptr, nullptr);
             //     }, stress_0);
+
+            // *H3 = H3_check;
 
             // std::cout << "H3 check: " << (*H3 - H3_check).cwiseAbs().maxCoeff() << std::endl;
         }
         
         if (H4) {
             double d_stress_mid_d_stress_1 = 0.5;
-
             *H4 = ds_ * K_inv_ * d_stress_mid_d_stress_1;
 
-            // Eigen::Matrix<double, 12, 6> H4_check = numericalDerivative11<Vector12, Vector6>(
+            // Eigen::Matrix<double, 6, 6> H4_check = numericalDerivative11<Vector6, Vector6>(
             //     [&](const Vector6& stress_1_) {
-            //         return this->evaluateError(pose_0, pose_1, stress_0, stress_1_, wrench_1,
-            //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
+            //         return this->evaluateError(pose_0, pose_1, stress_0, stress_1_,
+            //                                 nullptr, nullptr, nullptr, nullptr);
             //     }, stress_1);
+            
+            // *H4 = H4_check;
 
             // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -177,11 +183,13 @@ public:
         if (H1) {
             *H1 = d_stress_p_d_pose_0;
 
-            // Eigen::Matrix<double, 12, 6> H1_check = numericalDerivative11<Vector12, Pose3>(
+            // Eigen::Matrix<double, 6, 6> H1_check = numericalDerivative11<Vector6, Pose3>(
             //     [&](const Pose3& pose_0_) {
             //         return this->evaluateError(pose_0_, pose_1, stress_0, stress_1, wrench_1,
             //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, pose_0);
+            
+            // *H1 = H1_check;
 
             // std::cout << "H1 check: " << (*H1 - H1_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -189,11 +197,13 @@ public:
         if (H2) {
             *H2 = d_stress_p_d_pose_1;
 
-            // Eigen::Matrix<double, 12, 6> H2_check = numericalDerivative11<Vector12, Pose3>(
+            // Eigen::Matrix<double, 6, 6> H2_check = numericalDerivative11<Vector6, Pose3>(
             //     [&](const Pose3& pose_1_) {
             //         return this->evaluateError(pose_0, pose_1_, stress_0, stress_1, wrench_1,
             //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, pose_1);
+            
+            // *H2 = H2_check;
 
             // std::cout << "H2 check: " << (*H2 - H2_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -201,11 +211,13 @@ public:
         if (H3) {
             *H3 = -Matrix6::Identity();
 
-            // Eigen::Matrix<double, 12, 6> H3_check = numericalDerivative11<Vector12, Vector6>(
+            // Eigen::Matrix<double, 6, 6> H3_check = numericalDerivative11<Vector6, Vector6>(
             //     [&](const Vector6& stress_0_) {
             //         return this->evaluateError(pose_0, pose_1, stress_0_, stress_1, wrench_1,
             //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, stress_0);
+            
+            // *H3 = H3_check;
 
             // std::cout << "H3 check: " << (*H3 - H3_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -213,11 +225,13 @@ public:
         if (H4) {
             *H4 = d_stress_p_d_wrench_sum;
 
-            // Eigen::Matrix<double, 12, 6> H4_check = numericalDerivative11<Vector12, Vector6>(
+            // Eigen::Matrix<double, 6, 6> H4_check = numericalDerivative11<Vector6, Vector6>(
             //     [&](const Vector6& stress_1_) {
             //         return this->evaluateError(pose_0, pose_1, stress_0, stress_1_, wrench_1,
             //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, stress_1);
+            
+            // *H4 = H4_check;
 
             // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -225,11 +239,13 @@ public:
         if (H5) {
             *H5 = d_stress_p_d_wrench_sum;
 
-            // Eigen::Matrix<double, 12, 6> H5_check = numericalDerivative11<Vector12, Vector6>(
+            // Eigen::Matrix<double, 6, 6> H5_check = numericalDerivative11<Vector6, Vector6>(
             //     [&](const Vector6& wrench_) {
             //         return this->evaluateError(pose_0, pose_1, stress_0, stress_1, wrench_,
             //                                 nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, wrench_1);
+            
+            // *H5 = H5_check;
 
             // std::cout << "H5 check: " << (*H5 - H5_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -264,13 +280,12 @@ Vector6 get_single_tendon_wrench(
     Vector3 force_dir;
     Matrix3 d_force_dir_d_hole_diff = Matrix3::Zero();
     
-    bool valid = hole_diff.allFinite() && norm > 1e-6;
+    bool valid = hole_diff.allFinite() && norm > 1e-3;
     
     if (valid) {
         force_dir = normalize(hole_diff, H_pose || H_pose_other ? &d_force_dir_d_hole_diff : 0);
     } else {
         force_dir = Vector3::Zero();
-        d_force_dir_d_hole_diff.setZero();
     }
 
     Vector3 force = tension * force_dir;
@@ -414,6 +429,8 @@ public:
             //         return this->evaluateError(pose_prev_, pose, pose_next, wrench, tensions,
             //                                    nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, pose_prev);
+            
+            // *H1 = H1_check;
 
             // std::cout << "H1 check: " << (*H1 - H1_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -427,6 +444,8 @@ public:
             //                                    nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, pose);
             
+            // *H2 = H2_check;
+
             // std::cout << "H2 check: " << (*H2 - H2_check).cwiseAbs().maxCoeff() << std::endl;
         }
 
@@ -438,6 +457,8 @@ public:
             //         return this->evaluateError(pose_prev, pose, pose_next_, wrench, tensions,
             //                                    nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, pose_next);
+            
+            // *H3 = H3_check;
 
             // std::cout << "H3 check: " << (*H3 - H3_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -450,6 +471,8 @@ public:
             //         return this->evaluateError(pose_prev, pose, pose_next, wrench_, tensions,
             //                                    nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, wrench);
+
+            // *H4 = H4_check;
             
             // std::cout << "H4 check: " << (*H4 - H4_check).cwiseAbs().maxCoeff() << std::endl;
         }
@@ -462,6 +485,8 @@ public:
             //         return this->evaluateError(pose_prev, pose, pose_next, wrench, tensions_,
             //                                    nullptr, nullptr, nullptr, nullptr, nullptr);
             //     }, tensions);
+            
+            // *H5 = H5_check;
 
             // std::cout << "H5 check: " << (*H5 - H5_check).cwiseAbs().maxCoeff() << std::endl;
         }

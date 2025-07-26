@@ -159,14 +159,12 @@ public:
             config.small_r_std, config.small_r_std, config.small_r_std, 
             config.small_p_std, config.small_p_std, config.small_p_std).finished());
         
-        double r_std = config.cosserat_twist_r_std * ds_;
-        
         cosserat_twist_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
-            r_std, r_std, r_std, 
+            config.cosserat_twist_r_std, config.cosserat_twist_r_std, config.cosserat_twist_r_std, 
             config.small_p_std, config.small_p_std, config.small_p_std).finished());
 
         prior_pose_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
-            5 * M_PI, 5 * M_PI, 5 * M_PI, 5 * config.rod_length, 5 * config.rod_length, 5 * config.rod_length).finished());
+            3 * M_PI, 3 * M_PI, 3 * M_PI, 3 * config.rod_length, 3 * config.rod_length, 3 * config.rod_length).finished());
     }
 
 private:
@@ -234,7 +232,6 @@ private:
                     small_wrench_cov_));
             } else {
                 graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov_));
-                // graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), noiseModel::Constrained::All(6)));
             }
         }
 
@@ -263,15 +260,11 @@ private:
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
             graph.add(CosseratRodTwistFactor(
                 T(i), T(i + 1), S(i), S(i + 1), ds_, K_inv_, cosserat_twist_cov_));
-            // graph.add(CosseratRodStressFactor(
-            //     T(i), T(i + 1), S(i), S(i + 1), F(i + 1), noiseModel::Constrained::All(6)));
             graph.add(CosseratRodStressFactor(
                 T(i), T(i + 1), S(i), S(i + 1), F(i + 1), small_wrench_cov_));
         }
 
         // Near-zero constraint for tip stress
-        // graph.add(PriorFactor<Vector6>(
-        //     S(num_backbone_poses_ - 1), Vector6::Zero(), noiseModel::Constrained::All(6)));
         graph.add(PriorFactor<Vector6>(
             S(num_backbone_poses_ - 1), Vector6::Zero(), small_wrench_cov_));
 
@@ -292,11 +285,18 @@ private:
         // LevenbergMarquardtOptimizer optimizer(graph, values_, params);
 
         DoglegParams params;
-        params.setDeltaInitial(0.01);
+        // params.setDeltaInitial(0.01);
         params.setVerbosity("ERROR");
-        params.setLinearSolverType("MULTIFRONTAL_QR");
+        // params.setLinearSolverType("MULTIFRONTAL_QR");
+        // params.setLinearSolverType("SEQUENTIAL_QR");
         // params.setOrderingType("METIS");
         DoglegOptimizer optimizer(graph, values_, params);
+
+        // GaussNewtonParams params;
+        // params.setVerbosity("ERROR");
+        // params.setLinearSolverType("MULTIFRONTAL_QR");
+        // // params.setOrderingType("METIS");
+        // GaussNewtonOptimizer optimizer(graph, values_, params);
 
         values_ = optimizer.optimize();
     }
