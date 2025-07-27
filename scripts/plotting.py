@@ -123,10 +123,10 @@ class RobotPlotter:
 
     def _init_scene(self, solution):
         plate = get_base_plate(solution)
-        self.plate_actor = self.plotter.add_mesh(plate, color="dimgrey", show_edges=True, line_width=1, lighting="light_kit")
+        self.plate_actor = self.plotter.add_mesh(plate, color="dimgrey", show_edges=True, line_width=1)
 
         self.backbone_mesh = get_tube(solution.backbone_pose_mean, radius=0.0015)
-        self.plotter.add_mesh(self.backbone_mesh, color='blue', silhouette=True, specular=0.8, specular_power=10, opacity=0.5, smooth_shading=True, lighting="light_kit")
+        self.plotter.add_mesh(self.backbone_mesh, color='blue', silhouette=True, opacity=0.5, smooth_shading=True)
 
         self.tendon_meshes, self.disc_meshes = get_tendon_disc_meshes(solution)
 
@@ -135,18 +135,46 @@ class RobotPlotter:
         for j, tendon in enumerate(self.tendon_meshes):
             color = tendon_colors[j % len(tendon_colors)]
             for segment in tendon:
-                self.plotter.add_mesh(segment, color=color, specular=0.8, specular_power=10, opacity=0.7, smooth_shading=True, silhouette=True, lighting="light_kit")
+                self.plotter.add_mesh(segment, color=color, opacity=0.7, smooth_shading=True, silhouette=True)
         
         for disc in self.disc_meshes:
-            self.plotter.add_mesh(disc, color='lightsteelblue', specular=0.8, specular_power=10, opacity=0.4, smooth_shading=True, split_sharp_edges=True, silhouette=True, lighting="light_kit")
+            disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
+            self.plotter.add_mesh(disc, color='skyblue', opacity=0.5, smooth_shading=True)
 
-        self.plotter.show(auto_close=False, interactive_update=True)
+        self.backbone_sample_radius = 0.03 * solution.tendon_disc_config.routing_radius
+        self.backbone_sample_meshes = []
+        for backbone_sample in solution.backbone_pose_samples:
+            tube = get_tube(backbone_sample, radius=self.backbone_sample_radius)
+            self.plotter.add_mesh(tube, color='red', opacity=0.3, smooth_shading=True)
+            self.backbone_sample_meshes.append(tube)
 
-    def update(self, new_solution):
-        tube = get_tube(new_solution.backbone_pose_mean, radius=0.0015)
+        self.plotter.add_axes()
+        # self.plotter.enable_depth_peeling(10)
+        self.plotter.enable_anti_aliasing()
+
+        light = pv.Light(light_type='scenelight')
+        light.position = (5, 5, 10)           # Light source location
+        light.intensity = 0.2
+        self.plotter.add_light(light)
+
+        light = pv.Light(light_type='scenelight')
+        light.position = (5, -5, 10)           # Light source location
+        light.intensity = 0.2
+        self.plotter.add_light(light)
+
+        light = pv.Light(light_type='scenelight')
+        light.position = (-5, 0, 10)           # Light source location
+        light.intensity = 0.2
+        self.plotter.add_light(light)
+
+        self.plotter.view_isometric()
+        self.plotter.show(auto_close=False, interactive_update=True) #, full_screen=True)
+
+    def update(self, solution):
+        tube = get_tube(solution.backbone_pose_mean, radius=0.0015)
         self.backbone_mesh.points[:] = tube.points
 
-        tendons, discs = get_tendon_disc_meshes(new_solution)
+        tendons, discs = get_tendon_disc_meshes(solution)
 
         for new_disc, self_disc in zip(discs, self.disc_meshes):
             self_disc.points[:] = new_disc.points
@@ -155,7 +183,12 @@ class RobotPlotter:
             for j, segment in enumerate(tendon):
                 self.tendon_meshes[i][j].points[:] = tendons[i][j].points
 
-        # Update rendering
+        for i, backbone_sample in enumerate(solution.backbone_pose_samples):
+            tube = get_tube(backbone_sample, radius=self.backbone_sample_radius)
+            self.backbone_sample_meshes[i].points[:] = tube.points
+        
+        self.plotter.camera.azimuth += 2
+
         self.plotter.render()
 
 

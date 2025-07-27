@@ -165,6 +165,17 @@ public:
 
         prior_pose_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             3 * M_PI, 3 * M_PI, 3 * M_PI, 3 * config.rod_length, 3 * config.rod_length, 3 * config.rod_length).finished());
+
+        last_tip_pose_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
+
+        last_tip_pose_cov_ = (Vector(6) << 
+            config.small_r_std, config.small_r_std, config.small_r_std, 
+            config.small_p_std, config.small_p_std, config.small_p_std).finished().array().square().matrix().asDiagonal();
+
+        last_tensions_ = Vector4::Zero();
+        last_tensions_cov_ = (Vector(6) << 
+            config.small_force_std, config.small_force_std, config.small_force_std, 
+            config.small_force_std).finished().array().square().matrix().asDiagonal();
     }
 
 private:
@@ -180,6 +191,11 @@ private:
     noiseModel::Diagonal::shared_ptr base_frame_cov_;
     noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
     noiseModel::Diagonal::shared_ptr prior_pose_cov_;
+
+    Pose3 last_tip_pose_;
+    Matrix6 last_tip_pose_cov_;
+    Vector4 last_tensions_;
+    Matrix4 last_tensions_cov_;
 
     Values values_;
 
@@ -210,7 +226,7 @@ private:
 
     NonlinearFactorGraph build_graph(const Vector4& tensions_mean, const Vector6& tip_wrench_mean) {
         NonlinearFactorGraph graph;
-
+        
         // Priors for wrenches along backbone
         for (int i = 1; i + 2 < num_backbone_poses_; i++) {
             bool is_tip = false;
@@ -251,10 +267,10 @@ private:
         // Base frame soft constraint?
         graph.add(PriorFactor<Pose3>(T(0), Pose3::Identity(), base_frame_cov_));
 
-        // Soft pose prior for stability
-        for (int i = 0; i < num_backbone_poses_; ++i) {
-            graph.add(PriorFactor<Pose3>(T(i), Pose3::Identity(), prior_pose_cov_));
-        }
+        // Last pose prior for tip pose
+        double tip_pose_drift_std = 0.01;
+        Matrix6 tip_pose_prior_cov = last_tip_pose_cov_ + tip_pose_drift_std * tip_pose_drift_std * Matrix6::Identity();
+        graph.add(PriorFactor<Pose3>(T(num_backbone_poses_ - 1), last_tip_pose_, noiseModel::Gaussian::Covariance(tip_pose_prior_cov)));
 
         // Cosserat factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
@@ -270,6 +286,11 @@ private:
 
         // Tendon tensions prior
         graph.add(PriorFactor<Vector4>(Q(0), tensions_mean, tensions_cov_));
+        
+        // Last tension prior
+        double tension_drift_std = 0.1;
+        Matrix4 tensions_prior_cov = last_tensions_cov_ + tension_drift_std * tension_drift_std * Matrix4::Identity();
+        graph.add(PriorFactor<Vector4>(Q(0), last_tensions_, noiseModel::Gaussian::Covariance(tensions_prior_cov)));
 
         // Tip wrench actually applied at tip - 1, since tip already has a disc wrench
         graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 2), tip_wrench_mean, tip_wrench_cov_));
@@ -284,19 +305,19 @@ private:
         // params.setLinearSolverType("MULTIFRONTAL_QR");
         // LevenbergMarquardtOptimizer optimizer(graph, values_, params);
 
-        DoglegParams params;
-        // params.setDeltaInitial(0.01);
+        // DoglegParams params;
+        // // params.setDeltaInitial(0.01);
+        // params.setVerbosity("ERROR");
+        // // params.setLinearSolverType("MULTIFRONTAL_QR");
+        // // params.setLinearSolverType("SEQUENTIAL_QR");
+        // // params.setOrderingType("METIS");
+        // DoglegOptimizer optimizer(graph, values_, params);
+
+        GaussNewtonParams params;
         params.setVerbosity("ERROR");
         // params.setLinearSolverType("MULTIFRONTAL_QR");
-        // params.setLinearSolverType("SEQUENTIAL_QR");
         // params.setOrderingType("METIS");
-        DoglegOptimizer optimizer(graph, values_, params);
-
-        // GaussNewtonParams params;
-        // params.setVerbosity("ERROR");
-        // params.setLinearSolverType("MULTIFRONTAL_QR");
-        // // params.setOrderingType("METIS");
-        // GaussNewtonOptimizer optimizer(graph, values_, params);
+        GaussNewtonOptimizer optimizer(graph, values_, params);
 
         values_ = optimizer.optimize();
     }
@@ -412,6 +433,12 @@ public:
         solution.solve_time_ms = std::chrono::duration<double, std::milli>(end_solve - start_solve).count();
         solution.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
         solution.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_initialize).count();
+
+        last_tip_pose_ = Pose3(solution.backbone_pose_mean.back());
+        last_tip_pose_cov_ = solution.backbone_pose_cov.back();
+        
+        last_tensions_ = solution.tensions_mean;
+        last_tensions_cov_ = solution.tensions_cov;
 
         return solution;
     }
