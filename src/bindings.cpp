@@ -36,8 +36,10 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("backbone_pose_samples", &TendonRobotSolution::backbone_pose_samples)
         .def_readwrite("tip_wrench_mean", &TendonRobotSolution::tip_wrench_mean)
         .def_readwrite("tip_wrench_cov", &TendonRobotSolution::tip_wrench_cov)
+        .def_readwrite("tip_wrench_samples", &TendonRobotSolution::tip_wrench_samples)
         .def_readwrite("tensions_mean", &TendonRobotSolution::tensions_mean)
         .def_readwrite("tensions_cov", &TendonRobotSolution::tensions_cov)
+        .def_readwrite("tension_samples", &TendonRobotSolution::tension_samples)
         .def_readwrite("build_time_ms", &TendonRobotSolution::build_time_ms)
         .def_readwrite("solve_time_ms", &TendonRobotSolution::solve_time_ms)
         .def_readwrite("extract_time_ms", &TendonRobotSolution::extract_time_ms)
@@ -72,7 +74,12 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("tip_force_std", &TendonRobotGtsamConfig::tip_force_std)
         .def_readwrite("routing_radius", &TendonRobotGtsamConfig::routing_radius)
         .def_readwrite("angle_functions", &TendonRobotGtsamConfig::angle_functions)
-        .def_readwrite("angle_params", &TendonRobotGtsamConfig::angle_params);
+        .def_readwrite("angle_params", &TendonRobotGtsamConfig::angle_params)
+        .def_readwrite("pose_drift_p_std", &TendonRobotGtsamConfig::pose_drift_p_std)
+        .def_readwrite("pose_drift_r_std", &TendonRobotGtsamConfig::pose_drift_r_std)
+        .def_readwrite("tension_drift_std", &TendonRobotGtsamConfig::tension_drift_std)
+        .def_readwrite("wrench_drift_std", &TendonRobotGtsamConfig::wrench_drift_std)
+        .def_readwrite("p_meas_std", &TendonRobotGtsamConfig::p_meas_std);
     
     m.def("get_default_config", &get_default_config);
 
@@ -80,7 +87,7 @@ PYBIND11_MODULE(tendon_robot, m) {
     .def(py::init<const TendonRobotGtsamConfig&>())
     .def("solve", &TendonRobotGtsam::solve,
          py::arg("tensions"),
-         py::arg("tip_wrench"),
+         py::arg("tip_force"),
          py::arg("num_samples"),
          py::call_guard<py::gil_scoped_release>());
 }

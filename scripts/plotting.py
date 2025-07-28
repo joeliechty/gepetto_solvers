@@ -116,7 +116,7 @@ def get_arrow(start, vec, shaft_radius=0.001, tip_radius=0.002, tip_length=0.005
     return arrow
 
 
-class RobotPlotter:
+class TendonRobotPlotter:
     def __init__(self, initial_solution):
         self.plotter = pv.Plotter()
         self._init_scene(initial_solution)
@@ -139,7 +139,7 @@ class RobotPlotter:
         
         for disc in self.disc_meshes:
             disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
-            self.plotter.add_mesh(disc, color='skyblue', opacity=0.5, smooth_shading=True)
+            self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, silhouette=True, smooth_shading=True)
 
         self.backbone_sample_radius = 0.03 * solution.tendon_disc_config.routing_radius
         self.backbone_sample_meshes = []
@@ -147,6 +147,14 @@ class RobotPlotter:
             tube = get_tube(backbone_sample, radius=self.backbone_sample_radius)
             self.plotter.add_mesh(tube, color='red', opacity=0.3, smooth_shading=True)
             self.backbone_sample_meshes.append(tube)
+
+        T_tip = solution.backbone_pose_mean[-1]
+        R_tip = T_tip[:3,:3]
+        p_tip = T_tip[:3,3]
+        self.f_tip_scale = 0.5
+        f_tip_mean = R_tip @ solution.tip_wrench_mean[3:]  # World frame
+        self.tip_force_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
+        self.plotter.add_mesh(self.tip_force_mesh, color='blue', opacity=0.5)
 
         self.plotter.add_axes()
         # self.plotter.enable_depth_peeling(10)
@@ -187,8 +195,14 @@ class RobotPlotter:
             tube = get_tube(backbone_sample, radius=self.backbone_sample_radius)
             self.backbone_sample_meshes[i].points[:] = tube.points
         
-        self.plotter.camera.azimuth += 2
+        T_tip = solution.backbone_pose_mean[-1]
+        R_tip = T_tip[:3,:3]
+        p_tip = T_tip[:3,3]
+        f_tip_mean = R_tip @ solution.tip_wrench_mean[3:]  # World frame
+        arrow = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
+        self.tip_force_mesh.points[:] = arrow.points
 
+        self.plotter.camera.azimuth += 0.5
         self.plotter.render()
 
 

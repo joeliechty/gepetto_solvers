@@ -25,10 +25,12 @@ struct TendonRobotSolution {
 
     Vector6 tip_wrench_mean;
     Matrix6 tip_wrench_cov;
+    std::vector<Vector6> tip_wrench_samples;
 
     Vector4 tensions_mean;
     Matrix4 tensions_cov;
-    
+    std::vector<Vector4> tension_samples;
+
     double build_time_ms;
     double solve_time_ms;
     double extract_time_ms;
@@ -46,7 +48,7 @@ struct TendonRobotGtsamConfig{
     double youngs_modulus = 35.0e9;  // Nitinol
     double shear_modulus = 12.0e9;  // Nitinol
     
-    // Noise parameters
+    // Model parameters
     double tension_std = 5e-2;
     double small_force_std = 1e-5;
     double small_moment_std = 1e-5;
@@ -55,6 +57,15 @@ struct TendonRobotGtsamConfig{
     double small_p_std = 1e-5;
     double tip_force_std = 1e-4;
 
+    // Temporal drift parameters
+    double pose_drift_p_std = 1e-3;
+    double pose_drift_r_std = 1e-1;
+    double tension_drift_std = 1e-1;
+    double wrench_drift_std = 1e-1;
+
+    // Measurement noise parameters
+    double p_meas_std = 1e-3;
+    
     // Routing configuration
     double routing_radius;
     std::vector<RoutingAngleFunction> angle_functions;

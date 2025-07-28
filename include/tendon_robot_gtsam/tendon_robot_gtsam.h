@@ -115,7 +115,6 @@ using symbol_shorthand::T;
 using symbol_shorthand::F;
 using symbol_shorthand::S;
 using symbol_shorthand::Q;
-using symbol_shorthand::V;
 
 class TendonRobotGtsam {
 public:
@@ -170,6 +169,12 @@ public:
         last_tensions_mean_ = Vector4::Zero();
         last_tip_wrench_mean_ = Vector6::Zero();
         last_state_cov_ = 0.001 * Eigen::Matrix<double, 16, 16>::Identity();
+        
+        state_drift_cov_.setZero();
+        state_drift_cov_.block<3,3>(0,0) += config.pose_drift_r_std * config.pose_drift_r_std * Matrix3::Identity();
+        state_drift_cov_.block<3,3>(3,3) += config.pose_drift_p_std * config.pose_drift_p_std * Matrix3::Identity();
+        state_drift_cov_.block<4,4>(6,6) += config.tension_drift_std * config.tension_drift_std * Matrix4::Identity();
+        state_drift_cov_.block<6,6>(10,10) += config.wrench_drift_std * config.wrench_drift_std * Matrix6::Identity();
     }
 
 private:
@@ -190,10 +195,13 @@ private:
     Vector4 last_tensions_mean_;
     Vector6 last_tip_wrench_mean_;
     Eigen::Matrix<double, 16, 16> last_state_cov_;
+    Eigen::Matrix<double, 16, 16> state_drift_cov_;
 
+    Ordering ordering_;
+    bool is_first_solve_ = true;
     Values values_;
 
-    void initialize_values(const Vector4& tensions, const Vector6& tip_wrench){
+    void initialize_values(const Vector4& tensions, const Vector3& tip_force){
         if (values_.exists(Q(0))) {
             values_.update(Q(0), tensions);
         } else {
@@ -218,7 +226,7 @@ private:
         }
     }
 
-    NonlinearFactorGraph build_graph(const Vector4& tensions_mean, const Vector6& tip_wrench_mean) {
+    NonlinearFactorGraph build_graph(const Vector4& tensions_mean, const Vector3& tip_force_mean) {
         NonlinearFactorGraph graph;
         
         // Priors for wrenches along backbone
@@ -258,13 +266,8 @@ private:
                                           tendon_config_.local_holes[0], // Dummy, not used 
                                           small_wrench_cov_));
 
-        // Base frame soft constraint?
+        // Base frame soft constraint
         graph.add(PriorFactor<Pose3>(T(0), Pose3::Identity(), base_frame_cov_));
-
-        // Last pose prior for tip pose
-        // double tip_pose_drift_std = 0.01;
-        // Matrix6 tip_pose_prior_cov = last_tip_pose_cov_ + tip_pose_drift_std * tip_pose_drift_std * Matrix6::Identity();
-        // graph.add(PriorFactor<Pose3>(T(num_backbone_poses_ - 1), last_tip_pose_, noiseModel::Gaussian::Covariance(tip_pose_prior_cov)));
 
         // Cosserat factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
@@ -278,15 +281,13 @@ private:
         graph.add(PriorFactor<Vector6>(
             S(num_backbone_poses_ - 1), Vector6::Zero(), small_wrench_cov_));
 
-        // Tendon tensions prior
+        // Tendon tensions measurement prior
         graph.add(PriorFactor<Vector4>(Q(0), tensions_mean, tensions_cov_));
         
-        // Last tension prior
-        // double tension_drift_std = 0.1;
-        // Matrix4 tensions_prior_cov = last_tensions_cov_ + tension_drift_std * tension_drift_std * Matrix4::Identity();
-        // graph.add(PriorFactor<Vector4>(Q(0), last_tensions_, noiseModel::Gaussian::Covariance(tensions_prior_cov)));
-
         // Tip wrench actually applied at tip - 1, since tip already has a disc wrench
+        Vector6 tip_wrench_mean;
+        tip_wrench_mean.head<3>() = Vector3::Zero();
+        tip_wrench_mean.tail<3>() = tip_force_mean;
         graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 2), tip_wrench_mean, tip_wrench_cov_));
         
         add_last_state_prior(graph);
@@ -300,18 +301,7 @@ private:
         Vector6 tip_wrench_pred = last_tip_wrench_mean_;
 
         Eigen::Matrix<double, 16, 16> cov_pred = last_state_cov_;
-
-        // Define diagonal noise levels
-        double pose_drift_p_std = 1e-3;
-        double pose_drift_r_std = 1e-1;
-        double tension_drift_std = 1e-1;
-        double wrench_drift_std = 1e-1;
-
-        // Add noise to specific blocks
-        cov_pred.block<3,3>(0,0) += pose_drift_r_std * pose_drift_r_std * Matrix3::Identity();
-        cov_pred.block<3,3>(3,3) += pose_drift_p_std * pose_drift_p_std * Matrix3::Identity();
-        cov_pred.block<4,4>(6,6) += tension_drift_std * tension_drift_std * Matrix4::Identity();
-        cov_pred.block<6,6>(10,10) += wrench_drift_std * wrench_drift_std * Matrix6::Identity();
+        cov_pred += state_drift_cov_;
 
         graph.add(LastStatePriorFactor(
             T(num_backbone_poses_ - 1),
@@ -325,23 +315,17 @@ private:
 
     void solve_graph(const NonlinearFactorGraph& graph)
     {
-        // LevenbergMarquardtParams params;
-        // params.setVerbosityLM("SUMMARY");
-        // params.setLinearSolverType("MULTIFRONTAL_QR");
-        // LevenbergMarquardtOptimizer optimizer(graph, values_, params);
-
-        // DoglegParams params;
-        // // params.setDeltaInitial(0.01);
-        // params.setVerbosity("ERROR");
-        // // params.setLinearSolverType("MULTIFRONTAL_QR");
-        // // params.setLinearSolverType("SEQUENTIAL_QR");
-        // // params.setOrderingType("METIS");
-        // DoglegOptimizer optimizer(graph, values_, params);
-
+        // Reusing the variable ordering can save a few ms.
+        // Note that graph structure must be identical every call.
+        if (is_first_solve_) {
+            ordering_ = Ordering::Colamd(graph);
+            is_first_solve_ = false;
+        }
+        
         GaussNewtonParams params;
-        params.setVerbosity("ERROR");
+        params.setOrdering(ordering_);
+        params.setVerbosity("TERMINATION");
         // params.setLinearSolverType("MULTIFRONTAL_QR");
-        // params.setOrderingType("METIS");
         GaussNewtonOptimizer optimizer(graph, values_, params);
 
         values_ = optimizer.optimize();
@@ -390,50 +374,69 @@ private:
         return samples;
     }
 
-    void sample_backbone_poses(const Marginals& marginals, TendonRobotSolution& solution, const int num_samples) {
-        KeyVector pose_keys;
-        for (int i = 0; i < num_backbone_poses_; ++i) {
-            pose_keys.push_back(T(i));
-        }
-
-        Matrix pose_joint_cov = marginals.jointMarginalCovariance(pose_keys).fullMatrix();
-        std::vector<Vector> deltas = sample_joint_cov(pose_joint_cov, num_samples);
-
-        for(int i = 0; i < num_samples; i++) {
-            VectorValues vector_values;
-            int idx = 0;
-            for (const auto& key : pose_keys) {
-                Vector6 increment = deltas[i].segment(idx, 6);  // Pose3 tangent dim is 6
-                vector_values.insert(key, increment);
-                idx += 6;
-            }
-
-            Values values_sample = values_.retract(vector_values);
-            std::vector<Matrix4> backbone_sample;
-            for (int j = 0; j < num_backbone_poses_; j++) {
-                backbone_sample.push_back(values_sample.at<Pose3>(T(j)).matrix());
-            }
-            solution.backbone_pose_samples.push_back(backbone_sample);
-        }
-    }
-
     void sample_solution(
         const NonlinearFactorGraph& graph, 
         const Marginals& marginals, 
         TendonRobotSolution& solution,
         int num_samples) 
     {
-        sample_backbone_poses(marginals, solution, num_samples);
+        KeyVector keys;
+        for (int i = 0; i < num_backbone_poses_; ++i) {
+            keys.push_back(T(i));
+        }
+
+        // Key tension_key = Q(0);
+        // keys.push_back(tension_key);
+
+        // Key tip_wrench_key = F(num_backbone_poses_ - 2);
+        // keys.push_back(tip_wrench_key);
+        
+        Matrix joint_cov = marginals.jointMarginalCovariance(keys).fullMatrix();
+        std::vector<Vector> deltas = sample_joint_cov(joint_cov, num_samples);
+
+        int pose_dim = 6 * num_backbone_poses_;
+        // int force_dim = 6;
+        // int tension_dim = 4;
+
+        for (int i = 0; i < num_samples; i++) {
+            VectorValues vector_values;
+            int idx = 0;
+
+            for (int j = 0; j < num_backbone_poses_; j++) {
+                Vector6 pose_inc = deltas[i].segment<6>(idx);
+                vector_values.insert(T(j), pose_inc);
+                idx += 6;
+            }
+
+            // Vector4 tension_inc = deltas[i].segment<4>(idx);
+            // vector_values.insert(tension_key, tension_inc);
+            // idx += 4;
+
+            // Vector6 wrench_inc = deltas[i].segment<6>(idx);
+            // vector_values.insert(tip_wrench_key, wrench_inc);
+            // idx += 6;
+
+            Values sample = values_.retract(vector_values);
+
+            std::vector<Matrix4> backbone_sample;
+            for (int j = 0; j < num_backbone_poses_; j++) {
+                backbone_sample.push_back(sample.at<Pose3>(T(j)).matrix());
+            }
+
+            solution.backbone_pose_samples.push_back(backbone_sample);
+            // solution.tip_wrench_samples.push_back(sample.at<Vector6>(tip_wrench_key));
+            // solution.tension_samples.push_back(sample.at<Vector4>(tension_key));
+        }
     }
         
 public:
 
-    TendonRobotSolution solve(const Vector4& tensions, const Vector6& tip_wrench, int num_samples) {
+    TendonRobotSolution solve(const Vector4& tensions, const Vector3& tip_force, int num_samples) {
         
         auto start_initialize = std::chrono::high_resolution_clock::now();
 
-        initialize_values(tensions, tip_wrench);
-        NonlinearFactorGraph graph = build_graph(tensions, tip_wrench);
+        initialize_values(tensions, tip_force);
+        NonlinearFactorGraph graph = build_graph(tensions, tip_force);
 
         auto end_initialize = std::chrono::high_resolution_clock::now();
 
