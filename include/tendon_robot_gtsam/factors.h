@@ -494,4 +494,70 @@ public:
         return wrench_error;
     }
 };
+
+class LastStatePriorFactor: public NoiseModelFactorN<Pose3, Vector4, Vector6> {
+    Pose3 tip_pose_pred_;
+    Vector4 tensions_pred_;
+    Vector6 tip_wrench_pred_;
+
+public:
+
+    using NoiseModelFactorN<Pose3, Vector4, Vector6>::evaluateError;
+  
+    LastStatePriorFactor(Key tip_pose_key,
+                         Key tensions_key,
+                         Key tip_wrench_key,
+                         Pose3 tip_pose_pred,
+                         Vector4 tensions_pred,
+                         Vector6 tip_wrench_pred,
+                         const SharedNoiseModel& model): 
+        NoiseModelFactor4(model, tip_pose_key, tensions_key, tip_wrench_key) {
+            tip_pose_pred_ = tip_pose_pred;
+            tensions_pred_ = tensions_pred;
+            tip_wrench_pred_ = tip_wrench_pred;
+    }
+
+    Vector evaluateError(
+        const Pose3& tip_pose, 
+        const Vector4& tensions,
+        const Vector6& tip_wrench,
+        OptionalMatrixType H1, 
+        OptionalMatrixType H2, 
+        OptionalMatrixType H3) const override 
+    {  
+        Matrix66 d_delta_d_tip_pose, d_delta_d_pose_pred;
+        Pose3 delta = tip_pose.between(tip_pose_pred_,
+            H1 ? &d_delta_d_tip_pose : 0,
+            H2 ? &d_delta_d_pose_pred : 0);
+
+        Matrix66 d_pose_error_d_delta;
+        Vector6 pose_error = Pose3::Logmap(delta, 
+            H1 || H2 ? &d_pose_error_d_delta : 0);
+        
+        Vector4 tension_error = tensions - tensions_pred_;
+        Vector6 wrench_error = tip_wrench - tip_wrench_pred_;
+
+        Vector error(16);
+        error << pose_error, tension_error, wrench_error;
+
+        if (H1) {
+            Matrix6 d_pose_error_d_tip_pose = d_pose_error_d_delta * d_delta_d_tip_pose;
+            
+            *H1 = Eigen::Matrix<double, 16, 6>::Zero();
+            H1->block<6,6>(0, 0) = d_pose_error_d_tip_pose;
+        }
+
+        if (H2) {
+            *H2 = Eigen::Matrix<double, 16, 4>::Zero();
+            H2->block<4,4>(6, 0) = Matrix4::Identity();
+        }
+
+        if (H3) {
+            *H3 = Eigen::Matrix<double, 16, 6>::Zero();
+            H3->block<6,6>(10, 0) = Matrix6::Identity();
+        }
+
+        return error;
+    }
+};
 }

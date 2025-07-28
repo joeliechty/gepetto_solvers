@@ -67,11 +67,11 @@ print(f"elapsed time: {solution.total_time_ms:.2f} ms")
 
 plotter = RobotPlotter(solution)
 
-for i in range(100):
+for i in range(150):
     start = time.time()
 
     tensions = tensions + np.array([0.05, 0.02, 0.04, 0.01])
-    # tensions = np.array([3.0, 2.0, 1.0, 1.0])
+    # tensions = np.array([5.0, 2.0, 1.0, 1.0])
     solution = solver.solve(tensions, tip_wrench, num_samples)
 
     python_time = time.time() - start

@@ -115,7 +115,7 @@ using symbol_shorthand::T;
 using symbol_shorthand::F;
 using symbol_shorthand::S;
 using symbol_shorthand::Q;
-// using symbol_shorthand::D;
+using symbol_shorthand::V;
 
 class TendonRobotGtsam {
 public:
@@ -166,16 +166,10 @@ public:
         prior_pose_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             3 * M_PI, 3 * M_PI, 3 * M_PI, 3 * config.rod_length, 3 * config.rod_length, 3 * config.rod_length).finished());
 
-        last_tip_pose_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
-
-        last_tip_pose_cov_ = (Vector(6) << 
-            config.small_r_std, config.small_r_std, config.small_r_std, 
-            config.small_p_std, config.small_p_std, config.small_p_std).finished().array().square().matrix().asDiagonal();
-
-        last_tensions_ = Vector4::Zero();
-        last_tensions_cov_ = (Vector(6) << 
-            config.small_force_std, config.small_force_std, config.small_force_std, 
-            config.small_force_std).finished().array().square().matrix().asDiagonal();
+        last_tip_pose_mean_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
+        last_tensions_mean_ = Vector4::Zero();
+        last_tip_wrench_mean_ = Vector6::Zero();
+        last_state_cov_ = 0.001 * Eigen::Matrix<double, 16, 16>::Identity();
     }
 
 private:
@@ -192,10 +186,10 @@ private:
     noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
     noiseModel::Diagonal::shared_ptr prior_pose_cov_;
 
-    Pose3 last_tip_pose_;
-    Matrix6 last_tip_pose_cov_;
-    Vector4 last_tensions_;
-    Matrix4 last_tensions_cov_;
+    Pose3 last_tip_pose_mean_;
+    Vector4 last_tensions_mean_;
+    Vector6 last_tip_wrench_mean_;
+    Eigen::Matrix<double, 16, 16> last_state_cov_;
 
     Values values_;
 
@@ -268,9 +262,9 @@ private:
         graph.add(PriorFactor<Pose3>(T(0), Pose3::Identity(), base_frame_cov_));
 
         // Last pose prior for tip pose
-        double tip_pose_drift_std = 0.01;
-        Matrix6 tip_pose_prior_cov = last_tip_pose_cov_ + tip_pose_drift_std * tip_pose_drift_std * Matrix6::Identity();
-        graph.add(PriorFactor<Pose3>(T(num_backbone_poses_ - 1), last_tip_pose_, noiseModel::Gaussian::Covariance(tip_pose_prior_cov)));
+        // double tip_pose_drift_std = 0.01;
+        // Matrix6 tip_pose_prior_cov = last_tip_pose_cov_ + tip_pose_drift_std * tip_pose_drift_std * Matrix6::Identity();
+        // graph.add(PriorFactor<Pose3>(T(num_backbone_poses_ - 1), last_tip_pose_, noiseModel::Gaussian::Covariance(tip_pose_prior_cov)));
 
         // Cosserat factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
@@ -288,14 +282,45 @@ private:
         graph.add(PriorFactor<Vector4>(Q(0), tensions_mean, tensions_cov_));
         
         // Last tension prior
-        double tension_drift_std = 0.1;
-        Matrix4 tensions_prior_cov = last_tensions_cov_ + tension_drift_std * tension_drift_std * Matrix4::Identity();
-        graph.add(PriorFactor<Vector4>(Q(0), last_tensions_, noiseModel::Gaussian::Covariance(tensions_prior_cov)));
+        // double tension_drift_std = 0.1;
+        // Matrix4 tensions_prior_cov = last_tensions_cov_ + tension_drift_std * tension_drift_std * Matrix4::Identity();
+        // graph.add(PriorFactor<Vector4>(Q(0), last_tensions_, noiseModel::Gaussian::Covariance(tensions_prior_cov)));
 
         // Tip wrench actually applied at tip - 1, since tip already has a disc wrench
         graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 2), tip_wrench_mean, tip_wrench_cov_));
+        
+        add_last_state_prior(graph);
 
         return graph;
+    }
+
+    void add_last_state_prior(NonlinearFactorGraph& graph) {
+        Pose3 tip_pose_pred = last_tip_pose_mean_;
+        Vector4 tensions_pred = last_tensions_mean_;
+        Vector6 tip_wrench_pred = last_tip_wrench_mean_;
+
+        Eigen::Matrix<double, 16, 16> cov_pred = last_state_cov_;
+
+        // Define diagonal noise levels
+        double pose_drift_p_std = 1e-3;
+        double pose_drift_r_std = 1e-1;
+        double tension_drift_std = 1e-1;
+        double wrench_drift_std = 1e-1;
+
+        // Add noise to specific blocks
+        cov_pred.block<3,3>(0,0) += pose_drift_r_std * pose_drift_r_std * Matrix3::Identity();
+        cov_pred.block<3,3>(3,3) += pose_drift_p_std * pose_drift_p_std * Matrix3::Identity();
+        cov_pred.block<4,4>(6,6) += tension_drift_std * tension_drift_std * Matrix4::Identity();
+        cov_pred.block<6,6>(10,10) += wrench_drift_std * wrench_drift_std * Matrix6::Identity();
+
+        graph.add(LastStatePriorFactor(
+            T(num_backbone_poses_ - 1),
+            Q(0),
+            F(num_backbone_poses_ - 2), 
+            tip_pose_pred,
+            tensions_pred,
+            tip_wrench_pred,
+            noiseModel::Gaussian::Covariance(cov_pred)));
     }
 
     void solve_graph(const NonlinearFactorGraph& graph)
@@ -434,11 +459,18 @@ public:
         solution.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
         solution.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_initialize).count();
 
-        last_tip_pose_ = Pose3(solution.backbone_pose_mean.back());
-        last_tip_pose_cov_ = solution.backbone_pose_cov.back();
-        
-        last_tensions_ = solution.tensions_mean;
-        last_tensions_cov_ = solution.tensions_cov;
+
+
+        last_tip_pose_mean_ = values_.at<Pose3>(T(num_backbone_poses_ - 1));
+        last_tensions_mean_ = values_.at<Vector4>(Q(0));
+        last_tip_wrench_mean_ = values_.at<Vector6>(F(num_backbone_poses_ - 2));
+
+        KeyVector keys;
+        keys.push_back(T(num_backbone_poses_ - 1));
+        keys.push_back(Q(0));
+        keys.push_back(F(num_backbone_poses_ - 2));
+
+        last_state_cov_ = marginals.jointMarginalCovariance(keys).fullMatrix();
 
         return solution;
     }
