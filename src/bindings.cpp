@@ -7,18 +7,6 @@
 namespace py = pybind11;
 using namespace gtsam;
 
-// PYBIND11_MODULE(tendon_robot, m) {
-//     m.def("compose_poses", &compose_poses, "compose_poses");
-
-//     py::class_<gtsam::Pose3>(m, "Pose3")
-//         .def(py::init<>())
-//         // Expose matrix() that returns an Eigen::Matrix4d
-//         .def("matrix", &gtsam::Pose3::matrix);
-// }
-
-
-
-
 
 PYBIND11_MODULE(tendon_robot, m) {
     py::class_<TendonDiscConfig>(m, "TendonDiscConfig")
@@ -33,14 +21,11 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def(py::init<>())
         .def_readwrite("backbone_pose_mean", &TendonRobotSolution::backbone_pose_mean)
         .def_readwrite("backbone_pose_cov", &TendonRobotSolution::backbone_pose_cov)
-        .def_readwrite("backbone_pose_samples", &TendonRobotSolution::backbone_pose_samples)
+        .def_readwrite("tip_pose_samples", &TendonRobotSolution::tip_pose_samples)
         .def_readwrite("tip_wrench_mean", &TendonRobotSolution::tip_wrench_mean)
         .def_readwrite("tip_wrench_cov", &TendonRobotSolution::tip_wrench_cov)
-        .def_readwrite("tip_wrench_samples", &TendonRobotSolution::tip_wrench_samples)
         .def_readwrite("tensions_mean", &TendonRobotSolution::tensions_mean)
         .def_readwrite("tensions_cov", &TendonRobotSolution::tensions_cov)
-        .def_readwrite("tension_samples", &TendonRobotSolution::tension_samples)
-        .def_readwrite("build_time_ms", &TendonRobotSolution::build_time_ms)
         .def_readwrite("solve_time_ms", &TendonRobotSolution::solve_time_ms)
         .def_readwrite("extract_time_ms", &TendonRobotSolution::extract_time_ms)
         .def_readwrite("total_time_ms", &TendonRobotSolution::total_time_ms)
@@ -65,6 +50,8 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("rod_diameter", &TendonRobotGtsamConfig::rod_diameter)
         .def_readwrite("youngs_modulus", &TendonRobotGtsamConfig::youngs_modulus)
         .def_readwrite("shear_modulus", &TendonRobotGtsamConfig::shear_modulus)
+        .def_readwrite("routing_radius", &TendonRobotGtsamConfig::routing_radius)
+
         .def_readwrite("tension_std", &TendonRobotGtsamConfig::tension_std)
         .def_readwrite("small_force_std", &TendonRobotGtsamConfig::small_force_std)
         .def_readwrite("small_moment_std", &TendonRobotGtsamConfig::small_moment_std)
@@ -72,20 +59,20 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("small_r_std", &TendonRobotGtsamConfig::small_r_std)
         .def_readwrite("small_p_std", &TendonRobotGtsamConfig::small_p_std)
         .def_readwrite("tip_force_std", &TendonRobotGtsamConfig::tip_force_std)
-        .def_readwrite("routing_radius", &TendonRobotGtsamConfig::routing_radius)
-        .def_readwrite("angle_functions", &TendonRobotGtsamConfig::angle_functions)
-        .def_readwrite("angle_params", &TendonRobotGtsamConfig::angle_params)
+
         .def_readwrite("pose_drift_p_std", &TendonRobotGtsamConfig::pose_drift_p_std)
         .def_readwrite("pose_drift_r_std", &TendonRobotGtsamConfig::pose_drift_r_std)
         .def_readwrite("tension_drift_std", &TendonRobotGtsamConfig::tension_drift_std)
         .def_readwrite("wrench_drift_std", &TendonRobotGtsamConfig::wrench_drift_std)
-        .def_readwrite("p_meas_std", &TendonRobotGtsamConfig::p_meas_std);
-    
-    m.def("get_default_config", &get_default_config);
 
-    py::class_<TendonRobotGtsam>(m, "TendonRobotGtsam")
+        .def_readwrite("tip_position_meas_std", &TendonRobotGtsamConfig::tip_position_meas_std)
+
+        .def_readwrite("angle_functions", &TendonRobotGtsamConfig::angle_functions)
+        .def_readwrite("angle_params", &TendonRobotGtsamConfig::angle_params);
+
+    py::class_<TipForceSim>(m, "TipForceSim")
     .def(py::init<const TendonRobotGtsamConfig&>())
-    .def("solve", &TendonRobotGtsam::solve,
+    .def("step", &TipForceSim::step,
          py::arg("tensions"),
          py::arg("tip_force"),
          py::arg("num_samples"),

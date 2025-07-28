@@ -117,11 +117,12 @@ def get_arrow(start, vec, shaft_radius=0.001, tip_radius=0.002, tip_length=0.005
 
 
 class TendonRobotPlotter:
-    def __init__(self, initial_solution):
+    def __init__(self, title):
         self.plotter = pv.Plotter()
-        self._init_scene(initial_solution)
+        self.plotter.add_text(title, position='upper_edge', font_size=14, color='black', font="times")
+        self.is_first_plot = True
 
-    def _init_scene(self, solution):
+    def init_scene(self, solution):
         plate = get_base_plate(solution)
         self.plate_actor = self.plotter.add_mesh(plate, color="dimgrey", show_edges=True, line_width=1)
 
@@ -141,12 +142,12 @@ class TendonRobotPlotter:
             disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
             self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, silhouette=True, smooth_shading=True)
 
-        self.backbone_sample_radius = 0.03 * solution.tendon_disc_config.routing_radius
-        self.backbone_sample_meshes = []
-        for backbone_sample in solution.backbone_pose_samples:
-            tube = get_tube(backbone_sample, radius=self.backbone_sample_radius)
-            self.plotter.add_mesh(tube, color='red', opacity=0.3, smooth_shading=True)
-            self.backbone_sample_meshes.append(tube)
+        self.tip_pose_radius = 0.1 * solution.tendon_disc_config.routing_radius
+        self.tip_pose_meshes = []
+        for tip_pose_sample in solution.tip_pose_samples:
+            sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
+            self.plotter.add_mesh(sphere, color='red', opacity=0.3, smooth_shading=True)
+            self.tip_pose_meshes.append(sphere)
 
         T_tip = solution.backbone_pose_mean[-1]
         R_tip = T_tip[:3,:3]
@@ -179,6 +180,13 @@ class TendonRobotPlotter:
         self.plotter.show(auto_close=False, interactive_update=True) #, full_screen=True)
 
     def update(self, solution):
+        if self.is_first_plot:
+            self.init_scene(solution)
+            self.is_first_plot = False
+        else:
+            self.update_meshes(solution)
+
+    def update_meshes(self, solution):
         tube = get_tube(solution.backbone_pose_mean, radius=0.0015)
         self.backbone_mesh.points[:] = tube.points
 
@@ -191,9 +199,9 @@ class TendonRobotPlotter:
             for j, segment in enumerate(tendon):
                 self.tendon_meshes[i][j].points[:] = tendons[i][j].points
 
-        for i, backbone_sample in enumerate(solution.backbone_pose_samples):
-            tube = get_tube(backbone_sample, radius=self.backbone_sample_radius)
-            self.backbone_sample_meshes[i].points[:] = tube.points
+        for i, tip_pose_sample in enumerate(solution.tip_pose_samples):
+            sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
+            self.tip_pose_meshes[i].points[:] = sphere.points
         
         T_tip = solution.backbone_pose_mean[-1]
         R_tip = T_tip[:3,:3]
