@@ -63,7 +63,8 @@ struct TendonRobotGtsamConfig{
     double wrench_drift_std = 1e-1;
 
     // Measurement noise parameters
-    double tip_position_meas_std = 1e-3;
+    double tip_pose_r_meas_std = 3e0;
+    double tip_pose_p_meas_std = 1e-3;
 
     // Routing configuration
     std::vector<RoutingAngleFunction> angle_functions;

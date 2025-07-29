@@ -72,12 +72,12 @@ def get_tendon_disc_meshes(solution):
 
 
 def get_ellipsoid(center, cov, scale, num_sigma=1.0):
-    eigvals, eigvecs = np.linalg.eigh(cov.numpy())
+    eigvals, eigvecs = np.linalg.eigh(cov)
     one_sigma = np.sqrt(np.maximum(eigvals, 1e-12)) * scale
     radii = num_sigma * one_sigma
 
     ellipsoid = pv.Sphere(radius=1.0, theta_resolution=50, phi_resolution=50)
-    ellipsoid.points = (eigvecs @ np.diag(radii) @ ellipsoid.points.T).T + center.numpy()
+    ellipsoid.points = (eigvecs @ np.diag(radii) @ ellipsoid.points.T).T + center
 
     return ellipsoid
 
@@ -101,6 +101,10 @@ def get_largest_norm(f_samples, f_gt, f_mean):
 def get_arrow(start, vec, shaft_radius=0.001, tip_radius=0.002, tip_length=0.005):
     scale = np.linalg.norm(vec)
 
+    if scale < 1e-8:
+        scale = 1e-8
+        vec = vec + scale
+    
     arrow = pv.Arrow(
         start=start,
         direction=vec,
@@ -118,11 +122,11 @@ def get_arrow(start, vec, shaft_radius=0.001, tip_radius=0.002, tip_length=0.005
 
 class TendonRobotPlotter:
     def __init__(self, title):
-        self.plotter = pv.Plotter()
+        self.plotter = pv.Plotter(lighting='three lights')
         self.plotter.add_text(title, position='upper_edge', font_size=14, color='black', font="times")
         self.is_first_plot = True
 
-    def init_scene(self, solution):
+    def init_scene(self, solution, tip_force_gt):
         plate = get_base_plate(solution)
         self.plate_actor = self.plotter.add_mesh(plate, color="dimgrey", show_edges=True, line_width=1)
 
@@ -142,20 +146,30 @@ class TendonRobotPlotter:
             disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
             self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, silhouette=True, smooth_shading=True)
 
-        self.tip_pose_radius = 0.1 * solution.tendon_disc_config.routing_radius
-        self.tip_pose_meshes = []
-        for tip_pose_sample in solution.tip_pose_samples:
-            sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
-            self.plotter.add_mesh(sphere, color='red', opacity=0.3, smooth_shading=True)
-            self.tip_pose_meshes.append(sphere)
+        # self.tip_pose_radius = 0.1 * solution.tendon_disc_config.routing_radius
+        # self.tip_pose_meshes = []
+        # for tip_pose_sample in solution.tip_pose_samples:
+        #     sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
+        #     self.plotter.add_mesh(sphere, color='red', opacity=0.3, smooth_shading=True)
+        #     self.tip_pose_meshes.append(sphere)
 
         T_tip = solution.backbone_pose_mean[-1]
         R_tip = T_tip[:3,:3]
         p_tip = T_tip[:3,3]
         self.f_tip_scale = 0.5
         f_tip_mean = R_tip @ solution.tip_wrench_mean[3:]  # World frame
-        self.tip_force_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
-        self.plotter.add_mesh(self.tip_force_mesh, color='blue', opacity=0.5)
+        self.tip_force_mean_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
+        self.plotter.add_mesh(self.tip_force_mean_mesh, color='blue', opacity=0.5)
+
+        f_tip_cov = R_tip @ (solution.tip_wrench_cov[3:,3:] @ R_tip.T)  # World frame
+        center = p_tip + f_tip_mean * self.f_tip_scale
+        self.f_tip_95_mesh = get_ellipsoid(center, f_tip_cov, self.f_tip_scale, num_sigma=2.80)
+        self.plotter.add_mesh(self.f_tip_95_mesh, color="orange", opacity=0.2, smooth_shading=True)
+
+        if tip_force_gt is not None:
+            f_tip_gt = R_tip @ tip_force_gt
+            self.tip_force_gt_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_gt)
+            self.plotter.add_mesh(self.tip_force_gt_mesh, color='green', opacity=0.5)
 
         self.plotter.add_axes()
         # self.plotter.enable_depth_peeling(10)
@@ -177,16 +191,16 @@ class TendonRobotPlotter:
         self.plotter.add_light(light)
 
         self.plotter.view_isometric()
-        self.plotter.show(auto_close=False, interactive_update=True) #, full_screen=True)
+        self.plotter.show(auto_close=False, interactive_update=True, full_screen=False)
 
-    def update(self, solution):
+    def update(self, solution, tip_force_gt=None):
         if self.is_first_plot:
-            self.init_scene(solution)
+            self.init_scene(solution, tip_force_gt)
             self.is_first_plot = False
         else:
-            self.update_meshes(solution)
+            self.update_meshes(solution, tip_force_gt)
 
-    def update_meshes(self, solution):
+    def update_meshes(self, solution, tip_force_gt):
         tube = get_tube(solution.backbone_pose_mean, radius=0.0015)
         self.backbone_mesh.points[:] = tube.points
 
@@ -199,16 +213,26 @@ class TendonRobotPlotter:
             for j, segment in enumerate(tendon):
                 self.tendon_meshes[i][j].points[:] = tendons[i][j].points
 
-        for i, tip_pose_sample in enumerate(solution.tip_pose_samples):
-            sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
-            self.tip_pose_meshes[i].points[:] = sphere.points
+        # for i, tip_pose_sample in enumerate(solution.tip_pose_samples):
+        #     sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
+        #     self.tip_pose_meshes[i].points[:] = sphere.points
         
         T_tip = solution.backbone_pose_mean[-1]
         R_tip = T_tip[:3,:3]
         p_tip = T_tip[:3,3]
         f_tip_mean = R_tip @ solution.tip_wrench_mean[3:]  # World frame
         arrow = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
-        self.tip_force_mesh.points[:] = arrow.points
+        self.tip_force_mean_mesh.points[:] = arrow.points
+
+        f_tip_cov = R_tip @ (solution.tip_wrench_cov[3:,3:] @ R_tip.T)  # World frame
+        center = p_tip + f_tip_mean * self.f_tip_scale
+        ellipsoid = get_ellipsoid(center, f_tip_cov, self.f_tip_scale, num_sigma=2.80)
+        self.f_tip_95_mesh.points[:] = ellipsoid.points
+
+        if tip_force_gt is not None:
+            f_tip_gt = R_tip @ tip_force_gt
+            arrow = get_arrow(p_tip, self.f_tip_scale * f_tip_gt)
+            self.tip_force_gt_mesh.points[:] = arrow.points
 
         self.plotter.camera.azimuth += 0.5
         self.plotter.render()
@@ -226,66 +250,9 @@ class TendonRobotPlotter:
 
 
 def plot_robot(solution, title=''):
-    plotter = pv.Plotter(lighting='three lights')
 
-    T_tip = solution.backbone_pose_mean[-1]
-    R_tip = T_tip[:3,:3]
-    p_tip = T_tip[:3,3]
 
-    plate = get_base_plate(solution)
-    plotter.add_mesh(plate, color="dimgrey", show_edges=True, line_width=1, lighting="light_kit")
-
-    tube = get_tube(solution.backbone_pose_mean, radius=0.0015)
-    plotter.add_mesh(tube, color='blue', silhouette=True, specular=0.8, specular_power=10, opacity=0.5, smooth_shading=True, lighting="light_kit")
-
-    tendons, discs = get_tendon_disc_meshes(solution)
-
-    tendon_colors = ["crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod", "deeppink"]
-
-    for j, tendon in enumerate(tendons):
-        color = tendon_colors[j % len(tendon_colors)]
-        for segment in tendon:
-            plotter.add_mesh(segment, color=color, specular=0.8, specular_power=10, opacity=0.7, smooth_shading=True, silhouette=True, lighting="light_kit")
-            
-    for disc in discs:
-        edges = disc.extract_feature_edges(boundary_edges=True, non_manifold_edges=False, feature_edges=False, manifold_edges=False)
-        plotter.add_mesh(edges, color='k', line_width=1)
-        plotter.add_mesh(disc, color='lightsteelblue', specular=0.8, specular_power=10, opacity=0.4, smooth_shading=True, split_sharp_edges=True, silhouette=True, lighting="light_kit")
-
-    # f_tip_max = get_largest_norm(f_tip_samples, f_tip_gt, f_tip_mean)
-    # f_tip_scale = 0.05 / f_tip_max
-    f_tip_scale = 1.0
-    f_tip_mean = R_tip @ solution.tip_wrench_mean[3:]  # World frame
-    arrow = get_arrow(p_tip, f_tip_scale * f_tip_mean)
-    plotter.add_mesh(arrow, color='blue', opacity=0.5)
     
-    backbone_sample_radius = 0.05 * solution.tendon_disc_config.routing_radius
-    for backbone_sample in solution.backbone_pose_samples:
-        tube = get_tube(backbone_sample, radius=backbone_sample_radius)
-        plotter.add_mesh(tube, color='red', specular=0.8, specular_power=10, opacity=0.05, smooth_shading=True, lighting="light_kit")
-
-    #         if f_tip_samples is not None:
-    #             f_i = R_tip @ f_tip_samples[ii]  # World frame
-    #             arrow = get_arrow(T_i[-1][:3,3], f_tip_scale * f_i)
-    #             plotter.add_mesh(arrow, color='red', opacity=0.5, lighting="light_kit")
-
-    # if f_tip_mean is not None:
-
-
-    # if f_tip_gt is not None:
-    #     f_tip_gt = R_tip @ f_tip_gt  # World frame
-    #     arrow = get_arrow(p_tip, f_tip_scale * f_tip_gt)
-    #     plotter.add_mesh(arrow, color='green', opacity=0.5, lighting="light_kit")
-    
-    # if f_tip_cov is not None:
-    #     f_tip_cov = R_tip @ (f_tip_cov @ R_tip.T)  # World frame
-    #     center = p_tip + f_tip_mean * f_tip_scale
-    #     ellipsoid_50 = get_ellipsoid(center, f_tip_cov, f_tip_scale, num_sigma=1.18)
-    #     ellipsoid_95 = get_ellipsoid(center, f_tip_cov, f_tip_scale, num_sigma=2.80)
-
-    #     plotter.add_mesh(ellipsoid_50, color="#FF6600", opacity=0.3, smooth_shading=True, specular=1.0, specular_power=10, lighting="light_kit")
-    #     plotter.add_mesh(ellipsoid_95, color="#FF6600", opacity=0.2, smooth_shading=True, specular=1.0, specular_power=10, lighting="light_kit")
-
     # if p_goal is not None:
     #     goal = pv.Sphere(radius=0.003, center=p_goal)
     #     plotter.add_mesh(goal, color='green', opacity=0.7, smooth_shading=True, specular=1.0, specular_power=10, lighting="light_kit")

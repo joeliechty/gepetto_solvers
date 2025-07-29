@@ -65,7 +65,8 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("tension_drift_std", &TendonRobotGtsamConfig::tension_drift_std)
         .def_readwrite("wrench_drift_std", &TendonRobotGtsamConfig::wrench_drift_std)
 
-        .def_readwrite("tip_position_meas_std", &TendonRobotGtsamConfig::tip_position_meas_std)
+        .def_readwrite("tip_pose_r_meas_std", &TendonRobotGtsamConfig::tip_pose_r_meas_std)
+        .def_readwrite("tip_pose_p_meas_std", &TendonRobotGtsamConfig::tip_pose_p_meas_std)
 
         .def_readwrite("angle_functions", &TendonRobotGtsamConfig::angle_functions)
         .def_readwrite("angle_params", &TendonRobotGtsamConfig::angle_params);
@@ -75,6 +76,14 @@ PYBIND11_MODULE(tendon_robot, m) {
     .def("step", &TipForceSim::step,
          py::arg("tensions"),
          py::arg("tip_force"),
+         py::arg("num_samples"),
+         py::call_guard<py::gil_scoped_release>());
+
+    py::class_<TipForceSolver>(m, "TipForceSolver")
+    .def(py::init<const TendonRobotGtsamConfig&>())
+    .def("step", &TipForceSolver::step,
+         py::arg("tensions_meas"),
+         py::arg("tip_position_meas"),
          py::arg("num_samples"),
          py::call_guard<py::gil_scoped_release>());
 }

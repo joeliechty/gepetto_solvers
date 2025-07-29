@@ -21,7 +21,8 @@ def get_base_config():
 
     config.routing_radius = 0.01
 
-    config.tip_position_meas_std = 1e-3
+    config.tip_pose_r_meas_std = 3e0
+    config.tip_pose_p_meas_std = 1e-3
 
     config.angle_functions = [
         RoutingAngleFunction.LINEAR,
@@ -58,11 +59,11 @@ def get_simulation_config():
 def get_sensing_config():
     config = get_base_config()
 
-    config.tension_std = 1e-1
+    config.tension_std = 1e-2
     config.tip_force_std = 1e-1
 
-    config.pose_drift_p_std = 1e-2
-    config.pose_drift_r_std = 1e-1
+    config.pose_drift_p_std = 1e-3
+    config.pose_drift_r_std = 1e0
     config.tension_drift_std = 1e-1
     config.wrench_drift_std = 1e-2
 
