@@ -21,7 +21,7 @@ def estimate_tip_force(tensions, tip_positions, tip_forces_gt):
         i = i + 1
         start_solve = time.time()
 
-        solution = solver.step(tensions, tip_position, 100)
+        solution = solver.step(tensions, tip_position, 10)
 
         solve_time = time.time() - start_solve
         start_render = time.time()
@@ -39,16 +39,14 @@ def estimate_tip_force(tensions, tip_positions, tip_forces_gt):
 
 
 def simulate_tip_force(sim_time, frame_rate):
-    solver = TipForceSim(get_simulation_config())
-
-    num_samples = 100
+    simulator = TipForceSim(get_simulation_config())
     num_steps = sim_time * frame_rate
 
     tensions_gt = []
     tip_position_gt = []
     tip_force_gt = []
 
-    # plotter = TendonRobotPlotter('Ground Truth Simulation')
+    plotter = TendonRobotPlotter('Ground Truth Simulation')
 
     for i in range(num_steps):
         t = float(i) / frame_rate
@@ -81,11 +79,11 @@ def simulate_tip_force(sim_time, frame_rate):
         # tensions = np.array([5.0, 2.0, 1.0, 1.0])
 
         start_solve = time.time()
-        solution = solver.step(tensions, tip_force, num_samples)
+        solution = simulator.step(tensions, tip_force)
         solve_time = time.time() - start_solve
 
         start_render = time.time()
-        # plotter.update(solution)
+        plotter.update(solution)
         render_time = time.time() - start_render
 
         total_time = time.time() - start_solve

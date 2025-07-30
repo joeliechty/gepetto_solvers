@@ -48,10 +48,10 @@ def get_simulation_config():
     config.tip_force_std = 1e-3
 
     # We dont want any lag in sim, so make drift big
-    config.pose_drift_p_std = 1e0
-    config.pose_drift_r_std = 1e0
     config.tension_drift_std = 1e0
     config.wrench_drift_std = 1e0
+
+    config.velocity_drift_std = 1e0
 
     return config
 
@@ -62,37 +62,9 @@ def get_sensing_config():
     config.tension_std = 1e-2
     config.tip_force_std = 1e-1
 
-    config.pose_drift_p_std = 1e-3
-    config.pose_drift_r_std = 1e0
     config.tension_drift_std = 1e-1
-    config.wrench_drift_std = 1e-2
+    config.wrench_drift_std = 1e-1
 
-    return config
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def get_tip_force_sensing_config():
-    config = get_base_config()
-
-    config.tension_std = 1e-1
-    config.tip_force_std = 1e-1
-
-    config.pose_drift_p_std = 5e-3
-    config.pose_drift_r_std = 1e-1
-    config.tension_drift_std = 1e-1
-    config.wrench_drift_std = 1e-2
+    config.velocity_drift_std = 1e-2
 
     return config

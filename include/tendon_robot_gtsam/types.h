@@ -24,6 +24,10 @@ struct TendonRobotSolution {
     std::vector<Matrix6> backbone_pose_cov;
     std::vector<Matrix4> tip_pose_samples;
 
+    Vector3 tip_velocity_mean;
+    std::vector<Vector3> tip_velocity_samples;
+    Matrix6 tip_state_cov;
+    
     Vector6 tip_wrench_mean;
     Matrix6 tip_wrench_cov;
 
@@ -57,8 +61,7 @@ struct TendonRobotGtsamConfig{
     double tip_force_std = 1e-4;
 
     // Temporal drift parameters
-    double pose_drift_p_std = 1e-3;
-    double pose_drift_r_std = 1e-1;
+    double velocity_drift_std = 1e-3;
     double tension_drift_std = 1e-1;
     double wrench_drift_std = 1e-1;
 

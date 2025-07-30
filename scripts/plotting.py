@@ -146,12 +146,12 @@ class TendonRobotPlotter:
             disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
             self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, silhouette=True, smooth_shading=True)
 
-        # self.tip_pose_radius = 0.1 * solution.tendon_disc_config.routing_radius
-        # self.tip_pose_meshes = []
-        # for tip_pose_sample in solution.tip_pose_samples:
-        #     sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
-        #     self.plotter.add_mesh(sphere, color='red', opacity=0.3, smooth_shading=True)
-        #     self.tip_pose_meshes.append(sphere)
+        self.tip_pose_radius = 0.1 * solution.tendon_disc_config.routing_radius
+        self.tip_pose_meshes = []
+        for tip_pose_sample in solution.tip_pose_samples:
+            sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
+            self.plotter.add_mesh(sphere, color='red', opacity=0.3, smooth_shading=True)
+            self.tip_pose_meshes.append(sphere)
 
         T_tip = solution.backbone_pose_mean[-1]
         R_tip = T_tip[:3,:3]
@@ -213,9 +213,9 @@ class TendonRobotPlotter:
             for j, segment in enumerate(tendon):
                 self.tendon_meshes[i][j].points[:] = tendons[i][j].points
 
-        # for i, tip_pose_sample in enumerate(solution.tip_pose_samples):
-        #     sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
-        #     self.tip_pose_meshes[i].points[:] = sphere.points
+        for i, tip_pose_sample in enumerate(solution.tip_pose_samples):
+            sphere = pv.Sphere(self.tip_pose_radius, tip_pose_sample[:3,3])
+            self.tip_pose_meshes[i].points[:] = sphere.points
         
         T_tip = solution.backbone_pose_mean[-1]
         R_tip = T_tip[:3,:3]
