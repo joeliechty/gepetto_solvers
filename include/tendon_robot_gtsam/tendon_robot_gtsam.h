@@ -432,11 +432,8 @@ public:
             solution.tip_pose_samples.push_back(
                 tip_pose_mean.retract(delta_pose).matrix());
             
-            Vector3 velocity_sample = tip_velocity_mean + d_tip_state[i].tail<3>();
-            solution.tip_velocity_samples.push_back(velocity_sample);
-
-            // solution.tip_pose_samples.push_back(tip_pose_mean.matrix());
-            // solution.tip_velocity_samples.push_back(tip_velocity_mean);
+            Vector3 delta_velocity = d_tip_state[i].tail<3>();
+            solution.tip_velocity_samples.push_back(tip_velocity_mean + delta_velocity);
         }
 
         solution.tip_state_cov.topLeftCorner<3,3>() = full_tip_state_cov.block<3,3>(3, 3);

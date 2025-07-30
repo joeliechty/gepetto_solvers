@@ -93,8 +93,8 @@ def simulate_tip_force(sim_time, frame_rate):
         print(f"total time: {1000 * total_time:.2f} ms\n\n")
 
         tensions_gt.append(tensions)
-        # tip_position_gt.append(solution.tip_pose_samples[0][:3,3])
-        tip_position_gt.append(solution.backbone_pose_mean[-1][:3,3])
+        tip_position_gt.append(solution.tip_pose_samples[0][:3,3])
+        # tip_position_gt.append(solution.backbone_pose_mean[-1][:3,3])
         tip_force_gt.append(tip_force)
 
         # time.sleep(3.0)

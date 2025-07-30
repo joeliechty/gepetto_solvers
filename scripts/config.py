@@ -51,7 +51,7 @@ def get_simulation_config():
     config.tension_drift_std = 1e0
     config.wrench_drift_std = 1e0
 
-    config.velocity_drift_std = 1e0
+    config.velocity_drift_std = 1e-3
 
     return config
 
