@@ -495,49 +495,59 @@ public:
     }
 };
 
-class LastTipStateFactor: public NoiseModelFactorN<Pose3, Vector3> {
-    Vector3 position_pred_;
-    Vector3 velocity_pred_;
-
+class LastTipStateFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Pose3> {
 public:
-    using NoiseModelFactorN<Pose3, Vector3>::evaluateError;
+    using NoiseModelFactorN<Pose3, Pose3, Pose3, Pose3>::evaluateError;
   
-    LastTipStateFactor(Key tip_pose_key,
-                       Key tip_velocity_key,
-                       Vector3 tip_position_pred,
-                       Vector3 tip_velocity_pred,
+    LastTipStateFactor(Key pose_im3_key,
+                       Key pose_im2_key,
+                       Key pose_im1_key,
+                       Key pose_i_key,
                        const SharedNoiseModel& model): 
-        NoiseModelFactor2(model, tip_pose_key, tip_velocity_key), position_pred_(tip_position_pred), velocity_pred_(tip_velocity_pred) {}
+        NoiseModelFactor4(model, pose_im3_key, pose_im2_key, pose_im1_key, pose_i_key) {}
 
     Vector evaluateError(
-        const Pose3& pose, 
-        const Vector3& velocity,
+        const Pose3& pose_im3,
+        const Pose3& pose_im2,
+        const Pose3& pose_im1,
+        const Pose3& pose_i,
         OptionalMatrixType H1, 
-        OptionalMatrixType H2) const override 
+        OptionalMatrixType H2,
+        OptionalMatrixType H3,
+        OptionalMatrixType H4) const override 
     {  
-        Vector3 position = pose.translation();
-        Vector3 position_error = position - position_pred_;
+        Matrix36 d_p_im3;
+        Vector3 p_im3 = pose_im3.translation(d_p_im3);
 
-        Vector3 velocity_error = velocity - velocity_pred_;
+        Matrix36 d_p_im2;
+        Vector3 p_im2 = pose_im2.translation(d_p_im2);
 
-        Vector6 error;
-        error << position_error, velocity_error;
+        Matrix36 d_p_im1;
+        Vector3 p_im1 = pose_im1.translation(d_p_im1);
+
+        Matrix36 d_p_i;
+        Vector3 p_i   = pose_i.translation(d_p_i);
+
+        Vector3 jerk = p_i - 3.0 * p_im1 + 3.0 * p_im2 - p_im3;
 
         if (H1) {
-            *H1 = numericalDerivative11<Vector6, Pose3>(
-                [&](const Pose3& pose_) {
-                    return this->evaluateError(pose_, velocity, nullptr, nullptr);
-                }, pose);
+            *H1 = -d_p_im3;
         }
 
         if (H2) {
-            *H2 = numericalDerivative11<Vector6, Vector3>(
-                [&](const Vector3& velocity_) {
-                    return this->evaluateError(pose, velocity_, nullptr, nullptr);
-                }, velocity);
+            *H2 = 3.0 * d_p_im2;
         }
 
-        return error;
+        if (H3) {
+            *H3 = -3.0 * d_p_im1;
+        }
+
+        if (H4) {
+            *H4 = d_p_i;
+        }
+        
+
+        return jerk;
     }
 };
 }

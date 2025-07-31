@@ -124,7 +124,6 @@ using symbol_shorthand::T;
 using symbol_shorthand::F;
 using symbol_shorthand::S;
 using symbol_shorthand::Q;
-using symbol_shorthand::V;
 
 class TendonRobotGtsam {
 public:
@@ -178,14 +177,16 @@ public:
         tip_pose_meas_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             config.tip_pose_r_meas_std, config.tip_pose_r_meas_std, config.tip_pose_r_meas_std,
             config.tip_pose_p_meas_std, config.tip_pose_p_meas_std, config.tip_pose_p_meas_std).finished());
-
-        last_tip_position_ = (Vector(3) << 0, 0, config.rod_length).finished();
-        last_tip_velocity_ = Vector3::Zero();
-        last_tip_state_cov_ = 1e-6 * Matrix6::Identity();
         
-        tip_velocity_drift_cov_ = (Vector(3) <<
-            config.velocity_drift_std, config.velocity_drift_std, config.velocity_drift_std).finished().array().square().matrix().asDiagonal();
-
+        tip_accel_cov_ = noiseModel::Isotropic::Sigma(3, config.tip_accel_std);
+        
+        pose_im3_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
+        pose_im3_cov_ = 1e-8 * Matrix6::Identity();
+        pose_im2_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
+        pose_im2_cov_ = 1e-8 * Matrix6::Identity();
+        pose_im1_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
+        pose_im1_cov_ = 1e-8 * Matrix6::Identity();
+        
         last_tensions_ = Vector4::Zero();
         last_tensions_cov_ = 1e-6 * Matrix4::Identity();
         tensions_drift_cov_ = (config.tension_drift_std * Vector4::Ones()).array().square().matrix().asDiagonal();
@@ -210,11 +211,14 @@ public:
     noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
     noiseModel::Diagonal::shared_ptr prior_pose_cov_;
     noiseModel::Diagonal::shared_ptr tip_pose_meas_cov_;
+    noiseModel::Diagonal::shared_ptr tip_accel_cov_;
 
-    Matrix3 tip_velocity_drift_cov_;
-    Vector3 last_tip_position_;
-    Vector3 last_tip_velocity_;
-    Matrix6 last_tip_state_cov_;
+    Pose3 pose_im3_;
+    Matrix6 pose_im3_cov_;
+    Pose3 pose_im2_;
+    Matrix6 pose_im2_cov_;
+    Pose3 pose_im1_;
+    Matrix6 pose_im1_cov_;
 
     Matrix4 tensions_drift_cov_;
     Vector4 last_tensions_;
@@ -229,29 +233,18 @@ public:
     Values values_;
 
     void initialize_values(){
-        if (!values_.exists(Q(0))) {
-            values_.insert(Q(0), Vector4(Vector4::Zero()));
-        }
-        
-        if (!values_.exists(V(0))) {
-            values_.insert(V(0), Vector3(Vector3::Zero()));
-        }
+        values_.clear();
+
+        values_.insert(Q(0), Vector4(Vector4::Zero()));
+
+        values_.insert(T(num_backbone_poses_ + 100), Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
+        values_.insert(T(num_backbone_poses_ + 101), Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
+        values_.insert(T(num_backbone_poses_ + 102), Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
 
         for (int i = 0; i < num_backbone_poses_; ++i) {
-            // Initialize pose
-            if (!values_.exists(T(i))) {
-                values_.insert(T(i), Pose3(Rot3::Identity(), Point3(0.0, 0.0, i * ds_)));
-            }
-
-            // Initialize stress
-            if (!values_.exists(S(i))) {
-                values_.insert(S(i), Vector6(Vector6::Zero()));
-            }
-
-            // Initialize wrench, (no wrench at i = 0) TODO add tip wrench
-            if (i > 0 && !values_.exists(F(i))) {
-                values_.insert(F(i), Vector6(Vector6::Zero()));
-            }
+            values_.insert(T(i), Pose3(Rot3::Identity(), Point3(0.0, 0.0, i * ds_)));
+            values_.insert(S(i), Vector6(Vector6::Zero()));
+            values_.insert(F(i), Vector6(Vector6::Zero()));
         }
     }
 
@@ -309,24 +302,15 @@ public:
     }
 
     void add_last_state_prior(NonlinearFactorGraph& graph) {
-        Vector3 position_pred = last_tip_position_ + last_tip_velocity_;
-        Vector3 velocity_pred = last_tip_velocity_;
+        Key pose_im3_key = T(num_backbone_poses_ + 100);
+        Key pose_im2_key = T(num_backbone_poses_ + 101);
+        Key pose_im1_key = T(num_backbone_poses_ + 102);
+        Key pose_i_key = T(num_backbone_poses_ - 1);
 
-        Matrix6 state_transition = Matrix6::Zero();
-        state_transition.topLeftCorner<3, 3>() = Matrix3::Identity();
-        state_transition.topRightCorner<3, 3>() = Matrix3::Identity();
-        state_transition.bottomRightCorner<3, 3>() = Matrix3::Identity();
-
-        Matrix6 drift_cov = Matrix6::Zero();
-        drift_cov.topLeftCorner<3, 3>() = (1.0 / 3.0) * tip_velocity_drift_cov_;
-        Matrix3 cross = (1.0 / 2.0) * tip_velocity_drift_cov_;
-        drift_cov.topRightCorner<3, 3>() = cross;
-        drift_cov.bottomLeftCorner<3, 3>() = cross.transpose();  // Symmetric
-        drift_cov.bottomRightCorner<3, 3>() = tip_velocity_drift_cov_;
-
-        Matrix6 combined_cov = state_transition * last_tip_state_cov_ * state_transition.transpose() + drift_cov;
-        auto tip_state_cov_pred = noiseModel::Gaussian::Covariance(combined_cov);
-        graph.add(LastTipStateFactor(T(num_backbone_poses_ - 1), V(0), position_pred, velocity_pred, tip_state_cov_pred));
+        graph.add(PriorFactor<Pose3>(pose_im3_key, pose_im3_, noiseModel::Gaussian::Covariance(pose_im3_cov_)));
+        graph.add(PriorFactor<Pose3>(pose_im2_key, pose_im2_, noiseModel::Gaussian::Covariance(pose_im2_cov_)));
+        graph.add(PriorFactor<Pose3>(pose_im1_key, pose_im1_, noiseModel::Gaussian::Covariance(pose_im1_cov_)));
+        graph.add(LastTipStateFactor(pose_im3_key, pose_im2_key, pose_im1_key, pose_i_key, tip_accel_cov_));
 
         // graph.add(PriorFactor<Pose3>(T(num_backbone_poses_ - 1), last_tip_pose_, noiseModel::Isotropic::Sigma(6, 0.1)));
         // graph.add(PriorFactor<Vector3>(V(0), Vector3(Vector3::Zero()), noiseModel::Isotropic::Sigma(3, 0.1)));
@@ -370,8 +354,6 @@ public:
             solution.backbone_pose_cov.push_back(marginals.marginalCovariance(T(i)));
         }
 
-        solution.tip_velocity_mean = values_.at<Vector3>(V(0));
-
         solution.tip_wrench_mean = values_.at<Vector6>(F(num_backbone_poses_ - 1 - 1));
         solution.tip_wrench_cov = marginals.marginalCovariance(F(num_backbone_poses_ - 1 - 1));
 
@@ -414,32 +396,14 @@ public:
         int num_samples) 
     {
         Pose3 tip_pose_mean = Pose3(solution.backbone_pose_mean.back());
-        Vector3 tip_velocity_mean = solution.tip_velocity_mean;
+        Matrix6 tip_pose_cov = solution.backbone_pose_cov.back();
 
-        KeyVector keys;
-        Key pose_key = T(num_backbone_poses_ - 1);
-        keys.push_back(pose_key);
-        Key velocity_key = V(0);
-        keys.push_back(velocity_key);
-
-        JointMarginal tip_state_joint = marginals.jointMarginalCovariance(keys);
-        Matrix9 full_tip_state_cov = tip_state_joint.fullMatrix();
-
-        std::vector<Vector> d_tip_state = sample_joint_cov(full_tip_state_cov, num_samples);
+        std::vector<Vector> d_tip_state = sample_joint_cov(tip_pose_cov, num_samples);
         
         for (int i = 0; i < num_samples; i++) {
-            Vector6 delta_pose = d_tip_state[i].head<6>();
             solution.tip_pose_samples.push_back(
-                tip_pose_mean.retract(delta_pose).matrix());
-            
-            Vector3 delta_velocity = d_tip_state[i].tail<3>();
-            solution.tip_velocity_samples.push_back(tip_velocity_mean + delta_velocity);
+                tip_pose_mean.retract(d_tip_state[i]).matrix());
         }
-
-        solution.tip_state_cov.topLeftCorner<3,3>() = full_tip_state_cov.block<3,3>(3, 3);
-        solution.tip_state_cov.bottomRightCorner<3,3>() = full_tip_state_cov.block<3,3>(9, 9);
-        solution.tip_state_cov.topRightCorner<3,3>() = full_tip_state_cov.block<3,3>(3, 9);  // position w.r.t. velocity
-        solution.tip_state_cov.bottomLeftCorner<3,3>() = full_tip_state_cov.block<3,3>(9, 3); // symmetric
     }
         
     TendonRobotSolution update(const NonlinearFactorGraph& graph, int num_samples) {
@@ -498,8 +462,9 @@ public:
         TendonRobotSolution solution = update(graph, 1);
 
         // No need to update last covs, since for sampling, they need to be small
-        last_tip_position_ = Pose3(solution.tip_pose_samples.back()).translation();
-        last_tip_velocity_ = solution.tip_velocity_samples.back();
+        pose_im3_ = pose_im2_;
+        pose_im2_ = pose_im1_;
+        pose_im1_ = Pose3(solution.tip_pose_samples.back());
         last_tensions_ = solution.tensions_mean;
         last_tip_wrench_ = solution.tip_wrench_mean;
 
@@ -537,9 +502,12 @@ public:
 
         TendonRobotSolution solution = update(graph, num_samples);
 
-        last_tip_position_ = Pose3(solution.backbone_pose_mean.back()).translation();
-        last_tip_velocity_ = solution.tip_velocity_mean;
-        last_tip_state_cov_ = solution.tip_state_cov;
+        pose_im3_ = pose_im2_;
+        pose_im3_cov_ = pose_im2_cov_;
+        pose_im2_ = pose_im1_;
+        pose_im2_cov_ = pose_im1_cov_;
+        pose_im1_ = Pose3(solution.backbone_pose_mean.back());
+        pose_im1_cov_ = solution.backbone_pose_cov.back();
 
         last_tensions_ = solution.tensions_mean;
         last_tensions_cov_ = solution.tensions_cov;

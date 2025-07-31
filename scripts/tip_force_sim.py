@@ -14,14 +14,12 @@ def estimate_tip_force(tensions, tip_positions, tip_forces_gt):
     tip_positions_meas = tip_positions + config.tip_pose_p_meas_std * np.random.randn(*tip_positions.shape)
 
     solver = TipForceSolver(config)
-    plotter = TendonRobotPlotter('Estimation')
-    i = 0
+    plotter = TendonRobotPlotter('Inference Using Tip Position')
+
     for tensions, tip_position, tip_force in zip(tensions_meas, tip_positions_meas, tip_forces_gt):
-        print(i)
-        i = i + 1
         start_solve = time.time()
 
-        solution = solver.step(tensions, tip_position, 10)
+        solution = solver.step(tensions, tip_position, 1)
 
         solve_time = time.time() - start_solve
         start_render = time.time()
@@ -36,10 +34,13 @@ def estimate_tip_force(tensions, tip_positions, tip_forces_gt):
         print(f"total time: {1000 * total_time:.2f} ms\n\n")
 
         # time.sleep(3.0)
+    plotter.plotter.close()
 
 
-def simulate_tip_force(sim_time, frame_rate):
+def simulate_tip_force(sim_time):
     simulator = TipForceSim(get_simulation_config())
+
+    frame_rate = 30
     num_steps = sim_time * frame_rate
 
     tensions_gt = []
@@ -49,7 +50,7 @@ def simulate_tip_force(sim_time, frame_rate):
     plotter = TendonRobotPlotter('Ground Truth Simulation')
 
     for i in range(num_steps):
-        t = float(i) / frame_rate
+        t = float(i) / float(frame_rate)
 
         direction_rate_hz = 0.02
         direction = np.array([
@@ -72,7 +73,7 @@ def simulate_tip_force(sim_time, frame_rate):
 
         max_tensions = np.array([6.0, 2.0, 2.0, 2.0])
         # max_tensions = np.zeros(4)
-        tension_rate_hz = 0.05
+        tension_rate_hz = 0.1
         tensions_rate_hz = np.array([1.0 * tension_rate_hz, 1.1 * tension_rate_hz, 1.2 * tension_rate_hz, 1.3 * tension_rate_hz])
         tensions = 0.5 * (1.0 - np.cos(2 * np.pi * tensions_rate_hz * t))
         tensions *= max_tensions
@@ -93,18 +94,19 @@ def simulate_tip_force(sim_time, frame_rate):
         print(f"total time: {1000 * total_time:.2f} ms\n\n")
 
         tensions_gt.append(tensions)
-        tip_position_gt.append(solution.tip_pose_samples[0][:3,3])
-        # tip_position_gt.append(solution.backbone_pose_mean[-1][:3,3])
+        # tip_position_gt.append(solution.tip_pose_samples[0][:3,3])
+        tip_position_gt.append(solution.backbone_pose_mean[-1][:3,3])
         tip_force_gt.append(tip_force)
 
         # time.sleep(3.0)
+
+    plotter.plotter.close()
 
     return np.stack(tensions_gt), np.stack(tip_position_gt), np.stack(tip_force_gt)
 
 
 if __name__ == "__main__":
-    sim_time = 5
-    frame_rate = 30
+    sim_time = 60
 
-    tensions_gt, tip_position_gt, tip_force_gt = simulate_tip_force(sim_time, frame_rate)
+    tensions_gt, tip_position_gt, tip_force_gt = simulate_tip_force(sim_time)
     estimate_tip_force(tensions_gt, tip_position_gt, tip_force_gt)

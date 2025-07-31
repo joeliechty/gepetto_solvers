@@ -22,7 +22,7 @@ def get_base_config():
     config.routing_radius = 0.01
 
     config.tip_pose_r_meas_std = 3e0
-    config.tip_pose_p_meas_std = 1e-3
+    config.tip_pose_p_meas_std = 0.577e-3  # This makes for a 1mm rms position error
 
     config.angle_functions = [
         RoutingAngleFunction.LINEAR,
@@ -44,14 +44,14 @@ def get_base_config():
 def get_simulation_config():
     config = get_base_config()
 
-    config.tension_std = 1e-3
-    config.tip_force_std = 1e-3
+    config.tension_std = 1e-4
+    config.tip_force_std = 1e-4
 
     # We dont want any lag in sim, so make drift big
     config.tension_drift_std = 1e0
     config.wrench_drift_std = 1e0
 
-    config.velocity_drift_std = 1e-3
+    config.tip_accel_std = 1e0
 
     return config
 
@@ -59,12 +59,12 @@ def get_simulation_config():
 def get_sensing_config():
     config = get_base_config()
 
-    config.tension_std = 1e-2
+    config.tension_std = 1e-1
     config.tip_force_std = 1e-1
 
     config.tension_drift_std = 1e-1
-    config.wrench_drift_std = 1e-1
+    config.wrench_drift_std = 5e-2
 
-    config.velocity_drift_std = 1e-2
+    config.tip_accel_std = 1e-4
 
     return config

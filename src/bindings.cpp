@@ -22,9 +22,6 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("backbone_pose_mean", &TendonRobotSolution::backbone_pose_mean)
         .def_readwrite("backbone_pose_cov", &TendonRobotSolution::backbone_pose_cov)
         .def_readwrite("tip_pose_samples", &TendonRobotSolution::tip_pose_samples)
-        .def_readwrite("tip_velocity_mean", &TendonRobotSolution::tip_velocity_mean)
-        .def_readwrite("tip_velocity_samples",&TendonRobotSolution::tip_velocity_samples)
-        .def_readwrite("tip_state_cov",&TendonRobotSolution::tip_state_cov)
         .def_readwrite("tip_wrench_mean", &TendonRobotSolution::tip_wrench_mean)
         .def_readwrite("tip_wrench_cov", &TendonRobotSolution::tip_wrench_cov)
         .def_readwrite("tensions_mean", &TendonRobotSolution::tensions_mean)
@@ -63,7 +60,7 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("small_p_std", &TendonRobotGtsamConfig::small_p_std)
         .def_readwrite("tip_force_std", &TendonRobotGtsamConfig::tip_force_std)
 
-        .def_readwrite("velocity_drift_std", &TendonRobotGtsamConfig::velocity_drift_std)
+        .def_readwrite("tip_accel_std", &TendonRobotGtsamConfig::tip_accel_std)
         .def_readwrite("tension_drift_std", &TendonRobotGtsamConfig::tension_drift_std)
         .def_readwrite("wrench_drift_std", &TendonRobotGtsamConfig::wrench_drift_std)
 

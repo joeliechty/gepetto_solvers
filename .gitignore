@@ -75,3 +75,5 @@ dist/
 *.so
 *.whl
 .cache/
+
+*.mp4
