@@ -23,9 +23,10 @@ struct TendonRobotSolution {
     std::vector<Matrix4> backbone_pose_mean;
     std::vector<Matrix6> backbone_pose_cov;
     std::vector<Matrix4> tip_pose_samples;
-
-    Vector6 tip_wrench_mean;
-    Matrix6 tip_wrench_cov;
+    std::vector<std::vector<Vector3>> fbg_array_samples;
+    
+    std::vector<Vector6> applied_wrench_mean;
+    std::vector<Matrix6> applied_wrench_cov;
 
     Vector4 tensions_mean;
     Matrix4 tensions_cov;

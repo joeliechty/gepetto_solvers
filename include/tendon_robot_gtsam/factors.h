@@ -329,26 +329,27 @@ Vector6 get_single_tendon_wrench(
     return wrench;
 }
 
-class TendonDiscWrenchFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6, Vector4> {
+class TendonDiscWrenchFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6, Vector4, Vector6> {
     std::vector<Point3> holes_prev_;  // Previous disc hole location in local frame of previous disc, z = 0
     std::vector<Point3> holes_;   // Tip disc hole locations in local frame of tip disc
     std::vector<Point3> holes_next_;
     bool is_tip_;
 public:
 
-    using NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6, Vector4>::evaluateError;
+    using NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6, Vector4, Vector6>::evaluateError;
   
     TendonDiscWrenchFactor(Key pose_prev_key,
                            Key pose_key,
                            Key pose_next_key, // Set to dummy key if we are at the tip
                            Key wrench_key,
                            Key tensions_key,
+                           Key external_wrench_key,
                            bool is_tip,
                            std::vector<Point3> xy_holes_prev,
                            std::vector<Point3> xy_holes,
                            std::vector<Point3> xy_holes_next, // Not used if we are at the tip
                            const SharedNoiseModel& model): 
-        NoiseModelFactor5(model, pose_prev_key, pose_key, pose_next_key, wrench_key, tensions_key) {
+        NoiseModelFactor5(model, pose_prev_key, pose_key, pose_next_key, wrench_key, tensions_key, external_wrench_key) {
             is_tip_ = is_tip;
             holes_prev_ = xy_holes_prev;
             holes_ = xy_holes;
@@ -361,13 +362,15 @@ public:
         const Pose3& pose_next, 
         const Vector6& wrench, 
         const Vector4& tensions,
+        const Vector6& wrench_external,
         OptionalMatrixType H1, 
         OptionalMatrixType H2, 
         OptionalMatrixType H3, 
         OptionalMatrixType H4, 
-        OptionalMatrixType H5) const override 
+        OptionalMatrixType H5,
+        OptionalMatrixType H6) const override 
     {
-        Vector6 wrench_total = Vector6::Zero();
+        Vector6 wrench_tendons = Vector6::Zero();
         
         Matrix64 d_wrench_d_tensions = Matrix64::Zero();
         Matrix66 d_wrench_d_pose = Matrix66::Zero();
@@ -390,7 +393,7 @@ public:
                 H2 ? &d_wrench_prev_d_pose : 0,
                 H1 ? &d_wrench_prev_d_pose_prev : 0);
             
-            wrench_total += wrench_prev;
+            wrench_tendons += wrench_prev;
             Vector6 d_wrench_d_tension = d_wrench_prev_d_tension;
             d_wrench_d_pose += d_wrench_prev_d_pose;
             d_wrench_d_pose_prev += d_wrench_prev_d_pose_prev;
@@ -410,7 +413,7 @@ public:
                     H2 ? &d_wrench_next_d_pose : 0,
                     H3 ? &d_wrench_next_d_pose_next : 0);
                 
-                wrench_total += wrench_next;
+                wrench_tendons += wrench_next;
                 d_wrench_d_tension += d_wrench_next_d_tension;
                 d_wrench_d_pose += d_wrench_next_d_pose;
                 d_wrench_d_pose_next += d_wrench_next_d_pose_next;
@@ -419,7 +422,7 @@ public:
             d_wrench_d_tensions.col(tendon_idx) = d_wrench_d_tension;
         }
 
-        Vector6 wrench_error = wrench - wrench_total;
+        Vector6 wrench_error = wrench - wrench_tendons - wrench_external;
     
         if (H1) {
             *H1 = -d_wrench_d_pose_prev;
@@ -479,6 +482,20 @@ public:
 
         if (H5) {
             *H5 = -d_wrench_d_tensions;
+
+            // Matrix64 H5_check = numericalDerivative11<Vector6, Vector4>(
+            //     [&](const Vector4& tensions_) {
+            //         return this->evaluateError(pose_prev, pose, pose_next, wrench, tensions_,
+            //                                    nullptr, nullptr, nullptr, nullptr, nullptr);
+            //     }, tensions);
+            
+            // *H5 = H5_check;
+
+            // std::cout << "H5 check: " << (*H5 - H5_check).cwiseAbs().maxCoeff() << std::endl;
+        }
+
+        if (H6) {
+            *H6 = -Matrix6::Identity();
 
             // Matrix64 H5_check = numericalDerivative11<Vector6, Vector4>(
             //     [&](const Vector4& tensions_) {
