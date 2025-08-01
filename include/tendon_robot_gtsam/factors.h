@@ -567,4 +567,56 @@ public:
         return jerk;
     }
 };
+
+Vector3 stress_to_fbg_signal(const Vector6& stress, const Matrix6& K_inv, const double rod_diameter) {
+    Vector6 strain = K_inv * stress;
+
+    Vector3 curvature = strain.head<3>();  // [kappa_x, kappa_y, kappa_z]
+    double axial_strain = strain(5);       // gamma_z
+
+    std::array<Eigen::Vector3d, 3> fbg_locations = {
+        rod_diameter * Eigen::Vector3d(0, 1, 0),                                 // 0°
+        rod_diameter * Eigen::Vector3d(std::sqrt(3)/2, -0.5, 0),                 // +120°
+        rod_diameter * Eigen::Vector3d(-std::sqrt(3)/2, -0.5, 0)                 // -120°
+    };
+
+    Vector3 signal;
+    for (int i = 0; i < 3; ++i) {
+        double bending_strain = -fbg_locations[i].cross(curvature).z();  // ← corrected sign
+        signal(i) = axial_strain + bending_strain;
+    }
+
+    return signal;
+}
+
+class FbgMeasurementFactor: public NoiseModelFactorN<Vector6> {
+    Vector3 fbg_meas_;
+    Matrix6 K_inv_;
+    double rod_diameter_;
+public:
+
+    using NoiseModelFactorN<Vector6>::evaluateError;
+  
+    FbgMeasurementFactor(Key stress_key,
+                         const Vector3& fbg_meas,
+                         const Matrix6& K_inv,
+                         const double rod_diameter, 
+                         const SharedNoiseModel& model): 
+        NoiseModelFactorN(model, stress_key), fbg_meas_(fbg_meas), K_inv_(K_inv), rod_diameter_(rod_diameter) {}
+
+    Vector evaluateError(const Vector6& stress, OptionalMatrixType H1) const override {
+        
+        Vector3 error = stress_to_fbg_signal(stress, K_inv_, rod_diameter_) - fbg_meas_;
+
+        if (H1) {
+            *H1 = numericalDerivative11<Vector3, Vector6>(
+                [&](const Vector6& stress_) {
+                    return this->evaluateError(stress_, nullptr);
+                }, stress);
+        }
+
+        return error;
+    }
+};
+
 }

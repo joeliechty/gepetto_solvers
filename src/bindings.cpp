@@ -92,4 +92,12 @@ PYBIND11_MODULE(tendon_robot, m) {
          py::arg("tensions"),
          py::arg("forces"),
          py::call_guard<py::gil_scoped_release>());
+
+    py::class_<DistLoadSolver>(m, "DistLoadSolver")
+    .def(py::init<const TendonRobotGtsamConfig&>())
+    .def("step", &DistLoadSolver::step,
+         py::arg("tensions_meas"),
+         py::arg("fbg_signals_meas"),
+         py::arg("num_samples"),
+         py::call_guard<py::gil_scoped_release>());
 }

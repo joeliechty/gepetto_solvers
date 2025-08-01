@@ -226,7 +226,8 @@ class TendonRobotPlotter:
             for segment in tendon:
                 self.plotter.add_mesh(segment, color=color, opacity=0.7)
         
-        for disc in self.disc_meshes:
+        for i, disc in enumerate(self.disc_meshes):
+            if i == 0: continue
             disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
             self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
 
@@ -279,7 +280,8 @@ class TendonRobotPlotter:
 
         tendons, discs = get_tendon_disc_meshes(solution)
 
-        for new_disc, self_disc in zip(discs, self.disc_meshes):
+        for i, (new_disc, self_disc) in enumerate(zip(discs, self.disc_meshes)):
+            if i == 0: continue
             self_disc.points[:] = new_disc.points
         
         for i, tendon in enumerate(tendons):
@@ -295,46 +297,4 @@ class TendonRobotPlotter:
         else:
             self.update_tip_force(solution, tip_force_gt)
 
-        self.plotter.camera.azimuth += 0.5
-
-
-
-
-
-
-
-
-
-
-
-
-
-def plot_robot(solution, title=''):
-
-
-    
-    # if p_goal is not None:
-    #     goal = pv.Sphere(radius=0.003, center=p_goal)
-    #     plotter.add_mesh(goal, color='green', opacity=0.7, smooth_shading=True, specular=1.0, specular_power=10, lighting="light_kit")
-
-    # if f_dist is not None:
-    #     f_dist = f_dist.reshape(3,-1).T
-    #     f_dist_max = np.linalg.norm(f_dist, axis=1).max()
-    #     f_dist_scale = 0.075 / f_dist_max
-    #     for ii in range(len(f_dist)):
-    #         R_i = T_mean[ii,:3,:3]
-    #         p_i = T_mean[ii,:3,3]
-    #         f_i = R_i @ f_dist[ii]  # World frame
-    #         arrow = get_arrow(p_i, f_dist_scale * f_i)
-    #         plotter.add_mesh(arrow, color='green', opacity=0.5, lighting="light_kit")
-    
-    plotter.add_title(title, font_size=12, font='times')
-    plotter.add_axes()
-    # plotter.enable_depth_peeling(10)
-    plotter.enable_anti_aliasing()
-    light = pv.Light(light_type='headlight')
-    light.intensity = 0.8
-    plotter.add_light(light)
-    plotter.view_isometric()
-    
-    plotter.show()
+        self.plotter.camera.azimuth += 1.0

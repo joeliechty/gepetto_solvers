@@ -13,9 +13,8 @@ def get_base_config():
     config.youngs_modulus = 40.0e9
     config.shear_modulus = 15.0e9 
 
-    config.small_force_std = 1e-3
-    config.small_moment_std = 1e-4
-    config.cosserat_twist_r_std = 1e-2
+    config.small_force_std = 1e-4
+    config.small_moment_std = 1e-5
     config.small_r_std = 1e-3
     config.small_p_std = 1e-5
 
@@ -47,7 +46,8 @@ def get_simulation_config():
     config.tension_std = 1e-4
     config.tip_force_std = 1e-4
 
-    # We dont want any lag in sim, so make drift big
+    config.cosserat_twist_r_std = 1e-4
+
     config.tension_drift_std = 1e0
     config.wrench_drift_std = 1e0
 
@@ -59,8 +59,10 @@ def get_simulation_config():
 def get_sensing_config():
     config = get_base_config()
 
-    config.tension_std = 1e-1
+    config.tension_std = 1e-2
     config.tip_force_std = 1e-1
+
+    config.cosserat_twist_r_std = 1e-2
 
     config.tension_drift_std = 1e-1
     config.wrench_drift_std = 5e-2

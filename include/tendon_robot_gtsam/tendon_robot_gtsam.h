@@ -399,7 +399,7 @@ public:
         return solution;
     }
 
-    std::vector<Vector6> sample_6d_cov(const Matrix& cov, int num_samples) {
+    std::vector<Vector> sample_cov(const Matrix& cov, int num_samples) {
         const int dim = cov.rows();
         Eigen::LLT<Matrix> llt(cov);
         Matrix L = llt.matrixL();
@@ -408,7 +408,7 @@ public:
         static std::mt19937 gen(rd());
         static std::normal_distribution<> normal(0.0, 1.0);  // N(0,1)
 
-        std::vector<Vector6> samples;
+        std::vector<Vector> samples;
         samples.reserve(num_samples);
 
         for (int n = 0; n < num_samples; ++n) {
@@ -432,33 +432,12 @@ public:
         Pose3 tip_pose_mean = Pose3(solution.backbone_pose_mean.back());
         Matrix6 tip_pose_cov = solution.backbone_pose_cov.back();
 
-        std::vector<Vector6> d_tip_pose = sample_6d_cov(tip_pose_cov, num_samples);
+        std::vector<Vector> d_tip_pose = sample_cov(tip_pose_cov, num_samples);
         
         for (int i = 0; i < num_samples; i++) {
             solution.tip_pose_samples.push_back(
                 tip_pose_mean.retract(d_tip_pose[i]).matrix());
         }
-    }
-
-    Vector3 stress_to_fbg_signal(const Vector6& stress) {
-        Vector6 strain = K_inv_ * stress;
-
-        Vector3 curvature = strain.head<3>();  // [kappa_x, kappa_y, kappa_z]
-        double axial_strain = strain(5);       // gamma_z
-
-        std::array<Eigen::Vector3d, 3> fbg_locations = {
-            rod_diameter_ * Eigen::Vector3d(0, 1, 0),                                 // 0°
-            rod_diameter_ * Eigen::Vector3d(std::sqrt(3)/2, -0.5, 0),                 // +120°
-            rod_diameter_ * Eigen::Vector3d(-std::sqrt(3)/2, -0.5, 0)                 // -120°
-        };
-
-        Vector3 signal;
-        for (int i = 0; i < 3; ++i) {
-            double bending_strain = -fbg_locations[i].cross(curvature).z();  // ← corrected sign
-            signal(i) = axial_strain + bending_strain;
-        }
-
-        return signal;
     }
 
     void sample_fbg_array(
@@ -467,19 +446,23 @@ public:
         TendonRobotSolution& solution,
         int num_samples) 
     {   
-        std::vector<std::vector<Vector6>> d_stresses;
-        for (int j = 0; j < num_backbone_poses_; ++j) {
-            Matrix6 stress_cov = marginals.marginalCovariance(S(j));
-            d_stresses.push_back(sample_6d_cov(stress_cov, num_samples));  // vector<Vector6> of size num_samples
+        KeyVector stress_keys;
+        for (int i = 0; i < num_backbone_poses_; ++i) {
+            stress_keys.push_back(S(i));
         }
 
+        Matrix joint_stress_cov = marginals.jointMarginalCovariance(stress_keys).fullMatrix();
+        std::vector<Vector> joint_d_stresses = sample_cov(joint_stress_cov, num_samples);
+        
         for (int i = 0; i < num_samples; ++i) {
             std::vector<Vector3> fbg_array_sample;
             for (int j = 0; j < num_backbone_poses_; ++j) {
                 Vector6 stress_mean = values_.at<Vector6>(S(j));
-                Vector6 stress = stress_mean + d_stresses[j][i]; // Note: transpose
 
-                fbg_array_sample.push_back(stress_to_fbg_signal(stress));
+                Vector6 d_stress = joint_d_stresses[i].segment<6>(6 * j);
+                Vector6 stress = stress_mean + d_stress;
+
+                fbg_array_sample.push_back(stress_to_fbg_signal(stress, K_inv_, rod_diameter_));
             }
             solution.fbg_array_samples.push_back(fbg_array_sample);
         }
@@ -641,5 +624,58 @@ public:
     }
 };
 
+class DistLoadSolver : public TendonRobotGtsam {
+public:
+    using TendonRobotGtsam::TendonRobotGtsam;
+
+private:
+    void add_measurement_factors(const Vector4& tensions_meas, const std::vector<Vector3>& fbg_signals_meas, NonlinearFactorGraph& graph) {
+        auto wrench_cov = noiseModel::Diagonal::Sigmas((Vector(6) << 
+            1e-5, 1e-5, 1e-5, 1e-2, 1e-2, 1e-5).finished());
+        for (int i = 1; i < num_backbone_poses_; i++) {
+            graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), wrench_cov));
+        }
+
+        auto wrench_between_cov = noiseModel::Isotropic::Sigma(6, 1e-3);
+        for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
+            graph.add(BetweenFactor<Vector6>(F(i), F(i + 1), Vector6(Vector6::Zero()), wrench_between_cov));
+        }
+
+        // FBG strain measurement factors
+        auto fbg_strain_meas_cov = noiseModel::Isotropic::Sigma(3, 1e-6);
+
+        for (int i = 0; i < num_backbone_poses_; ++i) {
+            graph.add(FbgMeasurementFactor(S(i), fbg_signals_meas[i], K_inv_, rod_diameter_, fbg_strain_meas_cov));
+        }
+
+        
+
+        // Tendon tensions measurement prior
+        graph.add(PriorFactor<Vector4>(Q(0), tensions_meas, tensions_cov_));
+    }
+
+public:
+    TendonRobotSolution step(const Vector4& tensions_meas, const std::vector<Vector3>& fbg_signals_meas, int num_samples) {
+        NonlinearFactorGraph graph = build_graph_base();
+        add_measurement_factors(tensions_meas, fbg_signals_meas, graph);
+
+        TendonRobotSolution solution = update(graph, num_samples);
+
+        pose_im3_ = pose_im2_;
+        pose_im3_cov_ = pose_im2_cov_;
+        pose_im2_ = pose_im1_;
+        pose_im2_cov_ = pose_im1_cov_;
+        pose_im1_ = Pose3(solution.backbone_pose_mean.back());
+        pose_im1_cov_ = solution.backbone_pose_cov.back();
+
+        last_tensions_ = solution.tensions_mean;
+        last_tensions_cov_ = solution.tensions_cov;
+
+        last_tip_wrench_ = solution.applied_wrench_mean.back();
+        last_tip_wrench_cov_ = solution.applied_wrench_cov.back();
+
+        return solution;
+    }
+};
 }
 
