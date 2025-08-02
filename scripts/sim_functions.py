@@ -46,7 +46,7 @@ class dist_load_function:
         self.angle = 0
 
         self.sigma_range = [0.05, 0.1]
-        self.mag_range = [0.03, 0.1]
+        self.mag_range = [0.09, 0.1]
         self.mu_rage = [0.2, 1.0]
         self.angle_range = [0.0, 2 * np.pi]
         self.step = 0

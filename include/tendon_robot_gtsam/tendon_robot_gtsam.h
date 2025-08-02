@@ -196,6 +196,11 @@ public:
         last_tip_wrench_ = Vector6::Zero();
         last_tip_wrench_cov_ = 1e-6 * Matrix6::Identity();
         tip_wrench_drift_cov_ = (config.wrench_drift_std * Vector6::Ones()).array().square().matrix().asDiagonal();
+        
+        for (int i = 1; i < num_backbone_poses_; ++i) {
+            last_wrenches_.push_back(Vector6(Vector6::Zero()));
+            last_wrenches_cov_.push_back(1e-6 * Matrix6::Identity());
+        }
 
         initialize_values();
     }
@@ -230,6 +235,9 @@ public:
     Matrix6 tip_wrench_drift_cov_;
     Vector6 last_tip_wrench_;
     Matrix6 last_tip_wrench_cov_;
+
+    std::vector<Vector6> last_wrenches_;
+    std::vector<Matrix6> last_wrenches_cov_;
 
     Ordering ordering_;
     bool is_first_solve_ = true;
@@ -348,9 +356,6 @@ public:
 
         graph.add(PriorFactor<Vector4>(Q(0), last_tensions_,
             noiseModel::Gaussian::Covariance(last_tensions_cov_ + tensions_drift_cov_)));
-
-        graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), last_tip_wrench_, 
-            noiseModel::Gaussian::Covariance(last_tip_wrench_cov_ + tip_wrench_drift_cov_)));
     }
 
     void solve_graph(const NonlinearFactorGraph& graph)
@@ -523,6 +528,9 @@ private:
 
         // Tendon tensions measurement prior
         graph.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
+
+        graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), last_tip_wrench_, 
+            noiseModel::Gaussian::Covariance(last_tip_wrench_cov_ + tip_wrench_drift_cov_)));
     }
 
 public:
@@ -563,6 +571,9 @@ private:
 
         // Tendon tensions measurement prior
         graph.add(PriorFactor<Vector4>(Q(0), tensions_meas, tensions_cov_));
+
+        graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), last_tip_wrench_, 
+            noiseModel::Gaussian::Covariance(last_tip_wrench_cov_ + tip_wrench_drift_cov_)));
     }
 
 public:
@@ -631,14 +642,14 @@ public:
 private:
     void add_measurement_factors(const Vector4& tensions_meas, const std::vector<Vector3>& fbg_signals_meas, NonlinearFactorGraph& graph) {
         auto wrench_cov = noiseModel::Diagonal::Sigmas((Vector(6) << 
-            1e-5, 1e-5, 1e-5, 1e-2, 1e-2, 1e-5).finished());
+            1e-5, 1e-5, 1e-5, 1e-1, 1e-1, 1e-5).finished());
         for (int i = 1; i < num_backbone_poses_; i++) {
             graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), wrench_cov));
         }
 
-        auto wrench_between_cov = noiseModel::Isotropic::Sigma(6, 1e-3);
-        for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
-            graph.add(BetweenFactor<Vector6>(F(i), F(i + 1), Vector6(Vector6::Zero()), wrench_between_cov));
+        auto dist_load_smoothing_cov_ = noiseModel::Isotropic::Sigma(3, 1e-3);
+        for (int i = 1; i + 3 < num_backbone_poses_; ++i) {
+            graph.add(DistLoadSmoothingFactor(F(i), F(i + 1), F(i + 2), F(i + 3), dist_load_smoothing_cov_));
         }
 
         // FBG strain measurement factors
@@ -648,8 +659,15 @@ private:
             graph.add(FbgMeasurementFactor(S(i), fbg_signals_meas[i], K_inv_, rod_diameter_, fbg_strain_meas_cov));
         }
 
-        
+        // Vector6 sigmas;
+        // sigmas << 1e0, 1e0, 1e0, 1e-4, 1e-4, 1e-4;
+        // Matrix6 force_drift_cov = sigmas.array().square().matrix().asDiagonal();
 
+        // for (int i = 1; i < num_backbone_poses_; ++i) {
+        //     graph.add(PriorFactor<Vector6>(F(i), last_wrenches_[i], 
+        //     noiseModel::Gaussian::Covariance(last_wrenches_cov_[i] + force_drift_cov)));
+        // }
+        
         // Tendon tensions measurement prior
         graph.add(PriorFactor<Vector4>(Q(0), tensions_meas, tensions_cov_));
     }
@@ -671,8 +689,8 @@ public:
         last_tensions_ = solution.tensions_mean;
         last_tensions_cov_ = solution.tensions_cov;
 
-        last_tip_wrench_ = solution.applied_wrench_mean.back();
-        last_tip_wrench_cov_ = solution.applied_wrench_cov.back();
+        last_wrenches_ = solution.applied_wrench_mean;
+        last_wrenches_cov_ = solution.applied_wrench_cov;
 
         return solution;
     }

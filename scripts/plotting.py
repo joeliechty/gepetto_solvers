@@ -297,4 +297,4 @@ class TendonRobotPlotter:
         else:
             self.update_tip_force(solution, tip_force_gt)
 
-        self.plotter.camera.azimuth += 1.0
+        self.plotter.camera.azimuth += 0.3
