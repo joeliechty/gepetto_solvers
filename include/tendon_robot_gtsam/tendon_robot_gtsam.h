@@ -169,14 +169,14 @@ public:
             config.cosserat_twist_r_std, config.cosserat_twist_r_std, config.cosserat_twist_r_std, 
             config.small_p_std, config.small_p_std, config.small_p_std).finished());
         
-        tip_accel_cov_ = noiseModel::Isotropic::Sigma(3, config.tip_pose_jerk_std);
+        tip_motion_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
+            config.tip_pose_accel_std, config.tip_pose_accel_std, config.tip_pose_accel_std, 
+            config.tip_pose_jerk_std, config.tip_pose_jerk_std, config.tip_pose_jerk_std).finished());
         
         pose_im3_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
-        pose_im3_cov_ = 1e-8 * Matrix6::Identity();
         pose_im2_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
-        pose_im2_cov_ = 1e-8 * Matrix6::Identity();
         pose_im1_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
-        pose_im1_cov_ = 1e-8 * Matrix6::Identity();
+        last_poses_cov_ = 1e-8 * Eigen::Matrix<double, 18, 18>::Identity();
         
         last_tensions_ = Vector4::Zero();
         last_tensions_cov_ = 1e-6 * Matrix4::Identity();
@@ -200,14 +200,12 @@ public:
     noiseModel::Diagonal::shared_ptr small_wrench_cov_;
     noiseModel::Diagonal::shared_ptr base_frame_cov_;
     noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
-    noiseModel::Diagonal::shared_ptr tip_accel_cov_;
+    noiseModel::Diagonal::shared_ptr tip_motion_cov_;
 
     Pose3 pose_im3_;
-    Matrix6 pose_im3_cov_;
     Pose3 pose_im2_;
-    Matrix6 pose_im2_cov_;
     Pose3 pose_im1_;
-    Matrix6 pose_im1_cov_;
+    Eigen::Matrix<double, 18, 18> last_poses_cov_;
 
     Key pose_im3_key_;
     Key pose_im2_key_;
@@ -308,10 +306,12 @@ public:
     }
 
     void add_last_state_prior() {
-        graph_.add(PriorFactor<Pose3>(pose_im3_key_, pose_im3_, noiseModel::Gaussian::Covariance(pose_im3_cov_)));
-        graph_.add(PriorFactor<Pose3>(pose_im2_key_, pose_im2_, noiseModel::Gaussian::Covariance(pose_im2_cov_)));
-        graph_.add(PriorFactor<Pose3>(pose_im1_key_, pose_im1_, noiseModel::Gaussian::Covariance(pose_im1_cov_)));
-        graph_.add(LastTipStateFactor(pose_im3_key_, pose_im2_key_, pose_im1_key_, T(num_backbone_poses_ - 1), tip_accel_cov_));
+        graph_.add(LastPosesPriorFactor(
+            pose_im3_key_, pose_im2_key_, pose_im1_key_, 
+            pose_im3_, pose_im2_, pose_im1_, 
+            noiseModel::Gaussian::Covariance(last_poses_cov_)));
+
+        graph_.add(LastPosesSmoothingFactor(pose_im3_key_, pose_im2_key_, pose_im1_key_, T(num_backbone_poses_ - 1), tip_motion_cov_));
 
         graph_.add(PriorFactor<Vector4>(Q(0), last_tensions_,
             noiseModel::Gaussian::Covariance(last_tensions_cov_ + tensions_drift_cov_)));
@@ -433,9 +433,8 @@ public:
         solution_ = TendonRobotSolution(num_backbone_poses_, num_samples);
 
         auto start_solve = std::chrono::high_resolution_clock::now();
+
         solve_graph();
-        
-        auto end_solve = std::chrono::high_resolution_clock::now();
 
         auto start_extract = std::chrono::high_resolution_clock::now();
 
@@ -446,16 +445,9 @@ public:
         
         auto end_extract = std::chrono::high_resolution_clock::now();
 
-        solution_.solve_time_ms = std::chrono::duration<double, std::milli>(end_solve - start_solve).count();
+        solution_.solve_time_ms = std::chrono::duration<double, std::milli>(start_extract - start_solve).count();
         solution_.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
         solution_.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_solve).count();
-
-        pose_im3_ = values_.at<Pose3>(pose_im2_key_);
-        pose_im3_cov_ = marginals_.marginalCovariance(pose_im2_key_);
-        pose_im2_ = values_.at<Pose3>(pose_im1_key_);
-        pose_im2_cov_ = marginals_.marginalCovariance(pose_im1_key_);
-        pose_im1_ = Pose3(solution_.backbone_pose_mean.back());
-        pose_im1_cov_ = solution_.backbone_pose_cov.back();
 
         last_tensions_ = solution_.tensions_mean;
         last_tensions_cov_ = solution_.tensions_cov;
@@ -520,6 +512,16 @@ public:
         last_tip_wrench_ = solution_.applied_wrench_mean.back();
         last_tip_wrench_cov_ = solution_.applied_wrench_cov.back();
 
+        pose_im3_ = values_.at<Pose3>(pose_im2_key_);
+        pose_im2_ = values_.at<Pose3>(pose_im1_key_);
+        pose_im1_ = Pose3(solution_.backbone_pose_mean.back());
+
+        KeyVector poses_keys;
+        poses_keys.push_back(pose_im2_key_);
+        poses_keys.push_back(pose_im1_key_);
+        poses_keys.push_back(T(num_backbone_poses_ - 1));
+        last_poses_cov_ = marginals_.jointMarginalCovariance(poses_keys).fullMatrix();
+
         return solution_;
     }
 
@@ -535,8 +537,15 @@ public:
         
         update(1);
 
-        last_tip_wrench_ = solution_.applied_wrench_mean.back();
-        last_tip_wrench_cov_ = solution_.applied_wrench_cov.back();
+        pose_im3_ = values_.at<Pose3>(pose_im2_key_);
+        pose_im2_ = values_.at<Pose3>(pose_im1_key_);
+        pose_im1_ = Pose3(solution_.backbone_pose_mean.back());
+
+        KeyVector poses_keys;
+        poses_keys.push_back(pose_im2_key_);
+        poses_keys.push_back(pose_im1_key_);
+        poses_keys.push_back(T(num_backbone_poses_ - 1));
+        last_poses_cov_ = marginals_.jointMarginalCovariance(poses_keys).fullMatrix();
 
         return solution_;
     }
@@ -625,9 +634,6 @@ public:
         }
 
         update(1);
-
-        last_wrenches_ = solution_.applied_wrench_mean;
-        last_wrenches_cov_ = solution_.applied_wrench_cov;
 
         return solution_;
     }

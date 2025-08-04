@@ -512,15 +512,15 @@ public:
     }
 };
 
-class LastTipStateFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Pose3> {
+class LastPosesSmoothingFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Pose3> {
 public:
     using NoiseModelFactorN<Pose3, Pose3, Pose3, Pose3>::evaluateError;
   
-    LastTipStateFactor(Key pose_im3_key,
-                       Key pose_im2_key,
-                       Key pose_im1_key,
-                       Key pose_i_key,
-                       const SharedNoiseModel& model): 
+    LastPosesSmoothingFactor(Key pose_im3_key,
+                             Key pose_im2_key,
+                             Key pose_im1_key,
+                             Key pose_i_key,
+                             const SharedNoiseModel& model): 
         NoiseModelFactor4(model, pose_im3_key, pose_im2_key, pose_im1_key, pose_i_key) {}
 
     Vector evaluateError(
@@ -545,26 +545,114 @@ public:
         Matrix36 d_p_i;
         Vector3 p_i   = pose_i.translation(d_p_i);
 
-        Vector3 jerk = p_i - 3.0 * p_im1 + 3.0 * p_im2 - p_im3;
+        Vector3 accel = p_i - 2.0 * p_im1 + p_im2;
+        Vector3 jerk  = p_i - 3.0 * p_im1 + 3.0 * p_im2 - p_im3;
+
+        Vector6 error;
+        error << accel, jerk;
+
+        if (H1) { // pose_im3
+            *H1 = Matrix6::Zero();
+            H1->block<3,6>(3,0) = -d_p_im3; // jerk part
+        }
+
+        if (H2) { // pose_im2
+            *H2 = Matrix6::Zero();
+            H2->block<3,6>(0,0) =  d_p_im2;      // accel part
+            H2->block<3,6>(3,0) = 3.0 * d_p_im2; // jerk part
+        }
+
+        if (H3) { // pose_im1
+            *H3 = Matrix6::Zero();
+            H3->block<3,6>(0,0) = -2.0 * d_p_im1; // accel part
+            H3->block<3,6>(3,0) = -3.0 * d_p_im1; // jerk part
+        }
+
+        if (H4) { // pose_i
+            *H4 = Matrix6::Zero();
+            H4->block<3,6>(0,0) = d_p_i; // accel part
+            H4->block<3,6>(3,0) = d_p_i; // jerk part
+        }
+
+        return error;
+    }
+};
+
+class LastPosesPriorFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3> {
+    Pose3 pose_im3_pred_, pose_im2_pred_, pose_im1_pred_;
+
+public:
+    using NoiseModelFactorN<Pose3, Pose3, Pose3>::evaluateError;
+  
+    LastPosesPriorFactor(Key pose_im3_key,
+                         Key pose_im2_key,
+                         Key pose_im1_key,
+                         const Pose3& pose_im3_pred,
+                         const Pose3& pose_im2_pred,
+                         const Pose3& pose_im1_pred,
+                         const SharedNoiseModel& model): 
+        NoiseModelFactor3(model, pose_im3_key, pose_im2_key, pose_im1_key), 
+        pose_im3_pred_(pose_im3_pred), pose_im2_pred_(pose_im2_pred), pose_im1_pred_(pose_im1_pred) {}
+
+    Vector evaluateError(
+        const Pose3& pose_im3,
+        const Pose3& pose_im2,
+        const Pose3& pose_im1,
+        OptionalMatrixType H1, 
+        OptionalMatrixType H2,
+        OptionalMatrixType H3) const override 
+    {  
+        Matrix6 d_delta_d_pose_im3, d_delta_d_pose_im2, d_delta_d_pose_im1;
+        Pose3 delta_im3 = pose_im3.between(pose_im3_pred_, d_delta_d_pose_im3);
+        Pose3 delta_im2 = pose_im2.between(pose_im2_pred_, d_delta_d_pose_im2);
+        Pose3 delta_im1 = pose_im1.between(pose_im1_pred_, d_delta_d_pose_im1);
+
+        Matrix6 d_error_d_delta_im3, d_error_d_delta_im2, d_error_d_delta_im1;
+        Vector6 error_im3 = Pose3::Logmap(delta_im3, d_error_d_delta_im3);
+        Vector6 error_im2 = Pose3::Logmap(delta_im2, d_error_d_delta_im2);
+        Vector6 error_im1 = Pose3::Logmap(delta_im1, d_error_d_delta_im1);
+
+        Eigen::Matrix<double, 18, 1> error;
+        error << error_im3, error_im2, error_im1;
 
         if (H1) {
-            *H1 = -d_p_im3;
+            *H1 = Eigen::Matrix<double, 18, 6>::Zero();
+            H1->block<6, 6>(0, 0) = d_error_d_delta_im3 * d_delta_d_pose_im3;
         }
 
         if (H2) {
-            *H2 = 3.0 * d_p_im2;
+            *H2 = Eigen::Matrix<double, 18, 6>::Zero();
+            H2->block<6, 6>(6, 0) = d_error_d_delta_im2 * d_delta_d_pose_im2;
         }
 
         if (H3) {
-            *H3 = -3.0 * d_p_im1;
+            *H3 = Eigen::Matrix<double, 18, 6>::Zero();
+            H3->block<6, 6>(12, 0) = d_error_d_delta_im1 * d_delta_d_pose_im1;
         }
 
-        if (H4) {
-            *H4 = d_p_i;
-        }
-        
 
-        return jerk;
+        // if (H1) {
+        //     *H1 = numericalDerivative11<Eigen::Matrix<double, 18, 1>, Pose3>(
+        //         [&](const Pose3& pose_im3_) {
+        //             return this->evaluateError(pose_im3_, pose_im2, pose_im1, nullptr, nullptr, nullptr);
+        //         }, pose_im3);
+        // }
+
+        // if (H2) {
+        //     *H2 = numericalDerivative11<Eigen::Matrix<double, 18, 1>, Pose3>(
+        //         [&](const Pose3& pose_im2_) {
+        //             return this->evaluateError(pose_im3, pose_im2_, pose_im1, nullptr, nullptr, nullptr);
+        //         }, pose_im3);
+        // }
+
+        // if (H3) {
+        //     *H3 = numericalDerivative11<Eigen::Matrix<double, 18, 1>, Pose3>(
+        //         [&](const Pose3& pose_im1_) {
+        //             return this->evaluateError(pose_im3, pose_im2, pose_im1_, nullptr, nullptr, nullptr);
+        //         }, pose_im3);
+        // }
+
+        return error;
     }
 };
 

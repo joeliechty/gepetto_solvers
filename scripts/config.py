@@ -16,22 +16,23 @@ def get_base_config():
 
     config.tension_std = 1e-2
     config.cosserat_twist_r_std = 1e-2
-    config.small_force_std = 1e-4
+    config.small_force_std = 1e-5
     config.small_moment_std = 1e-5
     config.small_r_std = 1e-3
     config.small_p_std = 1e-5
     config.tension_drift_std = 1e-1
-    config.tip_pose_jerk_std = 1e-2
+    config.tip_pose_jerk_std = 1e0
+    config.tip_pose_accel_std = 1e0
     
     config.tip_force_std = 1e-1
-    config.tip_force_drift_std = 5e-2
+    config.tip_force_drift_std = 1e-2
     config.dist_load_magnitude_std = 1e-1
     config.dist_load_jerk_std = 1e-3
     config.dist_load_drift_std = 1e-3
 
     config.tip_pose_r_meas_std = 3e0
     config.tip_pose_p_meas_std = 1e-3 #0.577e-3  # This makes for a 1mm rms position error
-    config.fbg_strain_meas_std = 5e-6
+    config.fbg_strain_meas_std = 1e-6
 
 
     config.angle_functions = [
@@ -54,11 +55,14 @@ def get_base_config():
 def get_simulation_config():
     config = get_base_config()
 
+    # config.youngs_modulus = 40.0e9 * 1.025
+
     config.tension_std = 1e-4
     config.tip_force_std = 1e-4
 
     config.cosserat_twist_r_std = 1e-4
     config.tension_drift_std = 1e0
     config.tip_pose_jerk_std = 1e0
+    config.tip_pose_accel_std = 1e0
 
     return config

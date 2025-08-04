@@ -47,25 +47,25 @@ def inference(tensions_gt, fbg_signals_gt, dist_load_gt):
 
         #     plt.show()
 
-        # if np.linalg.norm(dist_load_gt_i).sum() > 0.02:
-        #     s = np.linspace(0, config.rod_length, len(dist_load_gt_i))
-        #     force_mean = np.array(solution.applied_wrench_mean)[:,3:]
-        #     force_cov = np.array(solution.applied_wrench_cov)[:,3:,3:]
-        #     force_two_std = 2 * np.sqrt(np.diagonal(force_cov, axis1=1, axis2=2))
+        if np.linalg.norm(dist_load_gt_i).sum() > 0.02:
+            s = np.linspace(0, config.rod_length, len(dist_load_gt_i))
+            force_mean = np.array(solution.applied_wrench_mean)[:,3:]
+            force_cov = np.array(solution.applied_wrench_cov)[:,3:,3:]
+            force_two_std = 2 * np.sqrt(np.diagonal(force_cov, axis1=1, axis2=2))
 
-        #     plt.figure()
+            plt.figure()
 
-        #     plt.subplot(1,2,1)
-        #     plt.plot(s, dist_load_gt_i[:,0], 'g-')
-        #     plt.plot(s, force_mean[:,0], 'b-')
-        #     plt.fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.25, interpolate=True)
+            plt.subplot(1,2,1)
+            plt.plot(s, dist_load_gt_i[:,0], 'g-')
+            plt.plot(s, force_mean[:,0], 'b-')
+            plt.fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.25, interpolate=True)
 
-        #     plt.subplot(1,2,2)
-        #     plt.plot(s, dist_load_gt_i[:,1], 'g-')
-        #     plt.plot(s, force_mean[:,1], 'b-')
-        #     plt.fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.25, interpolate=True)
+            plt.subplot(1,2,2)
+            plt.plot(s, dist_load_gt_i[:,1], 'g-')
+            plt.plot(s, force_mean[:,1], 'b-')
+            plt.fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.25, interpolate=True)
 
-        #     plt.show()
+            plt.show()
 
 
     plotter.plotter.close()
@@ -118,7 +118,7 @@ def simulation(sim_time, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 3
+    sim_time = 5
 
     tensions_gt, fbg_signals_gt, dist_load_gt = simulation(sim_time)
     inference(tensions_gt, fbg_signals_gt, dist_load_gt)

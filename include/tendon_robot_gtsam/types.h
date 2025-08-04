@@ -68,6 +68,7 @@ struct TendonRobotConfig{
     double small_r_std = 1e-3;
     double small_p_std = 1e-5;
     double tip_pose_jerk_std = 1e-3;
+    double tip_pose_accel_std = 1e-3;
     double tension_drift_std = 1e-1;
 
     // Tip force parameters

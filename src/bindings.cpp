@@ -60,6 +60,7 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("small_r_std", &TendonRobotConfig::small_r_std)
         .def_readwrite("small_p_std", &TendonRobotConfig::small_p_std)
         .def_readwrite("tip_pose_jerk_std", &TendonRobotConfig::tip_pose_jerk_std)
+        .def_readwrite("tip_pose_accel_std", &TendonRobotConfig::tip_pose_accel_std)
         .def_readwrite("tension_drift_std", &TendonRobotConfig::tension_drift_std)
 
         .def_readwrite("tip_force_std", &TendonRobotConfig::tip_force_std)
