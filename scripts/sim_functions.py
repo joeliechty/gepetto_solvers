@@ -1,7 +1,7 @@
 import numpy as np
 
 def tensions_function(t):
-    max_tensions = np.array([6.0, 2.0, 2.0, 2.0])
+    max_tensions = np.array([7.0, 3.0, 3.0, 3.0])
     rate_hz = 0.1
 
     tensions_rate_hz = np.array([1.0 * rate_hz, 1.1 * rate_hz, 1.2 * rate_hz, 1.3 * rate_hz])
@@ -34,10 +34,10 @@ def tip_force_function(t):
 
 
 class dist_load_function:
-    def __init__(self, num_poses):
+    def __init__(self, num_forces):
         self.framerate = 30
         self.force_rate_hz = 0.1
-        self.s = np.linspace(0, 1, num_poses)
+        self.s = np.linspace(0, 1, num_forces)
         self.steps_per_cycle = self.framerate / self.force_rate_hz
 
         self.mu = 0
@@ -47,7 +47,7 @@ class dist_load_function:
 
         self.sigma_range = [0.05, 0.1]
         self.mag_range = [0.09, 0.1]
-        self.mu_rage = [0.2, 1.0]
+        self.mu_rage = [0.2, 0.9]
         self.angle_range = [0.0, 2 * np.pi]
         self.step = 0
 

@@ -2,19 +2,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import time
-from tendon_robot import DistLoadSim, DistLoadSolver
+from tendon_robot import DistLoadSolver
 
 from plotting import TendonRobotPlotter
-from config import get_simulation_config, get_sensing_config
+from config import get_simulation_config, get_base_config
 from sim_functions import dist_load_function, tensions_function
 
 
 def inference(tensions_gt, fbg_signals_gt, dist_load_gt):
-    config = get_sensing_config()
+    config = get_base_config()
 
     # Add noise to all measured data
     tensions_meas = tensions_gt + config.tension_std * np.random.randn(*tensions_gt.shape)
-    fbg_signals_meas = fbg_signals_gt + 1e-6 * np.random.randn(*fbg_signals_gt.shape)
+    fbg_signals_meas = fbg_signals_gt + 3e-6 * np.random.randn(*fbg_signals_gt.shape)
 
     solver = DistLoadSolver(config)
     plotter = TendonRobotPlotter('Distributed Load Inference', plot_dist_load=True)
@@ -57,13 +57,13 @@ def inference(tensions_gt, fbg_signals_gt, dist_load_gt):
 
         #     plt.subplot(1,2,1)
         #     plt.plot(s, dist_load_gt_i[:,0], 'g-')
-        #     plt.plot(s[:-1], force_mean[:,0], 'b-')
-        #     plt.fill_between(s[:-1], force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.25, interpolate=True)
+        #     plt.plot(s, force_mean[:,0], 'b-')
+        #     plt.fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.25, interpolate=True)
 
         #     plt.subplot(1,2,2)
         #     plt.plot(s, dist_load_gt_i[:,1], 'g-')
-        #     plt.plot(s[:-1], force_mean[:,1], 'b-')
-        #     plt.fill_between(s[:-1], force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.25, interpolate=True)
+        #     plt.plot(s, force_mean[:,1], 'b-')
+        #     plt.fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.25, interpolate=True)
 
         #     plt.show()
 
@@ -73,14 +73,14 @@ def inference(tensions_gt, fbg_signals_gt, dist_load_gt):
 
 def simulation(sim_time, frame_rate=30):
     config = get_simulation_config()
-    simulator = DistLoadSim(config)
+    simulator = DistLoadSolver(config)
 
     num_steps = sim_time * frame_rate
 
     plotter = TendonRobotPlotter('Distributed Load Simulation', plot_dist_load=True)
 
     num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs
-    dist_load = dist_load_function(num_poses)
+    dist_load = dist_load_function(num_poses - 1)
 
     tensions_gt = []
     dist_load_gt = []
@@ -95,7 +95,7 @@ def simulation(sim_time, frame_rate=30):
         # tensions = np.zeros(4)
 
         start_solve = time.time()
-        solution = simulator.step(tensions, forces)
+        solution = simulator.step_simulation(tensions, forces)
         solve_time = time.time() - start_solve
 
         start_render = time.time()
@@ -118,7 +118,7 @@ def simulation(sim_time, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 30
+    sim_time = 3
 
     tensions_gt, fbg_signals_gt, dist_load_gt = simulation(sim_time)
     inference(tensions_gt, fbg_signals_gt, dist_load_gt)

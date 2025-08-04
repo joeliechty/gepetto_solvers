@@ -5,7 +5,7 @@ enum class RoutingAngleFunction {
     LINEAR = 1
 };
 
-struct RoutingParams {
+struct RoutingFunctionParams {
     double angle_offset = 0.0;  // Starting angle (radians)
     double total_angle = 0.0;   // For LINEAR: total angle change across the rod
 };
@@ -31,14 +31,26 @@ struct TendonRobotSolution {
     Vector4 tensions_mean;
     Matrix4 tensions_cov;
 
-    double solve_time_ms;
-    double extract_time_ms;
-    double total_time_ms;
+    double solve_time_ms = 0;
+    double extract_time_ms = 0;
+    double total_time_ms = 0;
 
     TendonDiscConfig tendon_disc_config;
+
+    TendonRobotSolution() = default;
+
+    TendonRobotSolution(size_t num_backbone_poses, size_t num_samples = 0) {
+        backbone_pose_mean.resize(num_backbone_poses);
+        backbone_pose_cov.resize(num_backbone_poses);
+        applied_wrench_mean.resize(num_backbone_poses - 1);
+        applied_wrench_cov.resize(num_backbone_poses - 1);
+
+        tip_pose_samples.resize(num_samples);
+        fbg_array_samples.resize(num_samples); // each can be filled with pose-count-long vectors
+    }
 };
 
-struct TendonRobotGtsamConfig{
+struct TendonRobotConfig{
     // Phsysical parameters 
     int num_discs = 9;
     int poses_between_discs = 2;
@@ -48,26 +60,30 @@ struct TendonRobotGtsamConfig{
     double shear_modulus = 12.0e9;  // Nitinol
     double routing_radius = 0.01;
 
-    // Model parameters
+    // General noise parameters
     double tension_std = 5e-2;
     double small_force_std = 1e-5;
     double small_moment_std = 1e-5;
     double cosserat_twist_r_std = 1e-1;
     double small_r_std = 1e-3;
     double small_p_std = 1e-5;
-    double tip_force_std = 1e-4;
-
-    // Temporal drift parameters
-    double tip_accel_std = 1e-3;
+    double tip_pose_jerk_std = 1e-3;
     double tension_drift_std = 1e-1;
-    double wrench_drift_std = 1e-1;
+
+    // Tip force parameters
+    double tip_force_std = 1e-4;
+    double tip_force_drift_std = 1e-1;
+    double dist_load_magnitude_std = 1e-1;
+    double dist_load_jerk_std = 1e-3;
+    double dist_load_drift_std = 1e-3;
 
     // Measurement noise parameters
     double tip_pose_r_meas_std = 3e0;
     double tip_pose_p_meas_std = 1e-3;
+    double fbg_strain_meas_std = 5e-6;
 
     // Routing configuration
     std::vector<RoutingAngleFunction> angle_functions;
-    std::vector<RoutingParams> angle_params;
+    std::vector<RoutingFunctionParams> angle_params;
 };
 }

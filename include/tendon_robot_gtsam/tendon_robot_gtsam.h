@@ -24,7 +24,7 @@ TendonDiscConfig generate_tendon_disc_config(
     int num_poses,
     double routing_radius,
     const std::vector<RoutingAngleFunction>& angle_functions, 
-    const std::vector<RoutingParams>& angle_params)
+    const std::vector<RoutingFunctionParams>& angle_params)
 {
     int num_tendons = angle_functions.size();
 
@@ -98,8 +98,8 @@ TendonDiscConfig generate_tendon_disc_config(
     return config;
 }
 
-TendonRobotGtsamConfig get_default_config(){
-    gtsam::TendonRobotGtsamConfig config;
+TendonRobotConfig get_default_config(){
+    gtsam::TendonRobotConfig config;
 
     config.routing_radius = 0.008;
 
@@ -128,7 +128,7 @@ using symbol_shorthand::Q; // tendon tensions
 
 class TendonRobotGtsam {
 public:
-    TendonRobotGtsam(TendonRobotGtsamConfig config) {
+    TendonRobotGtsam(const TendonRobotConfig& config) {
         num_backbone_poses_ = config.num_discs + (config.num_discs - 1) * config.poses_between_discs;
         ds_ = config.rod_length / (num_backbone_poses_ - 1);
         rod_diameter_ = config.rod_diameter;
@@ -160,10 +160,6 @@ public:
         small_wrench_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             config.small_moment_std, config.small_moment_std, config.small_moment_std, 
             config.small_force_std, config.small_force_std, config.small_force_std).finished());
-
-        tip_wrench_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
-            config.small_moment_std, config.small_moment_std, config.small_moment_std, 
-            config.tip_force_std, config.tip_force_std, config.tip_force_std).finished());
         
         base_frame_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             config.small_r_std, config.small_r_std, config.small_r_std, 
@@ -172,15 +168,8 @@ public:
         cosserat_twist_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             config.cosserat_twist_r_std, config.cosserat_twist_r_std, config.cosserat_twist_r_std, 
             config.small_p_std, config.small_p_std, config.small_p_std).finished());
-
-        prior_pose_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
-            3 * M_PI, 3 * M_PI, 3 * M_PI, 3 * config.rod_length, 3 * config.rod_length, 3 * config.rod_length).finished());
         
-        tip_pose_meas_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
-            config.tip_pose_r_meas_std, config.tip_pose_r_meas_std, config.tip_pose_r_meas_std,
-            config.tip_pose_p_meas_std, config.tip_pose_p_meas_std, config.tip_pose_p_meas_std).finished());
-        
-        tip_accel_cov_ = noiseModel::Isotropic::Sigma(3, config.tip_accel_std);
+        tip_accel_cov_ = noiseModel::Isotropic::Sigma(3, config.tip_pose_jerk_std);
         
         pose_im3_ = Pose3(Rot3::Identity(), Point3(0, 0, config.rod_length));
         pose_im3_cov_ = 1e-8 * Matrix6::Identity();
@@ -192,15 +181,10 @@ public:
         last_tensions_ = Vector4::Zero();
         last_tensions_cov_ = 1e-6 * Matrix4::Identity();
         tensions_drift_cov_ = (config.tension_drift_std * Vector4::Ones()).array().square().matrix().asDiagonal();
-
-        last_tip_wrench_ = Vector6::Zero();
-        last_tip_wrench_cov_ = 1e-6 * Matrix6::Identity();
-        tip_wrench_drift_cov_ = (config.wrench_drift_std * Vector6::Ones()).array().square().matrix().asDiagonal();
         
-        for (int i = 1; i < num_backbone_poses_; ++i) {
-            last_wrenches_.push_back(Vector6(Vector6::Zero()));
-            last_wrenches_cov_.push_back(1e-6 * Matrix6::Identity());
-        }
+        pose_im3_key_ = T(num_backbone_poses_ + 100);
+        pose_im2_key_ = T(num_backbone_poses_ + 101);
+        pose_im1_key_ = T(num_backbone_poses_ + 102);
 
         initialize_values();
     }
@@ -214,11 +198,8 @@ public:
 
     noiseModel::Diagonal::shared_ptr tensions_cov_;
     noiseModel::Diagonal::shared_ptr small_wrench_cov_;
-    noiseModel::Diagonal::shared_ptr tip_wrench_cov_;
     noiseModel::Diagonal::shared_ptr base_frame_cov_;
     noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
-    noiseModel::Diagonal::shared_ptr prior_pose_cov_;
-    noiseModel::Diagonal::shared_ptr tip_pose_meas_cov_;
     noiseModel::Diagonal::shared_ptr tip_accel_cov_;
 
     Pose3 pose_im3_;
@@ -228,29 +209,29 @@ public:
     Pose3 pose_im1_;
     Matrix6 pose_im1_cov_;
 
+    Key pose_im3_key_;
+    Key pose_im2_key_;
+    Key pose_im1_key_;
+
     Matrix4 tensions_drift_cov_;
     Vector4 last_tensions_;
     Matrix4 last_tensions_cov_;
 
-    Matrix6 tip_wrench_drift_cov_;
-    Vector6 last_tip_wrench_;
-    Matrix6 last_tip_wrench_cov_;
-
-    std::vector<Vector6> last_wrenches_;
-    std::vector<Matrix6> last_wrenches_cov_;
-
     Ordering ordering_;
     bool is_first_solve_ = true;
     Values values_;
+    NonlinearFactorGraph graph_;
+    Marginals marginals_;
+    TendonRobotSolution solution_;
 
     void initialize_values(){
         values_.clear();
 
         values_.insert(Q(0), Vector4(Vector4::Zero()));
 
-        values_.insert(T(num_backbone_poses_ + 100), Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
-        values_.insert(T(num_backbone_poses_ + 101), Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
-        values_.insert(T(num_backbone_poses_ + 102), Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
+        values_.insert(pose_im1_key_, Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
+        values_.insert(pose_im2_key_, Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
+        values_.insert(pose_im3_key_, Pose3(Rot3::Identity(), Point3(0.0, 0.0, ds_ * (num_backbone_poses_ - 1))));
 
         for (int i = 0; i < num_backbone_poses_; ++i) {
             values_.insert(T(i), Pose3(Rot3::Identity(), Point3(0.0, 0.0, i * ds_)));
@@ -263,8 +244,8 @@ public:
         }
     }
 
-    NonlinearFactorGraph build_graph_base() {
-        NonlinearFactorGraph graph;
+    void build_graph_base() {
+        graph_.resize(0);
 
         // Priors for discs (using disc indices), start at 1, no force at base disc
         for (size_t disc_idx = 1; disc_idx + 1 < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
@@ -273,18 +254,18 @@ public:
             int pose_idx_next = tendon_config_.disc_pose_idx[disc_idx + 1];
             bool is_tip = false;
 
-            graph.add(TendonDiscWrenchFactor(
-                T(pose_idx_prev), T(pose_idx), T(pose_idx_next), D(pose_idx), Q(0), F(pose_idx),
-                is_tip,
-                tendon_config_.local_holes[disc_idx - 1],
-                tendon_config_.local_holes[disc_idx],
-                tendon_config_.local_holes[disc_idx + 1],
-                small_wrench_cov_));
+            graph_.add(TendonDiscWrenchFactor(
+                       T(pose_idx_prev), T(pose_idx), T(pose_idx_next), D(pose_idx), Q(0), F(pose_idx),
+                       is_tip,
+                       tendon_config_.local_holes[disc_idx - 1],
+                       tendon_config_.local_holes[disc_idx],
+                       tendon_config_.local_holes[disc_idx + 1],
+                       small_wrench_cov_));
         }
 
         // For the last disc, use a tip tendon wrench factor instead
         bool is_tip = true;
-        graph.add(TendonDiscWrenchFactor(T(tendon_config_.disc_pose_idx[tendon_config_.num_discs - 2]),
+        graph_.add(TendonDiscWrenchFactor(T(tendon_config_.disc_pose_idx[tendon_config_.num_discs - 2]),
                                           T(tendon_config_.disc_pose_idx[tendon_config_.num_discs - 1]),
                                           T(0), // Dummy pose for tip factor, not used
                                           D(num_backbone_poses_ - 1),
@@ -297,73 +278,51 @@ public:
                                           small_wrench_cov_));
 
         // Base frame soft constraint
-        graph.add(PriorFactor<Pose3>(T(0), Pose3::Identity(), base_frame_cov_));
+        graph_.add(PriorFactor<Pose3>(T(0), Pose3::Identity(), base_frame_cov_));
 
-        // Cosserat factors
+        // Cosserat twist factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
-            graph.add(CosseratRodTwistFactor(
+            graph_.add(CosseratRodTwistFactor(
                 T(i), T(i + 1), S(i), S(i + 1), ds_, K_inv_, cosserat_twist_cov_));
         }
 
+        // Cosserat stress factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
+            // If a disc is next, then that changes whether we use an applied wrench F or a disc wrench D
             bool is_disc_next = std::find(tendon_config_.disc_pose_idx.begin(), tendon_config_.disc_pose_idx.end(), i + 1) 
                 != tendon_config_.disc_pose_idx.end();
 
             Key wrench_key;
-            if (is_disc_next) {
-                wrench_key = D(i + 1);
-            } else {
-                wrench_key = F(i + 1);
-            }
+            if (is_disc_next) { wrench_key = D(i + 1); } else { wrench_key = F(i + 1); }
 
-            graph.add(CosseratRodStressFactor(
+            graph_.add(CosseratRodStressFactor(
                 T(i), T(i + 1), S(i), S(i + 1), wrench_key, small_wrench_cov_));
         }
 
-
-        // for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
-        //     graph.add(CosseratRodTwistFactor(
-        //         T(i), T(i + 1), S(i), S(i + 1), ds_, K_inv_, cosserat_twist_cov_));
-        //     if (i is in tendon_config_.disc_pose_idx) {
-        //         graph.add(CosseratRodStressFactor(
-        //             T(i), T(i + 1), S(i), S(i + 1), D(i), small_wrench_cov_));
-        //     } else {
-        //         graph.add(CosseratRodStressFactor(
-        //             T(i), T(i + 1), S(i), S(i + 1), F(i + 1), small_wrench_cov_));
-        //     }
-        // }
-
         // Near-zero constraint for tip stress
-        graph.add(PriorFactor<Vector6>(
+        graph_.add(PriorFactor<Vector6>(
             S(num_backbone_poses_ - 1), Vector6::Zero(), small_wrench_cov_));
         
         // Priors from last time step to smooth in time, like Kalman filter
-        add_last_state_prior(graph);
-
-        return graph;
+        add_last_state_prior();
     }
 
-    void add_last_state_prior(NonlinearFactorGraph& graph) {
-        Key pose_im3_key = T(num_backbone_poses_ + 100);
-        Key pose_im2_key = T(num_backbone_poses_ + 101);
-        Key pose_im1_key = T(num_backbone_poses_ + 102);
-        Key pose_i_key = T(num_backbone_poses_ - 1);
+    void add_last_state_prior() {
+        graph_.add(PriorFactor<Pose3>(pose_im3_key_, pose_im3_, noiseModel::Gaussian::Covariance(pose_im3_cov_)));
+        graph_.add(PriorFactor<Pose3>(pose_im2_key_, pose_im2_, noiseModel::Gaussian::Covariance(pose_im2_cov_)));
+        graph_.add(PriorFactor<Pose3>(pose_im1_key_, pose_im1_, noiseModel::Gaussian::Covariance(pose_im1_cov_)));
+        graph_.add(LastTipStateFactor(pose_im3_key_, pose_im2_key_, pose_im1_key_, T(num_backbone_poses_ - 1), tip_accel_cov_));
 
-        graph.add(PriorFactor<Pose3>(pose_im3_key, pose_im3_, noiseModel::Gaussian::Covariance(pose_im3_cov_)));
-        graph.add(PriorFactor<Pose3>(pose_im2_key, pose_im2_, noiseModel::Gaussian::Covariance(pose_im2_cov_)));
-        graph.add(PriorFactor<Pose3>(pose_im1_key, pose_im1_, noiseModel::Gaussian::Covariance(pose_im1_cov_)));
-        graph.add(LastTipStateFactor(pose_im3_key, pose_im2_key, pose_im1_key, pose_i_key, tip_accel_cov_));
-
-        graph.add(PriorFactor<Vector4>(Q(0), last_tensions_,
+        graph_.add(PriorFactor<Vector4>(Q(0), last_tensions_,
             noiseModel::Gaussian::Covariance(last_tensions_cov_ + tensions_drift_cov_)));
     }
 
-    void solve_graph(const NonlinearFactorGraph& graph)
+    void solve_graph()
     {
         // Reusing the variable ordering can save a few ms.
         // Note that graph structure must be identical every call.
         if (is_first_solve_) {
-            ordering_ = Ordering::Colamd(graph);
+            ordering_ = Ordering::Colamd(graph_);
             is_first_solve_ = false;
         }
         
@@ -377,31 +336,27 @@ public:
         params.setVerbosity("TERMINATION");
         params.setOrdering(ordering_);
         // params.setLinearSolverType("MULTIFRONTAL_QR");
-        DoglegOptimizer optimizer(graph, values_, params);
+        DoglegOptimizer optimizer(graph_, values_, params);
 
         values_ = optimizer.optimize();
     }
 
-    TendonRobotSolution extract_solution(const NonlinearFactorGraph& graph, const Marginals& marginals){
-        TendonRobotSolution solution;
-
+    void extract_solution(){
         for (int i = 0; i < num_backbone_poses_; ++i) {
-            solution.backbone_pose_mean.push_back(values_.at<Pose3>(T(i)).matrix());
-            solution.backbone_pose_cov.push_back(marginals.marginalCovariance(T(i)));
+            solution_.backbone_pose_mean[i] = values_.at<Pose3>(T(i)).matrix();
+            solution_.backbone_pose_cov[i] = marginals_.marginalCovariance(T(i));
 
             // No applied force at the base pose
             if (i > 0) {
-                solution.applied_wrench_mean.push_back(values_.at<Vector6>(F(i)));
-                solution.applied_wrench_cov.push_back(marginals.marginalCovariance(F(i)));
+                solution_.applied_wrench_mean[i - 1] = values_.at<Vector6>(F(i));
+                solution_.applied_wrench_cov[i - 1] = marginals_.marginalCovariance(F(i));
             }
         }
 
-        solution.tensions_mean = values_.at<Vector4>(Q(0));
-        solution.tensions_cov = marginals.marginalCovariance(Q(0));
+        solution_.tensions_mean = values_.at<Vector4>(Q(0));
+        solution_.tensions_cov = marginals_.marginalCovariance(Q(0));
 
-        solution.tendon_disc_config = tendon_config_;
-
-        return solution;
+        solution_.tendon_disc_config = tendon_config_;
     }
 
     std::vector<Vector> sample_cov(const Matrix& cov, int num_samples) {
@@ -428,39 +383,33 @@ public:
         return samples;
     }
 
-    void sample_tip_pose(
-        const NonlinearFactorGraph& graph, 
-        const Marginals& marginals, 
-        TendonRobotSolution& solution,
-        int num_samples) 
-    {
-        Pose3 tip_pose_mean = Pose3(solution.backbone_pose_mean.back());
-        Matrix6 tip_pose_cov = solution.backbone_pose_cov.back();
+    void sample_tip_pose(int num_samples) {
+        Pose3 tip_pose_mean = Pose3(solution_.backbone_pose_mean.back());
+        Matrix6 tip_pose_cov = solution_.backbone_pose_cov.back();
 
         std::vector<Vector> d_tip_pose = sample_cov(tip_pose_cov, num_samples);
-        
+        d_tip_pose.reserve(num_samples);
+
         for (int i = 0; i < num_samples; i++) {
-            solution.tip_pose_samples.push_back(
-                tip_pose_mean.retract(d_tip_pose[i]).matrix());
+            solution_.tip_pose_samples[i] = tip_pose_mean.retract(d_tip_pose[i]).matrix();
         }
     }
 
-    void sample_fbg_array(
-        const NonlinearFactorGraph& graph, 
-        const Marginals& marginals, 
-        TendonRobotSolution& solution,
-        int num_samples) 
-    {   
+    void sample_fbg_array(int num_samples) {   
         KeyVector stress_keys;
+        stress_keys.reserve(num_backbone_poses_);
+
         for (int i = 0; i < num_backbone_poses_; ++i) {
             stress_keys.push_back(S(i));
         }
 
-        Matrix joint_stress_cov = marginals.jointMarginalCovariance(stress_keys).fullMatrix();
+        Matrix joint_stress_cov = marginals_.jointMarginalCovariance(stress_keys).fullMatrix();
         std::vector<Vector> joint_d_stresses = sample_cov(joint_stress_cov, num_samples);
         
         for (int i = 0; i < num_samples; ++i) {
             std::vector<Vector3> fbg_array_sample;
+            fbg_array_sample.reserve(num_backbone_poses_);
+
             for (int j = 0; j < num_backbone_poses_; ++j) {
                 Vector6 stress_mean = values_.at<Vector6>(S(j));
 
@@ -469,230 +418,218 @@ public:
 
                 fbg_array_sample.push_back(stress_to_fbg_signal(stress, K_inv_, rod_diameter_));
             }
-            solution.fbg_array_samples.push_back(fbg_array_sample);
+            solution_.fbg_array_samples[i] = fbg_array_sample;
         }
     }
 
-    void sample_solution(
-        const NonlinearFactorGraph& graph, 
-        const Marginals& marginals, 
-        TendonRobotSolution& solution,
-        int num_samples) 
+    void sample_solution(int num_samples) 
     {
-        sample_tip_pose(graph, marginals, solution, num_samples);
-        sample_fbg_array(graph, marginals, solution, num_samples);
+        sample_tip_pose(num_samples);
+        sample_fbg_array(num_samples);
     }
         
-    TendonRobotSolution update(const NonlinearFactorGraph& graph, int num_samples) {
-         graph.saveGraph("graph.dot", values_);
+    void update(int num_samples) {
+        // graph.saveGraph("graph.dot", values_);
+        solution_ = TendonRobotSolution(num_backbone_poses_, num_samples);
 
         auto start_solve = std::chrono::high_resolution_clock::now();
-        solve_graph(graph);
+        solve_graph();
         
         auto end_solve = std::chrono::high_resolution_clock::now();
 
         auto start_extract = std::chrono::high_resolution_clock::now();
 
-        Marginals marginals(graph, values_);
+        marginals_ = Marginals(graph_, values_);
 
-        TendonRobotSolution solution = extract_solution(graph, marginals);
-        
-        sample_solution(graph, marginals, solution, num_samples);
+        extract_solution();
+        sample_solution(num_samples);
         
         auto end_extract = std::chrono::high_resolution_clock::now();
 
-        solution.solve_time_ms = std::chrono::duration<double, std::milli>(end_solve - start_solve).count();
-        solution.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
-        solution.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_solve).count();
+        solution_.solve_time_ms = std::chrono::duration<double, std::milli>(end_solve - start_solve).count();
+        solution_.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
+        solution_.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_solve).count();
 
-        return solution;
+        pose_im3_ = values_.at<Pose3>(pose_im2_key_);
+        pose_im3_cov_ = marginals_.marginalCovariance(pose_im2_key_);
+        pose_im2_ = values_.at<Pose3>(pose_im1_key_);
+        pose_im2_cov_ = marginals_.marginalCovariance(pose_im1_key_);
+        pose_im1_ = Pose3(solution_.backbone_pose_mean.back());
+        pose_im1_cov_ = solution_.backbone_pose_cov.back();
+
+        last_tensions_ = solution_.tensions_mean;
+        last_tensions_cov_ = solution_.tensions_cov;
     }
 };
 
-class TipForceSim : public TendonRobotGtsam {
-public:
-    using TendonRobotGtsam::TendonRobotGtsam;
-
-private:
-    void add_loading_factors(const Vector4& tensions, const Vector3& tip_force, NonlinearFactorGraph& graph) {
-        // Applied wrenches are all zero, exect at the tip
-        for (int i = 1; i + 1 < num_backbone_poses_; i++) {
-            graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov_));
-        }
-
-        // Tip wrench
-        Vector6 tip_wrench_mean;
-        tip_wrench_mean.head<3>() = Vector3::Zero();
-        tip_wrench_mean.tail<3>() = tip_force;
-        graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), tip_wrench_mean, tip_wrench_cov_));
-
-        // Tendon tensions measurement prior
-        graph.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
-
-        graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), last_tip_wrench_, 
-            noiseModel::Gaussian::Covariance(last_tip_wrench_cov_ + tip_wrench_drift_cov_)));
-    }
-
-public:
-    TendonRobotSolution step(const Vector4& tensions, const Vector3& tip_force) {
-        NonlinearFactorGraph graph = build_graph_base();
-        add_loading_factors(tensions, tip_force, graph);
-
-        TendonRobotSolution solution = update(graph, 1);
-
-        // No need to update last covs, since for sampling, they need to be small
-        pose_im3_ = pose_im2_;
-        pose_im2_ = pose_im1_;
-        pose_im1_ = Pose3(solution.tip_pose_samples.back());
-        last_tensions_ = solution.tensions_mean;
-        last_tip_wrench_ = solution.applied_wrench_mean.back();
-
-        return solution;
-    }
-};
 
 class TipForceSolver : public TendonRobotGtsam {
 public:
-    using TendonRobotGtsam::TendonRobotGtsam;
+    TipForceSolver(const TendonRobotConfig& config) 
+        : TendonRobotGtsam(config)
+    {
+        tip_wrench_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
+            config.small_moment_std, config.small_moment_std, config.small_moment_std, 
+            config.tip_force_std, config.tip_force_std, config.tip_force_std).finished());
+            
+        tip_pose_meas_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
+            config.tip_pose_r_meas_std, config.tip_pose_r_meas_std, config.tip_pose_r_meas_std,
+            config.tip_pose_p_meas_std, config.tip_pose_p_meas_std, config.tip_pose_p_meas_std).finished());
+
+        last_tip_wrench_ = Vector6::Zero();
+        last_tip_wrench_cov_ = 1e-6 * Matrix6::Identity();
+        tip_force_drift_cov_ = (config.tip_force_drift_std * Vector6::Ones()).array().square().matrix().asDiagonal();
+    }
 
 private:
-    void add_measurement_factors(const Vector4& tensions_meas, const Vector3& tip_position_meas, NonlinearFactorGraph& graph) {
+    Matrix6 tip_force_drift_cov_;
+    Vector6 last_tip_wrench_;
+    Matrix6 last_tip_wrench_cov_;
+
+    noiseModel::Diagonal::shared_ptr tip_pose_meas_cov_;
+    noiseModel::Diagonal::shared_ptr tip_wrench_cov_;
+
+    void add_common_factors(const Vector4& tensions) {
         // Applied wrenches are all zero, exect at the tip
         for (int i = 1; i + 1 < num_backbone_poses_; i++) {
-            graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov_));
+            graph_.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), small_wrench_cov_));
         }
 
-        // Tip wrench prior with big uncertainty
-        graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), Vector6::Zero(), tip_wrench_cov_));
-
-        // Tip pose measurement prior
-        Pose3 tip_pose_mean = Pose3(Rot3::Identity(), tip_position_meas);
-        graph.add(PriorFactor<Pose3>(T(num_backbone_poses_ - 1), tip_pose_mean, tip_pose_meas_cov_));
-
         // Tendon tensions measurement prior
-        graph.add(PriorFactor<Vector4>(Q(0), tensions_meas, tensions_cov_));
-
-        graph.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), last_tip_wrench_, 
-            noiseModel::Gaussian::Covariance(last_tip_wrench_cov_ + tip_wrench_drift_cov_)));
+        graph_.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
     }
 
 public:
     TendonRobotSolution step(const Vector4& tensions_meas, const Vector3& tip_position_meas, int num_samples) {
-        NonlinearFactorGraph graph = build_graph_base();
-        add_measurement_factors(tensions_meas, tip_position_meas, graph);
+        build_graph_base();
+        add_common_factors(tensions_meas);
 
-        TendonRobotSolution solution = update(graph, num_samples);
+        // Tip wrench prior
+        graph_.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), Vector6::Zero(), tip_wrench_cov_));
 
-        pose_im3_ = pose_im2_;
-        pose_im3_cov_ = pose_im2_cov_;
-        pose_im2_ = pose_im1_;
-        pose_im2_cov_ = pose_im1_cov_;
-        pose_im1_ = Pose3(solution.backbone_pose_mean.back());
-        pose_im1_cov_ = solution.backbone_pose_cov.back();
+        // Tip pose prior from measurement
+        Pose3 tip_pose_mean = Pose3(Rot3::Identity(), tip_position_meas);
+        graph_.add(PriorFactor<Pose3>(T(num_backbone_poses_ - 1), tip_pose_mean, tip_pose_meas_cov_));
 
-        last_tensions_ = solution.tensions_mean;
-        last_tensions_cov_ = solution.tensions_cov;
+        // Tip wrench drift factor
+        graph_.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), last_tip_wrench_, 
+        noiseModel::Gaussian::Covariance(last_tip_wrench_cov_ + tip_force_drift_cov_)));
 
-        last_tip_wrench_ = solution.applied_wrench_mean.back();
-        last_tip_wrench_cov_ = solution.applied_wrench_cov.back();
+        update(num_samples);
 
-        return solution;
+        last_tip_wrench_ = solution_.applied_wrench_mean.back();
+        last_tip_wrench_cov_ = solution_.applied_wrench_cov.back();
+
+        return solution_;
+    }
+
+    TendonRobotSolution simulation_step(const Vector4& tensions, const Vector3& tip_force) {
+        build_graph_base();
+        add_common_factors(tensions);
+        
+        // Known tip force factor
+        Vector6 tip_wrench_mean;
+        tip_wrench_mean.head<3>() = Vector3::Zero();
+        tip_wrench_mean.tail<3>() = tip_force;
+        graph_.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), tip_wrench_mean, tip_wrench_cov_));
+        
+        update(1);
+
+        last_tip_wrench_ = solution_.applied_wrench_mean.back();
+        last_tip_wrench_cov_ = solution_.applied_wrench_cov.back();
+
+        return solution_;
     }
 };
 
-class DistLoadSim : public TendonRobotGtsam {
-public:
-    using TendonRobotGtsam::TendonRobotGtsam;
-
-private:
-    void add_loading_factors(const Vector4& tensions, const std::vector<Vector3>& forces, NonlinearFactorGraph& graph) {
-        for (int i = 1; i < num_backbone_poses_; i++) {
-            Vector6 applied_wrench;
-            applied_wrench.head<3>() = Vector3::Zero();
-            applied_wrench.tail<3>() = forces[i];
-            graph.add(PriorFactor<Vector6>(F(i), applied_wrench, small_wrench_cov_));
-        }
-
-        // Tendon tensions measurement prior
-        graph.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
-    }
-
-public:
-    TendonRobotSolution step(const Vector4& tensions, const std::vector<Vector3>& forces) {
-        NonlinearFactorGraph graph = build_graph_base();
-        add_loading_factors(tensions, forces, graph);
-
-        TendonRobotSolution solution = update(graph, 1);
-
-        // No need to update last covs, since for sampling, they need to be small
-        pose_im3_ = pose_im2_;
-        pose_im2_ = pose_im1_;
-        pose_im1_ = Pose3(solution.tip_pose_samples.back());
-        last_tensions_ = solution.tensions_mean;
-        last_tip_wrench_ = solution.applied_wrench_mean.back();
-
-        return solution;
-    }
-};
 
 class DistLoadSolver : public TendonRobotGtsam {
 public:
-    using TendonRobotGtsam::TendonRobotGtsam;
+    DistLoadSolver(const TendonRobotConfig& config) 
+        : TendonRobotGtsam(config)
+    {
+        dist_load_prior_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
+            config.small_moment_std, config.small_moment_std, config.small_moment_std, 
+            config.dist_load_magnitude_std, config.dist_load_magnitude_std, config.small_force_std).finished());
+        
+        dist_load_smoothing_cov_ = noiseModel::Isotropic::Sigma(3, config.dist_load_jerk_std);
+
+        fbg_strain_meas_cov_ = noiseModel::Isotropic::Sigma(3, config.fbg_strain_meas_std);
+
+        for (int i = 1; i < num_backbone_poses_; ++i) {
+            last_wrenches_.push_back(Vector6(Vector6::Zero()));
+            last_wrenches_cov_.push_back(1e-6 * Matrix6::Identity());
+        }
+
+        wrench_drift_cov_ = (config.dist_load_drift_std * Vector6::Ones()).array().square().matrix().asDiagonal();
+    }
 
 private:
-    void add_measurement_factors(const Vector4& tensions_meas, const std::vector<Vector3>& fbg_signals_meas, NonlinearFactorGraph& graph) {
-        auto wrench_cov = noiseModel::Diagonal::Sigmas((Vector(6) << 
-            1e-5, 1e-5, 1e-5, 1e-1, 1e-1, 1e-5).finished());
-        for (int i = 1; i < num_backbone_poses_; i++) {
-            graph.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), wrench_cov));
-        }
+    std::vector<Vector6> last_wrenches_;
+    std::vector<Matrix6> last_wrenches_cov_;
 
-        auto dist_load_smoothing_cov_ = noiseModel::Isotropic::Sigma(3, 1e-3);
-        for (int i = 1; i + 3 < num_backbone_poses_; ++i) {
-            graph.add(DistLoadSmoothingFactor(F(i), F(i + 1), F(i + 2), F(i + 3), dist_load_smoothing_cov_));
-        }
+    Matrix6 wrench_drift_cov_;
 
-        // FBG strain measurement factors
-        auto fbg_strain_meas_cov = noiseModel::Isotropic::Sigma(3, 1e-6);
+    noiseModel::Diagonal::shared_ptr dist_load_prior_cov_;
+    noiseModel::Isotropic::shared_ptr dist_load_smoothing_cov_;
+    noiseModel::Isotropic::shared_ptr fbg_strain_meas_cov_;
 
-        for (int i = 0; i < num_backbone_poses_; ++i) {
-            graph.add(FbgMeasurementFactor(S(i), fbg_signals_meas[i], K_inv_, rod_diameter_, fbg_strain_meas_cov));
-        }
-
-        // Vector6 sigmas;
-        // sigmas << 1e0, 1e0, 1e0, 1e-4, 1e-4, 1e-4;
-        // Matrix6 force_drift_cov = sigmas.array().square().matrix().asDiagonal();
-
-        // for (int i = 1; i < num_backbone_poses_; ++i) {
-        //     graph.add(PriorFactor<Vector6>(F(i), last_wrenches_[i], 
-        //     noiseModel::Gaussian::Covariance(last_wrenches_cov_[i] + force_drift_cov)));
-        // }
-        
+    void add_common_factors(const Vector4& tensions) {
         // Tendon tensions measurement prior
-        graph.add(PriorFactor<Vector4>(Q(0), tensions_meas, tensions_cov_));
+        graph_.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
     }
 
 public:
     TendonRobotSolution step(const Vector4& tensions_meas, const std::vector<Vector3>& fbg_signals_meas, int num_samples) {
-        NonlinearFactorGraph graph = build_graph_base();
-        add_measurement_factors(tensions_meas, fbg_signals_meas, graph);
+        build_graph_base();
+        add_common_factors(tensions_meas);
 
-        TendonRobotSolution solution = update(graph, num_samples);
+        // Magnitude prior factors for distributed load
+        for (int i = 1; i < num_backbone_poses_; i++) {
+            graph_.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), dist_load_prior_cov_));
+        }
 
-        pose_im3_ = pose_im2_;
-        pose_im3_cov_ = pose_im2_cov_;
-        pose_im2_ = pose_im1_;
-        pose_im2_cov_ = pose_im1_cov_;
-        pose_im1_ = Pose3(solution.backbone_pose_mean.back());
-        pose_im1_cov_ = solution.backbone_pose_cov.back();
+        // Smoothing prior factors for distributed load
+        for (int i = 1; i + 3 < num_backbone_poses_; ++i) {
+            graph_.add(DistLoadSmoothingFactor(F(i), F(i + 1), F(i + 2), F(i + 3), dist_load_smoothing_cov_));
+        }
 
-        last_tensions_ = solution.tensions_mean;
-        last_tensions_cov_ = solution.tensions_cov;
+        // FBG strain measurement factors
+        for (int i = 0; i < num_backbone_poses_; ++i) {
+            graph_.add(FbgMeasurementFactor(S(i), fbg_signals_meas[i], K_inv_, rod_diameter_, fbg_strain_meas_cov_));
+        }
 
-        last_wrenches_ = solution.applied_wrench_mean;
-        last_wrenches_cov_ = solution.applied_wrench_cov;
+        for (int i = 1; i < num_backbone_poses_; ++i) {
+            graph_.add(PriorFactor<Vector6>(F(i), last_wrenches_[i - 1], 
+            noiseModel::Gaussian::Covariance(last_wrenches_cov_[i - 1] + wrench_drift_cov_)));
+        }
 
-        return solution;
+        update(num_samples);
+
+        last_wrenches_ = solution_.applied_wrench_mean;
+        last_wrenches_cov_ = solution_.applied_wrench_cov;
+
+        return solution_;
+    }
+
+    TendonRobotSolution step_simulation(const Vector4& tensions, const std::vector<Vector3>& forces) {
+        build_graph_base();
+        add_common_factors(tensions);
+
+        // Add applied loads with small uncertainty
+        for (int i = 1; i < num_backbone_poses_; i++) {
+            Vector6 applied_wrench;
+            applied_wrench.head<3>() = Vector3::Zero();
+            applied_wrench.tail<3>() = forces[i - 1];
+            graph_.add(PriorFactor<Vector6>(F(i), applied_wrench, small_wrench_cov_));
+        }
+
+        update(1);
+
+        last_wrenches_ = solution_.applied_wrench_mean;
+        last_wrenches_cov_ = solution_.applied_wrench_cov;
+
+        return solution_;
     }
 };
 }

@@ -2,10 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import time
-from tendon_robot import TipForceSim, TipForceSolver, TendonRobotGtsamConfig
+from tendon_robot import TipForceSolver
 
 from plotting import TendonRobotPlotter
-from config import get_simulation_config, get_sensing_config
+from config import get_simulation_config, get_base_config
 from sim_functions import tip_force_function, tensions_function
 
 
@@ -63,7 +63,7 @@ class MeasurementKalmanFilter:
 
 
 def inference(tensions_gt, tip_positions_gt, tip_forces_gt):
-    config = get_sensing_config()
+    config = get_base_config()
 
     # Add noise to all measured data
     tensions_meas = tensions_gt + config.tension_std * np.random.randn(*tensions_gt.shape)
@@ -118,7 +118,7 @@ def inference(tensions_gt, tip_positions_gt, tip_forces_gt):
 
 
 def simulation(sim_time, frame_rate=30):
-    simulator = TipForceSim(get_simulation_config())
+    simulator = TipForceSolver(get_simulation_config())
 
     num_steps = sim_time * frame_rate
 
@@ -135,7 +135,7 @@ def simulation(sim_time, frame_rate=30):
         tensions = tensions_function(t)
 
         start_solve = time.time()
-        solution = simulator.step(tensions, tip_force)
+        solution = simulator.simulation_step(tensions, tip_force)
 
         start_render = time.time()
         plotter.update(solution)

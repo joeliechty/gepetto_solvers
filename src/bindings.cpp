@@ -37,67 +37,65 @@ PYBIND11_MODULE(tendon_robot, m) {
         .value("LINEAR", RoutingAngleFunction::LINEAR)
         .export_values();
 
-    py::class_<RoutingParams>(m, "RoutingParams")
+    py::class_<RoutingFunctionParams>(m, "RoutingFunctionParams")
         .def(py::init<>())
         .def(py::init<double, double>(), py::arg("angle_offset"), py::arg("total_angle"))
-        .def_readwrite("angle_offset", &RoutingParams::angle_offset)
-        .def_readwrite("total_angle", &RoutingParams::total_angle);
+        .def_readwrite("angle_offset", &RoutingFunctionParams::angle_offset)
+        .def_readwrite("total_angle", &RoutingFunctionParams::total_angle);
 
-    py::class_<TendonRobotGtsamConfig>(m, "TendonRobotGtsamConfig")
+    py::class_<TendonRobotConfig>(m, "TendonRobotConfig")
         .def(py::init<>())
-        .def_readwrite("num_discs", &TendonRobotGtsamConfig::num_discs)
-        .def_readwrite("poses_between_discs", &TendonRobotGtsamConfig::poses_between_discs)
-        .def_readwrite("rod_length", &TendonRobotGtsamConfig::rod_length)
-        .def_readwrite("rod_diameter", &TendonRobotGtsamConfig::rod_diameter)
-        .def_readwrite("youngs_modulus", &TendonRobotGtsamConfig::youngs_modulus)
-        .def_readwrite("shear_modulus", &TendonRobotGtsamConfig::shear_modulus)
-        .def_readwrite("routing_radius", &TendonRobotGtsamConfig::routing_radius)
+        .def_readwrite("num_discs", &TendonRobotConfig::num_discs)
+        .def_readwrite("poses_between_discs", &TendonRobotConfig::poses_between_discs)
+        .def_readwrite("rod_length", &TendonRobotConfig::rod_length)
+        .def_readwrite("rod_diameter", &TendonRobotConfig::rod_diameter)
+        .def_readwrite("youngs_modulus", &TendonRobotConfig::youngs_modulus)
+        .def_readwrite("shear_modulus", &TendonRobotConfig::shear_modulus)
+        .def_readwrite("routing_radius", &TendonRobotConfig::routing_radius)
 
-        .def_readwrite("tension_std", &TendonRobotGtsamConfig::tension_std)
-        .def_readwrite("small_force_std", &TendonRobotGtsamConfig::small_force_std)
-        .def_readwrite("small_moment_std", &TendonRobotGtsamConfig::small_moment_std)
-        .def_readwrite("cosserat_twist_r_std", &TendonRobotGtsamConfig::cosserat_twist_r_std)
-        .def_readwrite("small_r_std", &TendonRobotGtsamConfig::small_r_std)
-        .def_readwrite("small_p_std", &TendonRobotGtsamConfig::small_p_std)
-        .def_readwrite("tip_force_std", &TendonRobotGtsamConfig::tip_force_std)
+        .def_readwrite("tension_std", &TendonRobotConfig::tension_std)
+        .def_readwrite("small_force_std", &TendonRobotConfig::small_force_std)
+        .def_readwrite("small_moment_std", &TendonRobotConfig::small_moment_std)
+        .def_readwrite("cosserat_twist_r_std", &TendonRobotConfig::cosserat_twist_r_std)
+        .def_readwrite("small_r_std", &TendonRobotConfig::small_r_std)
+        .def_readwrite("small_p_std", &TendonRobotConfig::small_p_std)
+        .def_readwrite("tip_pose_jerk_std", &TendonRobotConfig::tip_pose_jerk_std)
+        .def_readwrite("tension_drift_std", &TendonRobotConfig::tension_drift_std)
 
-        .def_readwrite("tip_accel_std", &TendonRobotGtsamConfig::tip_accel_std)
-        .def_readwrite("tension_drift_std", &TendonRobotGtsamConfig::tension_drift_std)
-        .def_readwrite("wrench_drift_std", &TendonRobotGtsamConfig::wrench_drift_std)
+        .def_readwrite("tip_force_std", &TendonRobotConfig::tip_force_std)
+        .def_readwrite("tip_force_drift_std", &TendonRobotConfig::tip_force_drift_std)
+        .def_readwrite("dist_load_magnitude_std", &TendonRobotConfig::dist_load_magnitude_std)
+        .def_readwrite("dist_load_jerk_std", &TendonRobotConfig::dist_load_jerk_std)
+        .def_readwrite("dist_load_drift_std", &TendonRobotConfig::dist_load_drift_std)
+        
+        .def_readwrite("tip_pose_r_meas_std", &TendonRobotConfig::tip_pose_r_meas_std)
+        .def_readwrite("tip_pose_p_meas_std", &TendonRobotConfig::tip_pose_p_meas_std)
+        .def_readwrite("fbg_strain_meas_std", &TendonRobotConfig::fbg_strain_meas_std)
 
-        .def_readwrite("tip_pose_r_meas_std", &TendonRobotGtsamConfig::tip_pose_r_meas_std)
-        .def_readwrite("tip_pose_p_meas_std", &TendonRobotGtsamConfig::tip_pose_p_meas_std)
-
-        .def_readwrite("angle_functions", &TendonRobotGtsamConfig::angle_functions)
-        .def_readwrite("angle_params", &TendonRobotGtsamConfig::angle_params);
-
-    py::class_<TipForceSim>(m, "TipForceSim")
-    .def(py::init<const TendonRobotGtsamConfig&>())
-    .def("step", &TipForceSim::step,
-         py::arg("tensions"),
-         py::arg("tip_force"),
-         py::call_guard<py::gil_scoped_release>());
+        .def_readwrite("angle_functions", &TendonRobotConfig::angle_functions)
+        .def_readwrite("angle_params", &TendonRobotConfig::angle_params);
 
     py::class_<TipForceSolver>(m, "TipForceSolver")
-    .def(py::init<const TendonRobotGtsamConfig&>())
+    .def(py::init<const TendonRobotConfig&>())
     .def("step", &TipForceSolver::step,
          py::arg("tensions_meas"),
          py::arg("tip_position_meas"),
          py::arg("num_samples"),
-         py::call_guard<py::gil_scoped_release>());
-
-    py::class_<DistLoadSim>(m, "DistLoadSim")
-    .def(py::init<const TendonRobotGtsamConfig&>())
-    .def("step", &DistLoadSim::step,
+         py::call_guard<py::gil_scoped_release>())
+    .def("simulation_step", &TipForceSolver::simulation_step,
          py::arg("tensions"),
-         py::arg("forces"),
+         py::arg("tip_force"),
          py::call_guard<py::gil_scoped_release>());
 
     py::class_<DistLoadSolver>(m, "DistLoadSolver")
-    .def(py::init<const TendonRobotGtsamConfig&>())
+    .def(py::init<const TendonRobotConfig&>())
     .def("step", &DistLoadSolver::step,
          py::arg("tensions_meas"),
          py::arg("fbg_signals_meas"),
          py::arg("num_samples"),
+         py::call_guard<py::gil_scoped_release>())
+    .def("step_simulation", &DistLoadSolver::step_simulation,
+         py::arg("tensions"),
+         py::arg("forces"),
          py::call_guard<py::gil_scoped_release>());
 }
