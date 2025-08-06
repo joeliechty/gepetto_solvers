@@ -345,15 +345,15 @@ public:
                            Key tensions_key,
                            Key external_wrench_key,
                            bool is_tip,
-                           std::vector<Point3> xy_holes_prev,
-                           std::vector<Point3> xy_holes,
-                           std::vector<Point3> xy_holes_next, // Not used if we are at the tip
+                           std::vector<Point3> holes_prev,
+                           std::vector<Point3> holes,
+                           std::vector<Point3> holes_next, // Not used if we are at the tip
                            const SharedNoiseModel& model): 
         NoiseModelFactor5(model, pose_prev_key, pose_key, pose_next_key, wrench_key, tensions_key, external_wrench_key) {
             is_tip_ = is_tip;
-            holes_prev_ = xy_holes_prev;
-            holes_ = xy_holes;
-            holes_next_ = xy_holes_next;
+            holes_prev_ = holes_prev;
+            holes_ = holes;
+            holes_next_ = holes_next;
     }
 
     Vector evaluateError(
@@ -512,166 +512,35 @@ public:
     }
 };
 
-class LastPosesSmoothingFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3, Pose3> {
-public:
-    using NoiseModelFactorN<Pose3, Pose3, Pose3, Pose3>::evaluateError;
-  
-    LastPosesSmoothingFactor(Key pose_im3_key,
-                             Key pose_im2_key,
-                             Key pose_im1_key,
-                             Key pose_i_key,
-                             const SharedNoiseModel& model): 
-        NoiseModelFactor4(model, pose_im3_key, pose_im2_key, pose_im1_key, pose_i_key) {}
-
-    Vector evaluateError(
-        const Pose3& pose_im3,
-        const Pose3& pose_im2,
-        const Pose3& pose_im1,
-        const Pose3& pose_i,
-        OptionalMatrixType H1, 
-        OptionalMatrixType H2,
-        OptionalMatrixType H3,
-        OptionalMatrixType H4) const override 
-    {  
-        Matrix36 d_p_im3;
-        Vector3 p_im3 = pose_im3.translation(d_p_im3);
-
-        Matrix36 d_p_im2;
-        Vector3 p_im2 = pose_im2.translation(d_p_im2);
-
-        Matrix36 d_p_im1;
-        Vector3 p_im1 = pose_im1.translation(d_p_im1);
-
-        Matrix36 d_p_i;
-        Vector3 p_i   = pose_i.translation(d_p_i);
-
-        Vector3 accel = p_i - 2.0 * p_im1 + p_im2;
-        Vector3 jerk  = p_i - 3.0 * p_im1 + 3.0 * p_im2 - p_im3;
-
-        Vector6 error;
-        error << accel, jerk;
-
-        if (H1) { // pose_im3
-            *H1 = Matrix6::Zero();
-            H1->block<3,6>(3,0) = -d_p_im3; // jerk part
-        }
-
-        if (H2) { // pose_im2
-            *H2 = Matrix6::Zero();
-            H2->block<3,6>(0,0) =  d_p_im2;      // accel part
-            H2->block<3,6>(3,0) = 3.0 * d_p_im2; // jerk part
-        }
-
-        if (H3) { // pose_im1
-            *H3 = Matrix6::Zero();
-            H3->block<3,6>(0,0) = -2.0 * d_p_im1; // accel part
-            H3->block<3,6>(3,0) = -3.0 * d_p_im1; // jerk part
-        }
-
-        if (H4) { // pose_i
-            *H4 = Matrix6::Zero();
-            H4->block<3,6>(0,0) = d_p_i; // accel part
-            H4->block<3,6>(3,0) = d_p_i; // jerk part
-        }
-
-        return error;
-    }
-};
-
-class LastPosesPriorFactor: public NoiseModelFactorN<Pose3, Pose3, Pose3> {
-    Pose3 pose_im3_pred_, pose_im2_pred_, pose_im1_pred_;
-
-public:
-    using NoiseModelFactorN<Pose3, Pose3, Pose3>::evaluateError;
-  
-    LastPosesPriorFactor(Key pose_im3_key,
-                         Key pose_im2_key,
-                         Key pose_im1_key,
-                         const Pose3& pose_im3_pred,
-                         const Pose3& pose_im2_pred,
-                         const Pose3& pose_im1_pred,
-                         const SharedNoiseModel& model): 
-        NoiseModelFactor3(model, pose_im3_key, pose_im2_key, pose_im1_key), 
-        pose_im3_pred_(pose_im3_pred), pose_im2_pred_(pose_im2_pred), pose_im1_pred_(pose_im1_pred) {}
-
-    Vector evaluateError(
-        const Pose3& pose_im3,
-        const Pose3& pose_im2,
-        const Pose3& pose_im1,
-        OptionalMatrixType H1, 
-        OptionalMatrixType H2,
-        OptionalMatrixType H3) const override 
-    {  
-        Matrix6 d_delta_d_pose_im3, d_delta_d_pose_im2, d_delta_d_pose_im1;
-        Pose3 delta_im3 = pose_im3.between(pose_im3_pred_, d_delta_d_pose_im3);
-        Pose3 delta_im2 = pose_im2.between(pose_im2_pred_, d_delta_d_pose_im2);
-        Pose3 delta_im1 = pose_im1.between(pose_im1_pred_, d_delta_d_pose_im1);
-
-        Matrix6 d_error_d_delta_im3, d_error_d_delta_im2, d_error_d_delta_im1;
-        Vector6 error_im3 = Pose3::Logmap(delta_im3, d_error_d_delta_im3);
-        Vector6 error_im2 = Pose3::Logmap(delta_im2, d_error_d_delta_im2);
-        Vector6 error_im1 = Pose3::Logmap(delta_im1, d_error_d_delta_im1);
-
-        Eigen::Matrix<double, 18, 1> error;
-        error << error_im3, error_im2, error_im1;
-
-        if (H1) {
-            *H1 = Eigen::Matrix<double, 18, 6>::Zero();
-            H1->block<6, 6>(0, 0) = d_error_d_delta_im3 * d_delta_d_pose_im3;
-        }
-
-        if (H2) {
-            *H2 = Eigen::Matrix<double, 18, 6>::Zero();
-            H2->block<6, 6>(6, 0) = d_error_d_delta_im2 * d_delta_d_pose_im2;
-        }
-
-        if (H3) {
-            *H3 = Eigen::Matrix<double, 18, 6>::Zero();
-            H3->block<6, 6>(12, 0) = d_error_d_delta_im1 * d_delta_d_pose_im1;
-        }
-
-
-        // if (H1) {
-        //     *H1 = numericalDerivative11<Eigen::Matrix<double, 18, 1>, Pose3>(
-        //         [&](const Pose3& pose_im3_) {
-        //             return this->evaluateError(pose_im3_, pose_im2, pose_im1, nullptr, nullptr, nullptr);
-        //         }, pose_im3);
-        // }
-
-        // if (H2) {
-        //     *H2 = numericalDerivative11<Eigen::Matrix<double, 18, 1>, Pose3>(
-        //         [&](const Pose3& pose_im2_) {
-        //             return this->evaluateError(pose_im3, pose_im2_, pose_im1, nullptr, nullptr, nullptr);
-        //         }, pose_im3);
-        // }
-
-        // if (H3) {
-        //     *H3 = numericalDerivative11<Eigen::Matrix<double, 18, 1>, Pose3>(
-        //         [&](const Pose3& pose_im1_) {
-        //             return this->evaluateError(pose_im3, pose_im2, pose_im1_, nullptr, nullptr, nullptr);
-        //         }, pose_im3);
-        // }
-
-        return error;
-    }
-};
-
-Vector3 stress_to_fbg_signal(const Vector6& stress, const Matrix6& K_inv, const double rod_diameter) {
+Vector3 stress_to_fbg_signal(const Vector6& stress, const Matrix6& K_inv, const double rod_diameter, OptionalJacobian<3, 6> H_stress = {}) {
     Vector6 strain = K_inv * stress;
 
-    Vector3 curvature = strain.head<3>();  // [kappa_x, kappa_y, kappa_z]
-    double axial_strain = strain(5);       // gamma_z
+    Vector3 du = strain.head<3>();
+    Vector3 dv = strain.tail<3>();       // gamma_z
 
-    std::array<Eigen::Vector3d, 3> fbg_locations = {
-        rod_diameter * Eigen::Vector3d(0, 1, 0),                                 // 0°
-        rod_diameter * Eigen::Vector3d(std::sqrt(3)/2, -0.5, 0),                 // +120°
-        rod_diameter * Eigen::Vector3d(-std::sqrt(3)/2, -0.5, 0)                 // -120°
+    std::array<Vector3, 3> fbg_locations = {
+        rod_diameter * Point3(0, 1, 0),                                 // 0°
+        rod_diameter * Point3(std::sqrt(3)/2, -0.5, 0),                 // +120°
+        rod_diameter * Point3(-std::sqrt(3)/2, -0.5, 0)                 // -120°
     };
 
     Vector3 signal;
+    Matrix36 d_signal_d_strain;
+    d_signal_d_strain.setZero();
+
     for (int i = 0; i < 3; ++i) {
-        double bending_strain = -fbg_locations[i].cross(curvature).z();  // ← corrected sign
-        signal(i) = axial_strain + bending_strain;
+        Matrix3 d_strain_z_d_du;
+        Vector3 strain_z = dv + cross(du, fbg_locations[i], H_stress ? &d_strain_z_d_du : 0);
+
+        Matrix3 d_strain_z_d_dv = Matrix3::Identity();
+
+        signal(i) = strain_z.z();
+        d_signal_d_strain.block<1,3>(i,0) = d_strain_z_d_du.row(2); // w.r.t du
+        d_signal_d_strain.block<1,3>(i,3) = d_strain_z_d_dv.row(2); // w.r.t dv
+    }
+
+    if (H_stress) {
+        *H_stress = d_signal_d_strain * K_inv;
     }
 
     return signal;
@@ -694,13 +563,19 @@ public:
 
     Vector evaluateError(const Vector6& stress, OptionalMatrixType H1) const override {
         
-        Vector3 error = stress_to_fbg_signal(stress, K_inv_, rod_diameter_) - fbg_meas_;
+        Matrix36 d_error_d_stress;
+        Vector3 signal_pred = stress_to_fbg_signal(stress, K_inv_, rod_diameter_, H1 ? &d_error_d_stress : 0);
+        Vector3 error = signal_pred - fbg_meas_;
 
         if (H1) {
-            *H1 = numericalDerivative11<Vector3, Vector6>(
-                [&](const Vector6& stress_) {
-                    return this->evaluateError(stress_, nullptr);
-                }, stress);
+            *H1 = d_error_d_stress;
+
+            // Matrix36 H1_check = numericalDerivative11<Vector3, Vector6>(
+            //     [&](const Vector6& stress_) {
+            //         return this->evaluateError(stress_, nullptr);
+            //     }, stress);
+
+            // std::cout << "H1 check: " << (*H1 - H1_check).cwiseAbs().maxCoeff() << std::endl;
         }
 
         return error;
@@ -753,6 +628,32 @@ public:
         }
 
         return jerk;
+    }
+};
+
+class PositionMeasurementFactor: public NoiseModelFactorN<Pose3> {
+    Vector3 position_meas_;
+
+public:
+    using NoiseModelFactorN<Pose3>::evaluateError;
+  
+    PositionMeasurementFactor(Key pose_key,
+                              Vector3 position_meas,
+                              const SharedNoiseModel& model): 
+        NoiseModelFactor4(model, pose_key), position_meas_(position_meas) {}
+
+    Vector evaluateError(
+        const Pose3& pose,
+        OptionalMatrixType H1) const override 
+    {  
+        Matrix36 d_position_d_pose;
+        Vector3 error = pose.translation(d_position_d_pose) - position_meas_;
+
+        if (H1) {
+            *H1 = d_position_d_pose;
+        }
+
+        return error;
     }
 };
 

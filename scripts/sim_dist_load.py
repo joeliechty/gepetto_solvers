@@ -6,24 +6,28 @@ from tendon_robot import DistLoadSolver
 
 from plotting import TendonRobotPlotter
 from config import get_simulation_config, get_base_config
-from sim_functions import dist_load_function, tensions_function
+from utils import dist_load_function, tensions_function, moving_savgol
 
 
 def inference(tensions_gt, fbg_signals_gt, dist_load_gt):
     config = get_base_config()
 
-    # Add noise to all measured data
-    tensions_meas = tensions_gt + config.tension_std * np.random.randn(*tensions_gt.shape)
-    fbg_signals_meas = fbg_signals_gt + 3e-6 * np.random.randn(*fbg_signals_gt.shape)
+    tensions_meas = tensions_gt + config.tension_meas_std * np.random.randn(*tensions_gt.shape)
+    fbg_signals_meas = fbg_signals_gt + config.fbg_strain_meas_std * np.random.randn(*fbg_signals_gt.shape)
 
     solver = DistLoadSolver(config)
     plotter = TendonRobotPlotter('Distributed Load Inference', plot_dist_load=True)
-
+    
+    tensions_filter = moving_savgol()
+    fbg_signals_filter = moving_savgol()
 
     for tensions_meas_i, fbg_signals_meas_i, dist_load_gt_i in zip(tensions_meas, fbg_signals_meas, dist_load_gt):
         start_solve = time.time()
 
-        solution = solver.step(tensions_meas_i, fbg_signals_meas_i, 1)
+        tensions_filtered_i = tensions_filter.update(tensions_meas_i)
+        fbg_signals_filtered_i = fbg_signals_filter.update(fbg_signals_meas_i)
+
+        solution = solver.step(tensions_filtered_i, fbg_signals_filtered_i, 1)
 
         start_render = time.time()
         plotter.update(solution)
@@ -47,25 +51,25 @@ def inference(tensions_gt, fbg_signals_gt, dist_load_gt):
 
         #     plt.show()
 
-        if np.linalg.norm(dist_load_gt_i).sum() > 0.02:
-            s = np.linspace(0, config.rod_length, len(dist_load_gt_i))
-            force_mean = np.array(solution.applied_wrench_mean)[:,3:]
-            force_cov = np.array(solution.applied_wrench_cov)[:,3:,3:]
-            force_two_std = 2 * np.sqrt(np.diagonal(force_cov, axis1=1, axis2=2))
+        # if np.linalg.norm(dist_load_gt_i).sum() > 0.02:
+        #     s = np.linspace(0, config.rod_length, len(dist_load_gt_i))
+        #     force_mean = np.array(solution.applied_wrench_mean)[:,3:]
+        #     force_cov = np.array(solution.applied_wrench_cov)[:,3:,3:]
+        #     force_two_std = 2 * np.sqrt(np.diagonal(force_cov, axis1=1, axis2=2))
 
-            plt.figure()
+        #     plt.figure()
 
-            plt.subplot(1,2,1)
-            plt.plot(s, dist_load_gt_i[:,0], 'g-')
-            plt.plot(s, force_mean[:,0], 'b-')
-            plt.fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.25, interpolate=True)
+        #     plt.subplot(1,2,1)
+        #     plt.plot(s, dist_load_gt_i[:,0], 'g-')
+        #     plt.plot(s, force_mean[:,0], 'b-')
+        #     plt.fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.25, interpolate=True)
 
-            plt.subplot(1,2,2)
-            plt.plot(s, dist_load_gt_i[:,1], 'g-')
-            plt.plot(s, force_mean[:,1], 'b-')
-            plt.fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.25, interpolate=True)
+        #     plt.subplot(1,2,2)
+        #     plt.plot(s, dist_load_gt_i[:,1], 'g-')
+        #     plt.plot(s, force_mean[:,1], 'b-')
+        #     plt.fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.25, interpolate=True)
 
-            plt.show()
+        #     plt.show()
 
 
     plotter.plotter.close()
@@ -118,7 +122,7 @@ def simulation(sim_time, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 5
+    sim_time = 30
 
     tensions_gt, fbg_signals_gt, dist_load_gt = simulation(sim_time)
     inference(tensions_gt, fbg_signals_gt, dist_load_gt)

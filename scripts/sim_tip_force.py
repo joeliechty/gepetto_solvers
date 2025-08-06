@@ -1,28 +1,36 @@
+import time
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-import time
 from tendon_robot import TipForceSolver
-
 from plotting import TendonRobotPlotter
 from config import get_simulation_config, get_base_config
-from sim_functions import tip_force_function, tensions_function
+from utils import tip_force_function, tensions_function, moving_savgol
 
 
 def inference(tensions_gt, tip_positions_gt, tip_forces_gt):
     config = get_base_config()
 
     # Add noise to all measured data
-    tensions_meas = tensions_gt + config.tension_std * np.random.randn(*tensions_gt.shape)
-    tip_positions_meas = tip_positions_gt + config.tip_pose_p_meas_std * np.random.randn(*tip_positions_gt.shape)
+    tensions_meas = tensions_gt + config.tension_meas_std * np.random.randn(*tensions_gt.shape)
+    tip_positions_meas = tip_positions_gt + config.tip_position_meas_std * np.random.randn(*tip_positions_gt.shape)
 
     solver = TipForceSolver(config)
     plotter = TendonRobotPlotter('Tip Force Inference')
+    tensions_filter = moving_savgol()
+    tip_position_filter = moving_savgol()
+
+    tensions_filtered = []
+    tip_positions_filtered = []
 
     for tensions_meas_i, tip_position_meas_i, tip_force_gt_i in zip(tensions_meas, tip_positions_meas, tip_forces_gt):
         start_solve = time.time()
 
-        solution = solver.step(tensions_meas_i, tip_position_meas_i, 1)
+        tensions_filtered_i = tensions_filter.update(tensions_meas_i)
+        tip_position_filtered_i = tip_position_filter.update(tip_position_meas_i)
+
+        solution = solver.step(tensions_filtered_i, tip_position_filtered_i, 1)
 
         start_render = time.time()
         plotter.update(solution, tip_force_gt=tip_force_gt_i)
@@ -34,22 +42,24 @@ def inference(tensions_gt, tip_positions_gt, tip_forces_gt):
         print(f"render time: {1000 * render_time:.2f} ms")
         print(f"total time: {1000 * total_time:.2f} ms\n\n")
 
+        tensions_filtered.append(tensions_filtered_i)
+        tip_positions_filtered.append(tip_position_filtered_i)
 
     plotter.plotter.close()
 
-    # plt.figure()
-    # plt.plot(tensions_meas, 'ro')
-    # plt.plot(tensions_filtered, 'b-')
-    # plt.xlabel("Time step")
-    # plt.ylabel("Tension")
+    plt.figure()
+    plt.plot(tensions_meas, 'ro')
+    plt.plot(tensions_filtered, 'b-')
+    plt.xlabel("Time step")
+    plt.ylabel("Tension")
     
-    # plt.figure()
-    # plt.plot(tip_positions_meas, 'ro')
-    # plt.plot(tip_position_filtered, 'b-')
-    # plt.xlabel("Time step")
-    # plt.ylabel("Position")
+    plt.figure()
+    plt.plot(tip_positions_meas, 'ro')
+    plt.plot(tip_positions_filtered, 'b-')
+    plt.xlabel("Time step")
+    plt.ylabel("Position")
 
-    # plt.show()
+    plt.show()
 
 
 def simulation(sim_time, frame_rate=30):
@@ -86,8 +96,8 @@ def simulation(sim_time, frame_rate=30):
         print(f"total time: {1000 * total_time:.2f} ms\n\n")
 
         tensions_gt.append(tensions)
-        tip_position_gt.append(solution.tip_pose_samples[0][:3,3])
-        # tip_position_gt.append(solution.backbone_pose_mean[-1][:3,3])
+        # tip_position_gt.append(solution.tip_pose_samples[0][:3,3])
+        tip_position_gt.append(solution.backbone_pose_mean[-1][:3,3])
         tip_force_gt.append(tip_force)
 
     plotter.plotter.close()

@@ -61,26 +61,20 @@ struct TendonRobotConfig{
     double routing_radius = 0.01;
 
     // General noise parameters
-    double tension_std = 5e-2;
+    double cosserat_twist_r_std = 1e-1;
     double small_force_std = 1e-5;
     double small_moment_std = 1e-5;
-    double cosserat_twist_r_std = 1e-1;
     double small_r_std = 1e-3;
     double small_p_std = 1e-5;
-    double tip_pose_jerk_std = 1e-3;
-    double tip_pose_accel_std = 1e-3;
-    double tension_drift_std = 1e-1;
 
-    // Tip force parameters
-    double tip_force_std = 1e-4;
-    double tip_force_drift_std = 1e-1;
-    double dist_load_magnitude_std = 1e-1;
-    double dist_load_jerk_std = 1e-3;
-    double dist_load_drift_std = 1e-3;
+    // External load parameters
+    double tip_force_prior_std = 1e-4;
+    double dist_load_prior_std = 1e-1;
+    double dist_load_smoothness_std = 1e-3;
 
     // Measurement noise parameters
-    double tip_pose_r_meas_std = 3e0;
-    double tip_pose_p_meas_std = 1e-3;
+    double tension_meas_std = 5e-2;
+    double tip_position_meas_std = 1e-3;
     double fbg_strain_meas_std = 5e-6;
 
     // Routing configuration
