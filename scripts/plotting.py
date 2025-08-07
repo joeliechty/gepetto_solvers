@@ -1,5 +1,6 @@
 import numpy as np
-from scipy.interpolate import interp1d
+from pathlib import Path
+import shutil
 
 import pyvista as pv
 
@@ -36,7 +37,7 @@ def get_tendon_disc_meshes(solution):
 
     disc_radius = 1.1 * routing_radius
     disc_width = 0.1 * routing_radius
-    tendon_radius = 0.05 * routing_radius
+    tendon_radius = 0.04 * routing_radius
 
     discs = []
 
@@ -141,15 +142,21 @@ def get_backbone_ellipsoids(solution, skip=0):
 
 
 class TendonRobotPlotter:
-    def __init__(self, title, plot_dist_load=False):
+    def __init__(self, title, save_png_mode=False, plot_dist_load=False):
         self.plot_dist_load = plot_dist_load
-        self.is_first_plot = True
+        self.save_png_mode = save_png_mode
 
-        self.plotter = pv.Plotter(window_size=(1000, 1000))
-        filename = title.lower().replace(" ", "_") + ".mp4"
-        self.plotter.open_movie(filename, framerate=30)
+        if save_png_mode:
+            dir_name = title.strip().lower().replace(" ", "_")
+            self.frames_path = Path("frames") / dir_name
+            shutil.rmtree(self.frames_path, ignore_errors=True)
+            self.frames_path.mkdir(parents=True, exist_ok=True)
+
+        self.window_size = (1500, 2000)
+        self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_png_mode)
         self.plotter.add_text(title, position='upper_edge', font_size=14, color='black', font="times")
-    
+        self.frame = 0
+
     def init_dist_load(self, solution):
         self.dist_load_scale = 5.0
 
@@ -168,20 +175,20 @@ class TendonRobotPlotter:
         T_tip = solution.backbone_pose_mean[-1]
         R_tip = T_tip[:3,:3]
         p_tip = T_tip[:3,3]
-        self.f_tip_scale = 0.75
+        self.f_tip_scale = 0.7
         f_tip_mean = R_tip @ solution.applied_wrench_mean[-1][3:]  # World frame
         self.tip_force_mean_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
-        self.plotter.add_mesh(self.tip_force_mean_mesh, color='blue', opacity=0.5)
+        self.plotter.add_mesh(self.tip_force_mean_mesh, color='blue', opacity=0.7)
 
         f_tip_cov = R_tip @ (solution.applied_wrench_cov[-1][3:,3:] @ R_tip.T)  # World frame
         center = p_tip + f_tip_mean * self.f_tip_scale
         self.f_tip_95_mesh = get_ellipsoid(center, f_tip_cov, self.f_tip_scale, num_sigma=2.80)
-        self.plotter.add_mesh(self.f_tip_95_mesh, color="goldenrod", opacity=0.2, smooth_shading=True)
+        self.plotter.add_mesh(self.f_tip_95_mesh, color="gold", opacity=0.1, smooth_shading=True)
 
         if tip_force_gt is not None:
             f_tip_gt = R_tip @ tip_force_gt
             self.tip_force_gt_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_gt)
-            self.plotter.add_mesh(self.tip_force_gt_mesh, color='green', opacity=0.5)
+            self.plotter.add_mesh(self.tip_force_gt_mesh, color='forestgreen', opacity=0.7)
 
     def update_tip_force(self, solution, tip_force_gt):
         T_tip = solution.backbone_pose_mean[-1]
@@ -212,10 +219,11 @@ class TendonRobotPlotter:
             
     def init_scene(self, solution, tip_force_gt):
         plate = get_base_plate(solution)
-        self.plate_actor = self.plotter.add_mesh(plate, color="dimgrey", show_edges=True, line_width=1)
+        self.plate_actor = self.plotter.add_mesh(plate, color="coldgrey", show_edges=True, line_width=1)
 
-        self.backbone_mesh = get_tube(solution.backbone_pose_mean, radius=0.0015)
-        self.plotter.add_mesh(self.backbone_mesh, color='darkblue', smooth_shading=True)
+        self.backbone_radius = solution.tendon_disc_config.routing_radius / 12.0
+        self.backbone_mesh = get_tube(solution.backbone_pose_mean, radius=self.backbone_radius)
+        self.plotter.add_mesh(self.backbone_mesh, color='mediumblue', opacity = 0.8, smooth_shading=True)
 
         self.tendon_meshes, self.disc_meshes = get_tendon_disc_meshes(solution)
 
@@ -224,12 +232,12 @@ class TendonRobotPlotter:
         for j, tendon in enumerate(self.tendon_meshes):
             color = tendon_colors[j % len(tendon_colors)]
             for segment in tendon:
-                self.plotter.add_mesh(segment, color=color, opacity=0.7)
+                self.plotter.add_mesh(segment, color=color, opacity=0.15)
         
         for i, disc in enumerate(self.disc_meshes):
             if i == 0: continue
             disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
-            self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
+            self.plotter.add_mesh(disc, color='steelblue', opacity=0.15, smooth_shading=True)
 
         if self.plot_dist_load:
             self.init_dist_load(solution)
@@ -240,42 +248,48 @@ class TendonRobotPlotter:
         self.backbone_cov_meshes = get_backbone_ellipsoids(solution, skip=self.ellipsoid_skip)
 
         for ellipsoid in self.backbone_cov_meshes:
-            self.plotter.add_mesh(ellipsoid, color="red", opacity=0.1, smooth_shading=True)
-
-        self.plotter.add_axes()
-        self.plotter.enable_depth_peeling(10)
-        self.plotter.enable_anti_aliasing()
+            self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.25, smooth_shading=True)
 
         light_positions = [
-            (5, 5, 5),
-            (-5, 5, 5),
-            (0, -7, 5)
+            (0, 5, 5),
+            (0, -5, 5),
+            (5, 0, -5),
+            (-5, 0, -5)
         ]
 
         for pos in light_positions:
             light = pv.Light(
                 position=pos,
-                intensity=0.5,
+                intensity=0.4,
                 light_type='scene light'
             )
             self.plotter.add_light(light)
 
+        self.plotter.camera.position = (0.6, 0, 0.5)
+        self.plotter.camera.focal_point = (0, 0, 0.13)
 
-        self.plotter.view_isometric()
+        self.plotter.add_axes()
+        self.plotter.enable_depth_peeling(10)
+        self.plotter.enable_anti_aliasing()
 
-        # self.plotter.show(auto_close=False)#, interactive_update=True)
+        if not self.save_png_mode:
+            self.plotter.show(auto_close=False, interactive_update=True)
     
     def update(self, solution, tip_force_gt=None):
-        if self.is_first_plot:
+        if self.frame == 0:
             self.init_scene(solution, tip_force_gt)
-            self.is_first_plot = False
         else:
             self.update_meshes(solution, tip_force_gt)
+        
+        self.plotter.render()
 
-        self.plotter.write_frame()
+        if self.save_png_mode:
+            self.plotter.screenshot(self.frames_path / f"{self.frame}.png", window_size=self.window_size)
+        
+        self.frame = self.frame + 1
 
     def update_meshes(self, solution, tip_force_gt):
-        tube = get_tube(solution.backbone_pose_mean, radius=0.0015)
+        tube = get_tube(solution.backbone_pose_mean, radius=self.backbone_radius)
         self.backbone_mesh.points[:] = tube.points
 
         tendons, discs = get_tendon_disc_meshes(solution)
@@ -286,7 +300,7 @@ class TendonRobotPlotter:
         
         for i, tendon in enumerate(tendons):
             for j, segment in enumerate(tendon):
-                self.tendon_meshes[i][j].points[:] = tendons[i][j].points
+                self.tendon_meshes[i][j].points[:] = segment.points
 
         ellipsoids = get_backbone_ellipsoids(solution, skip=self.ellipsoid_skip)
         for ellipsoid_plot, ellipsoid in zip(self.backbone_cov_meshes, ellipsoids):

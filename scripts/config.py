@@ -20,7 +20,7 @@ def get_base_config():
     config.small_r_std = 1e-3
     config.small_p_std = 1e-5
 
-    config.tip_force_prior_std = 1e-1
+    config.tip_force_prior_std = 5e-2
     config.dist_load_prior_std = 1e-1
     config.dist_load_smoothness_std = 0.00418  # From sim_functions script
 
@@ -48,7 +48,7 @@ def get_base_config():
 def get_simulation_config():
     config = get_base_config()
 
-    # config.youngs_modulus = 40.0e9 * 1.025
+    config.youngs_modulus = 0.99 * config.youngs_modulus
 
     config.tension_meas_std = 1e-4
     config.cosserat_twist_r_std = 1e-4

@@ -15,27 +15,42 @@ def tensions_function(t):
     return tensions * max_tensions
 
 
-def tip_force_function(t):
-    max_magnitude = 0.1
-    magnitude_rate_hz = 0.3
-    direction_rate_hz = 0.07
+class TipForceFunction:
+    def __init__(self):
+        self.max_magnitude = 0.1
+        self.magnitude_rate_hz = 0.3
+        self.direction_rate_hz = 0.07
+        self.prev_magnitude = 0.0
+        self.was_increasing = True
 
-    direction = np.array([
-        np.sin(2 * np.pi * direction_rate_hz * 1.0 * t),
-        np.sin(2 * np.pi * direction_rate_hz * 1.1 * t),
-        np.sin(2 * np.pi * direction_rate_hz * 1.2 * t),
-    ])
+    def __call__(self, t):
+        # Direction varies slowly
+        direction = np.array([
+            np.sin(2 * np.pi * self.direction_rate_hz * 1.0 * t),
+            np.sin(2 * np.pi * self.direction_rate_hz * 1.1 * t),
+            np.sin(2 * np.pi * self.direction_rate_hz * 1.2 * t),
+        ])
 
-    norm = np.linalg.norm(direction)
-    if norm < 1e-9:
-        direction = np.array([1.0, 0.0, 0.0])  # default direction if zero
-    else:
-        direction /= norm
+        norm = np.linalg.norm(direction)
+        direction = direction / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
 
-    # Pulses from 0 to 1 
-    magnitude = (0.5 * (1.0 - np.cos(2 * np.pi * magnitude_rate_hz * t))) ** 4
+        # Magnitude pulses between 0 and 1, shaped to have smooth peak
+        magnitude = (0.5 * (1.0 - np.cos(2 * np.pi * self.magnitude_rate_hz * t))) ** 4
 
-    return max_magnitude * magnitude * direction
+        is_max_magnitude = False
+        is_increasing = magnitude > self.prev_magnitude + 1e-8
+
+        if is_increasing:
+            pass
+        elif self.was_increasing:
+            is_max_magnitude = True
+
+        self.prev_magnitude = magnitude
+        self.was_increasing = is_increasing
+
+        force = self.max_magnitude * magnitude * direction
+
+        return force #, is_max_magnitude
 
 
 class bump_function:
