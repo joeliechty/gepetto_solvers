@@ -221,7 +221,7 @@ class TendonRobotPlotter:
             mesh = get_arrow(p, self.dist_load_scale * f)
             self.dist_load_meshes[i].shallow_copy(mesh)
             
-    def init_scene(self, solution, tip_positions, tip_force_gt):
+    def init_scene(self, solution, p_desired, desired_trajectory, tip_force_gt):
         plate = get_base_plate(solution)
         self.plate_actor = self.plotter.add_mesh(plate, color="coldgrey", show_edges=True, line_width=1)
 
@@ -254,10 +254,15 @@ class TendonRobotPlotter:
         for ellipsoid in self.backbone_cov_meshes:
             self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.15, smooth_shading=True)
 
-        if tip_positions is not None:
-            self.trajectory_radius = 0.0015
-            self.trajectory_mesh = get_tube_points(tip_positions, self.trajectory_radius)
-            self.plotter.add_mesh(self.trajectory_mesh, color="crimson", opacity=0.3, smooth_shading=True)
+        if desired_trajectory is not None:
+            self.trajectory_radius = 0.001
+            self.trajectory_mesh = get_tube_points(desired_trajectory, self.trajectory_radius)
+            self.plotter.add_mesh(self.trajectory_mesh, color="crimson", opacity=0.2, smooth_shading=True)
+
+        if p_desired is not None:
+            self.p_desired_radius = 0.002
+            self.p_desired_mesh = pv.Sphere(self.p_desired_radius, p_desired)
+            self.plotter.add_mesh(self.p_desired_mesh, color="limegreen", opacity=0.7, smooth_shading=True)
 
         light_positions = [
             (0, 5, 5),
@@ -284,11 +289,11 @@ class TendonRobotPlotter:
         if not self.save_png_mode:
             self.plotter.show(auto_close=False, interactive_update=True)
     
-    def update(self, solution, tip_positions=None, tip_force_gt=None):
+    def update(self, solution, p_desired=None, desired_trajectory=None, tip_force_gt=None):
         if self.frame == 0:
-            self.init_scene(solution, tip_positions, tip_force_gt)
+            self.init_scene(solution, p_desired, desired_trajectory, tip_force_gt)
         else:
-            self.update_meshes(solution, tip_positions, tip_force_gt)
+            self.update_meshes(solution, p_desired, tip_force_gt)
         
         self.plotter.render()
 
@@ -297,7 +302,7 @@ class TendonRobotPlotter:
         
         self.frame = self.frame + 1
 
-    def update_meshes(self, solution, tip_positions, tip_force_gt):
+    def update_meshes(self, solution, p_desired, tip_force_gt):
         tube = get_tube_poses(solution.backbone_pose_mean, radius=self.backbone_radius)
         self.backbone_mesh.shallow_copy(tube)
 
@@ -320,9 +325,8 @@ class TendonRobotPlotter:
         else:
             self.update_tip_force(solution, tip_force_gt)
 
-        if tip_positions is not None:
-            if len(tip_positions) > 1:
-                tube = get_tube_points(tip_positions, self.trajectory_radius)
-                self.trajectory_mesh.shallow_copy(tube)
+        if p_desired is not None:
+            mesh = pv.Sphere(self.p_desired_radius, p_desired)
+            self.p_desired_mesh.shallow_copy(mesh)
 
         self.plotter.camera.azimuth += 0.3

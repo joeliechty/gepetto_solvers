@@ -48,7 +48,7 @@ def get_base_config():
 def get_simulation_config():
     config = get_base_config()
 
-    config.youngs_modulus = 0.99 * config.youngs_modulus
+    config.youngs_modulus = 0.98 * config.youngs_modulus
 
     config.tension_meas_std = 1e-4
     config.cosserat_twist_r_std = 1e-4
