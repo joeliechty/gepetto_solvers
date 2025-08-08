@@ -27,6 +27,7 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("applied_wrench_cov", &TendonRobotSolution::applied_wrench_cov)
         .def_readwrite("tensions_mean", &TendonRobotSolution::tensions_mean)
         .def_readwrite("tensions_cov", &TendonRobotSolution::tensions_cov)
+        .def_readwrite("J_pose_tensions", &TendonRobotSolution::J_pose_tensions)
         .def_readwrite("solve_time_ms", &TendonRobotSolution::solve_time_ms)
         .def_readwrite("extract_time_ms", &TendonRobotSolution::extract_time_ms)
         .def_readwrite("total_time_ms", &TendonRobotSolution::total_time_ms)

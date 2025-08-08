@@ -303,6 +303,17 @@ public:
         solution_.tensions_cov = marginals_.marginalCovariance(Q(0));
 
         solution_.tendon_disc_config = tendon_config_;
+
+        KeyVector keys;
+        keys.push_back(Q(0));
+        keys.push_back(T(num_backbone_poses_ - 1));
+        JointMarginal tensions_pose_joint = marginals_.jointMarginalCovariance(keys);
+
+        Matrix4 sigma_tensions_tensions = tensions_pose_joint(Q(0), Q(0));
+        Matrix64 sigma_pose_tensions = tensions_pose_joint(T(num_backbone_poses_ - 1), Q(0));
+
+        Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_tensions_tensions);
+        solution_.J_pose_tensions = sigma_pose_tensions * ldlt.solve(Matrix4::Identity());
     }
 
     std::vector<Vector> sample_cov(const Matrix& cov, int num_samples) {

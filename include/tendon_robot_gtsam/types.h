@@ -31,6 +31,8 @@ struct TendonRobotSolution {
     Vector4 tensions_mean;
     Matrix4 tensions_cov;
 
+    Matrix64 J_pose_tensions;
+    
     double solve_time_ms = 0;
     double extract_time_ms = 0;
     double total_time_ms = 0;
