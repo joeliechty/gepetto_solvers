@@ -150,6 +150,6 @@ def simulation(sim_time, save_png_mode, frame_rate=30):
 
 if __name__ == "__main__":
     sim_time = 30
-    save_png_mode = False
+    save_png_mode = True
 
     simulation(sim_time, save_png_mode)

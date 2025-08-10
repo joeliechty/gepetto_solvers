@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
 from config import get_simulation_config, get_base_config
-from utils import TipForceFunction, tensions_function, moving_savgol
+from utils import tip_force_function, tensions_function, moving_savgol
 
 
 def inference(tensions_gt, tip_positions_gt, tip_forces_gt, save_png_mode):
@@ -72,14 +72,12 @@ def simulation(sim_time, save_png_mode, frame_rate=30):
     tip_position_gt = []
     tip_force_gt = []
 
-    tip_force_function = TipForceFunction()
-
     plotter = TendonRobotPlotter('Tip Force Simulation', save_png_mode=save_png_mode)
 
     for i in range(num_steps):
         t = float(i) / float(frame_rate)
 
-        tip_force = tip_force_function(t)
+        tip_force = 0.1 * tip_force_function(t)
         tensions = tensions_function(t)
 
         start_solve = time.time()
