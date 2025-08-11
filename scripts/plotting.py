@@ -146,18 +146,18 @@ def get_backbone_ellipsoids(solution, skip=0):
 
 
 class TendonRobotPlotter:
-    def __init__(self, title, save_png_mode=False, plot_dist_load=False):
+    def __init__(self, title, save_frames_mode=False, plot_dist_load=False):
         self.plot_dist_load = plot_dist_load
-        self.save_png_mode = save_png_mode
+        self.save_frames_mode = save_frames_mode
 
-        if save_png_mode:
+        if save_frames_mode:
             dir_name = title.strip().lower().replace(" ", "_")
-            self.frames_path = Path("frames") / dir_name
+            self.frames_path = Path("videos") / "frames" / dir_name
             shutil.rmtree(self.frames_path, ignore_errors=True)
             self.frames_path.mkdir(parents=True, exist_ok=True)
 
-        self.window_size = (1500, 2000)
-        self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_png_mode)
+        self.window_size = (1750, 2000)
+        self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_mode)
         self.plotter.add_text(title, position='upper_edge', font_size=14, color='black', font="times")
         self.frame = 0
 
@@ -286,7 +286,7 @@ class TendonRobotPlotter:
         self.plotter.enable_depth_peeling(10)
         self.plotter.enable_anti_aliasing()
 
-        if not self.save_png_mode:
+        if not self.save_frames_mode:
             self.plotter.show(auto_close=False, interactive_update=True)
     
     def update(self, solution, p_desired=None, desired_trajectory=None, tip_force_gt=None):
@@ -297,7 +297,7 @@ class TendonRobotPlotter:
         
         self.plotter.render()
 
-        if self.save_png_mode:
+        if self.save_frames_mode:
             self.plotter.screenshot(self.frames_path / f"{self.frame}.png", window_size=self.window_size)
         
         self.frame = self.frame + 1

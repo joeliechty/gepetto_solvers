@@ -6,10 +6,10 @@ import matplotlib.pyplot as plt
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
 from config import get_simulation_config, get_base_config
-from utils import tip_force_function, tensions_function, moving_savgol
+from utils import TipForceFunction, tensions_function, moving_savgol
 
 
-def inference(tensions_gt, tip_positions_gt, tip_forces_gt, save_png_mode):
+def inference(tensions_gt, tip_positions_gt, tip_forces_gt, save_frames_mode):
     config = get_base_config()
 
     # Add noise to all measured data
@@ -17,7 +17,7 @@ def inference(tensions_gt, tip_positions_gt, tip_forces_gt, save_png_mode):
     tip_positions_meas = tip_positions_gt + config.tip_position_meas_std * np.random.randn(*tip_positions_gt.shape)
 
     solver = TipForceSolver(config)
-    plotter = TendonRobotPlotter('Tip Force Inference', save_png_mode=save_png_mode)
+    plotter = TendonRobotPlotter('Tip Force Inference', save_frames_mode=save_frames_mode)
     tensions_filter = moving_savgol()
     tip_position_filter = moving_savgol()
 
@@ -63,7 +63,7 @@ def inference(tensions_gt, tip_positions_gt, tip_forces_gt, save_png_mode):
     plt.show()
 
 
-def simulation(sim_time, save_png_mode, frame_rate=30):
+def simulation(sim_time, save_frames_mode, frame_rate=30):
     simulator = TipForceSolver(get_simulation_config())
 
     num_steps = sim_time * frame_rate
@@ -72,12 +72,14 @@ def simulation(sim_time, save_png_mode, frame_rate=30):
     tip_position_gt = []
     tip_force_gt = []
 
-    plotter = TendonRobotPlotter('Tip Force Simulation', save_png_mode=save_png_mode)
+    plotter = TendonRobotPlotter('Tip Force Simulation', save_frames_mode=save_frames_mode)
+
+    tip_force_function = TipForceFunction(max_magnitude=0.15)
 
     for i in range(num_steps):
         t = float(i) / float(frame_rate)
 
-        tip_force = 0.1 * tip_force_function(t)
+        tip_force = tip_force_function(t)
         tensions = tensions_function(t)
 
         start_solve = time.time()
@@ -104,8 +106,8 @@ def simulation(sim_time, save_png_mode, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 30
-    save_png_mode = True
+    sim_time = 5
+    save_frames_mode = False
 
-    tensions_gt, tip_position_gt, tip_force_gt = simulation(sim_time, save_png_mode)
-    inference(tensions_gt, tip_position_gt, tip_force_gt, save_png_mode)
+    tensions_gt, tip_position_gt, tip_force_gt = simulation(sim_time, save_frames_mode)
+    inference(tensions_gt, tip_position_gt, tip_force_gt, save_frames_mode)

@@ -1,6 +1,8 @@
+import os
 from collections import deque
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from config import get_simulation_config
 
@@ -15,23 +17,65 @@ def tensions_function(t):
     return tensions * max_tensions
 
 
-def tip_force_function(t, magnitude_rate_hz=0.3, direction_rate_hz = 0.1):
-    direction = np.array([
-        np.sin(2 * np.pi * direction_rate_hz * 1.0 * t),
-        np.sin(2 * np.pi * direction_rate_hz * 1.1 * t),
-        np.sin(2 * np.pi * direction_rate_hz * 1.2 * t),
-    ])
-
-    norm = np.linalg.norm(direction)
-    direction = direction / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0])
-
-    # Magnitude pulses between 0 and 1, shaped to have smooth peak
-    magnitude = (0.5 * (1.0 - np.cos(2 * np.pi * magnitude_rate_hz * t))) ** 4
-
-    return magnitude * direction
+def pulse_function(t, rate_hz):
+    return (0.5 * (1.0 - np.cos(2 * np.pi * rate_hz * t))) ** 3
 
 
-class bump_function:
+class TipForceFunction:
+    def __init__(self, max_magnitude=0.1, force_rate_hz=0.3, framerate=30):
+        self.max_magnitude = max_magnitude
+        self.force_rate_hz = force_rate_hz
+        self.steps_per_cycle = framerate / force_rate_hz
+
+        self.magnitude = 0
+        self.direction = np.ones(3)
+
+        self.step = 0
+
+    def sample_parameters(self):
+        d = np.random.randn(3)
+        self.direction = d / np.linalg.norm(d)
+
+    def __call__(self, t):
+        if self.step % self.steps_per_cycle == 0:
+            self.sample_parameters()
+        
+        pulse_scale = pulse_function(t, self.force_rate_hz)
+
+        self.step = self.step + 1
+
+        return pulse_scale * self.max_magnitude * self.direction 
+    
+
+class TipForceFunction:
+    def __init__(self, max_magnitude=0.1, force_rate_hz=0.3, framerate=30, seed=None):
+        self.max_magnitude = max_magnitude
+        self.force_rate_hz = force_rate_hz
+        self.steps_per_cycle = int(framerate / force_rate_hz)
+
+        self.magnitude = 0
+        self.direction = np.ones(3)
+
+        self.step = 0
+
+        self.rng = np.random.default_rng(seed)
+
+    def sample_parameters(self):
+        d = self.rng.normal(size=3)
+        self.direction = d / np.linalg.norm(d)
+
+    def __call__(self, t):
+        if self.step % self.steps_per_cycle == 0:
+            self.sample_parameters()
+
+        pulse_scale = pulse_function(t, self.force_rate_hz)
+
+        self.step += 1
+
+        return pulse_scale * self.max_magnitude * self.direction
+    
+
+class BumpFunction:
     def __init__(self, num_forces):
         self.framerate = 30
         self.force_rate_hz = 0.1
@@ -55,7 +99,7 @@ class bump_function:
         self.mag = np.random.uniform(self.mag_range[0], self.mag_range[1])
         self.angle = np.random.uniform(self.angle_range[0], self.angle_range[1])
 
-    def update(self, t):
+    def __call__(self, t):
         if self.step % self.steps_per_cycle == 0:
             self.sample_parameters()
         
@@ -76,12 +120,12 @@ class bump_function:
         return np.column_stack((f_x, f_y, f_z))
 
 
-class dist_load_function:
+class DistLoadFunction:
     def __init__(self, num_forces, num_bumps=3):
-        self.bump_functions = [bump_function(num_forces) for i in range(num_bumps)]
+        self.bump_functions = [BumpFunction(num_forces) for i in range(num_bumps)]
     
-    def update(self, t):
-        bumps_eval = [bump.update(t) for bump in self.bump_functions]
+    def __call__(self, t):
+        bumps_eval = [bump(t) for bump in self.bump_functions]
         return np.array(bumps_eval).sum(axis=0)
 
     def get_max_forces(self):
@@ -116,6 +160,30 @@ class moving_savgol:
 
         # Reshape back to original shape
         return last_val.reshape(original_shape)
+
+
+def setup_plt(height=5.0, grid=False):
+    width = 3.5  # inches
+
+    os.makedirs("figures", exist_ok=True)
+
+    plt.rcParams.update({
+        "figure.figsize": (width, height),  # IEEE single column
+        "font.size": 8,
+        "axes.labelsize": 8,
+        "axes.titlesize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "legend.fontsize": 7,
+        "lines.linewidth": 1,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": grid,
+        "grid.alpha": 0.3,
+        "legend.fontsize": 7,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42
+    })
 
 
 if __name__ == "__main__":

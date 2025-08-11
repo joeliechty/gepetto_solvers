@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
-from config import get_simulation_config, get_base_config
-from utils import tip_force_function, tensions_function, moving_savgol
+from config import get_base_config
+from utils import TipForceFunction, tensions_function, setup_plt
 
     
-def simulation(sim_time, do_plot, save_png_mode, poses_between_discs, frame_rate=10):
+def simulation(sim_time, do_plot, save_frames_mode, poses_between_discs, frame_rate=10):
     config = get_base_config()
     config.poses_between_discs = poses_between_discs
 
@@ -16,16 +16,18 @@ def simulation(sim_time, do_plot, save_png_mode, poses_between_discs, frame_rate
     num_steps = sim_time * frame_rate
 
     if do_plot:
-        plotter = TendonRobotPlotter('Forward Kinematics', save_png_mode=save_png_mode)
+        plotter = TendonRobotPlotter('Forward Kinematics', save_frames_mode=save_frames_mode)
     
     tip_position = []
     tensions_all = []
     t_all = []
 
+    tip_force_function = TipForceFunction(max_magnitude=0.2, seed=42)
+
     for i in range(num_steps):
         t = float(i) / float(frame_rate)
 
-        tip_force = 0.1 * tip_force_function(t)
+        tip_force = tip_force_function(t)
         tensions = tensions_function(t)
 
         solution = simulator.simulation_step(tensions, tip_force)
@@ -47,14 +49,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
-    sim_time = 15
-    poses_between_discs = np.arange(11)
+    sim_time = 5
+    poses_between_discs = np.arange(5)
 
     trajectories = [
         simulation(
             sim_time,
             do_plot=(i == 3),
-            save_png_mode=(i == 30),
+            save_frames_mode=(i == 3),
             poses_between_discs=poses_between_i
         )
         for i, poses_between_i in enumerate(poses_between_discs)
@@ -73,10 +75,13 @@ if __name__ == "__main__":
     config = get_base_config()
     error_percent = 100 * np.array(rms_diffs) / config.rod_length
 
+    setup_plt(height=6)
+
     plt.figure()
     plt.plot(poses_between_discs[1:], error_percent, 'o-')
     plt.xlabel('Poses Between Each Disc')
     plt.ylabel('Change in RMS Tip Position (% robot length)')
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    
+    plt.savefig("figures/kinematics_convergence.pdf", bbox_inches="tight")

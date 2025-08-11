@@ -6,17 +6,17 @@ from tendon_robot import DistLoadSolver
 
 from plotting import TendonRobotPlotter
 from config import get_simulation_config, get_base_config
-from utils import dist_load_function, tensions_function, moving_savgol
+from utils import DistLoadFunction, tensions_function, moving_savgol
 
 
-def inference(tensions_gt, fbg_signals_gt, dist_load_gt, save_png_mode):
+def inference(tensions_gt, fbg_signals_gt, dist_load_gt, save_frames_mode):
     config = get_base_config()
 
     tensions_meas = tensions_gt + config.tension_meas_std * np.random.randn(*tensions_gt.shape)
     fbg_signals_meas = fbg_signals_gt + config.fbg_strain_meas_std * np.random.randn(*fbg_signals_gt.shape)
 
     solver = DistLoadSolver(config)
-    plotter = TendonRobotPlotter('Distributed Load Inference', save_png_mode=save_png_mode, plot_dist_load=True)
+    plotter = TendonRobotPlotter('Distributed Load Inference', save_frames_mode=save_frames_mode, plot_dist_load=True)
     
     tensions_filter = moving_savgol()
     fbg_signals_filter = moving_savgol()
@@ -75,16 +75,16 @@ def inference(tensions_gt, fbg_signals_gt, dist_load_gt, save_png_mode):
     plotter.plotter.close()
 
 
-def simulation(sim_time, save_png_mode, frame_rate=30):
+def simulation(sim_time, save_png_mosave_frames_modede, frame_rate=30):
     config = get_simulation_config()
     simulator = DistLoadSolver(config)
 
     num_steps = sim_time * frame_rate
 
-    plotter = TendonRobotPlotter('Distributed Load Simulation', save_png_mode=save_png_mode, plot_dist_load=True)
+    plotter = TendonRobotPlotter('Distributed Load Simulation', save_frames_mode=save_frames_mode, plot_dist_load=True)
 
     num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs
-    dist_load = dist_load_function(num_poses - 1)
+    dist_load_function = DistLoadFunction(num_poses - 1)
 
     tensions_gt = []
     dist_load_gt = []
@@ -93,7 +93,7 @@ def simulation(sim_time, save_png_mode, frame_rate=30):
     for i in range(num_steps):
         
         t = float(i) / float(frame_rate)
-        forces = dist_load.update(t)
+        forces = dist_load_function(t)
         tensions = tensions_function(t)
 
         start_solve = time.time()
@@ -120,8 +120,8 @@ def simulation(sim_time, save_png_mode, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 30
-    save_png_mode = True
+    sim_time = 5
+    save_frames_mode = False
 
-    tensions_gt, fbg_signals_gt, dist_load_gt = simulation(sim_time, save_png_mode)
-    inference(tensions_gt, fbg_signals_gt, dist_load_gt, save_png_mode)
+    tensions_gt, fbg_signals_gt, dist_load_gt = simulation(sim_time, save_frames_mode)
+    inference(tensions_gt, fbg_signals_gt, dist_load_gt, save_frames_mode)
