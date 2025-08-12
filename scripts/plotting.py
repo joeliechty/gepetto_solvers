@@ -146,9 +146,12 @@ def get_backbone_ellipsoids(solution, skip=0):
 
 
 class TendonRobotPlotter:
-    def __init__(self, title, save_frames_mode=False, plot_dist_load=False):
+    def __init__(self, title, save_frames_mode=False, plot_dist_load=False, desired_trajectory=None, cylinders=None, d_azimuth=0.3):
         self.plot_dist_load = plot_dist_load
         self.save_frames_mode = save_frames_mode
+        self.desired_trajectory = desired_trajectory
+        self.cylinders = cylinders
+        self.d_azimuth = d_azimuth
 
         if save_frames_mode:
             dir_name = title.strip().lower().replace(" ", "_")
@@ -160,6 +163,9 @@ class TendonRobotPlotter:
         self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_mode)
         self.plotter.add_text(title, position='upper_edge', font_size=14, color='black', font="times")
         self.frame = 0
+
+        self.backbone_mesh = None
+        self.p_detected_mesh = None
 
     def init_dist_load(self, solution):
         self.dist_load_scale = 5.0
@@ -221,27 +227,9 @@ class TendonRobotPlotter:
             mesh = get_arrow(p, self.dist_load_scale * f)
             self.dist_load_meshes[i].shallow_copy(mesh)
             
-    def init_scene(self, solution, p_desired, desired_trajectory, tip_force_gt):
+    def init_scene(self, solution, p_desired, tip_force_gt):
         plate = get_base_plate(solution)
         self.plate_actor = self.plotter.add_mesh(plate, color="coldgrey", show_edges=True, line_width=1)
-
-        self.backbone_radius = solution.tendon_disc_config.routing_radius / 12.0
-        self.backbone_mesh = get_tube_poses(solution.backbone_pose_mean, radius=self.backbone_radius)
-        self.plotter.add_mesh(self.backbone_mesh, color='mediumblue', opacity = 0.8, smooth_shading=True)
-
-        self.tendon_meshes, self.disc_meshes = get_tendon_disc_meshes(solution)
-
-        tendon_colors = ["crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod", "deeppink"]
-
-        for j, tendon in enumerate(self.tendon_meshes):
-            color = tendon_colors[j % len(tendon_colors)]
-            for segment in tendon:
-                self.plotter.add_mesh(segment, color=color, opacity=0.3)
-        
-        for i, disc in enumerate(self.disc_meshes):
-            if i == 0: continue
-            disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
-            self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
 
         if self.plot_dist_load:
             self.init_dist_load(solution)
@@ -254,11 +242,16 @@ class TendonRobotPlotter:
         for ellipsoid in self.backbone_cov_meshes:
             self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.15, smooth_shading=True)
 
-        if desired_trajectory is not None:
+        if self.desired_trajectory is not None:
             self.trajectory_radius = 0.001
-            self.trajectory_mesh = get_tube_points(desired_trajectory, self.trajectory_radius)
+            self.trajectory_mesh = get_tube_points(self.desired_trajectory, self.trajectory_radius)
             self.plotter.add_mesh(self.trajectory_mesh, color="crimson", opacity=0.2, smooth_shading=True)
-
+        
+        if self.cylinders is not None:
+            for cylinder in self.cylinders:
+                mesh = pv.Cylinder(cylinder['center'], cylinder['z'], cylinder['radius'], cylinder['length'])
+                self.plotter.add_mesh(mesh, color='orangered', opacity=0.5, smooth_shading=True)
+        
         if p_desired is not None:
             self.p_desired_radius = 0.002
             self.p_desired_mesh = pv.Sphere(self.p_desired_radius, p_desired)
@@ -289,11 +282,11 @@ class TendonRobotPlotter:
         if not self.save_frames_mode:
             self.plotter.show(auto_close=False, interactive_update=True)
     
-    def update(self, solution, p_desired=None, desired_trajectory=None, tip_force_gt=None):
+    def update(self, solution, p_desired=None, p_detected=None, tip_force_gt=None):
         if self.frame == 0:
-            self.init_scene(solution, p_desired, desired_trajectory, tip_force_gt)
+            self.init_scene(solution, p_desired, tip_force_gt)
         else:
-            self.update_meshes(solution, p_desired, tip_force_gt)
+            self.update_meshes(solution, p_desired, tip_force_gt, p_detected)
         
         self.plotter.render()
 
@@ -302,19 +295,40 @@ class TendonRobotPlotter:
         
         self.frame = self.frame + 1
 
-    def update_meshes(self, solution, p_desired, tip_force_gt):
-        tube = get_tube_poses(solution.backbone_pose_mean, radius=self.backbone_radius)
-        self.backbone_mesh.shallow_copy(tube)
+    def update_meshes(self, solution, p_desired, tip_force_gt, p_detected):
 
+        backbone_radius = solution.tendon_disc_config.routing_radius / 12.0
+        backbone = get_tube_poses(solution.backbone_pose_mean, radius=backbone_radius)
         tendons, discs = get_tendon_disc_meshes(solution)
 
-        for i, (new_disc, disc) in enumerate(zip(discs, self.disc_meshes)):
-            if i == 0: continue
-            disc.shallow_copy(new_disc)
-        
-        for i, tendon in enumerate(tendons):
-            for j, segment in enumerate(tendon):
-                self.tendon_meshes[i][j].shallow_copy(segment)
+        if self.backbone_mesh is None:
+            self.backbone_mesh = backbone
+            self.plotter.add_mesh(self.backbone_mesh, color='mediumblue', opacity = 0.5, smooth_shading=True)
+
+            self.tendon_meshes = tendons
+            self.disc_meshes = discs
+            tendon_colors = ["crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod", "deeppink"]
+
+            for j, tendon in enumerate(self.tendon_meshes):
+                color = tendon_colors[j % len(tendon_colors)]
+                for segment in tendon:
+                    self.plotter.add_mesh(segment, color=color, opacity=0.3)
+            
+            for i, disc in enumerate(self.disc_meshes):
+                if i == 0: continue
+                disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
+                self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
+
+        else:
+            self.backbone_mesh.shallow_copy(backbone)
+
+            for i, (new_disc, disc) in enumerate(zip(discs, self.disc_meshes)):
+                if i == 0: continue
+                disc.shallow_copy(new_disc)
+            
+            for i, tendon in enumerate(tendons):
+                for j, segment in enumerate(tendon):
+                    self.tendon_meshes[i][j].shallow_copy(segment)
 
         ellipsoids = get_backbone_ellipsoids(solution, skip=self.ellipsoid_skip)
         for ellipsoid_plot, ellipsoid in zip(self.backbone_cov_meshes, ellipsoids):
@@ -329,4 +343,12 @@ class TendonRobotPlotter:
             mesh = pv.Sphere(self.p_desired_radius, p_desired)
             self.p_desired_mesh.shallow_copy(mesh)
 
-        self.plotter.camera.azimuth += 0.3
+        if p_detected is not None:
+            if self.p_detected_mesh is None:
+                self.p_detected_mesh = pv.Sphere(0.01, p_detected)
+                self.plotter.add_mesh(self.p_detected_mesh)
+            else:
+                mesh = pv.Sphere(0.01, p_detected)
+                self.p_detected_mesh.shallow_copy(mesh)
+        
+        self.plotter.camera.azimuth += self.d_azimuth

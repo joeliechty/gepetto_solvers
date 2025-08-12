@@ -31,9 +31,9 @@ def simulation(sim_time, save_frames_mode, frame_rate=30):
     force_magnitude = 0.2
 
     tensions_cmd = tensions_min
-    plotter = TendonRobotPlotter('Inverse Kinematics', save_frames_mode=save_frames_mode)
     t_trajectory = np.linspace(0, 1 / trajectory_rate_hz, 300)
     desired_trajectory = [trefoil_knot(t, trajectory_rate_hz) for t in t_trajectory]
+    plotter = TendonRobotPlotter('Inverse Kinematics', desired_trajectory=desired_trajectory, save_frames_mode=save_frames_mode)
     
     p_meas_filter = moving_savgol()
 
@@ -81,7 +81,7 @@ def simulation(sim_time, save_frames_mode, frame_rate=30):
         tensions_cmd = tensions_cmd + d_tensions
         tensions_cmd = np.maximum(tensions_cmd, tensions_min)
 
-        plotter.update(solution_inference, p_desired=p_desired, desired_trajectory=desired_trajectory, tip_force_gt=f_gt)
+        plotter.update(solution_inference, p_desired=p_desired, tip_force_gt=f_gt)
 
         tip_position_gt.append(p_gt)
         tip_position_desired.append(p_desired)
@@ -144,7 +144,7 @@ def simulation(sim_time, save_frames_mode, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 30
-    save_frames_mode = True
+    sim_time = 5
+    save_frames_mode = False
 
     simulation(sim_time, save_frames_mode)
