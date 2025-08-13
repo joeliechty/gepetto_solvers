@@ -125,16 +125,14 @@ def get_arrow(start, vec, shaft_radius=0.001, tip_radius=0.002, tip_length=0.005
     return arrow
 
 
-def get_backbone_ellipsoids(solution, skip=0):
-    N = len(solution.backbone_pose_mean)
-    selected_indices = list(range(N - 1, -1, -skip))
+def get_backbone_ellipsoids(solution):
+    disc_idx = solution.tendon_disc_config.disc_pose_idx
+    poses = [solution.backbone_pose_mean[i] for i in disc_idx]
+    covs  = [solution.backbone_pose_cov[i] for i in disc_idx]
 
     ellipsoids = []
 
-    for i in reversed(selected_indices):  # Optional: reverse for chronological order
-        pose = solution.backbone_pose_mean[i]
-        cov = solution.backbone_pose_cov[i]
-
+    for pose, cov in zip(poses, covs):
         R = pose[:3, :3]
         p = pose[:3, 3]
         cov = R @ (cov[3:, 3:] @ R.T)  # World frame
@@ -144,6 +142,41 @@ def get_backbone_ellipsoids(solution, skip=0):
 
     return ellipsoids
 
+
+def get_tip_force_meshes(solution, tip_force_gt, scale=0.7):
+    T_tip = solution.backbone_pose_mean[-1]
+    R_tip = T_tip[:3,:3]
+    p_tip = T_tip[:3,3]
+    
+    f_tip_mean = R_tip @ solution.applied_wrench_mean[-1][3:]  # World frame
+    tip_force_mean_mesh = get_arrow(p_tip, scale * f_tip_mean)
+
+    f_tip_cov = R_tip @ (solution.applied_wrench_cov[-1][3:,3:] @ R_tip.T)  # World frame
+    center = p_tip + f_tip_mean * scale
+    tip_force_95_mesh = get_ellipsoid(center, f_tip_cov, scale, num_sigma=2.80)
+
+    if tip_force_gt is not None:
+        f_tip_gt = R_tip @ tip_force_gt
+        tip_force_gt_mesh = get_arrow(p_tip, scale * f_tip_gt)
+    else:
+        tip_force_gt_mesh = None
+
+    return tip_force_mean_mesh, tip_force_95_mesh, tip_force_gt_mesh
+
+
+def get_dist_load_meshes(solution, scale=5.0):
+    meshes = []
+
+    for pose, wrench in zip(solution.backbone_pose_mean, solution.applied_wrench_mean):
+        R = pose[:3,:3]
+        p = pose[:3,3]
+    
+        f = R @ wrench[3:]  # World frame
+        mesh = get_arrow(p, scale * f)
+        meshes.append(mesh)
+
+    return meshes
+    
 
 class TendonRobotPlotter:
     def __init__(self, title, save_frames_mode=False, plot_dist_load=False, desired_trajectory=None, cylinders=None, d_azimuth=0.3):
@@ -161,102 +194,22 @@ class TendonRobotPlotter:
 
         self.window_size = (1750, 2000)
         self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_mode)
-        self.plotter.add_text(title, position='upper_edge', font_size=14, color='black', font="times")
         self.frame = 0
-
-        self.backbone_mesh = None
-        self.p_detected_mesh = None
-
-    def init_dist_load(self, solution):
-        self.dist_load_scale = 5.0
-
-        self.dist_load_meshes = []
-        for pose, wrench in zip(solution.backbone_pose_mean, solution.applied_wrench_mean):
-            R = pose[:3,:3]
-            p = pose[:3,3]
-        
-            f = R @ wrench[3:]  # World frame
-            mesh = get_arrow(p, self.dist_load_scale * f)
-
-            self.plotter.add_mesh(mesh, color='rebeccapurple', opacity=0.5)
-            self.dist_load_meshes.append(mesh)
-
-    def init_tip_force(self, solution, tip_force_gt):
-        T_tip = solution.backbone_pose_mean[-1]
-        R_tip = T_tip[:3,:3]
-        p_tip = T_tip[:3,3]
-        self.f_tip_scale = 0.7
-        f_tip_mean = R_tip @ solution.applied_wrench_mean[-1][3:]  # World frame
-        self.tip_force_mean_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
-        self.plotter.add_mesh(self.tip_force_mean_mesh, color='rebeccapurple', opacity=0.7)
-
-        f_tip_cov = R_tip @ (solution.applied_wrench_cov[-1][3:,3:] @ R_tip.T)  # World frame
-        center = p_tip + f_tip_mean * self.f_tip_scale
-        self.f_tip_95_mesh = get_ellipsoid(center, f_tip_cov, self.f_tip_scale, num_sigma=2.80)
-        self.plotter.add_mesh(self.f_tip_95_mesh, color="gold", opacity=0.1, smooth_shading=True)
-
-        if tip_force_gt is not None:
-            f_tip_gt = R_tip @ tip_force_gt
-            self.tip_force_gt_mesh = get_arrow(p_tip, self.f_tip_scale * f_tip_gt)
-            self.plotter.add_mesh(self.tip_force_gt_mesh, color='forestgreen', opacity=0.7)
-
-    def update_tip_force(self, solution, tip_force_gt):
-        T_tip = solution.backbone_pose_mean[-1]
-        R_tip = T_tip[:3,:3]
-        p_tip = T_tip[:3,3]
-        f_tip_mean = R_tip @ solution.applied_wrench_mean[-1][3:]  # World frame
-        arrow = get_arrow(p_tip, self.f_tip_scale * f_tip_mean)
-        self.tip_force_mean_mesh.shallow_copy(arrow)
-
-        f_tip_cov = R_tip @ (solution.applied_wrench_cov[-1][3:,3:] @ R_tip.T)  # World frame
-        center = p_tip + f_tip_mean * self.f_tip_scale
-        ellipsoid = get_ellipsoid(center, f_tip_cov, self.f_tip_scale, num_sigma=2.80)
-        self.f_tip_95_mesh.shallow_copy(ellipsoid)
-
-        if tip_force_gt is not None:
-            f_tip_gt = R_tip @ tip_force_gt
-            arrow = get_arrow(p_tip, self.f_tip_scale * f_tip_gt)
-            self.tip_force_gt_mesh.shallow_copy(arrow)
-    
-    def update_dist_load(self, solution):
-        for i, (pose, wrench) in enumerate(zip(solution.backbone_pose_mean, solution.applied_wrench_mean)):
-            R = pose[:3,:3]
-            p = pose[:3,3]
-        
-            f = R @ wrench[3:]  # World frame
-            mesh = get_arrow(p, self.dist_load_scale * f)
-            self.dist_load_meshes[i].shallow_copy(mesh)
+        self.solve_time_ms_history = []
             
-    def init_scene(self, solution, p_desired, tip_force_gt):
+    def init_scene(self, solution):
         plate = get_base_plate(solution)
         self.plate_actor = self.plotter.add_mesh(plate, color="coldgrey", show_edges=True, line_width=1)
 
-        if self.plot_dist_load:
-            self.init_dist_load(solution)
-        else:           
-            self.init_tip_force(solution, tip_force_gt)
-
-        self.ellipsoid_skip = 4
-        self.backbone_cov_meshes = get_backbone_ellipsoids(solution, skip=self.ellipsoid_skip)
-
-        for ellipsoid in self.backbone_cov_meshes:
-            self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.07, smooth_shading=True)
-
         if self.desired_trajectory is not None:
-            self.trajectory_radius = 0.001
-            self.trajectory_mesh = get_tube_points(self.desired_trajectory, self.trajectory_radius)
-            self.plotter.add_mesh(self.trajectory_mesh, color="crimson", opacity=0.2, smooth_shading=True)
+            mesh = get_tube_points(self.desired_trajectory, 0.001)
+            self.plotter.add_mesh(mesh, color="crimson", opacity=0.2, smooth_shading=True)
         
         if self.cylinders is not None:
             for cylinder in self.cylinders:
                 mesh = pv.Cylinder(cylinder['center'], cylinder['z'], cylinder['radius'], cylinder['length'])
                 self.plotter.add_mesh(mesh, color='orange', smooth_shading=True)
         
-        if p_desired is not None:
-            self.p_desired_radius = 0.002
-            self.p_desired_mesh = pv.Sphere(self.p_desired_radius, p_desired)
-            self.plotter.add_mesh(self.p_desired_mesh, color="limegreen", opacity=0.7, smooth_shading=True)
-
         light_positions = [
             (0, 5, 5),
             (0, -5, 5),
@@ -282,26 +235,22 @@ class TendonRobotPlotter:
         if not self.save_frames_mode:
             self.plotter.show(auto_close=False, interactive_update=True)
     
-    def update(self, solution, p_desired=None, p_detected=None, tip_force_gt=None):
-        if self.frame == 0:
-            self.init_scene(solution, p_desired, tip_force_gt)
-        else:
-            self.update_meshes(solution, p_desired, tip_force_gt, p_detected)
-        
-        self.plotter.render()
-
-        if self.save_frames_mode:
-            self.plotter.screenshot(self.frames_path / f"{self.frame}.png", window_size=self.window_size)
-        
-        self.frame = self.frame + 1
-
-    def update_meshes(self, solution, p_desired, tip_force_gt, p_detected):
+    def update(self, solution, p_desired=None, tip_force_gt=None):
 
         backbone_radius = solution.tendon_disc_config.routing_radius / 12.0
         backbone = get_tube_poses(solution.backbone_pose_mean, radius=backbone_radius)
         tendons, discs = get_tendon_disc_meshes(solution)
+        backbone_ellipsoids = get_backbone_ellipsoids(solution)
 
-        if self.backbone_mesh is None:
+        if not self.plot_dist_load:
+            tip_force_mean_mesh, tip_force_95_mesh, tip_force_gt_mesh = get_tip_force_meshes(solution, tip_force_gt)
+        else:
+            dist_load_meshes = get_dist_load_meshes(solution)
+
+        if p_desired is not None:
+            p_desired_mesh = pv.Sphere(0.002, p_desired)
+
+        if self.frame == 0:
             self.backbone_mesh = backbone
             self.plotter.add_mesh(self.backbone_mesh, color='mediumblue', opacity = 0.5, smooth_shading=True)
 
@@ -319,6 +268,30 @@ class TendonRobotPlotter:
                 disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
                 self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
 
+            self.backbone_95_meshes = backbone_ellipsoids
+            for ellipsoid in self.backbone_95_meshes:
+                self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.15, smooth_shading=True)
+
+            if not self.plot_dist_load:
+                self.tip_force_mean_mesh = tip_force_mean_mesh
+                self.plotter.add_mesh(self.tip_force_mean_mesh, color='rebeccapurple', opacity=0.7)
+
+                self.tip_force_95_mesh = tip_force_95_mesh
+                self.plotter.add_mesh(self.tip_force_95_mesh, color="gold", opacity=0.15, smooth_shading=True)
+
+                if tip_force_gt is not None:
+                    self.tip_force_gt_mesh = tip_force_gt_mesh
+                    self.plotter.add_mesh(self.tip_force_gt_mesh, color='forestgreen', opacity=0.7)
+            else:
+                self.dist_load_meshes = dist_load_meshes
+                for mesh in self.dist_load_meshes:
+                    self.plotter.add_mesh(mesh, color='rebeccapurple', opacity=0.5)
+
+            if p_desired is not None:
+                self.p_desired_mesh = p_desired_mesh
+                self.plotter.add_mesh(self.p_desired_mesh, color="limegreen", opacity=0.7, smooth_shading=True)
+
+            self.init_scene(solution)
         else:
             self.backbone_mesh.shallow_copy(backbone)
 
@@ -330,25 +303,29 @@ class TendonRobotPlotter:
                 for j, segment in enumerate(tendon):
                     self.tendon_meshes[i][j].shallow_copy(segment)
 
-        ellipsoids = get_backbone_ellipsoids(solution, skip=self.ellipsoid_skip)
-        for ellipsoid_plot, ellipsoid in zip(self.backbone_cov_meshes, ellipsoids):
-            ellipsoid_plot.shallow_copy(ellipsoid)
-        
-        if self.plot_dist_load:
-            self.update_dist_load(solution)
-        else:
-            self.update_tip_force(solution, tip_force_gt)
+            for mesh_self, mesh in zip(self.backbone_95_meshes, backbone_ellipsoids):
+                mesh_self.shallow_copy(mesh)
 
-        if p_desired is not None:
-            mesh = pv.Sphere(self.p_desired_radius, p_desired)
-            self.p_desired_mesh.shallow_copy(mesh)
-
-        if p_detected is not None:
-            if self.p_detected_mesh is None:
-                self.p_detected_mesh = pv.Sphere(0.01, p_detected)
-                self.plotter.add_mesh(self.p_detected_mesh)
+            if self.plot_dist_load:
+                for (mesh_self, mesh) in zip(self.dist_load_meshes, dist_load_meshes):
+                    mesh_self.shallow_copy(mesh)
             else:
-                mesh = pv.Sphere(0.01, p_detected)
-                self.p_detected_mesh.shallow_copy(mesh)
-        
+                self.tip_force_mean_mesh.shallow_copy(tip_force_mean_mesh)
+                self.tip_force_95_mesh.shallow_copy(tip_force_95_mesh)
+                if tip_force_gt is not None:
+                    self.tip_force_gt_mesh.shallow_copy(tip_force_gt_mesh)
+
+            if p_desired is not None:
+                self.p_desired_mesh.shallow_copy(p_desired_mesh)
+
+        self.solve_time_ms_history.append(solution.total_time_ms)
+        text = f"solve time: {solution.total_time_ms:.2f} ms, average: {np.mean(self.solve_time_ms_history):.2f} ms"
+        self.plotter.add_text(text, position='upper_right', font_size=14, font="courier", name="solve_time")
+
         self.plotter.camera.azimuth += self.d_azimuth
+        self.plotter.render()
+
+        if self.save_frames_mode:
+            self.plotter.screenshot(self.frames_path / f"{self.frame}.png", window_size=self.window_size)
+        
+        self.frame += 1

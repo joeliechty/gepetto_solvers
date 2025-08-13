@@ -6,7 +6,7 @@ import time
 from tendon_robot import DistLoadSolver, TipForceSolver
 
 from plotting import TendonRobotPlotter
-from config import get_simulation_config, get_base_config
+from config import get_sim_config, get_base_config
 from utils import moving_savgol, setup_plt
 
 
@@ -24,9 +24,14 @@ def get_single_contact_force(T, cylinder):
     nonzero_mask = radial_distances > 1e-12
     radial_dirs[nonzero_mask] = radial_vectors[nonzero_mask] / radial_distances[nonzero_mask, None]
 
-    k_contact = 7.0
-    sigma = 0.005
+    k_contact = 1.0
+    sigma = 0.25 * cylinder['radius']
     mag = np.exp(-np.abs(radial_distances) / sigma)
+
+    half_len = cylinder['length'] / 2
+    inside_mask = np.abs(axis_projections) <= half_len
+    mag[~inside_mask] = 0.0
+
     forces_world = k_contact * mag[:, None] * radial_dirs
 
     forces_local = np.empty_like(forces_world)
@@ -38,14 +43,14 @@ def get_single_contact_force(T, cylinder):
 
 
 def two_point_trajectory(t, total_time=10.0):
-    start_point = np.array([0.05, 0.07, 0.2])
-    end_point = np.array([0.12, -0.05, 0.15])
+    start_point = np.array([-0.05, 0.1, 0.2])
+    end_point = np.array([0.15, -0.1, 0.11])
     alpha = np.clip(t / total_time, 0.0, 1.0)  # 0 → 1 over total_time
     return (1 - alpha) * np.array(start_point) + alpha * np.array(end_point)
 
 
 def generate_trajectory(sim_time, frame_rate=30):
-    simulator = TipForceSolver(get_simulation_config())
+    simulator = TipForceSolver(get_sim_config())
 
     num_steps = sim_time * frame_rate
 
@@ -81,12 +86,13 @@ def generate_trajectory(sim_time, frame_rate=30):
 
 
 def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
-    simulator = DistLoadSolver(get_simulation_config())
+    simulator = DistLoadSolver(get_sim_config())
     config = get_base_config()
     solver_inference = DistLoadSolver(config)
 
     cylinders = [
-        {'radius': 0.03, 'center': np.array([0.1, 0.04, 0.13]), 'z': np.array([1.0, 1.0, 0.0]), 'length': 0.075}
+        {'radius': 0.02, 'center': np.array([0.09, 0.01, 0.12]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.12},
+        {'radius': 0.02, 'center': np.array([0.09, 0.01, 0.06]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.12}
     ]
 
     plotter = TendonRobotPlotter('dist_load_sim', save_frames_mode=save_frames_mode, cylinders=cylinders, plot_dist_load=True, d_azimuth=0.5)
@@ -102,7 +108,8 @@ def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
         tensions_gt = tensions + config.tension_meas_std * np.random.randn(*tensions.shape)
         solution_gt = simulator.step_simulation(tensions_gt, forces_gt)
 
-        forces_noisy = get_single_contact_force(np.array(solution_gt.backbone_pose_mean), cylinders[-1])
+        cylinder_forces = [get_single_contact_force(np.array(solution_gt.backbone_pose_mean), cylinder) for cylinder in cylinders]
+        forces_noisy = np.sum(cylinder_forces, axis=0)
         forces_gt = forces_filter.update(forces_noisy)
 
         fbg_signals_gt = np.array(solution_gt.fbg_array_samples[-1])
@@ -110,8 +117,6 @@ def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
         fbg_signals_filtered = fbg_signals_filter.update(fbg_signals_meas)
 
         solution = solver_inference.step(tensions, fbg_signals_filtered, 1)
-
-        
 
         plotter.update(solution)
     
@@ -150,7 +155,7 @@ def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
 
     axes[2].plot(s, p_greater, 'r-')
     axes[2].axhline(0.95, color='k', linestyle='--')
-    axes[2].set_ylabel(r"$P(|force| > threshold)$")
+    axes[2].set_ylabel("exceedance probability")
     axes[2].set_xlabel('arclength (m)')
 
     fig.align_ylabels()
@@ -160,7 +165,7 @@ def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
 
 
 if __name__ == "__main__":
-    sim_time = 13
+    sim_time = 10
     save_frames_mode = True
 
     tensions_cmd = generate_trajectory(sim_time)

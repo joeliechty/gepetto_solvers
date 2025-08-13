@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
-from config import get_simulation_config, get_base_config
+from config import get_sim_config, get_base_config
 from utils import TipForceFunction, moving_savgol, setup_plt
 
 
@@ -18,7 +18,7 @@ def trefoil_knot(t, f_hz=0.05):
 
     
 def simulation(sim_time, save_frames_mode, frame_rate=30):
-    simulator = TipForceSolver(get_simulation_config())
+    simulator = TipForceSolver(get_sim_config())
     config = get_base_config()
     solver_inference = TipForceSolver(config)
     solver_jacobian = TipForceSolver(config)
@@ -143,7 +143,7 @@ def simulation(sim_time, save_frames_mode, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 30
-    save_frames_mode = True
+    sim_time = 5
+    save_frames_mode = False
 
     simulation(sim_time, save_frames_mode)

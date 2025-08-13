@@ -13,6 +13,7 @@ def get_base_config():
     config.youngs_modulus = 40.0e9
     config.shear_modulus = 15.0e9 
     config.routing_radius = 0.01
+    config.use_midpoint = True
 
     config.cosserat_twist_r_std = 1e-2
     config.small_force_std = 1e-4
@@ -22,7 +23,7 @@ def get_base_config():
 
     config.tip_force_prior_std = 5e-2
     config.dist_load_prior_std = 5e-2
-    config.dist_load_smoothness_std = 0.002
+    config.dist_load_smoothness_std = 0.003
 
     config.tension_meas_std = 1e-2
     config.tip_position_meas_std = 0.577e-3  # This makes for a 1mm rms position error
@@ -45,7 +46,7 @@ def get_base_config():
     return config
 
 
-def get_simulation_config():
+def get_sim_config():
     config = get_base_config()
 
     config.youngs_modulus = 0.99999 * config.youngs_modulus

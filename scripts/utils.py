@@ -4,8 +4,6 @@ from collections import deque
 import numpy as np
 import matplotlib.pyplot as plt
 
-from config import get_simulation_config
-
 
 def tensions_function(t):
     max_tensions = np.array([7.0, 3.0, 3.0, 3.0])
@@ -162,17 +160,18 @@ class moving_savgol:
         return last_val.reshape(original_shape)
 
 
-def setup_plt(height=5.0, grid=False):
-    width = 3.5  # inches
+def setup_plt(height=5.0, grid=False, full_page=False):
+    width = 7.16 if full_page else 3.5
 
     os.makedirs("figures", exist_ok=True)
 
     plt.rcParams.update({
-        "figure.figsize": (width, height),  # IEEE single column
-        "font.size": 8,
-        "axes.labelsize": 8,
-        "axes.titlesize": 8,
-        "xtick.labelsize": 7,
+        "figure.figsize": (width, height),
+        "font.family": "STIXGeneral",
+        "font.size": 8,         
+        # "axes.labelsize": 7,         
+        # "axes.titlesize": 7,        
+        "xtick.labelsize": 7,        
         "ytick.labelsize": 7,
         "legend.fontsize": 7,
         "lines.linewidth": 1.0,
@@ -180,9 +179,10 @@ def setup_plt(height=5.0, grid=False):
         "axes.spines.right": False,
         "axes.grid": grid,
         "grid.alpha": 0.3,
-        "legend.fontsize": 7,
-        "pdf.fonttype": 42,
-        "ps.fonttype": 42
+        "pdf.fonttype": 42,  # embed fonts in PDF
+        "ps.fonttype": 42,
+        "mathtext.fontset": "stix",  # math text compatible with Times
+        "mathtext.rm": "stix"
     })
 
 
