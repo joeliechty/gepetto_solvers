@@ -6,8 +6,8 @@ import pyvista as pv
 
 
 def get_base_plate(solution):
-    side_length = 10 * solution.tendon_disc_config.routing_radius
-    thick = side_length / 10
+    side_length = 7 * solution.tendon_disc_config.routing_radius
+    thick = side_length / 15
     cube = pv.Cube(center=(0, 0, -thick / 2), x_length=side_length, y_length=side_length, z_length=thick)
     # rotated_points = (base_rotation @ cube.points.T).T
     # cube.points = rotated_points + base_location
@@ -240,7 +240,7 @@ class TendonRobotPlotter:
         self.backbone_cov_meshes = get_backbone_ellipsoids(solution, skip=self.ellipsoid_skip)
 
         for ellipsoid in self.backbone_cov_meshes:
-            self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.15, smooth_shading=True)
+            self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.07, smooth_shading=True)
 
         if self.desired_trajectory is not None:
             self.trajectory_radius = 0.001
@@ -250,7 +250,7 @@ class TendonRobotPlotter:
         if self.cylinders is not None:
             for cylinder in self.cylinders:
                 mesh = pv.Cylinder(cylinder['center'], cylinder['z'], cylinder['radius'], cylinder['length'])
-                self.plotter.add_mesh(mesh, color='orangered', opacity=0.5, smooth_shading=True)
+                self.plotter.add_mesh(mesh, color='orange', smooth_shading=True)
         
         if p_desired is not None:
             self.p_desired_radius = 0.002
@@ -275,8 +275,8 @@ class TendonRobotPlotter:
         self.plotter.camera.position = (0.6, 0, 0.5)
         self.plotter.camera.focal_point = (0, 0, 0.13)
 
-        self.plotter.add_axes()
-        self.plotter.enable_depth_peeling(10)
+        # self.plotter.add_axes()
+        # self.plotter.enable_depth_peeling(10)
         self.plotter.enable_anti_aliasing()
 
         if not self.save_frames_mode:

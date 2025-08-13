@@ -175,7 +175,7 @@ def setup_plt(height=5.0, grid=False):
         "xtick.labelsize": 7,
         "ytick.labelsize": 7,
         "legend.fontsize": 7,
-        "lines.linewidth": 1,
+        "lines.linewidth": 1.0,
         "axes.spines.top": False,
         "axes.spines.right": False,
         "axes.grid": grid,

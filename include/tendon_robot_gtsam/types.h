@@ -61,7 +61,8 @@ struct TendonRobotConfig{
     double youngs_modulus = 35.0e9;  // Nitinol
     double shear_modulus = 12.0e9;  // Nitinol
     double routing_radius = 0.01;
-
+    bool use_midpoint = true;
+    
     // General noise parameters
     double cosserat_twist_r_std = 1e-1;
     double small_force_std = 1e-5;

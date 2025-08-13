@@ -42,6 +42,7 @@ Vector6 propagate_wrench_backward(
 class CosseratRodTwistFactor: public NoiseModelFactorN<Pose3, Pose3, Vector6, Vector6> {
     double ds_;  // segment length
     gtsam::Matrix66 K_inv_;  // Assuming constant stiffness inverse per factor
+    bool use_midpoint_;
 
 public:
 
@@ -53,10 +54,12 @@ public:
                            Key stress_1_key,
                            double ds,
                            const Matrix66& K_inv,
+                           bool use_midpoint, 
                            const SharedNoiseModel& model): 
         NoiseModelFactorN(model, pose_0_key, pose_1_key, stress_0_key, stress_1_key),
         ds_(ds),
-        K_inv_(K_inv) {}
+        K_inv_(K_inv),
+        use_midpoint_(use_midpoint) {}
 
     Vector evaluateError(
         const Pose3& pose_0, 
@@ -78,9 +81,11 @@ public:
             H1 || H2 ? &d_twist_d_delta : 0);
         
         Vector6 stress_mid = 0.5 * (stress_0 + stress_1);
+        Vector6 stress = use_midpoint_ ? stress_mid : stress_0;
+
         Vector6 nominal_strain = Vector6::Zero();
         nominal_strain[5] = 1.0;  // Straight rod: linear velocity in z direction only
-        Vector6 twist_p = ds_ * (K_inv_ * stress_mid + nominal_strain);
+        Vector6 twist_p = ds_ * (K_inv_ * stress + nominal_strain);
         
         Vector6 twist_error = twist_p - twist;
 
@@ -113,8 +118,11 @@ public:
         }
 
         if (H3) {
-            double d_stress_mid_d_stress_0 = 0.5;
-            *H3 = ds_ * K_inv_ * d_stress_mid_d_stress_0;
+            *H3 = ds_ * K_inv_;
+
+            if (use_midpoint_) {
+                *H3 *= 0.5;
+            }
 
             // Eigen::Matrix<double, 6, 6> H3_check = numericalDerivative11<Vector6, Vector6>(
             //     [&](const Vector6& stress_0_) {
@@ -128,9 +136,12 @@ public:
         }
         
         if (H4) {
-            double d_stress_mid_d_stress_1 = 0.5;
-            *H4 = ds_ * K_inv_ * d_stress_mid_d_stress_1;
-
+            if (use_midpoint_) {
+                *H4 = Matrix6::Zero();
+            } else {
+                *H4 = 0.5 * ds_ * K_inv_;
+            }
+            
             // Eigen::Matrix<double, 6, 6> H4_check = numericalDerivative11<Vector6, Vector6>(
             //     [&](const Vector6& stress_1_) {
             //         return this->evaluateError(pose_0, pose_1, stress_0, stress_1_,

@@ -7,22 +7,23 @@ from config import get_base_config
 from utils import TipForceFunction, tensions_function, setup_plt
 
     
-def simulation(sim_time, do_plot, save_frames_mode, poses_between_discs, frame_rate=10):
+def simulate_trajectory(sim_time, do_plot, save_frames_mode, poses_between_discs, use_midpoint, frame_rate=3):
     config = get_base_config()
     config.poses_between_discs = poses_between_discs
+    config.use_midpoint = use_midpoint
 
     simulator = TipForceSolver(config)
 
     num_steps = sim_time * frame_rate
 
     if do_plot:
-        plotter = TendonRobotPlotter('Forward Kinematics', save_frames_mode=save_frames_mode)
+        plotter = TendonRobotPlotter('kinematics_sim', save_frames_mode=save_frames_mode, d_azimuth=2.0)
     
     tip_position = []
     tensions_all = []
     t_all = []
 
-    tip_force_function = TipForceFunction(max_magnitude=0.2, seed=42)
+    tip_force_function = TipForceFunction(max_magnitude=0.1, force_rate_hz=0.1, seed=42)
 
     for i in range(num_steps):
         t = float(i) / float(frame_rate)
@@ -45,19 +46,15 @@ def simulation(sim_time, do_plot, save_frames_mode, poses_between_discs, frame_r
     return np.array(tip_position)
 
 
-import numpy as np
-import matplotlib.pyplot as plt
-
-if __name__ == "__main__":
-    sim_time = 5
-    poses_between_discs = np.arange(5)
+def run_simulation(sim_time, poses_between_discs, trajectory_accurate, use_midpoint):
 
     trajectories = [
-        simulation(
+        simulate_trajectory(
             sim_time,
             do_plot=(i == 3),
             save_frames_mode=(i == 3),
-            poses_between_discs=poses_between_i
+            poses_between_discs=poses_between_i,
+            use_midpoint=use_midpoint
         )
         for i, poses_between_i in enumerate(poses_between_discs)
     ]
@@ -67,21 +64,34 @@ if __name__ == "__main__":
         return np.sqrt(np.mean(np.sum(diff**2, axis=1)))
 
     rms_diffs = []
-    for traj_low, traj_high in zip(trajectories, trajectories[1:]):
-        rms_diff = rms_error(traj_low, traj_high)
+    for trajectory in trajectories:
+        rms_diff = rms_error(trajectory, trajectory_accurate)
         rms_diffs.append(rms_diff)
 
-    # num_poses = config.num_discs + (config.num_discs - 1) * poses_between_discs
     config = get_base_config()
     error_percent = 100 * np.array(rms_diffs) / config.rod_length
 
-    setup_plt(height=6)
+    return error_percent
+
+
+if __name__ == "__main__":
+    sim_time = 120
+    poses_between_discs = np.arange(11)
+    big_num_poses = 50
+
+    trajectory_accurate = simulate_trajectory(sim_time, False, False, big_num_poses, use_midpoint=True)
+    error_percents_euler = run_simulation(sim_time, poses_between_discs, trajectory_accurate, use_midpoint=False)
+    error_percents_midpoint = run_simulation(sim_time, poses_between_discs, trajectory_accurate, use_midpoint=True)
+    
+    setup_plt(height=3, grid=True)
 
     plt.figure()
-    plt.plot(poses_between_discs[1:], error_percent, 'o-')
+    plt.plot(poses_between_discs, error_percents_euler, 'o-', label="Euler")
+    plt.plot(poses_between_discs, error_percents_midpoint, 'o-', label="Midpoint")
     plt.xlabel('Poses Between Each Disc')
-    plt.ylabel('Change in RMS Tip Position (% robot length)')
-    plt.grid(True)
+    plt.ylabel('RMS Tip Position Error (% robot length)')
+    plt.semilogy()
     plt.tight_layout()
-    
-    plt.savefig("figures/kinematics_convergence.pdf", bbox_inches="tight")
+    plt.legend()
+
+    plt.savefig("figures/kinematics_sim.pdf", bbox_inches="tight")

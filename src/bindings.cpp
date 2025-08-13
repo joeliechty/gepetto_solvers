@@ -53,7 +53,8 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("youngs_modulus", &TendonRobotConfig::youngs_modulus)
         .def_readwrite("shear_modulus", &TendonRobotConfig::shear_modulus)
         .def_readwrite("routing_radius", &TendonRobotConfig::routing_radius)
-
+        .def_readwrite("use_midpoint", &TendonRobotConfig::use_midpoint)
+        
         .def_readwrite("cosserat_twist_r_std", &TendonRobotConfig::cosserat_twist_r_std)
         .def_readwrite("small_force_std", &TendonRobotConfig::small_force_std)
         .def_readwrite("small_moment_std", &TendonRobotConfig::small_moment_std)

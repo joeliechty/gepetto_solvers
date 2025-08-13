@@ -7,7 +7,7 @@ from tendon_robot import DistLoadSolver, TipForceSolver
 
 from plotting import TendonRobotPlotter
 from config import get_simulation_config, get_base_config
-from utils import moving_savgol
+from utils import moving_savgol, setup_plt
 
 
 def get_single_contact_force(T, cylinder):
@@ -24,8 +24,8 @@ def get_single_contact_force(T, cylinder):
     nonzero_mask = radial_distances > 1e-12
     radial_dirs[nonzero_mask] = radial_vectors[nonzero_mask] / radial_distances[nonzero_mask, None]
 
-    k_contact = 10.0
-    sigma = 0.004
+    k_contact = 7.0
+    sigma = 0.005
     mag = np.exp(-np.abs(radial_distances) / sigma)
     forces_world = k_contact * mag[:, None] * radial_dirs
 
@@ -89,7 +89,7 @@ def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
         {'radius': 0.03, 'center': np.array([0.1, 0.04, 0.13]), 'z': np.array([1.0, 1.0, 0.0]), 'length': 0.075}
     ]
 
-    plotter = TendonRobotPlotter('Distributed Load Simulation', save_frames_mode=save_frames_mode, cylinders=cylinders, plot_dist_load=True, d_azimuth=0.5)
+    plotter = TendonRobotPlotter('dist_load_sim', save_frames_mode=save_frames_mode, cylinders=cylinders, plot_dist_load=True, d_azimuth=0.5)
 
     num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs
     forces_gt = np.zeros((num_poses - 1, 3))
@@ -111,53 +111,57 @@ def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
 
         solution = solver_inference.step(tensions, fbg_signals_filtered, 1)
 
-        force_mean = np.array(solution.applied_wrench_mean)[:,3:]
-        force_cov = np.array(solution.applied_wrench_cov)[:,3:,3:]
+        
 
-        confidence = 0.95
-        threshold = chi2.ppf(confidence, df=3)
-
-        max_mahol = -np.inf
-        max_mahol_idx = None
-
-        for i, (mu, Sigma) in enumerate(zip(force_mean, force_cov)):
-            mahol = mu.T @ np.linalg.inv(Sigma) @ mu
-            if mahol > max_mahol:
-                max_mahol = mahol
-                max_mahol_idx = i
-
-        if max_mahol > threshold:
-            detected_location = solution.backbone_pose_mean[max_mahol_idx][:3,3]
-
-            s = np.linspace(0, config.rod_length, len(forces_gt))
-            force_two_std = 2 * np.sqrt(np.diagonal(force_cov, axis1=1, axis2=2))
-
-            plt.figure()
-
-            plt.subplot(1,2,1)
-            plt.plot(s, forces_gt[:,0], 'g-')
-            plt.plot(s, force_mean[:,0], 'b-')
-            plt.fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.25, interpolate=True)
-
-            plt.subplot(1,2,2)
-            plt.plot(s, forces_gt[:,1], 'g-')
-            plt.plot(s, force_mean[:,1], 'b-')
-            plt.fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.25, interpolate=True)
-
-            plt.show()
-
-        else:
-            detected_location = None
-
-        plotter.update(solution_gt, p_detected=detected_location)
+        plotter.update(solution)
     
     plotter.plotter.close()
 
+    force_mean = np.array(solution.applied_wrench_mean)[:,3:]
+    force_cov = np.array(solution.applied_wrench_cov)[:,3:,3:]
+
+    p_greater = np.zeros(force_mean.shape[0])
+    force_thresh = 0.005
+    num_samples = 10000
+
+    for i, (mu, Sigma) in enumerate(zip(force_mean, force_cov)):
+        L = np.linalg.cholesky(Sigma)
+        Z = np.random.standard_normal((num_samples, 3))    # ~ N(0,I)
+        F = mu + Z @ L.T                          # samples from N(mu,Sigma)
+        norms = np.linalg.norm(F, axis=1)
+        p_greater[i] = np.mean(norms > force_thresh)
+
+    s = np.linspace(0, config.rod_length, len(forces_gt))
+    force_two_std = 2 * np.sqrt(np.diagonal(force_cov, axis1=1, axis2=2))
+
+    setup_plt(height=5, grid=True)
+
+    fig, axes = plt.subplots(3, 1, sharex=True)
+
+    axes[0].plot(s, forces_gt[:,0], 'k--')
+    axes[0].plot(s, force_mean[:,0])
+    axes[0].fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.2, color='blue', interpolate=True)
+    axes[0].set_ylabel('force-$x$ (N)')
+
+    axes[1].plot(s, forces_gt[:,1], 'k--')
+    axes[1].plot(s, force_mean[:,1])
+    axes[1].fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.2, color='blue', interpolate=True)
+    axes[1].set_ylabel('force-$y$ (N)')
+
+    axes[2].plot(s, p_greater, 'r-')
+    axes[2].axhline(0.95, color='k', linestyle='--')
+    axes[2].set_ylabel(r"$P(|force| > threshold)$")
+    axes[2].set_xlabel('arclength (m)')
+
+    fig.align_ylabels()
+    plt.tight_layout()
+    
+    plt.savefig("figures/dist_load_sim.pdf", bbox_inches="tight")
 
 
 if __name__ == "__main__":
-    sim_time = 10
-    save_frames_mode = False
+    sim_time = 13
+    save_frames_mode = True
 
     tensions_cmd = generate_trajectory(sim_time)
-    tensions_gt, fbg_signals_gt, dist_load_gt = simulation(tensions_cmd, save_frames_mode)
+    simulation(tensions_cmd, save_frames_mode)

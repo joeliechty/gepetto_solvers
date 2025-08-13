@@ -132,6 +132,7 @@ public:
         num_backbone_poses_ = config.num_discs + (config.num_discs - 1) * config.poses_between_discs;
         ds_ = config.rod_length / (num_backbone_poses_ - 1);
         rod_diameter_ = config.rod_diameter;
+        use_midpoint_ = config.use_midpoint;
 
         // Build stiffness matrix
         double cross_section_area = M_PI * std::pow(config.rod_diameter, 2) / 4.0;
@@ -173,6 +174,7 @@ public:
     }
 
     int num_backbone_poses_;
+    bool use_midpoint_;
     double ds_;
     double rod_diameter_;
     Matrix66 K_inv_;
@@ -246,7 +248,7 @@ public:
         // Cosserat twist factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
             graph_.add(CosseratRodTwistFactor(
-                T(i), T(i + 1), S(i), S(i + 1), ds_, K_inv_, cosserat_twist_cov_));
+                T(i), T(i + 1), S(i), S(i + 1), ds_, K_inv_, use_midpoint_, cosserat_twist_cov_));
         }
 
         // Cosserat stress factors
@@ -488,7 +490,8 @@ public:
         build_graph_base(tensions_meas);
 
         // Magnitude prior factors for distributed load
-        for (int i = 1; i < num_backbone_poses_; i++) {
+        graph_.add(PriorFactor<Vector6>(F(1), Vector6::Zero(), small_wrench_cov_));
+        for (int i = 2; i < num_backbone_poses_; i++) {
             graph_.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), dist_load_prior_cov_));
         }
 

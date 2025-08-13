@@ -15,18 +15,18 @@ def get_base_config():
     config.routing_radius = 0.01
 
     config.cosserat_twist_r_std = 1e-2
-    config.small_force_std = 1e-5
+    config.small_force_std = 1e-4
     config.small_moment_std = 1e-5
     config.small_r_std = 1e-3
     config.small_p_std = 1e-5
 
     config.tip_force_prior_std = 5e-2
-    config.dist_load_prior_std = 1e-1
-    config.dist_load_smoothness_std = 0.004  # From sim_functions script
+    config.dist_load_prior_std = 5e-2
+    config.dist_load_smoothness_std = 0.002
 
     config.tension_meas_std = 1e-2
     config.tip_position_meas_std = 0.577e-3  # This makes for a 1mm rms position error
-    config.fbg_strain_meas_std = 1e-6
+    config.fbg_strain_meas_std = 3e-6
 
     config.angle_functions = [
         RoutingAngleFunction.LINEAR,
