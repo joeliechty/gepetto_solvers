@@ -7,7 +7,7 @@ from tendon_robot import DistLoadSolver, TipForceSolver
 
 from plotting import TendonRobotPlotter
 from config import get_sim_config, get_base_config
-from utils import moving_savgol, setup_plt
+from utils import moving_savgol, setup_plt, generate_trajectory
 
 
 def get_single_contact_force(T, cylinder):
@@ -49,42 +49,6 @@ def two_point_trajectory(t, total_time=10.0):
     return (1 - alpha) * np.array(start_point) + alpha * np.array(end_point)
 
 
-def generate_trajectory(sim_time, frame_rate=30):
-    simulator = TipForceSolver(get_sim_config())
-
-    num_steps = sim_time * frame_rate
-
-    damping = 5e-2
-    tensions_min = np.array([0.1, 0.1, 0.1, 0.1])
-
-    tensions = tensions_min
-    tensions_all = []
-
-    for i in range(num_steps):
-        t = float(i) / float(frame_rate)
-
-        solution = simulator.simulation_step(tensions, np.zeros(3))
-
-        J_position = solution.J_pose_tensions[3:]
-        p = solution.backbone_pose_mean[-1][:3,3]
-        R = solution.backbone_pose_mean[-1][:3,:3]
-        
-        p_desired = two_point_trajectory(t, sim_time)
-        p_error = R.T @ (p_desired - p)
-
-        JTJ = J_position.T @ J_position
-        A = JTJ + (damping**2) * np.eye(JTJ.shape[0])
-        b = J_position.T @ p_error
-        d_tensions = np.linalg.solve(A, b)
-
-        tensions = tensions + d_tensions
-        tensions = np.maximum(tensions, tensions_min)
-
-        tensions_all.append(tensions)
-
-    return tensions_all
-
-
 def simulation(tensions_cmd, save_frames_mode):
     simulator = DistLoadSolver(get_sim_config())
     config = get_base_config()
@@ -102,7 +66,6 @@ def simulation(tensions_cmd, save_frames_mode):
 
     forces_filter = moving_savgol(window_size=30, poly_order=0)
     fbg_signals_filter = moving_savgol()
-
 
     for tensions in tensions_cmd:
         tensions_gt = tensions + config.tension_meas_std * np.random.randn(*tensions.shape)
@@ -168,5 +131,8 @@ if __name__ == "__main__":
     sim_time = 10
     save_frames_mode = True
 
-    tensions_cmd = generate_trajectory(sim_time)
+    def trajectory(t):
+        return two_point_trajectory(t, sim_time)
+
+    t, tensions_cmd = generate_trajectory(trajectory, sim_time)
     simulation(tensions_cmd, save_frames_mode)

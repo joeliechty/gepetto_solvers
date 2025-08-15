@@ -146,7 +146,7 @@ def solve_kinematics_bvp(tensions, tip_force, config, holes, x0_guess=None):
     def get_res(x):
         return compute_residual(x, s_discs, K_se_inv, K_bt_inv, tensions, tip_force, holes)
 
-    sol = root(get_res, x0, tol=1e-8, method='hybr')
+    sol = root(get_res, x0, tol=1e-6, method='hybr')
 
     if not sol.success:
         raise RuntimeError(f"Root finding failed: {sol.message}")

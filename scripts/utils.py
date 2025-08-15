@@ -4,6 +4,9 @@ from collections import deque
 import numpy as np
 import matplotlib.pyplot as plt
 
+from tendon_robot import TipForceSolver
+from config import get_sim_config
+
 
 def tensions_function(t):
     max_tensions = np.array([6.0, 2.0, 2.0, 2.0])
@@ -184,6 +187,38 @@ def setup_plt(width=3.5, height=5.0, grid=False):
         "mathtext.rm": "stix"
     })
 
+
+def generate_trajectory(position_trajecotry, sim_time, frame_rate=30):
+    simulator = TipForceSolver(get_sim_config())
+
+    num_steps = sim_time * frame_rate
+    damping = 5e-2
+    tensions_min = np.array([0.1, 0.1, 0.1, 0.1])
+    tensions = tensions_min
+    tensions_trajectory = []
+    t = []
+
+    for i in range(num_steps):
+        t_i = i / frame_rate
+
+        solution = simulator.simulation_step(tensions, np.zeros(3))
+        J_position = solution.J_pose_tensions[3:]
+        p = solution.backbone_pose_mean[-1][:3, 3]
+        R = solution.backbone_pose_mean[-1][:3, :3]
+
+        p_desired = position_trajecotry(t_i)
+        p_error = R.T @ (p_desired - p)
+
+        JTJ = J_position.T @ J_position
+        A = JTJ + (damping**2) * np.eye(JTJ.shape[0])
+        b = J_position.T @ p_error
+        d_tensions = np.linalg.solve(A, b)
+
+        tensions = np.maximum(tensions + d_tensions, tensions_min)
+        tensions_trajectory.append(tensions)
+        t.append(t_i)
+
+    return np.array(t), np.array(tensions_trajectory)
 
 if __name__ == "__main__":
     config = get_simulation_config()
