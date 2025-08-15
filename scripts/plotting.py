@@ -40,8 +40,8 @@ def get_tendon_disc_meshes(solution):
     disc_pose_idx = solution.tendon_disc_config.disc_pose_idx
 
     disc_radius = 1.1 * routing_radius
-    disc_width = 0.1 * routing_radius
-    tendon_radius = 0.04 * routing_radius
+    disc_width = 0.12 * routing_radius
+    tendon_radius = 0.05 * routing_radius
 
     discs = []
 
@@ -208,7 +208,7 @@ class TendonRobotPlotter:
         if self.cylinders is not None:
             for cylinder in self.cylinders:
                 mesh = pv.Cylinder(cylinder['center'], cylinder['z'], cylinder['radius'], cylinder['length'])
-                self.plotter.add_mesh(mesh, color='orange', smooth_shading=True)
+                self.plotter.add_mesh(mesh, color='coral', smooth_shading=True)
         
         light_positions = [
             (0, 5, 5),
@@ -225,7 +225,7 @@ class TendonRobotPlotter:
             )
             self.plotter.add_light(light)
 
-        self.plotter.camera.position = (0.6, 0, 0.5)
+        self.plotter.camera.position = (0.6, 0, 0.4)
         self.plotter.camera.focal_point = (0, 0, 0.13)
 
         # self.plotter.add_axes()

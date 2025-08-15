@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 def tensions_function(t):
-    max_tensions = np.array([7.0, 3.0, 3.0, 3.0])
+    max_tensions = np.array([6.0, 2.0, 2.0, 2.0])
     rate_hz = 0.1
 
     tensions_rate_hz = np.array([1.0 * rate_hz, 1.1 * rate_hz, 1.2 * rate_hz, 1.3 * rate_hz])
@@ -160,8 +160,7 @@ class moving_savgol:
         return last_val.reshape(original_shape)
 
 
-def setup_plt(height=5.0, grid=False, full_page=False):
-    width = 7.16 if full_page else 3.5
+def setup_plt(width=3.5, height=5.0, grid=False):
 
     os.makedirs("figures", exist_ok=True)
 

@@ -7,16 +7,21 @@ from config import get_sim_config, get_base_config
 from utils import TipForceFunction, moving_savgol, setup_plt
 
 
-def trefoil_knot(t, f_hz=0.05):
-    R = 0.03
+def figure_eight(t, f_hz=0.05):
+    r_x = 0.1
+    r_y = 0.12
+    r_z = 0.015
+
     omega = 2 * np.pi * f_hz
     tau = omega * t
-    x = R * (np.sin(tau) + 2 * np.sin(2 * tau))
-    y = R * (np.cos(tau) - 2 * np.cos(2 * tau))
-    z = -R * np.sin(3 * tau) / 2
-    return np.array([x, y, z + 0.15])
 
-    
+    x = r_x * np.sin(tau)
+    y = r_y * np.sin(tau) * np.cos(tau)
+    z = r_z * np.cos(2 * tau) + 0.13
+
+    return np.array([x, y, z])
+
+
 def simulation(sim_time, save_frames_mode, frame_rate=30):
     simulator = TipForceSolver(get_sim_config())
     config = get_base_config()
@@ -32,7 +37,7 @@ def simulation(sim_time, save_frames_mode, frame_rate=30):
 
     tensions_cmd = tensions_min
     t_trajectory = np.linspace(0, 1 / trajectory_rate_hz, 300)
-    desired_trajectory = [trefoil_knot(t, trajectory_rate_hz) for t in t_trajectory]
+    desired_trajectory = [figure_eight(t, trajectory_rate_hz) for t in t_trajectory]
     plotter = TendonRobotPlotter('tip_force_sim', desired_trajectory=desired_trajectory, save_frames_mode=save_frames_mode)
     
     p_meas_filter = moving_savgol()
@@ -70,7 +75,7 @@ def simulation(sim_time, save_frames_mode, frame_rate=30):
         p = solution_inference.backbone_pose_mean[-1][:3,3]
         R = solution_inference.backbone_pose_mean[-1][:3,:3]
         
-        p_desired = trefoil_knot(t, trajectory_rate_hz)
+        p_desired = figure_eight(t, trajectory_rate_hz)
         p_error = R.T @ (p_desired - p)
 
         JTJ = J_position.T @ J_position
@@ -143,7 +148,7 @@ def simulation(sim_time, save_frames_mode, frame_rate=30):
 
 
 if __name__ == "__main__":
-    sim_time = 5
-    save_frames_mode = False
+    sim_time = 30
+    save_frames_mode = True
 
     simulation(sim_time, save_frames_mode)

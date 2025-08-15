@@ -24,8 +24,8 @@ def get_single_contact_force(T, cylinder):
     nonzero_mask = radial_distances > 1e-12
     radial_dirs[nonzero_mask] = radial_vectors[nonzero_mask] / radial_distances[nonzero_mask, None]
 
-    k_contact = 1.0
-    sigma = 0.25 * cylinder['radius']
+    k_contact = 5.0
+    sigma = 0.2 * cylinder['radius']
     mag = np.exp(-np.abs(radial_distances) / sigma)
 
     half_len = cylinder['length'] / 2
@@ -44,7 +44,7 @@ def get_single_contact_force(T, cylinder):
 
 def two_point_trajectory(t, total_time=10.0):
     start_point = np.array([-0.05, 0.1, 0.2])
-    end_point = np.array([0.15, -0.1, 0.11])
+    end_point = np.array([0.15, -0.1, 0.13])
     alpha = np.clip(t / total_time, 0.0, 1.0)  # 0 → 1 over total_time
     return (1 - alpha) * np.array(start_point) + alpha * np.array(end_point)
 
@@ -85,14 +85,14 @@ def generate_trajectory(sim_time, frame_rate=30):
     return tensions_all
 
 
-def simulation(tensions_cmd, save_frames_mode, frame_rate=60):
+def simulation(tensions_cmd, save_frames_mode):
     simulator = DistLoadSolver(get_sim_config())
     config = get_base_config()
     solver_inference = DistLoadSolver(config)
 
     cylinders = [
-        {'radius': 0.02, 'center': np.array([0.09, 0.01, 0.12]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.12},
-        {'radius': 0.02, 'center': np.array([0.09, 0.01, 0.06]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.12}
+        {'radius': 0.02, 'center': np.array([0.075, 0.01, 0.12]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.12},
+        {'radius': 0.015, 'center': np.array([0.075, 0.01, 0.07]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.12}
     ]
 
     plotter = TendonRobotPlotter('dist_load_sim', save_frames_mode=save_frames_mode, cylinders=cylinders, plot_dist_load=True, d_azimuth=0.5)

@@ -5,9 +5,17 @@ from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
 from config import get_base_config
 from utils import TipForceFunction, tensions_function, setup_plt
-
+from benchmark import solve_kinematics_bvp
     
-def simulate_trajectory(sim_time, do_plot, save_frames_mode, poses_between_discs, use_midpoint, frame_rate=30):
+
+def get_single_trajetory(sim_time, poses_or_benchmark, do_plot=False, use_midpoint=True, frame_rate=30):
+    if poses_or_benchmark == "benchmark":
+        do_benchmark = True
+        poses_between_discs = 0
+    else:
+        do_benchmark = False
+        poses_between_discs = poses_or_benchmark
+    
     config = get_base_config()
     config.poses_between_discs = poses_between_discs
     config.use_midpoint = use_midpoint
@@ -17,20 +25,30 @@ def simulate_trajectory(sim_time, do_plot, save_frames_mode, poses_between_discs
     num_steps = sim_time * frame_rate
 
     if do_plot:
-        plotter = TendonRobotPlotter('kinematics_sim', save_frames_mode=save_frames_mode, d_azimuth=2.0)
+        plotter = TendonRobotPlotter('kinematics_sim', save_frames_mode=True, d_azimuth=1.0)
     
     tip_positions = []
     solve_times = []
 
     tip_force_function = TipForceFunction(max_magnitude=0.1, force_rate_hz=0.1, seed=42)
 
+    x_guess = None
+
     for i in range(num_steps):
+        percent_complete = (i + 1) / num_steps * 100
+        print(f"\r\nProgress: {percent_complete:.1f} %\n\n", end="")
+
         t = float(i) / float(frame_rate)
 
         tip_force = tip_force_function(t)
         tensions = tensions_function(t)
 
         solution = simulator.simulation_step(tensions, tip_force)
+
+        if do_benchmark:
+            p, x_guess = solve_kinematics_bvp(tensions, tip_force, config, solution.tendon_disc_config.local_holes, x_guess)
+            tip_positions.append(p[-1])
+            continue
 
         tip_positions.append(solution.backbone_pose_mean[-1][:3,3])
         solve_times.append(solution.total_time_ms)
@@ -50,13 +68,8 @@ def run_simulation(sim_time, poses_between_discs, trajectory_accurate, use_midpo
     mean_solve_times = []
     
     for poses_between_i in poses_between_discs:
-        trajectory, mean_solve_time = simulate_trajectory(
-            sim_time,
-            do_plot=(poses_between_i == 5),
-            save_frames_mode=(poses_between_i == 5),
-            poses_between_discs=poses_between_i,
-            use_midpoint=use_midpoint
-        )
+        trajectory, mean_solve_time = get_single_trajetory(
+            sim_time, poses_between_i, do_plot=(poses_between_i == 5), use_midpoint=use_midpoint)
 
         trajectories.append(trajectory)
         mean_solve_times.append(mean_solve_time)
@@ -83,19 +96,18 @@ def run_simulation(sim_time, poses_between_discs, trajectory_accurate, use_midpo
 if __name__ == "__main__":
     sim_time = 60
     poses_between_discs = np.arange(11)
-    big_num_poses = 25
 
-    trajectory_accurate = simulate_trajectory(sim_time, False, False, big_num_poses, use_midpoint=True)[0]
+    trajectory_accurate = get_single_trajetory(sim_time, "benchmark")[0]
     error_percents_euler, mean_solve_times_euler = run_simulation(sim_time, poses_between_discs, trajectory_accurate, use_midpoint=False)
     error_percents_midpoint, mean_solve_times_midpoint = run_simulation(sim_time, poses_between_discs, trajectory_accurate, use_midpoint=True)
     
-    setup_plt(height=6.0, grid=True)
+    setup_plt(height=4, grid=True)
 
     fig, axes = plt.subplots(2, 1, sharex=True)
 
     axes[0].plot(poses_between_discs, error_percents_euler, 'o-', label="Euler")
     axes[0].plot(poses_between_discs, error_percents_midpoint, 'o-', label="Midpoint")
-    axes[0].set_ylabel('RMS Tip Position Error (% robot length)')
+    axes[0].set_ylabel('RMS Position Error (% length)')
     axes[0].semilogy()
     axes[0].legend()
 
