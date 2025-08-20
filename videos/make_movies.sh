@@ -12,4 +12,12 @@ make_vid () {
 
 make_vid frames/kinematics_sim kinematics_sim
 make_vid frames/tip_force_sim tip_force_sim
+make_vid frames/tip_force_nominal tip_force_nominal
 make_vid frames/dist_load_sim dist_load_sim
+
+# Make side by side movie comparing tip force
+ffmpeg -i tip_force_nominal.mp4 -i tip_force_sim.mp4 \
+  -filter_complex "[0:v][1:v]hstack=inputs=2" \
+  -c:v libx264 -preset veryslow -crf 16 \
+  -pix_fmt yuv420p -movflags +faststart \
+  tip_force_comparison.mp4

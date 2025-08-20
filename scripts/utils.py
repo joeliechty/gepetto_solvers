@@ -20,36 +20,10 @@ def tensions_function(t):
 
 def pulse_function(t, rate_hz):
     return (0.5 * (1.0 - np.cos(2 * np.pi * rate_hz * t))) ** 3
-
-
-class TipForceFunction:
-    def __init__(self, max_magnitude=0.1, force_rate_hz=0.3, framerate=30):
-        self.max_magnitude = max_magnitude
-        self.force_rate_hz = force_rate_hz
-        self.steps_per_cycle = framerate / force_rate_hz
-
-        self.magnitude = 0
-        self.direction = np.ones(3)
-
-        self.step = 0
-
-    def sample_parameters(self):
-        d = np.random.randn(3)
-        self.direction = d / np.linalg.norm(d)
-
-    def __call__(self, t):
-        if self.step % self.steps_per_cycle == 0:
-            self.sample_parameters()
-        
-        pulse_scale = pulse_function(t, self.force_rate_hz)
-
-        self.step = self.step + 1
-
-        return pulse_scale * self.max_magnitude * self.direction 
     
 
 class TipForceFunction:
-    def __init__(self, max_magnitude=0.1, force_rate_hz=0.3, framerate=30, seed=None):
+    def __init__(self, max_magnitude=0.2, force_rate_hz=0.2, framerate=30, seed=None):
         self.max_magnitude = max_magnitude
         self.force_rate_hz = force_rate_hz
         self.steps_per_cycle = int(framerate / force_rate_hz)
@@ -147,19 +121,16 @@ class moving_savgol:
         new_array = np.asarray(new_value)
         self.buffer.append(new_array)
 
-        if len(self.buffer) < self.window_size:
-            return new_array
+        if len(self.buffer) < self.poly_order + 1:
+            return new_array  # not enough points for a fit
 
         data = np.stack(self.buffer, axis=0)
-        t = np.arange(self.window_size)
-
         original_shape = data.shape[1:]
-        data_flat = data.reshape(self.window_size, -1)
+        t = np.arange(len(self.buffer))
+        data_flat = data.reshape(len(self.buffer), -1)
 
-        coeffs = np.polyfit(t, data_flat, self.poly_order)
+        coeffs = np.polyfit(t, data_flat, min(self.poly_order, len(self.buffer) - 1))
         last_val = np.polyval(coeffs, t[-1])
-
-        # Reshape back to original shape
         return last_val.reshape(original_shape)
 
 
@@ -188,13 +159,15 @@ def setup_plt(width=3.5, height=5.0, grid=False):
     })
 
 
-def generate_trajectory(position_trajecotry, sim_time, frame_rate=30):
+def generate_trajectory(position_function, sim_time, frame_rate=30):
     simulator = TipForceSolver(get_sim_config())
 
     num_steps = sim_time * frame_rate
     damping = 5e-2
     tensions_min = np.array([0.1, 0.1, 0.1, 0.1])
     tensions = tensions_min
+
+    position_trajectory = []
     tensions_trajectory = []
     t = []
 
@@ -206,7 +179,7 @@ def generate_trajectory(position_trajecotry, sim_time, frame_rate=30):
         p = solution.backbone_pose_mean[-1][:3, 3]
         R = solution.backbone_pose_mean[-1][:3, :3]
 
-        p_desired = position_trajecotry(t_i)
+        p_desired = position_function(t_i)
         p_error = R.T @ (p_desired - p)
 
         JTJ = J_position.T @ J_position
@@ -215,10 +188,48 @@ def generate_trajectory(position_trajecotry, sim_time, frame_rate=30):
         d_tensions = np.linalg.solve(A, b)
 
         tensions = np.maximum(tensions + d_tensions, tensions_min)
+
+        position_trajectory.append(p_desired)
         tensions_trajectory.append(tensions)
         t.append(t_i)
 
-    return np.array(t), np.array(tensions_trajectory)
+    return np.array(t), np.array(position_trajectory), np.array(tensions_trajectory)
+
+
+def generate_waypoints(num_waypoints, center=(0, 0, 0.15), radii=(0.1, 0.1, 0.05), seed=None):
+    rng = np.random.default_rng(seed)
+
+    waypoints = []
+    for _ in range(num_waypoints):
+        direction = rng.normal(size=3)
+        direction /= np.linalg.norm(direction)
+        r = rng.random() ** (1/3)
+        point = r * direction * np.array(radii)
+        waypoints.append(np.array(center) + point)
+
+    return np.array(waypoints)
+    
+
+def generate_waypoint_trajectory(sim_time, time_per_waypoint=3.0, waypoints=None, seed=None):
+    if waypoints is None:
+        num_waypoints = int(sim_time / time_per_waypoint) + 1
+        waypoints = generate_waypoints(num_waypoints, seed=seed)
+
+    position_function = lambda t: waypoint_trajectory(t, waypoints)
+    t, positions, tensions = generate_trajectory(position_function, sim_time)
+
+    return t, positions, tensions, waypoints
+
+
+def waypoint_trajectory(t, waypoints, time_per_waypoint=3.0):
+    num_segments = len(waypoints) - 1
+
+    segment_index = min(int(t // time_per_waypoint), num_segments)
+    next_index = min(segment_index + 1, len(waypoints) - 1)
+
+    alpha = (t % time_per_waypoint) / time_per_waypoint
+    return (1 - alpha) * waypoints[segment_index] + alpha * waypoints[next_index]
+
 
 if __name__ == "__main__":
     config = get_simulation_config()

@@ -119,7 +119,7 @@ def compute_backbone_loads(s, p, R, s_discs, tensions, tip_force, holes):
 
         f.append(f_i); l.append(l_i)
     
-    f[-1] += R[-1] @ tip_force
+    f[-1] += tip_force
 
     return f, l
 

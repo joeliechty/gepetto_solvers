@@ -2,7 +2,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include "tendon_robot_gtsam.h"
+#include "tendon_robot.h"
 
 namespace py = pybind11;
 using namespace gtsam;

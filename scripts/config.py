@@ -21,12 +21,12 @@ def get_base_config():
     config.small_r_std = 1e-3
     config.small_p_std = 1e-5
 
-    config.tip_force_prior_std = 5e-2
-    config.dist_load_prior_std = 5e-2
-    config.dist_load_smoothness_std = 0.003
+    config.tip_force_prior_std = 1e-1
+    config.dist_load_prior_std = 2e-2
+    config.dist_load_smoothness_std = 0.01
 
     config.tension_meas_std = 1e-2
-    config.tip_position_meas_std = 0.577e-3  # This makes for a 1mm rms position error
+    config.tip_position_meas_std = 0.577e-3  # -> 1mm RMS position error
     config.fbg_strain_meas_std = 3e-6
 
     config.angle_functions = [
@@ -48,8 +48,6 @@ def get_base_config():
 
 def get_sim_config():
     config = get_base_config()
-
-    config.youngs_modulus = 0.99999 * config.youngs_modulus
 
     config.tension_meas_std = 1e-4
     config.cosserat_twist_r_std = 1e-4

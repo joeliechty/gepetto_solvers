@@ -256,9 +256,13 @@ public:
             // If a disc is next, then that changes whether we use an applied wrench F or a disc wrench D
             bool is_disc_next = std::find(tendon_config_.disc_pose_idx.begin(), tendon_config_.disc_pose_idx.end(), i + 1) 
                 != tendon_config_.disc_pose_idx.end();
-
+            
             graph_.add(CosseratRodStressFactor(
-                T(i), T(i + 1), S(i), S(i + 1), is_disc_next ? D(i + 1) : F(i + 1), small_wrench_cov_));
+                T(i), T(i + 1), 
+                S(i), S(i + 1),
+                is_disc_next ? D(i + 1) : F(i + 1), 
+                is_disc_next ? false : true,
+                small_wrench_cov_));
         }
 
         // Near-zero prior constraint for tip stress
@@ -473,7 +477,7 @@ public:
     {
         dist_load_prior_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             config.small_moment_std, config.small_moment_std, config.small_moment_std, 
-            config.dist_load_prior_std, config.dist_load_prior_std, config.small_force_std).finished());
+            config.dist_load_prior_std, config.dist_load_prior_std, config.dist_load_prior_std).finished());
         
         dist_load_smoothing_cov_ = noiseModel::Isotropic::Sigma(3, config.dist_load_smoothness_std);
 
