@@ -1,12 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import chi2
 
-import time
-from tendon_robot import DistLoadSolver, TipForceSolver
+from tendon_robot import DistLoadSolver
 
 from plotting import TendonRobotPlotter
-from config import get_sim_config, get_base_config
+from config import get_base_config
 from utils import moving_savgol, setup_plt, generate_trajectory
 
 
@@ -46,22 +44,28 @@ def two_point_trajectory(t, total_time=2.0):
 
 
 def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
-    simulator = DistLoadSolver(get_sim_config())
+    simulator = DistLoadSolver(get_base_config())
     config = get_base_config()
     solver_inference = DistLoadSolver(config)
 
     cylinders = [
-        {'radius': 0.02, 'center': np.array([0.09, 0.04, 0.14]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.125},
+        {'radius': 0.02, 'center': np.array([0.09, 0.05, 0.14]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.125},
         {'radius': 0.02, 'center': np.array([0.07, 0.01, 0.07]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.125}
     ]
     
-    plotter = TendonRobotPlotter('dist_load_sim', save_frames_mode=save_frames, cylinders=cylinders, plot_dist_load=True, d_azimuth=200 / len(tensions_cmd))
+    plotter = TendonRobotPlotter(
+        'dist_load_sim', 
+        save_frames_mode=save_frames, 
+        cylinders=cylinders, 
+        plot_backbone_ellipsoids=False, 
+        plot_dist_load=True, 
+        d_azimuth=200 / len(tensions_cmd))
 
     num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs
     force_gt = np.zeros((num_poses - 1, 3))
 
     forces_filter = moving_savgol(poly_order=0)
-    fbg_signals_filter = moving_savgol(poly_order=1)
+    fbg_signals_filter = moving_savgol()
 
     for tensions, position_desired in zip(tensions_cmd, position_cmd):
         tensions_gt = tensions + config.tension_meas_std * np.random.randn(*tensions.shape)
@@ -113,34 +117,36 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
 
     fig, axes = plt.subplots(4, 1, sharex=True, gridspec_kw={'height_ratios': [2, 2, 2, 1.5]})
 
-    axes[0].plot(s, force_gt[:,0], 'k--')
-    axes[0].plot(s, force_mean[:,0])
-    axes[0].fill_between(s, force_mean[:,0] - force_two_std[:,0], force_mean[:,0] + force_two_std[:,0], alpha=0.2, color='blue', interpolate=True)
-    axes[0].set_ylabel('force-$x$ (N)')
+    color_cycle = ['r', 'g', 'b']
 
-    axes[1].plot(s, force_gt[:,1], 'k--')
-    axes[1].plot(s, force_mean[:,1])
-    axes[1].fill_between(s, force_mean[:,1] - force_two_std[:,1], force_mean[:,1] + force_two_std[:,1], alpha=0.2, color='blue', interpolate=True)
-    axes[1].set_ylabel('force-$y$ (N)')
+    force_labels = [r'force-$x$ (N)',
+                    r'force-$y$ (N)',
+                    r'force-$z$ (N)']
+    
+    for ii, ax in enumerate(axes[0:3]):
+        ax.plot(s, force_gt[:,ii], 'k--', label='truth')
+        ax.plot(s, force_mean[:,ii], color=color_cycle[ii], label='mean')
+        ax.fill_between(s, 
+            force_mean[:,ii] - force_two_std[:,ii], 
+            force_mean[:,ii] + force_two_std[:,ii], alpha=0.2,
+            color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
+        ax.set_ylabel(force_labels[ii])
+        if ii == 1:
+            ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
 
-    axes[2].plot(s, force_gt[:,2], 'k--')
-    axes[2].plot(s, force_mean[:,2])
-    axes[2].fill_between(s, force_mean[:,2] - force_two_std[:,2], force_mean[:,2] + force_two_std[:,2], alpha=0.2, color='blue', interpolate=True)
-    axes[2].set_ylabel('force-$z$ (N)')
-
-    axes[3].plot(s, p_greater, 'r-')
-    axes[3].axhline(0.95, color='k', linestyle='--')
-    axes[3].set_ylabel(r"$p(\| \text{force} \| > \tau)$")
+    axes[3].plot(s, p_greater, color='orangered')
+    axes[3].axhline(0.95, color='k', linestyle=':')
+    axes[3].set_ylabel(r"$P(\| \text{force} \| > \tau)$")
     axes[3].set_xlabel('arclength (m)')
 
     fig.align_ylabels()
     plt.tight_layout()
     
-    plt.savefig("figures/dist_load_sim.pdf", bbox_inches="tight")
+    plt.savefig("figures/dist_load_sim_results.pdf", bbox_inches="tight")
 
 
 if __name__ == "__main__":
-    sim_time = 8
+    sim_time = 10
     do_plot = True
     save_frames = True
 

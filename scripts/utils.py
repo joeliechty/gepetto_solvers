@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
-from config import get_sim_config
+from config import get_base_config
 
 
 def tensions_function(t):
@@ -159,11 +159,10 @@ def setup_plt(width=3.5, height=5.0, grid=False):
     })
 
 
-def generate_trajectory(position_function, sim_time, frame_rate=30):
-    simulator = TipForceSolver(get_sim_config())
+def generate_trajectory(position_function, sim_time, damping=5e-2, frame_rate=30):
+    simulator = TipForceSolver(get_base_config())
 
     num_steps = sim_time * frame_rate
-    damping = 5e-2
     tensions_min = np.array([0.1, 0.1, 0.1, 0.1])
     tensions = tensions_min
 

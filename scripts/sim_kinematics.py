@@ -8,6 +8,32 @@ from utils import TipForceFunction, generate_waypoint_trajectory, setup_plt
 from benchmark import solve_kinematics_bvp
     
 
+def run_uncertainty_comparison(sim_time):
+    configs = [get_base_config() for _ in range(4)]
+
+    configs[0].cosserat_twist_r_std = 1e-4
+    configs[0].tension_meas_std = 1e-4
+    configs[1].tension_meas_std = 1e-4
+    configs[3].tip_position_meas_std = 1.0
+
+    solvers = [TipForceSolver(config) for config in configs]
+    labels = ['uncertainty_small', 'uncertainty_random_walk', 'uncertainty_kinematics', 'uncertainty_force_prior']
+    plotters = [TendonRobotPlotter(label, save_frames_mode=True) for label in labels]
+
+    t, positions, tensions, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
+    
+    for position_i, tensions_i in zip(positions, tensions):
+        for solver_idx, (solver, plotter) in enumerate(zip(solvers, plotters)):
+            if solver_idx == 3:
+                solution = solver.step(tensions_i, np.zeros(3), 0)
+            else:
+                solution = solver.simulation_step(tensions_i, np.zeros(3))
+
+            plotter.update(solution)
+
+    [plotter.plotter.close() for plotter in plotters]
+
+
 def run_trajectory_simulation(sim_time, poses_between_discs):
     euler_solvers = []
     midpoint_solvers = []
@@ -24,8 +50,6 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
 
     t, positions, tensions, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
     tip_force_function = TipForceFunction(max_magnitude=config.tip_force_prior_std, seed=42)
-
-    plotter = TendonRobotPlotter('kinematics_sim', waypoints=None, save_frames_mode=True, d_azimuth=1.0)
 
     tip_positions_benchmark = []
     tip_positions_euler = [[] for _ in poses_between_discs] # (poses_between_i, step)
@@ -47,17 +71,12 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
             tip_positions_midpoint[idx].append(sol_midpoint.backbone_pose_mean[-1][:3, 3])
             solve_times_midpoint[idx].append(sol_midpoint.total_time_ms)
 
-            if poses_between_discs[idx] == 3:
-                plotter.update(sol_midpoint)
-
         percent_complete = i / len(t) * 100
         print(f"\r\nProgress: {percent_complete:.1f} %\n", end="")
 
         holes = sol_euler.tendon_disc_config.local_holes
         p, x_guess = solve_kinematics_bvp(tensions_i, tip_force, get_base_config(), holes, x_guess)
         tip_positions_benchmark.append(p[-1])
-
-    plotter.plotter.close()
 
     tip_positions_benchmark = np.array(tip_positions_benchmark)
     tip_positions_euler = [np.array(tp) for tp in tip_positions_euler]
@@ -78,18 +97,18 @@ def get_rms_percent_errors(traj_list, traj_benchmark):
         diff = traj - traj_benchmark
         rms_errors.append(np.sqrt(np.mean(np.sum(diff**2, axis=1))))
 
-    config =get_base_config()
+    config = get_base_config()
     rms_percent_errors = 100 * np.array(rms_errors) / config.rod_length
 
     return rms_percent_errors
 
 
 if __name__ == "__main__":
-    sim_time = 90
-    poses_between_discs = np.arange(12)
+    run_uncertainty_comparison(sim_time=30)
 
+    poses_between_discs = np.arange(9)
     traj_benchmark, traj_euler, mean_solve_times_euler, traj_midpoint, mean_solve_times_midpoint = \
-        run_trajectory_simulation(sim_time, poses_between_discs)
+        run_trajectory_simulation(sim_time=90, poses_between_discs=poses_between_discs)
 
     rms_errors_euler = get_rms_percent_errors(traj_euler, traj_benchmark)
     rms_errors_midpoint = get_rms_percent_errors(traj_midpoint, traj_benchmark)
@@ -101,18 +120,18 @@ if __name__ == "__main__":
 
     fig, axes = plt.subplots(2, 1, sharex=True)
 
-    axes[0].plot(num_nodes, rms_errors_euler, 'o-', label="Euler")
-    axes[0].plot(num_nodes, rms_errors_midpoint, 'o-', label="Midpoint")
-    axes[0].set_ylabel('RMS position error (% length)')
+    axes[0].plot(num_nodes, rms_errors_euler, label="Euler")
+    axes[0].plot(num_nodes, rms_errors_midpoint, label="midpoint")
+    axes[0].set_ylabel('position error (RMS % length)')
     axes[0].semilogy()
     axes[0].legend()
 
-    axes[1].plot(num_nodes, mean_solve_times_euler, 'o-', label="Euler")
-    axes[1].plot(num_nodes, mean_solve_times_midpoint, 'o-', label="Midpoint")
+    axes[1].plot(num_nodes, mean_solve_times_euler)
+    axes[1].plot(num_nodes, mean_solve_times_midpoint)
     axes[1].set_xlabel('number of arclength nodes')
     axes[1].set_ylabel('mean solve time (ms)')
 
     fig.align_ylabels()
     fig.tight_layout()
 
-    fig.savefig("figures/kinematics_sim.pdf", bbox_inches="tight")
+    fig.savefig("figures/kinematics_sim_results.pdf", bbox_inches="tight")

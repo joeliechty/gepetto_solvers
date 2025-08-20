@@ -177,10 +177,21 @@ def get_dist_load_meshes(solution, scale=2.0):
     
 
 class TendonRobotPlotter:
-    def __init__(self, title, save_frames_mode=False, plot_dist_load=False, waypoints=None, desired_trajectory=None, cylinders=None, d_azimuth=0.3):
-        self.plot_dist_load = plot_dist_load
+    def __init__(self, 
+                 title, 
+                 save_frames_mode=False, 
+                 plot_tip_force=False, 
+                 plot_dist_load=False,
+                 plot_backbone_ellipsoids=True,
+                 waypoints=None, 
+                 cylinders=None, 
+                 d_azimuth=0.5):
+        
         self.save_frames_mode = save_frames_mode
-        self.desired_trajectory = desired_trajectory
+        self.plot_tip_force = plot_tip_force
+        self.plot_dist_load = plot_dist_load
+        self.plot_backbone_ellipsoids = plot_backbone_ellipsoids
+
         self.cylinders = cylinders
         self.waypoints = waypoints
         self.d_azimuth = d_azimuth
@@ -191,23 +202,19 @@ class TendonRobotPlotter:
             shutil.rmtree(self.frames_path, ignore_errors=True)
             self.frames_path.mkdir(parents=True, exist_ok=True)
 
-        self.window_size = (1750, 2000)
+        self.window_size = (2000, 2000)
         self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_mode)
         self.frame = 0
         self.solve_time_ms_history = []
             
     def init_scene(self, solution):
         plate = get_base_plate(solution)
-        self.plate_actor = self.plotter.add_mesh(plate, color="coldgrey", show_edges=True, line_width=1)
+        self.plotter.add_mesh(plate, color="coldgrey", show_edges=True, line_width=1)
 
         if self.waypoints is not None:
             for point in self.waypoints:
                 mesh = pv.Sphere(0.0015, center=point)
                 self.plotter.add_mesh(mesh, color="red", smooth_shading=True)
-        
-        if self.desired_trajectory is not None:
-            mesh = get_tube_points(self.desired_trajectory, 0.001)
-            self.plotter.add_mesh(mesh, color="crimson", opacity=0.2, smooth_shading=True)
         
         if self.cylinders is not None:
             for cylinder in self.cylinders:
@@ -246,9 +253,10 @@ class TendonRobotPlotter:
         tendons, discs = get_tendon_disc_meshes(solution)
         backbone_ellipsoids = get_backbone_ellipsoids(solution)
 
-        if not self.plot_dist_load:
+        if self.plot_tip_force:
             tip_force_mean_mesh, tip_force_2_sigma_mesh, tip_force_gt_mesh = get_tip_force_meshes(solution, tip_force_gt)
-        else:
+        
+        if self.plot_dist_load:
             dist_load_meshes = get_dist_load_meshes(solution)
 
         if p_desired is not None:
@@ -272,11 +280,12 @@ class TendonRobotPlotter:
                 disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
                 self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
 
-            self.backbone_2_sigma_meshes = backbone_ellipsoids
-            for ellipsoid in self.backbone_2_sigma_meshes:
-                self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.15, smooth_shading=True)
+            if self.plot_backbone_ellipsoids:
+                self.backbone_2_sigma_meshes = backbone_ellipsoids
+                for ellipsoid in self.backbone_2_sigma_meshes:
+                    self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.15, smooth_shading=True)
 
-            if not self.plot_dist_load:
+            if self.plot_tip_force:
                 self.tip_force_mean_mesh = tip_force_mean_mesh
                 self.plotter.add_mesh(self.tip_force_mean_mesh, color='rebeccapurple', opacity=0.7)
 
@@ -286,7 +295,8 @@ class TendonRobotPlotter:
                 if tip_force_gt is not None:
                     self.tip_force_gt_mesh = tip_force_gt_mesh
                     self.plotter.add_mesh(self.tip_force_gt_mesh, color='forestgreen', opacity=0.7)
-            else:
+            
+            if self.plot_dist_load:
                 self.dist_load_meshes = dist_load_meshes
                 for mesh in self.dist_load_meshes:
                     self.plotter.add_mesh(mesh, color='rebeccapurple', opacity=0.5)
@@ -307,18 +317,20 @@ class TendonRobotPlotter:
                 for j, segment in enumerate(tendon):
                     self.tendon_meshes[i][j].shallow_copy(segment)
 
-            for mesh_self, mesh in zip(self.backbone_2_sigma_meshes, backbone_ellipsoids):
-                mesh_self.shallow_copy(mesh)
-
-            if self.plot_dist_load:
-                for (mesh_self, mesh) in zip(self.dist_load_meshes, dist_load_meshes):
+            if self.plot_backbone_ellipsoids:
+                for mesh_self, mesh in zip(self.backbone_2_sigma_meshes, backbone_ellipsoids):
                     mesh_self.shallow_copy(mesh)
-            else:
+
+            if self.plot_tip_force:
                 self.tip_force_mean_mesh.shallow_copy(tip_force_mean_mesh)
                 self.tip_force_2_sigma_mesh.shallow_copy(tip_force_2_sigma_mesh)
                 if tip_force_gt is not None:
                     self.tip_force_gt_mesh.shallow_copy(tip_force_gt_mesh)
-
+            
+            if self.plot_dist_load:
+                for (mesh_self, mesh) in zip(self.dist_load_meshes, dist_load_meshes):
+                    mesh_self.shallow_copy(mesh)
+           
             if p_desired is not None:
                 self.p_desired_mesh.shallow_copy(p_desired_mesh)
 
