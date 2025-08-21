@@ -159,7 +159,7 @@ def get_dist_load_meshes(solution, scale=2.0):
     meshes = []
 
     for pose, wrench in zip(solution.backbone_pose_mean, solution.applied_wrench_mean):
-        mesh = get_arrow(pose[:3,3], scale * wrench[3:])
+        mesh = get_arrow(pose[:3,3], scale * wrench[3:], shaft_radius=0.0007, tip_radius=0.0015, tip_length=0.003)
         meshes.append(mesh)
 
     return meshes
@@ -263,12 +263,12 @@ class TendonRobotPlotter:
             for i, disc in enumerate(self.disc_meshes):
                 if i == 0: continue
                 disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
-                self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
+                self.plotter.add_mesh(disc, color='steelblue', opacity=0.25, smooth_shading=True)
             
             for j, tendon in enumerate(self.tendon_meshes):
                 color = tendon_colors[j % len(tendon_colors)]
                 for segment in tendon:
-                    self.plotter.add_mesh(segment, color=color, opacity=0.3)
+                    self.plotter.add_mesh(segment, color=color, opacity=0.4)
 
             if self.plot_backbone_ellipsoids:
                 self.backbone_2_sigma_meshes = backbone_ellipsoids
