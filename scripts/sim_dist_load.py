@@ -37,8 +37,8 @@ def get_single_contact_force(T, cylinder, k_contact=5.0, bandwith=0.25):
 
 
 def two_point_trajectory(t, total_time=2.0):
-    start_point = np.array([-0.05, 0.1, 0.2])
-    end_point = np.array([0.15, -0.1, 0.15])
+    start_point = np.array([0.05, 0.2, 0.1])
+    end_point   = np.array([-0.15, 0.15, -0.1])
     alpha = np.clip(t / total_time, 0.0, 1.0)  # 0 → 1 over total_time
     return (1 - alpha) * np.array(start_point) + alpha * np.array(end_point)
 
@@ -47,10 +47,10 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
     simulator = DistLoadSolver(get_base_config())
     config = get_base_config()
     solver_inference = DistLoadSolver(config)
-
+    
     cylinders = [
-        {'radius': 0.02, 'center': np.array([0.09, 0.05, 0.14]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.125},
-        {'radius': 0.02, 'center': np.array([0.07, 0.01, 0.07]), 'z': np.array([1.0, 0.5, 0.0]), 'length': 0.125}
+        {'radius': 0.02, 'center': np.array([-0.09, 0.14, 0.05]), 'z': np.array([-1.0, 0.0, 0.5]), 'length': 0.125},
+        {'radius': 0.02, 'center': np.array([-0.07, 0.07, 0.01]), 'z': np.array([-1.0, 0.0, 0.5]), 'length': 0.125}
     ]
     
     plotter = TendonRobotPlotter(
@@ -58,8 +58,7 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
         save_frames_mode=save_frames, 
         cylinders=cylinders, 
         plot_backbone_ellipsoids=False, 
-        plot_dist_load=True, 
-        d_azimuth=200 / len(tensions_cmd))
+        plot_dist_load=True)
 
     num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs
     force_gt = np.zeros((num_poses - 1, 3))

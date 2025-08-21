@@ -15,7 +15,7 @@ def get_base_config():
     config.routing_radius = 0.01
     config.use_midpoint = True
 
-    config.cosserat_twist_r_std = 5e-3
+    config.cosserat_twist_r_std = 1e-2
     config.small_force_std = 1e-4
     config.small_moment_std = 1e-5
     config.small_r_std = 1e-3
@@ -25,8 +25,8 @@ def get_base_config():
     config.dist_load_prior_std = 2e-2
     config.dist_load_smoothness_std = 0.01
 
-    config.tension_meas_std = 1e-1
-    config.tip_position_meas_std = 0.577e-3  # -> 1mm RMS position error
+    config.tension_meas_std = 1e-2
+    config.tip_position_meas_std = 1e-3
     config.fbg_strain_meas_std = 3e-6
 
     config.angle_functions = [

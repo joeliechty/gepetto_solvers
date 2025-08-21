@@ -11,8 +11,11 @@ def simulation(sim_time, do_plot, save_frames):
     config = get_base_config()
     simulator_tracking = TipForceSolver(config)
     simulator_nominal = TipForceSolver(config)
-    solver_inference = TipForceSolver(config)
     solver_jacobian = TipForceSolver(config)
+    solver_tracking = TipForceSolver(config)
+    config_prior = get_base_config()
+    config_prior.tip_position_meas_std = 1.0
+    solver_prior = TipForceSolver(config_prior)
 
     t, positions, tensions_nominal, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
     tip_force_function = TipForceFunction(max_magnitude=2 * config.tip_force_prior_std, seed=42)
@@ -21,7 +24,8 @@ def simulation(sim_time, do_plot, save_frames):
     tensions_min = np.array([0.5, 0.1, 0.1, 0.1])
 
     tensions_cmd_current = tensions_min
-    plotter_sim = TendonRobotPlotter('tip_force_tracking', plot_tip_force=True, save_frames_mode=save_frames)
+    plotter_prior = TendonRobotPlotter('tip_force_prior', save_frames_mode=save_frames)
+    plotter_tracking = TendonRobotPlotter('tip_force_tracking', plot_tip_force=True, save_frames_mode=save_frames)
     plotter_nominal = TendonRobotPlotter('tip_force_nominal', plot_tip_force=True, save_frames_mode=save_frames)
 
     tensions_nominal_noise_model = GaussianProcessNoiseModel(4, len(t), seed=42)
@@ -63,15 +67,17 @@ def simulation(sim_time, do_plot, save_frames):
         p_nominal_cov += config.tip_position_meas_std ** 2 * np.eye(3)
         p_nominal_gt = p_nominal_mean + p_nominal_noise_model.step(p_nominal_cov)
 
-        solution_inference = solver_inference.step(tensions_cmd_current, p_tracking_gt, 1)
-        f_mean = solution_inference.applied_wrench_mean[-1][3:]
-        f_cov = solution_inference.applied_wrench_cov[-1][3:,3:]
+        solution_tracking = solver_tracking.step(tensions_cmd_current, p_tracking_gt, 1)
+        solution_prior = solver_prior.step(tensions_cmd_current, np.zeros(3), 1)
+
+        f_mean = solution_tracking.applied_wrench_mean[-1][3:]
+        f_cov = solution_tracking.applied_wrench_cov[-1][3:,3:]
 
         solution_jacobian = solver_jacobian.simulation_step(tensions_cmd_current, f_mean)
         
         J_position = solution_jacobian.J_pose_tensions[3:]
-        p = solution_inference.backbone_pose_mean[-1][:3,3]
-        R = solution_inference.backbone_pose_mean[-1][:3,:3]
+        p = solution_tracking.backbone_pose_mean[-1][:3,3]
+        R = solution_tracking.backbone_pose_mean[-1][:3,:3]
         
         p_error = R.T @ (p_desired - p)
 
@@ -84,8 +90,9 @@ def simulation(sim_time, do_plot, save_frames):
         tensions_cmd_current = np.maximum(tensions_cmd_current, tensions_min)
 
         if do_plot:
-            plotter_sim.update(solution_inference, p_desired=p_desired, tip_force_gt=f_gt)
+            plotter_tracking.update(solution_tracking, p_desired=p_desired, tip_force_gt=f_gt)
             plotter_nominal.update(solution_nominal, p_desired=p_desired, tip_force_gt=f_gt)
+            plotter_prior.update(solution_prior)
 
         tip_position_tracking_mean.append(p_tracking_mean)
         tip_position_tracking_std.append(np.sqrt(np.diag(p_tracking_cov)))
@@ -98,8 +105,9 @@ def simulation(sim_time, do_plot, save_frames):
         tensions_cmd.append(tensions_cmd_current)
         tensions_gt.append(tensions_tracking_gt)
         
-    plotter_sim.plotter.close()
+    plotter_tracking.plotter.close()
     plotter_nominal.plotter.close()
+    plotter_prior.plotter.close()
 
     tip_position_tracking_mean = np.array(tip_position_tracking_mean)
     tip_position_tracking_std = np.array(tip_position_tracking_std)

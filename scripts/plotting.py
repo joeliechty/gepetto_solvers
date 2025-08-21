@@ -6,16 +6,9 @@ import pyvista as pv
 
 
 def get_base_plate(solution):
-    side_length = 7 * solution.tendon_disc_config.routing_radius
-    thick = side_length / 15
-    cube = pv.Cube(center=(0, 0, -thick / 2), x_length=side_length, y_length=side_length, z_length=thick)
-    # rotated_points = (base_rotation @ cube.points.T).T
-    # cube.points = rotated_points + base_location
-
-    # cube_thick = 0.02
-    # cube = pv.Cube(center=(0, 0, 0), x_length=0.3, y_length=0.3, z_length=cube_thick)
-    # cube.points[:,2] = cube.points[:,2] - cube_thick / 2.0
-    # cube.points = (base_rotation @ cube.points.T + base_location.reshape((3,1))).T
+    side_length = 10 * solution.tendon_disc_config.routing_radius
+    thick = side_length / 10
+    cube = pv.Cube(center=(0, -thick / 2, 0), x_length=side_length, y_length=thick, z_length=side_length)
 
     return cube
 
@@ -166,11 +159,7 @@ def get_dist_load_meshes(solution, scale=2.0):
     meshes = []
 
     for pose, wrench in zip(solution.backbone_pose_mean, solution.applied_wrench_mean):
-        R = pose[:3,:3]
-        p = pose[:3,3]
-    
-        f = R @ wrench[3:]  # World frame
-        mesh = get_arrow(p, scale * f)
+        mesh = get_arrow(pose[:3,3], scale * wrench[3:])
         meshes.append(mesh)
 
     return meshes
@@ -185,7 +174,7 @@ class TendonRobotPlotter:
                  plot_backbone_ellipsoids=True,
                  waypoints=None, 
                  cylinders=None, 
-                 d_azimuth=0.5):
+                 azimuth=30):
         
         self.save_frames_mode = save_frames_mode
         self.plot_tip_force = plot_tip_force
@@ -194,7 +183,7 @@ class TendonRobotPlotter:
 
         self.cylinders = cylinders
         self.waypoints = waypoints
-        self.d_azimuth = d_azimuth
+        self.azimuth = azimuth
 
         if save_frames_mode:
             dir_name = title.strip().lower().replace(" ", "_")
@@ -231,15 +220,16 @@ class TendonRobotPlotter:
         for pos in light_positions:
             light = pv.Light(
                 position=pos,
-                intensity=0.4,
+                intensity=0.5,
                 light_type='scene light'
             )
             self.plotter.add_light(light)
 
-        self.plotter.camera.position = (0.6, 0, 0.4)
-        self.plotter.camera.focal_point = (0, 0, 0.13)
+        self.plotter.camera.position = (0.6, 0, 0.3)
+        self.plotter.camera.focal_point = (0, 0.12, 0)
+        self.plotter.camera.azimuth += self.azimuth
 
-        # self.plotter.add_axes()
+        self.plotter.add_axes()
         # self.plotter.enable_depth_peeling(10)
         self.plotter.enable_anti_aliasing()
 
@@ -264,33 +254,33 @@ class TendonRobotPlotter:
 
         if self.frame == 0:
             self.backbone_mesh = backbone
-            self.plotter.add_mesh(self.backbone_mesh, color='mediumblue', opacity = 0.5, smooth_shading=True)
+            self.plotter.add_mesh(self.backbone_mesh, color='black', opacity = 0.5, smooth_shading=True)
 
             self.tendon_meshes = tendons
             self.disc_meshes = discs
             tendon_colors = ["crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod", "deeppink"]
 
-            for j, tendon in enumerate(self.tendon_meshes):
-                color = tendon_colors[j % len(tendon_colors)]
-                for segment in tendon:
-                    self.plotter.add_mesh(segment, color=color, opacity=0.3)
-            
             for i, disc in enumerate(self.disc_meshes):
                 if i == 0: continue
                 disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
-                self.plotter.add_mesh(disc, color='steelblue', opacity=0.2, smooth_shading=True)
+                self.plotter.add_mesh(disc, color='steelblue', opacity=0.25, smooth_shading=True)
+            
+            for j, tendon in enumerate(self.tendon_meshes):
+                color = tendon_colors[j % len(tendon_colors)]
+                for segment in tendon:
+                    self.plotter.add_mesh(segment, color=color, opacity=0.5)
 
             if self.plot_backbone_ellipsoids:
                 self.backbone_2_sigma_meshes = backbone_ellipsoids
                 for ellipsoid in self.backbone_2_sigma_meshes:
-                    self.plotter.add_mesh(ellipsoid, color="crimson", opacity=0.15, smooth_shading=True)
+                    self.plotter.add_mesh(ellipsoid, color="cadmiumorange", opacity=0.3, smooth_shading=True)
 
             if self.plot_tip_force:
                 self.tip_force_mean_mesh = tip_force_mean_mesh
                 self.plotter.add_mesh(self.tip_force_mean_mesh, color='rebeccapurple', opacity=0.7)
 
                 self.tip_force_2_sigma_mesh = tip_force_2_sigma_mesh
-                self.plotter.add_mesh(self.tip_force_2_sigma_mesh, color="gold", opacity=0.15, smooth_shading=True)
+                self.plotter.add_mesh(self.tip_force_2_sigma_mesh, color="gold", opacity=0.3, smooth_shading=True)
 
                 if tip_force_gt is not None:
                     self.tip_force_gt_mesh = tip_force_gt_mesh
@@ -338,7 +328,6 @@ class TendonRobotPlotter:
         text = f"solve time: {solution.total_time_ms:.2f} ms, average: {np.mean(self.solve_time_ms_history):.2f} ms"
         self.plotter.add_text(text, position='upper_right', font_size=14, font="courier", name="solve_time")
 
-        self.plotter.camera.azimuth += self.d_azimuth
         self.plotter.render()
 
         if self.save_frames_mode:

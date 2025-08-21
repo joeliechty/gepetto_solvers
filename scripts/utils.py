@@ -218,7 +218,7 @@ def generate_trajectory(position_function, sim_time, damping=5e-2, frame_rate=30
     return np.array(t), np.array(position_trajectory), np.array(tensions_trajectory)
 
 
-def generate_waypoints(num_waypoints, center=(0, 0, 0.15), radii=(0.1, 0.1, 0.05), seed=None):
+def generate_waypoints(num_waypoints, center=(0, 0.15, 0.0), radii=(0.1, 0.05, 0.1), seed=None):
     rng = np.random.default_rng(seed)
 
     waypoints = []
@@ -250,27 +250,5 @@ def waypoint_trajectory(t, waypoints, time_per_waypoint=3.0):
     next_index = min(segment_index + 1, len(waypoints) - 1)
 
     alpha = (t % time_per_waypoint) / time_per_waypoint
-    return (1 - alpha) * waypoints[segment_index] + alpha * waypoints[next_index]
-
-
-if __name__ == "__main__":
-    config = get_simulation_config()
-
-    num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs
-    dist_load = dist_load_function(num_poses - 1)
-
-    all_jerks = []
-    for i in range(1000000):
-        dist_load.sample_parameters()
-        forces = dist_load.get_max_forces()
-        jerk = np.diff(forces, n=3, axis=0)
-        all_jerks.append(jerk[:, :2].reshape(-1))
-
-    all_jerks = np.concatenate(all_jerks)
-
-    # Keep only the top 5% biggest jerks by magnitude
-    cutoff = np.percentile(np.abs(all_jerks), 95)
-    big_jerks = all_jerks[np.abs(all_jerks) >= cutoff]
-    
-    print(big_jerks.std())        
+    return (1 - alpha) * waypoints[segment_index] + alpha * waypoints[next_index]    
         

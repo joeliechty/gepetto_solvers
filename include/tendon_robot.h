@@ -191,7 +191,6 @@ public:
     Values values_;
     NonlinearFactorGraph graph_;
     Marginals marginals_;
-    TendonRobotSolution solution_;
 
     void initialize_values(){
         values_.clear();
@@ -243,7 +242,8 @@ public:
         }
 
         // Base frame soft constraint
-        graph_.add(PriorFactor<Pose3>(T(0), Pose3::Identity(), base_frame_cov_));
+        Rot3 base_rot = Rot3::Rx(-M_PI / 2).compose(Rot3::Rz(M_PI));
+        graph_.add(PriorFactor<Pose3>(T(0), Pose3(base_rot, Point3()), base_frame_cov_));
 
         // Cosserat twist factors
         for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
@@ -291,24 +291,24 @@ public:
         values_ = optimizer.optimize();
     }
 
-    void extract_solution(){
+    void extract_solution(TendonRobotSolution& solution){
         marginals_ = Marginals(graph_, values_);
 
         for (int i = 0; i < num_backbone_poses_; ++i) {
-            solution_.backbone_pose_mean[i] = values_.at<Pose3>(T(i)).matrix();
-            solution_.backbone_pose_cov[i] = marginals_.marginalCovariance(T(i));
+            solution.backbone_pose_mean[i] = values_.at<Pose3>(T(i)).matrix();
+            solution.backbone_pose_cov[i] = marginals_.marginalCovariance(T(i));
 
             // No applied force at the base pose
             if (i > 0) {
-                solution_.applied_wrench_mean[i - 1] = values_.at<Vector6>(F(i));
-                solution_.applied_wrench_cov[i - 1] = marginals_.marginalCovariance(F(i));
+                solution.applied_wrench_mean[i - 1] = values_.at<Vector6>(F(i));
+                solution.applied_wrench_cov[i - 1] = marginals_.marginalCovariance(F(i));
             }
         }
 
-        solution_.tensions_mean = values_.at<Vector4>(Q(0));
-        solution_.tensions_cov = marginals_.marginalCovariance(Q(0));
+        solution.tensions_mean = values_.at<Vector4>(Q(0));
+        solution.tensions_cov = marginals_.marginalCovariance(Q(0));
 
-        solution_.tendon_disc_config = tendon_config_;
+        solution.tendon_disc_config = TendonDiscConfig(tendon_config_);
 
         KeyVector keys;
         keys.push_back(Q(0));
@@ -319,7 +319,7 @@ public:
         Matrix64 sigma_pose_tensions = tensions_pose_joint(T(num_backbone_poses_ - 1), Q(0));
 
         Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_tensions_tensions);
-        solution_.J_pose_tensions = sigma_pose_tensions * ldlt.solve(Matrix4::Identity());
+        solution.J_pose_tensions = sigma_pose_tensions * ldlt.solve(Matrix4::Identity());
     }
 
     std::vector<Vector> sample_cov(const Matrix& cov, int num_samples) {
@@ -346,19 +346,19 @@ public:
         return samples;
     }
 
-    void sample_tip_pose(int num_samples) {
-        Pose3 tip_pose_mean = Pose3(solution_.backbone_pose_mean.back());
-        Matrix6 tip_pose_cov = solution_.backbone_pose_cov.back();
+    void sample_tip_pose(TendonRobotSolution& solution, int num_samples) {
+        Pose3 tip_pose_mean = Pose3(solution.backbone_pose_mean.back());
+        Matrix6 tip_pose_cov = solution.backbone_pose_cov.back();
 
         std::vector<Vector> d_tip_pose = sample_cov(tip_pose_cov, num_samples);
         d_tip_pose.reserve(num_samples);
 
         for (int i = 0; i < num_samples; i++) {
-            solution_.tip_pose_samples[i] = tip_pose_mean.retract(d_tip_pose[i]).matrix();
+            solution.tip_pose_samples[i] = tip_pose_mean.retract(d_tip_pose[i]).matrix();
         }
     }
 
-    void sample_fbg_array(int num_samples) {   
+    void sample_fbg_array(TendonRobotSolution& solution, int num_samples) {   
         KeyVector stress_keys;
         stress_keys.reserve(num_backbone_poses_);
 
@@ -381,19 +381,19 @@ public:
 
                 fbg_array_sample.push_back(stress_to_fbg_signal(stress, K_inv_, rod_diameter_));
             }
-            solution_.fbg_array_samples[i] = fbg_array_sample;
+            solution.fbg_array_samples[i] = fbg_array_sample;
         }
     }
 
-    void sample_solution(int num_samples) 
+    void sample_solution(TendonRobotSolution& solution, int num_samples) 
     {
-        sample_tip_pose(num_samples);
-        sample_fbg_array(num_samples);
+        sample_tip_pose(solution, num_samples);
+        sample_fbg_array(solution, num_samples);
     }
         
-    void update(int num_samples) {
+    TendonRobotSolution update(int num_samples) {
         // graph.saveGraph("graph.dot", values_);
-        solution_ = TendonRobotSolution(num_backbone_poses_, num_samples);
+        TendonRobotSolution solution = TendonRobotSolution(num_backbone_poses_, num_samples);
 
         auto start_solve = std::chrono::high_resolution_clock::now();
 
@@ -401,14 +401,16 @@ public:
 
         auto start_extract = std::chrono::high_resolution_clock::now();
 
-        extract_solution();
-        sample_solution(num_samples);
+        extract_solution(solution);
+        sample_solution(solution, num_samples);
         
         auto end_extract = std::chrono::high_resolution_clock::now();
 
-        solution_.solve_time_ms = std::chrono::duration<double, std::milli>(start_extract - start_solve).count();
-        solution_.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
-        solution_.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_solve).count();
+        solution.solve_time_ms = std::chrono::duration<double, std::milli>(start_extract - start_solve).count();
+        solution.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
+        solution.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_solve).count();
+
+        return solution;
     }
 };
 
@@ -448,9 +450,9 @@ public:
         graph_.add(PositionMeasurementFactor(T(num_backbone_poses_ - 1), tip_position_meas, tip_position_meas_cov_));
 
         // Run the optimizer, etc
-        update(num_samples);
+        TendonRobotSolution solution = update(num_samples);
 
-        return solution_;
+        return solution;
     }
 
     TendonRobotSolution simulation_step(const Vector4& tensions, const Vector3& tip_force) {
@@ -463,9 +465,9 @@ public:
         tip_wrench_mean.tail<3>() = tip_force;
         graph_.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), tip_wrench_mean, small_wrench_cov_));
         
-        update(1);
+        TendonRobotSolution solution = update(1);
 
-        return solution_;
+        return solution;
     }
 };
 
@@ -494,8 +496,8 @@ public:
         build_graph_base(tensions_meas);
 
         // Magnitude prior factors for distributed load
-        graph_.add(PriorFactor<Vector6>(F(1), Vector6::Zero(), small_wrench_cov_));
-        for (int i = 2; i < num_backbone_poses_; i++) {
+        // graph_.add(PriorFactor<Vector6>(F(1), Vector6::Zero(), small_wrench_cov_));
+        for (int i = 1; i < num_backbone_poses_; i++) {
             graph_.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), dist_load_prior_cov_));
         }
 
@@ -509,9 +511,9 @@ public:
             graph_.add(FbgMeasurementFactor(S(i), fbg_signals_meas[i], K_inv_, rod_diameter_, fbg_strain_meas_cov_));
         }
 
-        update(num_samples);
+        TendonRobotSolution solution = update(num_samples);
 
-        return solution_;
+        return solution;
     }
 
     TendonRobotSolution step_simulation(const Vector4& tensions, const std::vector<Vector3>& forces) {
@@ -525,9 +527,9 @@ public:
             graph_.add(PriorFactor<Vector6>(F(i), applied_wrench, small_wrench_cov_));
         }
 
-        update(1);
+        TendonRobotSolution solution = update(1);
 
-        return solution_;
+        return solution;
     }
 };
 }

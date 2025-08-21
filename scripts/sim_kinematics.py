@@ -1,38 +1,13 @@
+import copy
+
 import numpy as np
 import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
-from config import get_base_config, get_sim_config
+from config import get_base_config
 from utils import TipForceFunction, generate_waypoint_trajectory, setup_plt
 from benchmark import solve_kinematics_bvp
-    
-
-def run_uncertainty_comparison(sim_time):
-    sim_config = get_sim_config()
-    configs = [get_base_config() for _ in range(4)]
-
-    configs[0].cosserat_twist_r_std = sim_config.cosserat_twist_r_std
-    configs[0].tension_meas_std = sim_config.tension_meas_std
-    configs[1].tension_meas_std = sim_config.tension_meas_std
-    configs[3].tip_position_meas_std = 1.0
-
-    solvers = [TipForceSolver(config) for config in configs]
-    labels = ['uncertainty_small', 'uncertainty_random_walk', 'uncertainty_kinematics', 'uncertainty_force_prior']
-    plotters = [TendonRobotPlotter(label, save_frames_mode=True) for label in labels]
-
-    t, positions, tensions, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
-    
-    for position_i, tensions_i in zip(positions, tensions):
-        for solver_idx, (solver, plotter) in enumerate(zip(solvers, plotters)):
-            if solver_idx == 3:
-                solution = solver.step(tensions_i, np.zeros(3), 0)
-            else:
-                solution = solver.simulation_step(tensions_i, np.zeros(3))
-
-            plotter.update(solution)
-
-    [plotter.plotter.close() for plotter in plotters]
 
 
 def run_trajectory_simulation(sim_time, poses_between_discs):
@@ -40,7 +15,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
     midpoint_solvers = []
 
     for poses_between_i in poses_between_discs:
-        config = get_sim_config()
+        config = get_base_config()
         config.poses_between_discs = poses_between_i
 
         config.use_midpoint = False
@@ -49,6 +24,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
         config.use_midpoint = True
         midpoint_solvers.append(TipForceSolver(config))
 
+    plotter = TendonRobotPlotter('kinematics_sim', plot_tip_force=True, save_frames_mode=True)
     t, positions, tensions, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
     tip_force_function = TipForceFunction(max_magnitude=config.tip_force_prior_std, seed=42)
 
@@ -60,7 +36,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
 
     x_guess = None
 
-    for i, (t_i, tensions_i) in enumerate(zip(t, tensions)):
+    for i, (t_i, p_i, tensions_i) in enumerate(zip(t, positions, tensions)):
         tip_force = tip_force_function(t_i)
 
         for idx, (solver_euler, solver_midpoint) in enumerate(zip(euler_solvers, midpoint_solvers)):
@@ -72,6 +48,9 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
             tip_positions_midpoint[idx].append(sol_midpoint.backbone_pose_mean[-1][:3, 3])
             solve_times_midpoint[idx].append(sol_midpoint.total_time_ms)
 
+            if idx == 2:
+                plotter.update(sol_euler)
+            
         percent_complete = i / len(t) * 100
         print(f"\r\nProgress: {percent_complete:.1f} %\n", end="")
 
@@ -105,11 +84,10 @@ def get_rms_percent_errors(traj_list, traj_benchmark):
 
 
 if __name__ == "__main__":
-    run_uncertainty_comparison(sim_time=60)
-
+    sim_time = 90
     poses_between_discs = np.arange(12)
     traj_benchmark, traj_euler, mean_solve_times_euler, traj_midpoint, mean_solve_times_midpoint = \
-        run_trajectory_simulation(sim_time=90, poses_between_discs=poses_between_discs)
+        run_trajectory_simulation(sim_time, poses_between_discs=poses_between_discs)
 
     rms_errors_euler = get_rms_percent_errors(traj_euler, traj_benchmark)
     rms_errors_midpoint = get_rms_percent_errors(traj_midpoint, traj_benchmark)
