@@ -3,17 +3,18 @@ import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
-from config import get_base_config
+from config import get_base_config, get_sim_config
 from utils import TipForceFunction, generate_waypoint_trajectory, setup_plt
 from benchmark import solve_kinematics_bvp
     
 
 def run_uncertainty_comparison(sim_time):
+    sim_config = get_sim_config()
     configs = [get_base_config() for _ in range(4)]
 
-    configs[0].cosserat_twist_r_std = 1e-4
-    configs[0].tension_meas_std = 1e-4
-    configs[1].tension_meas_std = 1e-4
+    configs[0].cosserat_twist_r_std = sim_config.cosserat_twist_r_std
+    configs[0].tension_meas_std = sim_config.tension_meas_std
+    configs[1].tension_meas_std = sim_config.tension_meas_std
     configs[3].tip_position_meas_std = 1.0
 
     solvers = [TipForceSolver(config) for config in configs]
@@ -39,7 +40,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
     midpoint_solvers = []
 
     for poses_between_i in poses_between_discs:
-        config = get_base_config()
+        config = get_sim_config()
         config.poses_between_discs = poses_between_i
 
         config.use_midpoint = False
@@ -104,9 +105,9 @@ def get_rms_percent_errors(traj_list, traj_benchmark):
 
 
 if __name__ == "__main__":
-    run_uncertainty_comparison(sim_time=30)
+    run_uncertainty_comparison(sim_time=60)
 
-    poses_between_discs = np.arange(9)
+    poses_between_discs = np.arange(12)
     traj_benchmark, traj_euler, mean_solve_times_euler, traj_midpoint, mean_solve_times_midpoint = \
         run_trajectory_simulation(sim_time=90, poses_between_discs=poses_between_discs)
 

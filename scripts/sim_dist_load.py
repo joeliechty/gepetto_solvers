@@ -5,7 +5,7 @@ from tendon_robot import DistLoadSolver
 
 from plotting import TendonRobotPlotter
 from config import get_base_config
-from utils import moving_savgol, setup_plt, generate_trajectory
+from utils import moving_savgol, setup_plt, generate_trajectory, GaussianProcessNoiseModel
 
 
 def get_single_contact_force(T, cylinder, k_contact=5.0, bandwith=0.25):
@@ -65,10 +65,12 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
     force_gt = np.zeros((num_poses - 1, 3))
 
     forces_filter = moving_savgol(poly_order=0)
-    fbg_signals_filter = moving_savgol()
+    fbg_signals_filter = moving_savgol(poly_order=1)
+    tensions_noise_model = GaussianProcessNoiseModel(4, len(tensions_cmd), seed=42)
 
     for tensions, position_desired in zip(tensions_cmd, position_cmd):
-        tensions_gt = tensions + config.tension_meas_std * np.random.randn(*tensions.shape)
+        tensions_noise = tensions_noise_model.step(config.tension_meas_std ** 2 * np.eye(4))
+        tensions_gt = tensions + tensions_noise
         solution_gt = simulator.step_simulation(tensions_gt, force_gt)
 
         cylinder_forces = [get_single_contact_force(np.array(solution_gt.backbone_pose_mean), cylinder) for cylinder in cylinders]

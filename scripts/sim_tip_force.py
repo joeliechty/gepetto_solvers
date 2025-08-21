@@ -4,30 +4,7 @@ import matplotlib.pyplot as plt
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
 from config import get_base_config
-from utils import TipForceFunction, setup_plt, generate_waypoint_trajectory
-
-
-class GaussianProcessNoiseModel:
-    def __init__(self, dim, num_steps, tau=100.0, seed=None):
-        self.dim = dim
-        self.num_steps = num_steps
-        self.tau = tau
-        self.rng = np.random.default_rng(seed)
-
-        t = np.arange(num_steps)
-        t_i, t_j = np.meshgrid(t, t, indexing='ij')
-        K = np.exp(-np.abs(t_i - t_j) / tau)
-
-        L = np.linalg.cholesky(K)
-        self.gp_samples = L @ self.rng.standard_normal((num_steps, dim))
-
-        self.current_step = 0
-
-    def step(self, cov):
-        sample = self.gp_samples[self.current_step]
-        L_cov = np.linalg.cholesky(cov)
-        self.current_step += 1
-        return L_cov @ sample
+from utils import TipForceFunction, setup_plt, generate_waypoint_trajectory, GaussianProcessNoiseModel
 
 
 def simulation(sim_time, do_plot, save_frames):
@@ -192,7 +169,7 @@ def simulation(sim_time, do_plot, save_frames):
     lines_cmd = axes[6].plot(t, tensions_cmd, linestyle='-')
     lines_gt  = axes[6].plot(t, tensions_gt, 'k:')
     handles = [lines_cmd[0], lines_gt[0]]
-    labels  = ['commanded', 'truth']
+    labels  = ['cmd', 'truth']
     axes[6].legend(handles, labels)
     axes[6].set_ylabel('tendon tensions (N)')
     

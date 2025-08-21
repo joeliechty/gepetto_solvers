@@ -8,6 +8,29 @@ from tendon_robot import TipForceSolver
 from config import get_base_config
 
 
+class GaussianProcessNoiseModel:
+    def __init__(self, dim, num_steps, tau=100.0, seed=None):
+        self.dim = dim
+        self.num_steps = num_steps
+        self.tau = tau
+        self.rng = np.random.default_rng(seed)
+
+        t = np.arange(num_steps)
+        t_i, t_j = np.meshgrid(t, t, indexing='ij')
+        K = np.exp(-np.abs(t_i - t_j) / tau)
+
+        L = np.linalg.cholesky(K)
+        self.gp_samples = L @ self.rng.standard_normal((num_steps, dim))
+
+        self.current_step = 0
+
+    def step(self, cov):
+        sample = self.gp_samples[self.current_step]
+        L_cov = np.linalg.cholesky(cov)
+        self.current_step += 1
+        return L_cov @ sample
+    
+
 def tensions_function(t):
     max_tensions = np.array([6.0, 2.0, 2.0, 2.0])
     rate_hz = 0.1

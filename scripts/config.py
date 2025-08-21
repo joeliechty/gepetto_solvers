@@ -44,3 +44,12 @@ def get_base_config():
     ]
 
     return config
+
+
+def get_sim_config():
+    config = get_base_config()
+
+    config.tension_meas_std = 1e-4
+    config.cosserat_twist_r_std = 1e-4
+
+    return config
