@@ -38,7 +38,7 @@ def get_single_contact_force(T, cylinder, k_contact=5.0, bandwith=0.25):
 
 def two_point_trajectory(t, total_time=2.0):
     start_point = np.array([0.05, 0.2, 0.1])
-    end_point   = np.array([-0.15, 0.15, -0.1])
+    end_point   = np.array([-0.1, 0.15, -0.12])
     alpha = np.clip(t / total_time, 0.0, 1.0)  # 0 → 1 over total_time
     return (1 - alpha) * np.array(start_point) + alpha * np.array(end_point)
 
@@ -49,8 +49,8 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
     solver_inference = DistLoadSolver(config)
     
     cylinders = [
-        {'radius': 0.02, 'center': np.array([-0.09, 0.14, 0.05]), 'z': np.array([-1.0, 0.0, 0.5]), 'length': 0.125},
-        {'radius': 0.02, 'center': np.array([-0.07, 0.07, 0.01]), 'z': np.array([-1.0, 0.0, 0.5]), 'length': 0.125}
+        {'radius': 0.02, 'center': np.array([-0.06, 0.14, 0.03]), 'z': np.array([-1.0, 0.0, 0.0]), 'length': 0.1},
+        {'radius': 0.02, 'center': np.array([-0.06, 0.07, -0.015]), 'z': np.array([-1.0, 0.0, 0.0]), 'length': 0.1}
     ]
     
     plotter = TendonRobotPlotter(

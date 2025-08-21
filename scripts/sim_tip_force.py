@@ -26,7 +26,7 @@ def simulation(sim_time, do_plot, save_frames):
     tensions_cmd_current = tensions_min
     plotter_prior = TendonRobotPlotter('tip_force_prior', save_frames_mode=save_frames)
     plotter_tracking = TendonRobotPlotter('tip_force_tracking', plot_tip_force=True, save_frames_mode=save_frames)
-    plotter_nominal = TendonRobotPlotter('tip_force_nominal', plot_tip_force=True, save_frames_mode=save_frames)
+    plotter_nominal = TendonRobotPlotter('tip_force_nominal', plot_tip_force=True, plot_backbone_ellipsoids=False, save_frames_mode=save_frames)
 
     tensions_nominal_noise_model = GaussianProcessNoiseModel(4, len(t), seed=42)
     tensions_tracking_noise_model = GaussianProcessNoiseModel(4, len(t), seed=42)
@@ -175,10 +175,10 @@ def simulation(sim_time, do_plot, save_frames):
             ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
         
     lines_cmd = axes[6].plot(t, tensions_cmd, linestyle='-')
-    lines_gt  = axes[6].plot(t, tensions_gt, 'k:')
-    handles = [lines_cmd[0], lines_gt[0]]
-    labels  = ['cmd', 'truth']
-    axes[6].legend(handles, labels)
+    # lines_gt  = axes[6].plot(t, tensions_gt, 'k:')
+    # handles = [lines_cmd[0], lines_gt[0]]
+    # labels  = ['cmd', 'truth']
+    # axes[6].legend(handles, labels)
     axes[6].set_ylabel('tendon tensions (N)')
     
     axes[7].plot(t, np.linalg.norm(tip_force_gt, axis=1), color='purple')

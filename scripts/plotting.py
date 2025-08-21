@@ -289,7 +289,7 @@ class TendonRobotPlotter:
             if self.plot_dist_load:
                 self.dist_load_meshes = dist_load_meshes
                 for mesh in self.dist_load_meshes:
-                    self.plotter.add_mesh(mesh, color='rebeccapurple', opacity=0.5)
+                    self.plotter.add_mesh(mesh, color='blueviolet', opacity=0.5)
 
             if p_desired is not None:
                 self.p_desired_mesh = p_desired_mesh

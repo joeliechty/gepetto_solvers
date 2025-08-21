@@ -23,7 +23,7 @@ def get_base_config():
 
     config.tip_force_prior_std = 1e-1
     config.dist_load_prior_std = 2e-2
-    config.dist_load_smoothness_std = 0.01
+    config.dist_load_smoothness_std = 0.005
 
     config.tension_meas_std = 1e-2
     config.tip_position_meas_std = 1e-3

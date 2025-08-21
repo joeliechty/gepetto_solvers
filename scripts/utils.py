@@ -164,9 +164,7 @@ def setup_plt(width=3.5, height=5.0, grid=False):
     plt.rcParams.update({
         "figure.figsize": (width, height),
         "font.family": "STIXGeneral",
-        "font.size": 8,         
-        # "axes.labelsize": 7,         
-        # "axes.titlesize": 7,        
+        "font.size": 8,               
         "xtick.labelsize": 7,        
         "ytick.labelsize": 7,
         "legend.fontsize": 7,
@@ -178,7 +176,8 @@ def setup_plt(width=3.5, height=5.0, grid=False):
         "pdf.fonttype": 42,  # embed fonts in PDF
         "ps.fonttype": 42,
         "mathtext.fontset": "stix",  # math text compatible with Times
-        "mathtext.rm": "stix"
+        "mathtext.rm": "stix",
+        "lines.markersize": 4
     })
 
 

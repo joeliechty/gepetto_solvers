@@ -44,7 +44,9 @@ def integrate_robot(x, s_discs, K_se_inv, K_bt_inv):
     l = fl[:, 3:]
 
     p0 = np.zeros(3)
-    R0 = np.eye(3)
+    R0 = np.array([[-1, 0, 0],
+                   [ 0, 0, 1],
+                   [ 0, 1, 0]])
     n0 = nm0[:3]
     m0 = nm0[3:]
     y0 = pack_state(p0, R0, n0, m0)
