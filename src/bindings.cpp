@@ -69,6 +69,10 @@ PYBIND11_MODULE(tendon_robot, m) {
         .def_readwrite("tip_position_meas_std", &TendonRobotConfig::tip_position_meas_std)
         .def_readwrite("fbg_strain_meas_std", &TendonRobotConfig::fbg_strain_meas_std)
 
+        .def_readwrite("tension_drift_std", &TendonRobotConfig::tension_drift_std)
+        .def_readwrite("tip_force_drift_std", &TendonRobotConfig::tip_force_drift_std)
+        .def_readwrite("dist_load_drift_std", &TendonRobotConfig::dist_load_drift_std)
+
         .def_readwrite("angle_functions", &TendonRobotConfig::angle_functions)
         .def_readwrite("angle_params", &TendonRobotConfig::angle_params);
 

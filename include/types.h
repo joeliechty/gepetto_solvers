@@ -80,6 +80,11 @@ struct TendonRobotConfig{
     double tip_position_meas_std = 1e-3;
     double fbg_strain_meas_std = 5e-6;
 
+    // Params specifying how much these are allowed to change wrt time
+    double tension_drift_std = 1e-1;
+    double tip_force_drift_std = 1e-1;
+    double dist_load_drift_std = 1e-2;
+    
     // Routing configuration
     std::vector<RoutingAngleFunction> angle_functions;
     std::vector<RoutingFunctionParams> angle_params;

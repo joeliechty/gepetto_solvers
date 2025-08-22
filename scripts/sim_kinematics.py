@@ -52,7 +52,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
                 plotter.update(sol_midpoint)
             
         percent_complete = i / len(t) * 100
-        print(f"\r\nProgress: {percent_complete:.1f} %\n", end="")
+        print(f"\n\nProgress: {percent_complete:.1f} %\n", flush=True)
 
         holes = sol_euler.tendon_disc_config.local_holes
         p, x_guess = solve_kinematics_bvp(tensions_i, tip_force, get_base_config(), holes, x_guess)

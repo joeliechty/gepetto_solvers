@@ -49,22 +49,18 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
     solver_inference = DistLoadSolver(config)
     
     cylinders = [
-        {'radius': 0.02, 'center': np.array([-0.06, 0.14, 0.03]), 'z': np.array([-1.0, 0.0, 0.0]), 'length': 0.1},
+        {'radius': 0.02, 'center': np.array([-0.06, 0.14, 0.025]), 'z': np.array([-1.0, 0.0, 0.0]), 'length': 0.1},
         {'radius': 0.02, 'center': np.array([-0.06, 0.07, -0.015]), 'z': np.array([-1.0, 0.0, 0.0]), 'length': 0.1}
     ]
     
-    plotter = TendonRobotPlotter(
-        'dist_load_sim', 
-        save_frames_mode=save_frames, 
-        cylinders=cylinders, 
-        plot_backbone_ellipsoids=False, 
-        plot_dist_load=True)
+    plotter = TendonRobotPlotter('dist_load_sim', save_frames_mode=save_frames, 
+        cylinders=cylinders, plot_backbone_ellipsoids=False, plot_dist_load=True)
 
     num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs
     force_gt = np.zeros((num_poses - 1, 3))
 
     forces_filter = moving_savgol(poly_order=0)
-    fbg_signals_filter = moving_savgol(poly_order=1)
+    fbg_signals_filter = moving_savgol(poly_order=2)
     tensions_noise_model = GaussianProcessNoiseModel(4, len(tensions_cmd), seed=42)
 
     for tensions, position_desired in zip(tensions_cmd, position_cmd):
@@ -83,7 +79,7 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
         solution = solver_inference.step(tensions, fbg_signals_filtered, 1)
 
         if do_plot:
-            plotter.update(solution, p_desired=position_desired)
+            plotter.update(solution)
     
     plotter.plotter.close()
 

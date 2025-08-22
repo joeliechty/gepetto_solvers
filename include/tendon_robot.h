@@ -169,6 +169,10 @@ public:
         cosserat_twist_cov_ = noiseModel::Diagonal::Sigmas((Vector(6) << 
             config.cosserat_twist_r_std, config.cosserat_twist_r_std, config.cosserat_twist_r_std, 
             config.small_p_std, config.small_p_std, config.small_p_std).finished());
+        
+        last_tensions_mean_ = Vector4::Zero();
+        last_tensions_cov_ = 100 * Matrix4::Identity();
+        tensions_drift_cov_ = config.tension_drift_std * config.tension_drift_std * Matrix4::Identity();
 
         initialize_values();
     }
@@ -185,6 +189,10 @@ public:
     noiseModel::Diagonal::shared_ptr small_wrench_cov_;
     noiseModel::Diagonal::shared_ptr base_frame_cov_;
     noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
+
+    Vector4 last_tensions_mean_;
+    Matrix4 last_tensions_cov_;
+    Matrix4 tensions_drift_cov_;
 
     Ordering ordering_;
     bool is_first_solve_ = true;
@@ -211,8 +219,12 @@ public:
     void build_graph_base(const Vector4& tensions) {
         graph_.resize(0);
         
-        // Prior on tensions measurements
+        // Measurement prior on tensions
         graph_.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
+
+        // Drift prior on tensions
+        graph_.add(PriorFactor<Vector4>(Q(0), last_tensions_mean_, 
+            noiseModel::Gaussian::Covariance(last_tensions_cov_ + tensions_drift_cov_)));
 
         // Priors for discs (using disc indices), start at 1, no force at base disc
         for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
@@ -410,6 +422,9 @@ public:
         solution.extract_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_extract).count();
         solution.total_time_ms = std::chrono::duration<double, std::milli>(end_extract - start_solve).count();
 
+        last_tensions_mean_ = solution.tensions_mean;
+        last_tensions_cov_ = solution.tensions_cov;
+
         return solution;
     }
 };
@@ -425,11 +440,19 @@ public:
             config.tip_force_prior_std, config.tip_force_prior_std, config.tip_force_prior_std).finished());
             
         tip_position_meas_cov_ = noiseModel::Isotropic::Sigma(3, config.tip_position_meas_std);
+
+        last_tip_wrench_mean_ = Vector6::Zero();
+        last_tip_wrench_cov_ = 10 * Matrix6::Identity();
+        tip_wrench_drift_cov_ = config.tip_force_drift_std * config.tip_force_drift_std * Matrix6::Identity();
     }
 
 private:
     noiseModel::Diagonal::shared_ptr tip_position_meas_cov_;
     noiseModel::Diagonal::shared_ptr tip_wrench_cov_;
+
+    Vector6 last_tip_wrench_mean_;
+    Matrix6 last_tip_wrench_cov_;
+    Matrix6 tip_wrench_drift_cov_;
 
     void add_common_factors() {
         // Applied wrenches are all zero, exect at the tip
@@ -443,6 +466,10 @@ public:
         build_graph_base(tensions_meas);
         add_common_factors();
 
+        // Tip force drift prior
+        graph_.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), last_tip_wrench_mean_, 
+            noiseModel::Gaussian::Covariance(last_tip_wrench_cov_ + tip_wrench_drift_cov_)));
+
         // Tip force prior is zero with big uncertainty
         graph_.add(PriorFactor<Vector6>(F(num_backbone_poses_ - 1), Vector6::Zero(), tip_wrench_cov_));
 
@@ -451,6 +478,9 @@ public:
 
         // Run the optimizer, etc
         TendonRobotSolution solution = update(num_samples);
+
+        last_tip_wrench_mean_ = solution.applied_wrench_mean.back();
+        last_tip_wrench_cov_ = solution.applied_wrench_cov.back();
 
         return solution;
     }
@@ -484,6 +514,13 @@ public:
         dist_load_smoothing_cov_ = noiseModel::Isotropic::Sigma(3, config.dist_load_smoothness_std);
 
         fbg_strain_meas_cov_ = noiseModel::Isotropic::Sigma(3, config.fbg_strain_meas_std);
+
+        for (int i = 1; i < num_backbone_poses_; ++i) {
+            last_wrenches_mean_.push_back(Vector6::Zero());
+            last_wrenches_cov_.push_back(10 * Matrix6::Identity());
+        }
+        
+        wrenches_drift_cov_ = config.dist_load_drift_std * config.dist_load_drift_std * Matrix6::Identity();
     }
 
 private:
@@ -491,14 +528,22 @@ private:
     noiseModel::Isotropic::shared_ptr dist_load_smoothing_cov_;
     noiseModel::Isotropic::shared_ptr fbg_strain_meas_cov_;
 
+    std::vector<Vector6> last_wrenches_mean_;
+    std::vector<Matrix6> last_wrenches_cov_;
+    Matrix6 wrenches_drift_cov_;
+
 public:
     TendonRobotSolution step(const Vector4& tensions_meas, const std::vector<Vector3>& fbg_signals_meas, int num_samples) {
         build_graph_base(tensions_meas);
 
-        // Magnitude prior factors for distributed load
-        // graph_.add(PriorFactor<Vector6>(F(1), Vector6::Zero(), small_wrench_cov_));
+        // Priors for wrenches
         for (int i = 1; i < num_backbone_poses_; i++) {
+            // Magnitude prior factors for distributed load
             graph_.add(PriorFactor<Vector6>(F(i), Vector6::Zero(), dist_load_prior_cov_));
+
+            // Drift prior factors
+            graph_.add(PriorFactor<Vector6>(F(i), last_wrenches_mean_[i - 1], 
+                noiseModel::Gaussian::Covariance(last_wrenches_cov_[i - 1] + wrenches_drift_cov_)));
         }
 
         // Smoothing prior factors for distributed load
@@ -512,6 +557,9 @@ public:
         }
 
         TendonRobotSolution solution = update(num_samples);
+
+        last_wrenches_mean_ = solution.applied_wrench_mean;
+        last_wrenches_cov_ = solution.applied_wrench_cov;
 
         return solution;
     }

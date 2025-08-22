@@ -7,10 +7,10 @@ import pyvista as pv
 
 def get_base_plate(solution):
     side_length = 10 * solution.tendon_disc_config.routing_radius
-    thick = side_length / 10
-    cube = pv.Cube(center=(0, -thick / 2, 0), x_length=side_length, y_length=thick, z_length=side_length)
+    thick = 0.15 * side_length
+    plate = pv.Cube(center=(0, -thick / 2, 0), x_length=side_length, y_length=thick, z_length=side_length)
 
-    return cube
+    return plate
 
 
 def get_tube_points(points, radius):
@@ -32,41 +32,48 @@ def get_tendon_disc_meshes(solution):
     local_holes = solution.tendon_disc_config.local_holes # num_discs, num_tendons, 3
     disc_pose_idx = solution.tendon_disc_config.disc_pose_idx
 
-    disc_radius = 1.1 * routing_radius
-    disc_width = 0.12 * routing_radius
+    disc_radius = 1.3 * routing_radius
+    disc_width = 0.1 * routing_radius
     tendon_radius = 0.05 * routing_radius
 
     discs = []
 
     for i in disc_pose_idx:
         T = solution.backbone_pose_mean[i]
-        cylinder = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width)
+        cylinder = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
         cylinder.points = (T[:3,:3] @ cylinder.points.T + T[:3,3].reshape((3,1))).T
         discs.append(cylinder)
 
     tendons = []
-
     for j in range(num_tendons):  # iterate over each tendon
         tendon_segments = []  # segments along this tendon
-        
         for i in range(num_discs - 1):  # one segment per pair of discs
             T_i = solution.backbone_pose_mean[disc_pose_idx[i]]
             T_ip1 = solution.backbone_pose_mean[disc_pose_idx[i + 1]]
 
-            # Local positions of this tendon on discs i and i+1
-            p0_local = local_holes[i][j]
-            p1_local = local_holes[i + 1][j]
+            p0_world = T_i[:3, :3] @ local_holes[i][j] + T_i[:3, 3]
+            p1_world = T_ip1[:3, :3] @ local_holes[i + 1][j] + T_ip1[:3, 3]
 
-            p0_world = T_i[:3, :3] @ p0_local + T_i[:3, 3]
-            p1_world = T_ip1[:3, :3] @ p1_local + T_ip1[:3, 3]
-
-            # Build a line segment and add to this tendon's segments
             line = pv.lines_from_points([p0_world, p1_world])
             tendon_segments.append(line.tube(radius=tendon_radius))
         
         tendons.append(tendon_segments)
 
-    return tendons, discs
+    angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+    x = routing_radius * np.cos(angles)
+    y = routing_radius * np.sin(angles)
+    z = np.zeros_like(x)
+    hole_locations = np.array((x, y, z)).T
+
+    holes = []
+    for idx in disc_pose_idx:
+        T = solution.backbone_pose_mean[idx]
+        for loc in hole_locations:
+            loc_world = T[:3,:3] @ loc + T[:3,3]
+            hole = pv.Cylinder(loc_world, T[:3,2], radius=tendon_radius, height=disc_width)
+            holes.append(hole)
+    
+    return tendons, discs, holes
 
 
 def get_ellipsoid(center, cov, scale, num_sigma=2.0):
@@ -155,7 +162,7 @@ def get_tip_force_meshes(solution, tip_force_gt, scale=0.5):
     return tip_force_mean_mesh, tip_force_2_sigma_mesh, tip_force_gt_mesh
 
 
-def get_dist_load_meshes(solution, scale=2.0):
+def get_dist_load_meshes(solution, scale=3.0):
     meshes = []
 
     for pose, wrench in zip(solution.backbone_pose_mean, solution.applied_wrench_mean):
@@ -174,7 +181,9 @@ class TendonRobotPlotter:
                  plot_backbone_ellipsoids=True,
                  waypoints=None, 
                  cylinders=None, 
-                 azimuth=20):
+                 azimuth=15,
+                 camera_distance=0.6,
+                 focal_point_y=0.12):
         
         self.save_frames_mode = save_frames_mode
         self.plot_tip_force = plot_tip_force
@@ -183,7 +192,10 @@ class TendonRobotPlotter:
 
         self.cylinders = cylinders
         self.waypoints = waypoints
+
         self.azimuth = azimuth
+        self.camera_distance = camera_distance
+        self.focal_point_y = focal_point_y
 
         if save_frames_mode:
             dir_name = title.strip().lower().replace(" ", "_")
@@ -198,38 +210,50 @@ class TendonRobotPlotter:
             
     def init_scene(self, solution):
         plate = get_base_plate(solution)
-        self.plotter.add_mesh(plate, color="coldgrey", show_edges=True, line_width=1)
-
+        self.plotter.add_mesh(plate, color="silver", show_edges=True, line_width=1)
+        
         if self.waypoints is not None:
             for point in self.waypoints:
                 mesh = pv.Sphere(0.0015, center=point)
-                self.plotter.add_mesh(mesh, color="red", smooth_shading=True)
+                self.plotter.add_mesh(mesh, color="red")
         
         if self.cylinders is not None:
             for cylinder in self.cylinders:
                 mesh = pv.Cylinder(cylinder['center'], cylinder['z'], cylinder['radius'], cylinder['length'])
-                self.plotter.add_mesh(mesh, color='coral', smooth_shading=True)
-        
+                self.plotter.add_mesh(mesh, color='cadmiumyellow')
+
+        focal_point = np.array([0.0, self.focal_point_y, 0])
+        elevation = 15
+
+        az = np.deg2rad(self.azimuth)
+        el = np.deg2rad(elevation)
+
+        x = focal_point[0] + self.camera_distance * np.cos(el) * np.cos(az)
+        y = focal_point[1] + self.camera_distance * np.cos(el) * np.sin(az)
+        z = focal_point[2] + self.camera_distance * np.sin(el)
+
+        self.plotter.camera.position = (x, y, z)
+        self.plotter.camera.focal_point = focal_point
+
         light_positions = [
-            (0, 5, 5),
-            (0, -5, 5),
-            (5, 0, -5),
-            (-5, 0, -5)
+            (1, 1, 1),
+            (-1, 1, 1),
+            (2, 2, -2),
+            (-2, 2, -2),
         ]
 
         for pos in light_positions:
             light = pv.Light(
                 position=pos,
-                intensity=0.5,
+                intensity=0.1,
                 light_type='scene light'
             )
             self.plotter.add_light(light)
 
-        self.plotter.camera.position = (0.6, 0, 0.2)
-        self.plotter.camera.focal_point = (-0.1, 0.12, 0)
-        self.plotter.camera.azimuth += self.azimuth
+        cam_light = pv.Light(light_type='camera light', intensity=0.2)
+        self.plotter.add_light(cam_light)
 
-        self.plotter.add_axes()
+        # self.plotter.add_axes()
         self.plotter.enable_depth_peeling(10)
         self.plotter.enable_anti_aliasing()
 
@@ -238,9 +262,9 @@ class TendonRobotPlotter:
     
     def update(self, solution, p_desired=None, tip_force_gt=None):
 
-        backbone_radius = solution.tendon_disc_config.routing_radius / 12.0
+        backbone_radius = 0.1 * solution.tendon_disc_config.routing_radius
         backbone = get_tube_poses(solution.backbone_pose_mean, radius=backbone_radius)
-        tendons, discs = get_tendon_disc_meshes(solution)
+        tendons, discs, holes = get_tendon_disc_meshes(solution)
         backbone_ellipsoids = get_backbone_ellipsoids(solution)
 
         if self.plot_tip_force:
@@ -254,7 +278,7 @@ class TendonRobotPlotter:
 
         if self.frame == 0:
             self.backbone_mesh = backbone
-            self.plotter.add_mesh(self.backbone_mesh, color='black', opacity = 0.5, smooth_shading=True)
+            self.plotter.add_mesh(self.backbone_mesh, color='ultramarine', opacity = 0.7)
 
             self.tendon_meshes = tendons
             self.disc_meshes = discs
@@ -263,24 +287,29 @@ class TendonRobotPlotter:
             for i, disc in enumerate(self.disc_meshes):
                 if i == 0: continue
                 disc.compute_normals(cell_normals=False, point_normals=True, auto_orient_normals=True, inplace=True)
-                self.plotter.add_mesh(disc, color='steelblue', opacity=0.25, smooth_shading=True)
+                self.plotter.add_mesh(disc, color='cornflowerblue', opacity=0.2)
             
             for j, tendon in enumerate(self.tendon_meshes):
                 color = tendon_colors[j % len(tendon_colors)]
                 for segment in tendon:
                     self.plotter.add_mesh(segment, color=color, opacity=0.4)
 
+            self.hole_meshes = holes
+            for i, hole in enumerate(self.hole_meshes):
+                opacity = 0.4 if i < 8 else 0.125
+                self.plotter.add_mesh(hole, color='black', opacity=opacity)
+            
             if self.plot_backbone_ellipsoids:
                 self.backbone_2_sigma_meshes = backbone_ellipsoids
                 for ellipsoid in self.backbone_2_sigma_meshes:
-                    self.plotter.add_mesh(ellipsoid, color="cadmiumorange", opacity=0.3, smooth_shading=True)
+                    self.plotter.add_mesh(ellipsoid, color="deepcadmiumred", opacity=0.2)
 
             if self.plot_tip_force:
                 self.tip_force_mean_mesh = tip_force_mean_mesh
-                self.plotter.add_mesh(self.tip_force_mean_mesh, color='blueviolet')
+                self.plotter.add_mesh(self.tip_force_mean_mesh, color='darkorchid')
 
                 self.tip_force_2_sigma_mesh = tip_force_2_sigma_mesh
-                self.plotter.add_mesh(self.tip_force_2_sigma_mesh, color="gold", opacity=0.3, smooth_shading=True)
+                self.plotter.add_mesh(self.tip_force_2_sigma_mesh, color="cadmiumlemon", opacity=0.4)
 
                 if tip_force_gt is not None:
                     self.tip_force_gt_mesh = tip_force_gt_mesh
@@ -289,11 +318,11 @@ class TendonRobotPlotter:
             if self.plot_dist_load:
                 self.dist_load_meshes = dist_load_meshes
                 for mesh in self.dist_load_meshes:
-                    self.plotter.add_mesh(mesh, color='blueviolet', opacity=0.5)
+                    self.plotter.add_mesh(mesh, color='darkorchid', opacity=0.5)
 
             if p_desired is not None:
                 self.p_desired_mesh = p_desired_mesh
-                self.plotter.add_mesh(self.p_desired_mesh, color="red", smooth_shading=True)
+                self.plotter.add_mesh(self.p_desired_mesh, color="red")
 
             self.init_scene(solution)
         else:
@@ -306,6 +335,9 @@ class TendonRobotPlotter:
             for i, tendon in enumerate(tendons):
                 for j, segment in enumerate(tendon):
                     self.tendon_meshes[i][j].shallow_copy(segment)
+
+            for new_hole, hole in zip(holes, self.hole_meshes):
+                hole.shallow_copy(new_hole)
 
             if self.plot_backbone_ellipsoids:
                 for mesh_self, mesh in zip(self.backbone_2_sigma_meshes, backbone_ellipsoids):

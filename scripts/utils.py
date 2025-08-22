@@ -217,7 +217,7 @@ def generate_trajectory(position_function, sim_time, damping=5e-2, frame_rate=30
     return np.array(t), np.array(position_trajectory), np.array(tensions_trajectory)
 
 
-def generate_waypoints(num_waypoints, center=(0, 0.15, 0.0), radii=(0.1, 0.05, 0.1), seed=None):
+def generate_waypoints(num_waypoints, center=(0, 0.175, 0.0), radii=(0.1, 0.05, 0.1), seed=None):
     rng = np.random.default_rng(seed)
 
     waypoints = []
