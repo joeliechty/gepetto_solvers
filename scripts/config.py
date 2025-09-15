@@ -29,9 +29,9 @@ def get_base_config():
     config.tip_position_meas_std = 1e-3
     config.fbg_strain_meas_std = 3e-6
 
-    config.tension_drift_std = 1e-1
-    config.tip_force_drift_std = 1e-2
-    config.dist_load_drift_std = 3e-3
+    config.tension_drift_std = 1e-2
+    config.tip_force_drift_std = 1e-1
+    config.dist_load_drift_std = 5e-3
 
     config.angle_functions = [
         RoutingAngleFunction.LINEAR,

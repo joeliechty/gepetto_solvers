@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
 from plotting import TendonRobotPlotter
-from config import get_base_config
+from config import get_base_config, get_sim_config
 from utils import TipForceFunction, setup_plt, generate_waypoint_trajectory, GaussianProcessNoiseModel
 
 
@@ -11,16 +11,16 @@ def simulation(sim_time, do_plot, save_frames):
     config = get_base_config()
     simulator_tracking = TipForceSolver(config)
     simulator_nominal = TipForceSolver(config)
-    solver_jacobian = TipForceSolver(config)
+    solver_jacobian = TipForceSolver(get_sim_config())
     solver_tracking = TipForceSolver(config)
     config_prior = get_base_config()
     config_prior.tip_position_meas_std = 1.0
     solver_prior = TipForceSolver(config_prior)
 
-    t, positions, tensions_nominal, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
-    tip_force_function = TipForceFunction(max_magnitude=2 * config.tip_force_prior_std, seed=42)
+    t, positions, tensions_nominal, waypoints = generate_waypoint_trajectory(sim_time, seed=7)
+    tip_force_function = TipForceFunction(max_magnitude=2 * config.tip_force_prior_std, seed=7)
 
-    damping = 7e-2
+    damping = 6e-2
     tensions_min = np.array([0.5, 0.1, 0.1, 0.1])
 
     tensions_cmd_current = tensions_min
@@ -56,14 +56,14 @@ def simulation(sim_time, do_plot, save_frames):
         solution_nominal = simulator_nominal.simulation_step(tensions_nominal_gt, f_gt)
 
         p_tracking_mean = solution_tracking.backbone_pose_mean[-1][:3,3]
-        R = solution_tracking.backbone_pose_mean[-1][:3,:3]
-        p_tracking_cov = R @ solution_tracking.backbone_pose_cov[-1][3:,3:] @ R.T
+        R_tracking = solution_tracking.backbone_pose_mean[-1][:3,:3]
+        p_tracking_cov = R_tracking @ solution_tracking.backbone_pose_cov[-1][3:,3:] @ R_tracking.T
         p_tracking_cov += config.tip_position_meas_std ** 2 * np.eye(3)
         p_tracking_gt = p_tracking_mean + p_tracking_noise_model.step(p_tracking_cov)
 
         p_nominal_mean = solution_nominal.backbone_pose_mean[-1][:3,3]
-        R = solution_nominal.backbone_pose_mean[-1][:3,:3]
-        p_nominal_cov = R @ solution_nominal.backbone_pose_cov[-1][3:,3:] @ R.T
+        R_nominal = solution_nominal.backbone_pose_mean[-1][:3,:3]
+        p_nominal_cov = R_nominal @ solution_nominal.backbone_pose_cov[-1][3:,3:] @ R_nominal.T
         p_nominal_cov += config.tip_position_meas_std ** 2 * np.eye(3)
         p_nominal_gt = p_nominal_mean + p_nominal_noise_model.step(p_nominal_cov)
 
@@ -76,10 +76,7 @@ def simulation(sim_time, do_plot, save_frames):
         solution_jacobian = solver_jacobian.simulation_step(tensions_cmd_current, f_mean)
         
         J_position = solution_jacobian.J_pose_tensions[3:]
-        p = solution_tracking.backbone_pose_mean[-1][:3,3]
-        R = solution_tracking.backbone_pose_mean[-1][:3,:3]
-        
-        p_error = R.T @ (p_desired - p)
+        p_error = R_tracking.T @ (p_desired - p_tracking_gt)
 
         JTJ = J_position.T @ J_position
         A = JTJ + (damping**2) * np.eye(JTJ.shape[0])
@@ -147,53 +144,55 @@ def simulation(sim_time, do_plot, save_frames):
     
     plt.savefig("figures/position_noise_model.pdf", bbox_inches="tight")
 
-    setup_plt(height=9.0, grid=True)
+    setup_plt(width=6, height=2, grid=True)
 
-    fig, axes = plt.subplots(8, 1, sharex=True)
-    
-    for ii, ax in enumerate(axes[0:3]):
-        ax.plot(t, 1000 * tip_position_tracking_gt[:, ii], linestyle='-', color=color_cycle[ii], label='tracking')
-        ax.plot(t, 1000 * tip_position_nominal_gt[:, ii], linestyle='--', color=color_cycle[ii], label='open loop')
+    fig, axes = plt.subplots(2, 3, sharex=True)
+
+    for ii, ax in enumerate(axes[0,:]):
         ax.plot(t, 1000 * tip_position_desired[:, ii], linestyle=':', color='k', label='desired')
-        ax.set_ylabel(position_labels[ii])
+        ax.plot(t, 1000 * tip_position_tracking_gt[:, ii], linestyle='-', color=color_cycle[ii], label='tracking')
+        ax.plot(t, 1000 * tip_position_nominal_gt[:, ii], linestyle='--', color=color_cycle[ii], label='OL')
+        ax.set_xlim([t[0], t[-1]+1e-1])
+        if ii == 0:
+            ax.set_ylabel("tip position (mm)")
         if ii == 1:
-            ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
-        
-    force_labels = [r'force-$x$ (N)',
-                    r'force-$y$ (N)',
-                    r'force-$z$ (N)']
+            ax.legend(ncol=3, loc="upper right", bbox_to_anchor=(1, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
+            
 
-    for ii, ax in enumerate(axes[3:6]):
+    for ii, ax in enumerate(axes[1,:]):
         ax.plot(t, tip_force_gt[:,ii], 'k--', label='truth')
         ax.plot(t, tip_force_mean[:,ii], color=color_cycle[ii], label='mean')
         ax.fill_between(t, 
             tip_force_mean[:,ii] - 2 * tip_force_std[:,ii],
             tip_force_mean[:,ii] + 2 * tip_force_std[:,ii], 
             alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
-        ax.set_ylabel(force_labels[ii])
-        if ii == 1:
-            ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
-        
-    lines_cmd = axes[6].plot(t, tensions_cmd, linestyle='-')
+        ax.set_xlabel("time (sec)")
+        ax.set_xlim([t[0], t[-1]+1e-1])
+        if ii == 0:
+            ax.set_ylabel("tip force (N)")
+            ax.legend(ncol=3, loc="upper left", bbox_to_anchor=(0, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
+            
+    # lines_cmd = axes[6].plot(t, tensions_cmd, linestyle='-')
     # lines_gt  = axes[6].plot(t, tensions_gt, 'k:')
     # handles = [lines_cmd[0], lines_gt[0]]
     # labels  = ['cmd', 'truth']
     # axes[6].legend(handles, labels)
-    axes[6].set_ylabel('tendon tensions (N)')
+    # axes[6].set_ylabel('tendon tensions (N)')
     
-    axes[7].plot(t, np.linalg.norm(tip_force_gt, axis=1), color='purple')
-    axes[7].set_ylabel('force magnitude (N)')
-    axes[7].set_xlabel('time (sec)')
+    # axes[7].plot(t, np.linalg.norm(tip_force_gt, axis=1), color='purple')
+    # axes[7].set_ylabel('force magnitude (N)')
+    # axes[7].set_xlabel('time (sec)')
 
     fig.align_ylabels()
     plt.tight_layout()
-    
+    plt.subplots_adjust(wspace=0.35, hspace=0.2)
+
     plt.savefig("figures/tip_force_sim_results.pdf", bbox_inches="tight")
 
 
 if __name__ == "__main__":
     sim_time = 30
-    do_plot = True
+    do_plot = False
     save_frames = True
 
     simulation(sim_time, do_plot, save_frames)

@@ -60,7 +60,7 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
     force_gt = np.zeros((num_poses - 1, 3))
 
     forces_filter = moving_savgol(poly_order=0)
-    fbg_signals_filter = moving_savgol(poly_order=2)
+    fbg_signals_filter = moving_savgol(poly_order=1)
     tensions_noise_model = GaussianProcessNoiseModel(4, len(tensions_cmd), seed=42)
 
     for tensions, position_desired in zip(tensions_cmd, position_cmd):
@@ -98,6 +98,7 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
 
     p_greater = np.zeros(len(force_mean))
     force_thresh = 0.01
+    true_greater = np.linalg.norm(force_gt, axis=1) > force_thresh
     num_samples = 10000
 
     for i, (mu, Sigma) in enumerate(zip(force_mean, force_cov)):
@@ -110,9 +111,9 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
     s = np.linspace(0, config.rod_length, len(force_gt))
     force_two_std = 2 * np.sqrt(np.diagonal(force_cov, axis1=1, axis2=2))
 
-    setup_plt(height=5, grid=True)
+    setup_plt(height=4, width=2.5, grid=True)
 
-    fig, axes = plt.subplots(4, 1, sharex=True, gridspec_kw={'height_ratios': [2, 2, 2, 1.5]})
+    fig, axes = plt.subplots(4, 1, sharex=True, gridspec_kw={'height_ratios': [1, 1, 1, 0.7]})
 
     color_cycle = ['r', 'g', 'b']
 
@@ -128,13 +129,17 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
             force_mean[:,ii] + force_two_std[:,ii], alpha=0.2,
             color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
         ax.set_ylabel(force_labels[ii])
-        if ii == 1:
-            ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
+        if ii == 0:
+            ax.legend(ncol=3, loc="upper right", bbox_to_anchor=(1, 1.1), columnspacing=0.5, handletextpad=0.5)
 
-    axes[3].plot(s, p_greater, color='orangered')
+    axes[3].fill_between(s, 0, 1, where=true_greater > 0.5, color='grey', linewidth=0, alpha=0.5, label="truth")
     axes[3].axhline(0.95, color='k', linestyle=':')
+    axes[3].plot(s, p_greater, color='orangered', label="estimated")
+    axes[3].set_ylim([0, 1])
     axes[3].set_ylabel(r"$P(\| \text{force} \| > \tau)$")
     axes[3].set_xlabel('arclength (m)')
+    axes[3].legend(handletextpad=0.5, loc="center", framealpha=0.5, borderaxespad=0.2, borderpad=0.2, handlelength=1.0)
+    
 
     fig.align_ylabels()
     plt.tight_layout()
@@ -144,7 +149,7 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
 
 if __name__ == "__main__":
     sim_time = 10
-    do_plot = True
+    do_plot = False
     save_frames = True
 
     def trajectory(t):

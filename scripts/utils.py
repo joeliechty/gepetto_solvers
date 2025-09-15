@@ -17,7 +17,9 @@ class GaussianProcessNoiseModel:
 
         t = np.arange(num_steps)
         t_i, t_j = np.meshgrid(t, t, indexing='ij')
-        K = np.exp(-np.abs(t_i - t_j) / tau)
+
+        K = np.exp(-0.5 * (t_i - t_j)**2 / (tau**2))
+        K += 1e-8 * np.eye(num_steps)
 
         L = np.linalg.cholesky(K)
         self.gp_samples = L @ self.rng.standard_normal((num_steps, dim))

@@ -24,7 +24,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
         config.use_midpoint = True
         midpoint_solvers.append(TipForceSolver(config))
 
-    plotter = TendonRobotPlotter('kinematics_sim', plot_tip_force=True, save_frames_mode=True)
+    # plotter = TendonRobotPlotter('kinematics_sim', plot_tip_force=True, save_frames_mode=True)
     t, positions, tensions, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
     tip_force_function = TipForceFunction(max_magnitude=2 * config.tip_force_prior_std, seed=42)
 
@@ -48,8 +48,8 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
             traj_midpoint[idx].append(sol_midpoint.backbone_pose_mean[-1][:3, 3])
             solve_times_midpoint[idx].append(sol_midpoint.total_time_ms)
 
-            if idx == 3:
-                plotter.update(sol_midpoint)
+            # if idx == 3:
+            #     plotter.update(sol_midpoint)
             
         percent_complete = i / len(t) * 100
         print(f"\n\nProgress: {percent_complete:.1f} %\n", flush=True)
@@ -95,22 +95,33 @@ if __name__ == "__main__":
     config = get_base_config()
     num_nodes = config.num_discs + (config.num_discs - 1) * poses_between_discs
 
-    setup_plt(height=3.5, grid=True)
+    setup_plt(height=2.0, grid=True)
 
-    fig, axes = plt.subplots(2, 1, sharex=True)
+    # fig, axes = plt.subplots(2, 1, sharex=True)
 
-    axes[0].plot(num_nodes, rms_errors_euler, 'ko--', markerfacecolor="orangered")
-    axes[0].plot(num_nodes, rms_errors_midpoint, 'ko-', markerfacecolor="blue")
-    axes[0].set_ylabel('position error (RMS % length)')
-    axes[0].semilogy()
+    # axes[0].plot(num_nodes, rms_errors_euler, 'ko--', markerfacecolor="orangered", label="Euler")
+    # axes[0].plot(num_nodes, rms_errors_midpoint, 'ko-', markerfacecolor="blue", label="midpoint")
+    # axes[0].set_ylabel('position error (RMS % length)')
+    # axes[0].semilogy()
+    # axes[0].legend()
 
-    axes[1].plot(num_nodes, mean_solve_times_euler, 'ko--', markerfacecolor="orangered", label="Euler")
-    axes[1].plot(num_nodes, mean_solve_times_midpoint, 'ko-', markerfacecolor="blue", label="midpoint")
-    axes[1].set_xlabel('number of arclength nodes')
-    axes[1].set_ylabel('mean solve time (ms)')
-    axes[1].legend()
+    # axes[1].plot(num_nodes, mean_solve_times_euler, 'ko--', markerfacecolor="orangered")
+    # axes[1].plot(num_nodes, mean_solve_times_midpoint, 'ko-', markerfacecolor="blue")
+    # axes[1].set_xlabel('number of arclength nodes')
+    # axes[1].set_ylabel('mean solve time (ms)')
 
-    fig.align_ylabels()
-    fig.tight_layout()
+    # fig.align_ylabels()
 
-    fig.savefig("figures/kinematics_sim_results.pdf", bbox_inches="tight")
+    plt.figure()
+
+    plt.plot(num_nodes, rms_errors_euler, 'ko--', markerfacecolor="orangered", label="Euler")
+    plt.plot(num_nodes, rms_errors_midpoint, 'ko-', markerfacecolor="blue", label="midpoint")
+    plt.ylabel('RMS position error (% robot length)')
+    plt.xlabel('number of discrete arclength nodes')
+    plt.semilogy()
+    plt.legend()
+
+
+    plt.tight_layout()
+
+    plt.savefig("figures/kinematics_sim_results.pdf", bbox_inches="tight")
