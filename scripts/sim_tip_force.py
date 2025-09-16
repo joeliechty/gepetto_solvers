@@ -192,7 +192,7 @@ def simulation(sim_time, do_plot, save_frames):
 
 if __name__ == "__main__":
     sim_time = 30
-    do_plot = False
+    do_plot = True
     save_frames = True
 
     simulation(sim_time, do_plot, save_frames)

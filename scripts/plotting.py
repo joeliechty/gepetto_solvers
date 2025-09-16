@@ -175,7 +175,8 @@ def get_dist_load_meshes(solution, scale=3.0):
 class TendonRobotPlotter:
     def __init__(self, 
                  title, 
-                 save_frames_mode=False, 
+                 save_frames_mode=False,
+                 single_plot_mode=False,
                  plot_tip_force=False, 
                  plot_dist_load=False,
                  plot_backbone_ellipsoids=True,
@@ -186,6 +187,7 @@ class TendonRobotPlotter:
                  focal_point_y=0.12):
         
         self.save_frames_mode = save_frames_mode
+        self.single_plot_mode = single_plot_mode
         self.plot_tip_force = plot_tip_force
         self.plot_dist_load = plot_dist_load
         self.plot_backbone_ellipsoids = plot_backbone_ellipsoids
@@ -244,7 +246,9 @@ class TendonRobotPlotter:
         self.plotter.enable_anti_aliasing()
 
         if not self.save_frames_mode:
-            self.plotter.show(auto_close=False, interactive_update=True)
+            interactive_update = not self.single_plot_mode
+            # interactive_update=True
+            self.plotter.show(auto_close=False, interactive_update=interactive_update)
     
     def update(self, solution, p_desired=None, tip_force_gt=None):
 

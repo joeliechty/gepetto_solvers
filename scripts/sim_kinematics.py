@@ -24,7 +24,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
         config.use_midpoint = True
         midpoint_solvers.append(TipForceSolver(config))
 
-    # plotter = TendonRobotPlotter('kinematics_sim', plot_tip_force=True, save_frames_mode=True)
+    plotter = TendonRobotPlotter('kinematics_sim', plot_tip_force=True, save_frames_mode=True)
     t, positions, tensions, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
     tip_force_function = TipForceFunction(max_magnitude=2 * config.tip_force_prior_std, seed=42)
 
@@ -48,8 +48,8 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
             traj_midpoint[idx].append(sol_midpoint.backbone_pose_mean[-1][:3, 3])
             solve_times_midpoint[idx].append(sol_midpoint.total_time_ms)
 
-            # if idx == 3:
-            #     plotter.update(sol_midpoint)
+            if idx == 3:
+                plotter.update(sol_midpoint)
             
         percent_complete = i / len(t) * 100
         print(f"\n\nProgress: {percent_complete:.1f} %\n", flush=True)

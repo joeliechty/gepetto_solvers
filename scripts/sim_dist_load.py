@@ -149,7 +149,7 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
 
 if __name__ == "__main__":
     sim_time = 10
-    do_plot = False
+    do_plot = True
     save_frames = True
 
     def trajectory(t):
