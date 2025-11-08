@@ -15,9 +15,8 @@ public:
         gtsam::Key pose_1_key,
         gtsam::Key stress_0_key,
         gtsam::Key stress_1_key,
-        double ds,
+        double segment_length,
         const gtsam::Matrix6& K_inv,
-        bool use_midpoint, 
         const gtsam::SharedNoiseModel& model);
 
     gtsam::Vector evaluateError(
@@ -33,7 +32,6 @@ public:
 private:
     double ds_;
     gtsam::Matrix66 K_inv_;
-    bool use_midpoint_;
 };
 
 
@@ -49,7 +47,6 @@ public:
         gtsam::Key stress_0_key,
         gtsam::Key stress_1_key,
         gtsam::Key wrench_key,
-        const bool is_wrench_spatial,
         const gtsam::SharedNoiseModel& model);
 
     gtsam::Vector evaluateError(
@@ -72,9 +69,6 @@ private:
         gtsam::OptionalJacobian<6, 6> H_pose = {},
         gtsam::OptionalJacobian<6, 6> H_tip_pose = {},
         gtsam::OptionalJacobian<6, 6> H_tip_wrench = {}) const;
-
-    bool is_wrench_spatial_;
-
 };
 
 
