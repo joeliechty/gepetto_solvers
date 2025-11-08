@@ -1,5 +1,6 @@
 #pragma once
 
+#include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 
@@ -24,11 +25,26 @@ struct CosseratRodConfig {
 };
 
 
+struct CosseratRodSolution {
+    std::vector<gtsam::Matrix4> pose_mean;
+    std::vector<gtsam::Matrix6> pose_cov;
+
+    std::vector<gtsam::Vector6> wrench_mean;
+    std::vector<gtsam::Matrix6> wrench_cov;
+};
+
+
 class CosseratRod {
 public:
     CosseratRod(const CosseratRodConfig& config);
+
     gtsam::NonlinearFactorGraph build_graph() const;
+
     gtsam::Values get_initial_values();
+
+    CosseratRodSolution extract_solution(
+        const gtsam::Values& values, 
+        const gtsam::Marginals& marginals) const;
 
 private:
     CosseratRodConfig config_;
@@ -40,13 +56,16 @@ private:
 
 
 class BasicCosseratSolver {
+public:
     BasicCosseratSolver(const CosseratRodConfig& config);
 
-    void solve(gtsam::Vector3 tip_force);
+    CosseratRodSolution solve(gtsam::Vector3 tip_force);
 
 private:
-    void add_boundary_conditions(const gtsam::Vector3& tip_force);
+    void add_boundary_factors();
 
+    void add_force_factors(const gtsam::Vector3& tip_force);
+    
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
     gtsam::Marginals marginals_;
