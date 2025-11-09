@@ -4,7 +4,6 @@
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/LevenbergMarquardtParams.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
-#include <gtsam/inference/Symbol.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 
 #include "gtsam_factors.h"
@@ -12,14 +11,10 @@
 using namespace gtsam;
 
 
-inline Symbol pose_key(int node_idx) { return gtsam::Symbol('T', node_idx); }
-inline Symbol stress_key(int node_idx) { return gtsam::Symbol('S', node_idx); }
-inline Symbol wrench_key(int node_idx) { return gtsam::Symbol('F', node_idx); }
-
-
 CosseratRod::CosseratRod (const CosseratRodConfig& config) 
 : 
-    config_(config) 
+    config_(config),
+    id_(next_id_++)
 {
     K_inv_ = Matrix6::Zero();
     K_inv_(0, 0) = 1 / config_.k_bending;
@@ -41,13 +36,13 @@ CosseratRod::CosseratRod (const CosseratRodConfig& config)
 }
 
 
-Values CosseratRod::get_initial_values() {
+Values CosseratRod::get_initial_values() const {
     Values values;
     
     for (int i = 0; i < config_.num_backbone_nodes; ++i) {
-        values.insert(pose_key(i), Pose3(Rot3::Identity(), Point3(0.0, 0.0, i * ds_)));
-        values.insert(stress_key(i), Vector6(Vector6::Zero()));
-        if (i > 0) { values.insert(wrench_key(i), Vector6(Vector6::Zero())); }
+        values.insert(get_pose_key(i), Pose3(Rot3::Identity(), Point3(0.0, 0.0, i * ds_)));
+        values.insert(get_stress_key(i), Vector6(Vector6::Zero()));
+        if (i > 0) { values.insert(get_wrench_key(i), Vector6(Vector6::Zero())); }
     }
 
     return values;
@@ -59,10 +54,10 @@ NonlinearFactorGraph CosseratRod::build_graph() const {
 
     for (int i = 0; i + 1 < config_.num_backbone_nodes; ++i) {
         auto factor = CosseratRodTwistFactor(
-            pose_key(i), 
-            pose_key(i + 1), 
-            stress_key(i), 
-            stress_key(i + 1), 
+            get_pose_key(i), 
+            get_pose_key(i + 1), 
+            get_stress_key(i), 
+            get_stress_key(i + 1), 
             ds_, 
             K_inv_, 
             cosserat_twist_cov_);
@@ -73,11 +68,11 @@ NonlinearFactorGraph CosseratRod::build_graph() const {
     // Cosserat stress factors
     for (int i = 0; i + 1 < config_.num_backbone_nodes; ++i) {
         auto factor = CosseratRodStressFactor(
-            pose_key(i), 
-            pose_key(i + 1), 
-            stress_key(i), 
-            stress_key(i + 1),
-            wrench_key(i + 1),
+            get_pose_key(i), 
+            get_pose_key(i + 1), 
+            get_stress_key(i), 
+            get_stress_key(i + 1),
+            get_wrench_key(i + 1),
             small_wrench_cov_);
         
         graph.add(factor);
@@ -85,7 +80,7 @@ NonlinearFactorGraph CosseratRod::build_graph() const {
 
     // Near-zero prior constraint for tip stress
     auto factor = PriorFactor<Vector6>(
-        stress_key(config_.num_backbone_nodes - 1), Vector6::Zero(), small_wrench_cov_);
+        get_stress_key(config_.num_backbone_nodes - 1), Vector6::Zero(), small_wrench_cov_);
 
     graph.add(factor);
 
@@ -105,17 +100,32 @@ CosseratRodSolution CosseratRod::extract_solution(
     solution.wrench_cov.resize(config_.num_backbone_nodes - 1);
 
     for (int i = 0; i < config_.num_backbone_nodes; ++i) {
-        solution.pose_mean[i] = values.at<Pose3>(pose_key(i)).matrix();
-        solution.pose_cov[i] = marginals.marginalCovariance(pose_key(i));
+        solution.pose_mean[i] = values.at<Pose3>(get_pose_key(i)).matrix();
+        solution.pose_cov[i] = marginals.marginalCovariance(get_pose_key(i));
 
         // No applied force at the base pose
         if (i > 0) {
-            solution.wrench_mean[i - 1] = values.at<Vector6>(wrench_key(i));
-            solution.wrench_cov[i - 1] = marginals.marginalCovariance(wrench_key(i));
+            solution.wrench_mean[i - 1] = values.at<Vector6>(get_wrench_key(i));
+            solution.wrench_cov[i - 1] = marginals.marginalCovariance(get_wrench_key(i));
         }
     }
 
     return solution;
+}
+
+
+Symbol CosseratRod::get_pose_key(int node_idx) const {
+    return gtsam::Symbol('T', 1000 * id_ + node_idx);
+}
+
+
+Symbol CosseratRod::get_stress_key(int node_idx) const { 
+    return gtsam::Symbol('S', 1000 * id_ + node_idx); 
+}
+
+
+Symbol CosseratRod::get_wrench_key(int node_idx) const { 
+    return gtsam::Symbol('F', 1000 * id_ + node_idx); 
 }
 
 
@@ -161,7 +171,7 @@ CosseratRodSolution BasicCosseratSolver::solve(gtsam::Vector3 tip_force) {
 void BasicCosseratSolver::add_boundary_factors() {
     //TODO don't access keys in the solver only interface through rod class
     SharedDiagonal base_cov = noiseModel::Isotropic::Sigma(6, 1e-3);
-    auto factor = PriorFactor<Pose3>(pose_key(0), Pose3::Identity(), base_cov);
+    auto factor = PriorFactor<Pose3>(rod_.get_pose_key(0), Pose3::Identity(), base_cov);
 
     graph_.add(factor);
 }
@@ -171,22 +181,13 @@ void BasicCosseratSolver::add_force_factors(const Vector3& tip_force) {
     
     SharedDiagonal wrench_cov = noiseModel::Isotropic::Sigma(6, 1e-3);
 
-    for (int i = 0; i < rod_config_.num_backbone_nodes; ++i) {
-        if (i > 0) {
-            auto wrench_factor = PriorFactor<Vector6>(
-                wrench_key(i), 
-                Vector6::Zero(), 
-                wrench_cov);
+    for (int i = 1; i < rod_config_.num_backbone_nodes; ++i) {
+        auto wrench_factor = PriorFactor<Vector6>(
+            rod_.get_wrench_key(i), 
+            Vector6::Zero(), 
+            wrench_cov);
 
-            graph_.add(wrench_factor);
-        }
-
-        // auto stress_factor = PriorFactor<Vector6>(
-        //     stress_key(i), 
-        //     Vector6::Zero(), 
-        //     wrench_cov);
-
-        // graph_.add(stress_factor);
+        graph_.add(wrench_factor);
     }
 
 

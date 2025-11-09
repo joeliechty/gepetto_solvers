@@ -3,6 +3,7 @@
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/inference/Symbol.h>
 
 
 struct CosseratRodConfig {
@@ -40,18 +41,27 @@ public:
 
     gtsam::NonlinearFactorGraph build_graph() const;
 
-    gtsam::Values get_initial_values();
+    gtsam::Values get_initial_values() const;
 
     CosseratRodSolution extract_solution(
         const gtsam::Values& values, 
         const gtsam::Marginals& marginals) const;
+    
+    gtsam::Symbol get_pose_key(int node_idx) const;
+    
+    gtsam::Symbol get_stress_key(int node_idx) const;
+
+    gtsam::Symbol get_wrench_key(int node_idx) const;
 
 private:
-    CosseratRodConfig config_;
+    const CosseratRodConfig config_;
     double ds_;
     gtsam::Matrix6 K_inv_;
     gtsam::noiseModel::Diagonal::shared_ptr small_wrench_cov_;
     gtsam::noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
+
+    const int id_;
+    inline static int next_id_ = 0;
 };
 
 
@@ -65,7 +75,7 @@ private:
     void add_boundary_factors();
 
     void add_force_factors(const gtsam::Vector3& tip_force);
-    
+
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
     gtsam::Marginals marginals_;

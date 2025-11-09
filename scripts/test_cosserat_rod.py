@@ -1,13 +1,8 @@
-import sys
 import numpy as np
 
+import crest_sparse
 
-lib_path = "../build"
-sys.path.append(lib_path)
-
-import tendon_robot_gtsam_py
-
-config = tendon_robot_gtsam_py.CosseratRodConfig()
+config = crest_sparse.CosseratRodConfig()
 config.rod_length = 0.5
 config.num_backbone_nodes = 10
 config.k_bending = 1.0
@@ -23,7 +18,7 @@ config.sigma_small_moment = 1.0e-3
 config.sigma_base_position = 1.0e-3
 config.sigma_base_rotation = 1.03-3
 
-solver = tendon_robot_gtsam_py.BasicCosseratSolver(config)
+solver = crest_sparse.BasicCosseratSolver(config)
 
 tip_force = np.array([0.0, 0.0, 0.0])
 

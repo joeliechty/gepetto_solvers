@@ -64,7 +64,7 @@ gtsam/cmake-build-release/
 __pycache__/
 
 # Virtual environment
-venv/
+.venv/
 
 # Build artifacts
 build/

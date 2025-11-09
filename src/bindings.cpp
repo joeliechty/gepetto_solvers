@@ -6,7 +6,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(tendon_robot_gtsam_py, m) {
+PYBIND11_MODULE(crest_sparse, m) {
     py::class_<CosseratRodSolution>(m, "CosseratRodSolution")
         .def(py::init<>())
         .def_readwrite("pose_mean", &CosseratRodSolution::pose_mean)
