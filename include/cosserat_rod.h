@@ -69,12 +69,12 @@ class BasicCosseratSolver {
 public:
     BasicCosseratSolver(const CosseratRodConfig& config);
 
-    CosseratRodSolution solve(gtsam::Vector3 tip_force);
+    CosseratRodSolution solve(const gtsam::Vector3& tip_force_mean, const gtsam::Matrix3& tip_force_cov);
 
 private:
     void add_boundary_factors();
 
-    void add_force_factors(const gtsam::Vector3& tip_force);
+    void add_force_factors(const gtsam::Vector3& tip_force_mean, const gtsam::Matrix3& tip_force_cov);
 
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;

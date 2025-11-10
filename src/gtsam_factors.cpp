@@ -41,13 +41,9 @@ Vector CosseratRodTwistFactor::evaluateError(
     
     Vector6 twist_error = twist_p - twist;
 
-    if (H1) {
-        *H1 = -d_twist_d_delta * d_delta_d_pose_0;
-    }
+    if (H1) { *H1 = -d_twist_d_delta * d_delta_d_pose_0; }
 
-    if (H2) {
-        *H2 = -d_twist_d_delta * d_delta_d_pose_1;
-    }
+    if (H2) { *H2 = -d_twist_d_delta * d_delta_d_pose_1; }
 
     if (H3) { *H3 = 0.5 * ds_ * K_inv_; }
     

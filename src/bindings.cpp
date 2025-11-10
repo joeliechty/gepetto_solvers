@@ -32,8 +32,9 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("sigma_base_rotation", &CosseratRodConfig::sigma_base_rotation);
 
     py::class_<BasicCosseratSolver>(m, "BasicCosseratSolver")
-        .def(py::init<const CosseratRodConfig&>())  // only constructor exposed
+        .def(py::init<const CosseratRodConfig&>())
         .def("solve", &BasicCosseratSolver::solve,
-            py::arg("tip_force"),
-            py::call_guard<py::gil_scoped_release>());  // only solve exposed
+            py::arg("tip_force_mean"),
+            py::arg("tip_force_cov"),
+            py::call_guard<py::gil_scoped_release>());
 }

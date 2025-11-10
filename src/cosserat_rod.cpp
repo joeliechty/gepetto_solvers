@@ -2,9 +2,8 @@
 
 #include <gtsam/base/Vector.h>
 #include <gtsam/linear/NoiseModel.h>
-#include <gtsam/nonlinear/LevenbergMarquardtParams.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
-#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/nonlinear/DoglegOptimizer.h>
 
 #include "gtsam_factors.h"
 
@@ -137,30 +136,19 @@ BasicCosseratSolver::BasicCosseratSolver(const CosseratRodConfig& rod_config)
 }
 
 
-CosseratRodSolution BasicCosseratSolver::solve(gtsam::Vector3 tip_force) {
+CosseratRodSolution BasicCosseratSolver::solve(const Vector3& tip_force_mean, const Matrix3& tip_force_cov) {
     graph_ = rod_.build_graph();
 
-    std::cout << "adding boundary" << std::endl;
-
     add_boundary_factors();
+    add_force_factors(tip_force_mean, tip_force_cov);
 
-    std::cout << "adding force" << std::endl;
-
-    add_force_factors(tip_force);
-
-    LevenbergMarquardtParams params;
-    params.setVerbosityLM("SUMMARY");
-    LevenbergMarquardtOptimizer optimizer(graph_, values_, params);
-
-    std::cout << "running optimization" << std::endl;
+    DoglegParams params;
+    params.setVerbosity("TERMINATION");
+    params.setLinearSolverType("MULTIFRONTAL_QR");
+    DoglegOptimizer optimizer(graph_, values_, params);
 
     values_ = optimizer.optimize();
-
-    std::cout << "getting marginals" << std::endl;
-
     marginals_ = Marginals(graph_, values_);
-
-    std::cout << "extracting solution" << std::endl;
 
     CosseratRodSolution solution = rod_.extract_solution(values_, marginals_);
 
@@ -177,36 +165,25 @@ void BasicCosseratSolver::add_boundary_factors() {
 }
 
 
-void BasicCosseratSolver::add_force_factors(const Vector3& tip_force) {
+void BasicCosseratSolver::add_force_factors(const Vector3& tip_force_mean, const Matrix3& tip_force_cov) {
     
     SharedDiagonal wrench_cov = noiseModel::Isotropic::Sigma(6, 1e-3);
 
-    for (int i = 1; i < rod_config_.num_backbone_nodes; ++i) {
+    for (int i = 1; i + 1 < rod_config_.num_backbone_nodes; ++i) {
         auto wrench_factor = PriorFactor<Vector6>(
             rod_.get_wrench_key(i), 
-            Vector6::Zero(), 
+            Vector6::Zero(),
             wrench_cov);
 
         graph_.add(wrench_factor);
     }
 
+    Vector6 tip_wrench_mean = Vector6::Zero();
+    tip_wrench_mean.tail<3>() = tip_force_mean;
 
-    // SharedDiagonal wrench_cov = noiseModel::Diagonal::Sigmas((Vector(6) << 
-    //     rod_config_.sigma_small_moment, rod_config_.sigma_small_moment, rod_config_.sigma_small_moment, 
-    //     rod_config_.sigma_small_force, rod_config_.sigma_small_force, rod_config_.sigma_small_force).finished());
+    Matrix6 tip_wrench_cov = 1e-6 * Matrix6::Identity();
+    tip_wrench_cov.block<3,3>(3, 3) = tip_force_cov;
+    auto tip_wrench_noise = noiseModel::Gaussian::Covariance(tip_wrench_cov);
 
-
-    // for (int i = 1; i + 1 < rod_config_.num_backbone_nodes; ++i) {
-    //     auto factor = PriorFactor<Vector6>(
-    //         wrench_key(i), 
-    //         Vector6::Zero(), 
-    //         wrench_cov);
-
-    //     graph_.add(factor);
-    // }
-
-    // Vector6 tip_wrench_mean = Vector6::Zero();
-    // tip_wrench_mean.tail<3>() = tip_force;
-
-    // graph_.add(PriorFactor<Vector6>(wrench_key(rod_config_.num_backbone_nodes - 1), tip_wrench_mean, wrench_cov));
+    graph_.add(PriorFactor<Vector6>(rod_.get_wrench_key(rod_config_.num_backbone_nodes - 1), tip_wrench_mean, tip_wrench_noise));
 }
