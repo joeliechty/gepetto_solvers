@@ -28,15 +28,10 @@ Vector CosseratRodTwistFactor::evaluateError(
     OptionalMatrixType H4) const 
 {
     Matrix66 d_delta_d_pose_0, d_delta_d_pose_1;
-    Pose3 delta = pose_0.between(
-        pose_1,
-        H1 ? &d_delta_d_pose_0 : 0,
-        H2 ? &d_delta_d_pose_1 : 0);
+    Pose3 delta = pose_0.between(pose_1, &d_delta_d_pose_0, &d_delta_d_pose_1);
 
     Matrix66 d_twist_d_delta;
-    Vector6 twist = Pose3::Logmap(
-        delta, 
-        H1 || H2 ? &d_twist_d_delta : 0);
+    Vector6 twist = Pose3::Logmap(delta, &d_twist_d_delta);
     
     Vector6 stress_mid = 0.5 * (stress_0 + stress_1);
 
@@ -83,109 +78,104 @@ Vector CosseratRodStressFactor::evaluateError(
     OptionalMatrixType H2, 
     OptionalMatrixType H3, 
     OptionalMatrixType H4,
-    OptionalMatrixType H5) const {
-    
-    Matrix6 d_stress_p_d_pose_0, d_stress_p_d_pose_1, d_stress_p_d_wrench_sum;
+    OptionalMatrixType H5) const 
+{
+    Matrix6 d_wrench_body_d_pose_1, d_wrench_body_d_wrench;
+    Vector6 wrench_body = spatial_to_body_wrench(wrench_1, pose_1, d_wrench_body_d_wrench, d_wrench_body_d_pose_1);
 
-    Vector6 stress_p = transform_wrench_adjoint(pose_0, pose_1, wrench_1 + stress_1, 
-        H1 ? &d_stress_p_d_pose_0 : 0,
-        H2 ? &d_stress_p_d_pose_1 : 0,
-        H4 || H5 ? &d_stress_p_d_wrench_sum : 0);
-    
+    Matrix6 d_stress_p_d_pose_0, d_stress_p_d_pose_1, d_stress_p_d_wrench_sum;
+    Vector6 stress_p = transform_wrench_adjoint(
+        wrench_body + stress_1, 
+        pose_1, 
+        pose_0, 
+        &d_stress_p_d_wrench_sum,
+        &d_stress_p_d_pose_1,
+        &d_stress_p_d_pose_0);
+        
     Vector6 stress_error = stress_p - stress_0;
 
     if (H1) { *H1 = d_stress_p_d_pose_0; }
 
-    if (H2) { *H2 = d_stress_p_d_pose_1; }
+    if (H2) {
+        *H2 = d_stress_p_d_pose_1 + d_stress_p_d_wrench_sum * d_wrench_body_d_pose_1;
+    }
 
     if (H3) { *H3 = -Matrix6::Identity(); }
     
     if (H4) { *H4 = d_stress_p_d_wrench_sum; }
 
-    if (H5) { *H5 = d_stress_p_d_wrench_sum; }
+    if (H5) {
+        *H5 = d_stress_p_d_wrench_sum * d_wrench_body_d_wrench;
+    }
 
     return stress_error;
 }
 
 
 Vector6 CosseratRodStressFactor::transform_wrench_adjoint(
+    const Vector6& wrench_0,
+    const Pose3& pose_0,
     const Pose3& pose,
-    const Pose3& tip_pose,
-    const Vector6& tip_wrench,
-    OptionalJacobian<6, 6> H_pose,
-    OptionalJacobian<6, 6> H_tip_pose,
-    OptionalJacobian<6, 6> H_tip_wrench) const
-{
-    Matrix66 d_tip_pose_inv_d_tip_pose;
-    Matrix66 d_delta_d_tip_pose_inv, d_delta_d_pose;
-    Matrix66 d_wrench_d_delta, d_wrench_d_tip_wrench_;
+    OptionalJacobian<6, 6> H_wrench_0,
+    OptionalJacobian<6, 6> H_pose_0,
+    OptionalJacobian<6, 6> H_pose) const
+{   
+    Matrix6 d_pose_0_inv_d_pose_0;
+    Pose3 pose_0_inv = pose_0.inverse(&d_pose_0_inv_d_pose_0);
+    
+    Matrix6 d_delta_d_pose_0_inv, d_delta_d_pose;
+    Pose3 delta = pose_0_inv.compose(pose, &d_delta_d_pose_0_inv, &d_delta_d_pose);
+    
+    Matrix6 d_wrench_d_delta, d_wrench_d_wrench_0;
+    Vector6 wrench = delta.AdjointTranspose(wrench_0, &d_wrench_d_delta, &d_wrench_d_wrench_0);
 
-    Pose3 tip_pose_inv = tip_pose.inverse(
-        (H_pose ? &d_tip_pose_inv_d_tip_pose : 0));
+    if (H_wrench_0) { *H_wrench_0 = d_wrench_d_wrench_0; }
 
-    Pose3 delta = tip_pose_inv.compose(pose,
-        (H_tip_pose ? &d_delta_d_tip_pose_inv : 0),
-        (H_pose ? &d_delta_d_pose : 0));
-
-    Vector6 wrench = delta.AdjointTranspose(
-        tip_wrench,
-        (H_pose || H_tip_pose ? &d_wrench_d_delta : 0),
-        (H_tip_wrench ? &d_wrench_d_tip_wrench_ : 0));
-
-    // Assign Jacobians if needed
-    if (H_pose) {
-        *H_pose = d_wrench_d_delta * d_delta_d_pose;
-    }
-    if (H_tip_pose) {
-        *H_tip_pose = d_wrench_d_delta * d_delta_d_tip_pose_inv * d_tip_pose_inv_d_tip_pose;
-    }
-    if (H_tip_wrench) {
-        *H_tip_wrench = d_wrench_d_tip_wrench_;
+    if (H_pose_0) {
+        *H_pose_0 = d_wrench_d_delta * d_delta_d_pose_0_inv * d_pose_0_inv_d_pose_0;
     }
 
+    if (H_pose) { *H_pose = d_wrench_d_delta * d_delta_d_pose; }
+    
     return wrench;
 }
 
 
+Vector6 CosseratRodStressFactor::spatial_to_body_wrench(
+    const Vector6& wrench_spatial, 
+    const Pose3& pose, 
+    OptionalJacobian<6, 6> H_wrench,
+    OptionalJacobian<6, 6> H_pose) const
+{
+    Matrix3 d_moment_d_rotation, d_force_d_rotation, d_moment_d_moment, d_force_d_force;
+    Matrix36 d_rotation_d_pose;
 
+    Vector6 wrench_body;
 
-
-// // TODO this might be equivalent to transform wrench adjoint. Might need to consolidate
-// Vector6 spatial_to_body_wrench(
-//     const Vector6& wrench_spatial, 
-//     const Pose3& pose, 
-//     OptionalJacobian<6, 6> H_wrench,
-//     OptionalJacobian<6, 6> H_pose)
-// {
-//     Matrix3 d_moment_d_rotation, d_force_d_rotation, d_moment_d_moment, d_force_d_force;
-//     Matrix36 d_rotation_d_pose;
-
-//     Vector6 wrench_body;
-
-//     Rot3 rot = pose.rotation(d_rotation_d_pose);
+    Rot3 rot = pose.rotation(d_rotation_d_pose);
     
-//     wrench_body.head<3>() = rot.unrotate(wrench_spatial.head<3>(),
-//         H_pose ? &d_moment_d_rotation : 0,
-//         H_wrench ? &d_moment_d_moment : 0);
+    wrench_body.head<3>() = rot.unrotate(wrench_spatial.head<3>(),
+        H_pose ? &d_moment_d_rotation : 0,
+        H_wrench ? &d_moment_d_moment : 0);
     
-//     wrench_body.tail<3>() = rot.unrotate(wrench_spatial.tail<3>(),
-//         H_pose ? &d_force_d_rotation : 0,
-//         H_wrench ? &d_force_d_force : 0);
+    wrench_body.tail<3>() = rot.unrotate(wrench_spatial.tail<3>(),
+        H_pose ? &d_force_d_rotation : 0,
+        H_wrench ? &d_force_d_force : 0);
     
-//     if (H_pose) {
-//         H_pose->setZero();
-//         H_pose->block<3,3>(0,0) = d_moment_d_rotation;
-//         H_pose->block<3,3>(3,0) = d_force_d_rotation;
-//     }
+    if (H_pose) {
+        H_pose->setZero();
+        H_pose->block<3,3>(0,0) = d_moment_d_rotation;
+        H_pose->block<3,3>(3,0) = d_force_d_rotation;
+    }
 
-//     if (H_wrench) {
-//         H_wrench->setZero();
-//         H_wrench->block<3,3>(0,0) = d_moment_d_moment;
-//         H_wrench->block<3,3>(3,3) = d_force_d_force;
-//     }
+    if (H_wrench) {
+        H_wrench->setZero();
+        H_wrench->block<3,3>(0,0) = d_moment_d_moment;
+        H_wrench->block<3,3>(3,3) = d_force_d_force;
+    }
     
-//     return wrench_body;
-// }
+    return wrench_body;
+}
 
 // TendonDiscWrenchFactor::TendonDiscWrenchFactor(
 //     Key pose_prev_key,

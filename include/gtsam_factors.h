@@ -63,12 +63,18 @@ public:
 
 private:
     gtsam::Vector6 transform_wrench_adjoint(
+        const gtsam::Vector6& wrench_0,
+        const gtsam::Pose3& pose_0,
         const gtsam::Pose3& pose,
-        const gtsam::Pose3& tip_pose,
-        const gtsam::Vector6& tip_wrench,
-        gtsam::OptionalJacobian<6, 6> H_pose = {},
-        gtsam::OptionalJacobian<6, 6> H_tip_pose = {},
-        gtsam::OptionalJacobian<6, 6> H_tip_wrench = {}) const;
+        gtsam::OptionalJacobian<6, 6> H_wrench_0 = {},
+        gtsam::OptionalJacobian<6, 6> H_pose_0 = {},
+        gtsam::OptionalJacobian<6, 6> H_pose = {}) const;
+    
+    gtsam::Vector6 spatial_to_body_wrench(
+        const gtsam::Vector6& wrench_spatial, 
+        const gtsam::Pose3& pose, 
+        gtsam::OptionalJacobian<6, 6> H_wrench,
+        gtsam::OptionalJacobian<6, 6> H_pose) const;
 };
 
 
