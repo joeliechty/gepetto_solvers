@@ -84,7 +84,8 @@ class PlotterBase:
         self.window_size = (2000, 2000)
         self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_mode)
         self.frame = 0
-        
+        self.solve_time_ms_history = []
+
         self.init_scene()
 
     def init_scene(self):
@@ -105,13 +106,17 @@ class PlotterBase:
         self.plotter.enable_anti_aliasing()
     
     def update(self, solution):
-        self.update_meshes(solution)
+        self.update_meshes(solution.marginals)
 
         if self.frame == 0:
             show_plot = not self.save_frames_mode
             if show_plot:
                 interactive_update = not self.single_plot_mode
                 self.plotter.show(auto_close=False, interactive_update=interactive_update)
+
+        self.solve_time_ms_history.append(solution.meta.total_time_ms)
+        text = f"solve time: {solution.meta.total_time_ms:.2f} ms, average: {np.mean(self.solve_time_ms_history):.2f} ms"
+        self.plotter.add_text(text, position='upper_right', font_size=14, font="courier", name="solve_time")
 
         self.plotter.render()
 
@@ -122,7 +127,7 @@ class PlotterBase:
 
 
 class CosseratRodPlotter(PlotterBase):
-    def __init__(self, backbone_radius=0.01, force_scale=0.1, base_plate_size=0.1, **kwargs):
+    def __init__(self, backbone_radius=0.01, force_scale=0.05, base_plate_size=0.1, **kwargs):
         super().__init__(**kwargs)
 
         self.backbone_radius = backbone_radius
@@ -283,15 +288,6 @@ class CosseratRodPlotter(PlotterBase):
 #     max_norm = max(norms) if norms else 1.0  # Fallback value to avoid div-by-zero
 
 #     return max_norm
-
-# def get_dist_load_meshes(solution, scale=3.0):
-#     meshes = []
-
-#     for pose, wrench in zip(solution.backbone_pose_mean, solution.applied_wrench_mean):
-#         mesh = get_arrow(pose[:3,3], scale * wrench[3:], shaft_radius=0.0007, tip_radius=0.0015, tip_length=0.003)
-#         meshes.append(mesh)
-
-#     return meshes
     
 
 # class TendonRobotPlotter:

@@ -4,6 +4,22 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 
 
+gtsam::Vector6 transform_wrench_adjoint(
+        const gtsam::Vector6& wrench_0,
+        const gtsam::Pose3& pose_0,
+        const gtsam::Pose3& pose,
+        gtsam::OptionalJacobian<6, 6> H_wrench_0 = {},
+        gtsam::OptionalJacobian<6, 6> H_pose_0 = {},
+        gtsam::OptionalJacobian<6, 6> H_pose = {});
+
+
+gtsam::Vector6 spatial_to_body_wrench(
+        const gtsam::Vector6& wrench_spatial, 
+        const gtsam::Pose3& pose, 
+        gtsam::OptionalJacobian<6, 6> H_wrench,
+        gtsam::OptionalJacobian<6, 6> H_pose);
+
+
 using CosseratTwistBase = gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector6>;
 
 class CosseratRodTwistFactor: public CosseratTwistBase {
@@ -33,22 +49,6 @@ private:
     double ds_;
     gtsam::Matrix66 K_inv_;
 };
-
-
-gtsam::Vector6 transform_wrench_adjoint(
-        const gtsam::Vector6& wrench_0,
-        const gtsam::Pose3& pose_0,
-        const gtsam::Pose3& pose,
-        gtsam::OptionalJacobian<6, 6> H_wrench_0 = {},
-        gtsam::OptionalJacobian<6, 6> H_pose_0 = {},
-        gtsam::OptionalJacobian<6, 6> H_pose = {});
-
-
-gtsam::Vector6 spatial_to_body_wrench(
-        const gtsam::Vector6& wrench_spatial, 
-        const gtsam::Pose3& pose, 
-        gtsam::OptionalJacobian<6, 6> H_wrench,
-        gtsam::OptionalJacobian<6, 6> H_pose);
 
 
 using CosseratStressBase = gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector6, gtsam::Vector6>;
@@ -228,6 +228,7 @@ private:
 //     }
 // };
 
+
 // class DistLoadSmoothingFactor: public NoiseModelFactorN<Vector6, Vector6, Vector6, Vector6> {
 // public:
 //     using NoiseModelFactorN<Vector6, Vector6, Vector6, Vector6>::evaluateError;
@@ -276,6 +277,7 @@ private:
 //         return jerk;
 //     }
 // };
+
 
 class PositionMeasurementFactor: public gtsam::NoiseModelFactorN<gtsam::Pose3> {
     gtsam::Vector3 position_meas_;

@@ -1,67 +1,96 @@
 #pragma once
 
 #include <gtsam/geometry/Pose3.h>
+#include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/inference/Symbol.h>
+#include <memory>
 
 
 struct CosseratRodConfig {
     double rod_length;
-    int num_backbone_nodes;
+    int num_nodes;
 
     double k_bending;
     double k_torsion;
     double k_shear;
     double k_extension;
 
-    double sigma_twist_position;
-    double sigma_twist_rotation;
-    double sigma_stress_force;
-    double sigma_stress_moment;
+    double sigma_twist_pos;
+    double sigma_twist_rot;
+
     double sigma_small_force;
     double sigma_small_moment;
-    double sigma_base_position;
-    double sigma_base_rotation;
+
+    double sigma_base_pose_pos;
+    double sigma_base_pose_rot;
 };
 
 
-struct CosseratRodSolution {
+struct SolutionMetadata {
+    double solve_time_ms;
+    double total_time_ms;
+};
+
+
+struct CosseratRodMarginals {
     std::vector<gtsam::Matrix4> pose_mean;
     std::vector<gtsam::Matrix6> pose_cov;
+
+    std::vector<gtsam::Vector6> stress_mean;
+    std::vector<gtsam::Matrix6> stress_cov;
 
     std::vector<gtsam::Vector6> wrench_mean;
     std::vector<gtsam::Matrix6> wrench_cov;
 };
 
 
+struct CosseratRodSolution {
+    SolutionMetadata meta;
+    CosseratRodMarginals marginals;
+};
+
+
 class CosseratRod {
 public:
-    CosseratRod(const CosseratRodConfig& config);
+    CosseratRod(
+        double rod_length, 
+        int num_nodes, 
+        gtsam::Matrix6 K_inv, 
+        gtsam::SharedDiagonal twist_cov,
+        gtsam::SharedDiagonal stress_cov);
 
     gtsam::NonlinearFactorGraph build_graph() const;
 
     gtsam::Values get_initial_values() const;
 
-    CosseratRodSolution extract_solution(
+    CosseratRodMarginals get_marginals(
         const gtsam::Values& values, 
         const gtsam::Marginals& marginals) const;
-    
-    gtsam::Symbol get_pose_key(int node_idx) const;
-    
-    gtsam::Symbol get_stress_key(int node_idx) const;
 
-    gtsam::Symbol get_wrench_key(int node_idx) const;
+    gtsam::Key get_pose_key(int node_idx) const;
+
+    gtsam::Key get_stress_key(int node_idx) const;
+    
+    gtsam::Key get_wrench_key(int node_idx) const;
+    
+    const std::vector<gtsam::Key>& get_wrench_keys() const;
 
 private:
-    const CosseratRodConfig config_;
-    double ds_;
-    gtsam::Matrix6 K_inv_;
-    gtsam::noiseModel::Diagonal::shared_ptr small_wrench_cov_;
-    gtsam::noiseModel::Diagonal::shared_ptr cosserat_twist_cov_;
-
     const int id_;
     inline static int next_id_ = 0;
+
+    const int num_nodes_;
+    std::vector<double> ds_;
+    std::vector<gtsam::Matrix6> K_inv_;
+
+    gtsam::SharedDiagonal twist_cov_;
+    gtsam::SharedDiagonal stress_cov_;
+
+    std::vector<gtsam::Key> pose_keys_;
+    std::vector<gtsam::Key> stress_keys_;
+    std::vector<gtsam::Key> wrench_keys_;
 };
 
 
@@ -80,6 +109,8 @@ private:
     gtsam::Values values_;
     gtsam::Marginals marginals_;
 
-    CosseratRodConfig rod_config_;
-    CosseratRod rod_;
+    gtsam::SharedDiagonal small_wrench_cov_;
+    gtsam::SharedDiagonal base_pose_cov_;
+
+    std::unique_ptr<CosseratRod> rod_;
 };
