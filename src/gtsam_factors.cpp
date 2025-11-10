@@ -69,52 +69,50 @@ Vector CosseratRodStressFactor::evaluateError(
     const Pose3& pose_1, 
     const Vector6& stress_0, 
     const Vector6& stress_1, 
-    const Vector6& wrench_1,
+    const Vector6& wrench,
     OptionalMatrixType H1, 
     OptionalMatrixType H2, 
     OptionalMatrixType H3, 
     OptionalMatrixType H4,
     OptionalMatrixType H5) const 
 {
-    Matrix6 d_wrench_body_d_pose_1, d_wrench_body_d_wrench;
-    Vector6 wrench_body = spatial_to_body_wrench(wrench_1, pose_1, d_wrench_body_d_wrench, d_wrench_body_d_pose_1);
+    // This factor assumes wrench is in spatial frame, must convert coordinates to body (pose_0) frame
+    Matrix6 d_wrench_body_d_pose_0, d_wrench_body_d_wrench;
+    Vector6 wrench_body = spatial_to_body_wrench(wrench, pose_0, d_wrench_body_d_wrench, d_wrench_body_d_pose_0);
 
-    Matrix6 d_stress_p_d_pose_0, d_stress_p_d_pose_1, d_stress_p_d_wrench_sum;
-    Vector6 stress_p = transform_wrench_adjoint(
-        wrench_body + stress_1, 
+    // We transform stress_1 to pose_0 frame for summation with wrench_body
+    Matrix6 d_stress_pred_d_pose_0, d_stress_pred_d_pose_1, d_stress_pred_d_stress_1;
+    Vector6 stress_pred = transform_wrench_adjoint(
+        stress_1, 
         pose_1, 
         pose_0, 
-        &d_stress_p_d_wrench_sum,
-        &d_stress_p_d_pose_1,
-        &d_stress_p_d_pose_0);
-        
-    Vector6 stress_error = stress_p - stress_0;
+        &d_stress_pred_d_stress_1,
+        &d_stress_pred_d_pose_1,
+        &d_stress_pred_d_pose_0) + wrench_body;
+    
+    Vector6 stress_error = stress_pred - stress_0; // Result should equal stress_0
 
-    if (H1) { *H1 = d_stress_p_d_pose_0; }
+    if (H1) { *H1 = d_stress_pred_d_pose_0 + d_wrench_body_d_pose_0; }
 
-    if (H2) {
-        *H2 = d_stress_p_d_pose_1 + d_stress_p_d_wrench_sum * d_wrench_body_d_pose_1;
-    }
+    if (H2) { *H2 = d_stress_pred_d_pose_1; }
 
     if (H3) { *H3 = -Matrix6::Identity(); }
     
-    if (H4) { *H4 = d_stress_p_d_wrench_sum; }
+    if (H4) { *H4 = d_stress_pred_d_stress_1; }
 
-    if (H5) {
-        *H5 = d_stress_p_d_wrench_sum * d_wrench_body_d_wrench;
-    }
+    if (H5) { *H5 = d_wrench_body_d_wrench; }
 
     return stress_error;
 }
 
 
-Vector6 CosseratRodStressFactor::transform_wrench_adjoint(
+Vector6 transform_wrench_adjoint(
     const Vector6& wrench_0,
     const Pose3& pose_0,
     const Pose3& pose,
     OptionalJacobian<6, 6> H_wrench_0,
     OptionalJacobian<6, 6> H_pose_0,
-    OptionalJacobian<6, 6> H_pose) const
+    OptionalJacobian<6, 6> H_pose) 
 {   
     Matrix6 d_pose_0_inv_d_pose_0;
     Pose3 pose_0_inv = pose_0.inverse(&d_pose_0_inv_d_pose_0);
@@ -137,11 +135,44 @@ Vector6 CosseratRodStressFactor::transform_wrench_adjoint(
 }
 
 
-Vector6 CosseratRodStressFactor::spatial_to_body_wrench(
+TipStressWrenchFactor::TipStressWrenchFactor(
+    Key tip_stress_key,
+    Key tip_wrench_key,
+    Key tip_pose_key,
+    const SharedNoiseModel& model)
+:
+    NoiseModelFactorN(model, tip_stress_key, tip_wrench_key, tip_pose_key) {}
+
+
+Vector TipStressWrenchFactor::evaluateError(
+    const Vector6& stress, 
+    const Vector6& wrench,
+    const Pose3& pose,
+    OptionalMatrixType H1, 
+    OptionalMatrixType H2,
+    OptionalMatrixType H3) const 
+{
+    // This factor assumes wrench is in spatial frame, must convert coordinates to body (pose_0) frame
+    Matrix6 d_wrench_body_d_pose, d_wrench_body_d_wrench;
+    Vector6 wrench_body = spatial_to_body_wrench(wrench, pose, d_wrench_body_d_wrench, d_wrench_body_d_pose);
+    
+    Vector6 stress_error = stress - wrench_body;
+
+    if (H1) { *H1 = Matrix6::Identity(); }
+
+    if (H2) { *H2 = -d_wrench_body_d_wrench; }
+
+    if (H3) { *H3 = -d_wrench_body_d_pose; }
+
+    return stress_error;
+}
+
+
+Vector6 spatial_to_body_wrench(
     const Vector6& wrench_spatial, 
     const Pose3& pose, 
     OptionalJacobian<6, 6> H_wrench,
-    OptionalJacobian<6, 6> H_pose) const
+    OptionalJacobian<6, 6> H_pose)
 {
     Matrix3 d_moment_d_rotation, d_force_d_rotation, d_moment_d_moment, d_force_d_force;
     Matrix36 d_rotation_d_pose;
@@ -172,6 +203,9 @@ Vector6 CosseratRodStressFactor::spatial_to_body_wrench(
     
     return wrench_body;
 }
+
+
+
 
 // TendonDiscWrenchFactor::TendonDiscWrenchFactor(
 //     Key pose_prev_key,

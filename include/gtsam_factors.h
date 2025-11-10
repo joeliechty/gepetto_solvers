@@ -35,6 +35,22 @@ private:
 };
 
 
+gtsam::Vector6 transform_wrench_adjoint(
+        const gtsam::Vector6& wrench_0,
+        const gtsam::Pose3& pose_0,
+        const gtsam::Pose3& pose,
+        gtsam::OptionalJacobian<6, 6> H_wrench_0 = {},
+        gtsam::OptionalJacobian<6, 6> H_pose_0 = {},
+        gtsam::OptionalJacobian<6, 6> H_pose = {});
+
+
+gtsam::Vector6 spatial_to_body_wrench(
+        const gtsam::Vector6& wrench_spatial, 
+        const gtsam::Pose3& pose, 
+        gtsam::OptionalJacobian<6, 6> H_wrench,
+        gtsam::OptionalJacobian<6, 6> H_pose);
+
+
 using CosseratStressBase = gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector6, gtsam::Vector6>;
 
 class CosseratRodStressFactor: public CosseratStressBase {
@@ -60,22 +76,33 @@ public:
         gtsam::OptionalMatrixType H3, 
         gtsam::OptionalMatrixType H4,
         gtsam::OptionalMatrixType H5) const override;
-
-private:
-    gtsam::Vector6 transform_wrench_adjoint(
-        const gtsam::Vector6& wrench_0,
-        const gtsam::Pose3& pose_0,
-        const gtsam::Pose3& pose,
-        gtsam::OptionalJacobian<6, 6> H_wrench_0 = {},
-        gtsam::OptionalJacobian<6, 6> H_pose_0 = {},
-        gtsam::OptionalJacobian<6, 6> H_pose = {}) const;
-    
-    gtsam::Vector6 spatial_to_body_wrench(
-        const gtsam::Vector6& wrench_spatial, 
-        const gtsam::Pose3& pose, 
-        gtsam::OptionalJacobian<6, 6> H_wrench,
-        gtsam::OptionalJacobian<6, 6> H_pose) const;
 };
+
+
+using TipStressBase = gtsam::NoiseModelFactorN<gtsam::Vector6, gtsam::Vector6, gtsam::Pose3>;
+
+class TipStressWrenchFactor: public TipStressBase {
+    using TipStressBase::evaluateError;
+
+public:
+    TipStressWrenchFactor(
+        gtsam::Key tip_stress_key,
+        gtsam::Key tip_wrench_key,
+        gtsam::Key tip_pose_key,
+        const gtsam::SharedNoiseModel& model);
+        
+    gtsam::Vector evaluateError(
+        const gtsam::Vector6& stress, 
+        const gtsam::Vector6& wrench,
+        const gtsam::Pose3& pose,
+        gtsam::OptionalMatrixType H1, 
+        gtsam::OptionalMatrixType H2,
+        gtsam::OptionalMatrixType H3) const override;
+};
+
+
+
+
 
 
 using TendonWrenchBase = gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector4, gtsam::Vector6>;

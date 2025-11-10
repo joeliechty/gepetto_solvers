@@ -159,7 +159,7 @@ class CosseratRodPlotter(PlotterBase):
         force_arrows = []
         force_ellipsoids = []
 
-        for pose, wrench, wrench_cov in zip(solution.pose_mean[1:], solution.wrench_mean, solution.wrench_cov):
+        for pose, wrench, wrench_cov in zip(solution.pose_mean, solution.wrench_mean, solution.wrench_cov):
             p = pose[:3,3]
 
             force_mean = wrench[3:]

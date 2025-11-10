@@ -4,7 +4,7 @@
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
-
+#include <gtsam/slam/BetweenFactor.h>
 #include "gtsam_factors.h"
 
 using namespace gtsam;
@@ -41,7 +41,7 @@ Values CosseratRod::get_initial_values() const {
     for (int i = 0; i < config_.num_backbone_nodes; ++i) {
         values.insert(get_pose_key(i), Pose3(Rot3::Identity(), Point3(0.0, 0.0, i * ds_)));
         values.insert(get_stress_key(i), Vector6(Vector6::Zero()));
-        if (i > 0) { values.insert(get_wrench_key(i), Vector6(Vector6::Zero())); }
+        values.insert(get_wrench_key(i), Vector6(Vector6::Zero()));
     }
 
     return values;
@@ -71,16 +71,19 @@ NonlinearFactorGraph CosseratRod::build_graph() const {
             get_pose_key(i + 1), 
             get_stress_key(i), 
             get_stress_key(i + 1),
-            get_wrench_key(i + 1),
+            get_wrench_key(i),
             small_wrench_cov_);
         
         graph.add(factor);
     }
 
-    // Near-zero prior constraint for tip stress
-    auto factor = PriorFactor<Vector6>(
-        get_stress_key(config_.num_backbone_nodes - 1), Vector6::Zero(), small_wrench_cov_);
-
+    // Constrain tip strain to be equal to tip force TODO change this to do spatial/body
+    auto factor = TipStressWrenchFactor(
+        get_stress_key(config_.num_backbone_nodes - 1), 
+        get_wrench_key(config_.num_backbone_nodes - 1),
+        get_pose_key(config_.num_backbone_nodes - 1),
+        small_wrench_cov_);
+    
     graph.add(factor);
 
     return graph;
@@ -95,18 +98,15 @@ CosseratRodSolution CosseratRod::extract_solution(
 
     solution.pose_mean.resize(config_.num_backbone_nodes);
     solution.pose_cov.resize(config_.num_backbone_nodes);
-    solution.wrench_mean.resize(config_.num_backbone_nodes - 1);
-    solution.wrench_cov.resize(config_.num_backbone_nodes - 1);
+    solution.wrench_mean.resize(config_.num_backbone_nodes);
+    solution.wrench_cov.resize(config_.num_backbone_nodes);
 
     for (int i = 0; i < config_.num_backbone_nodes; ++i) {
         solution.pose_mean[i] = values.at<Pose3>(get_pose_key(i)).matrix();
         solution.pose_cov[i] = marginals.marginalCovariance(get_pose_key(i));
 
-        // No applied force at the base pose
-        if (i > 0) {
-            solution.wrench_mean[i - 1] = values.at<Vector6>(get_wrench_key(i));
-            solution.wrench_cov[i - 1] = marginals.marginalCovariance(get_wrench_key(i));
-        }
+        solution.wrench_mean[i] = values.at<Vector6>(get_wrench_key(i));
+        solution.wrench_cov[i] = marginals.marginalCovariance(get_wrench_key(i));
     }
 
     return solution;
@@ -169,7 +169,7 @@ void BasicCosseratSolver::add_force_factors(const Vector3& tip_force_mean, const
     
     SharedDiagonal wrench_cov = noiseModel::Isotropic::Sigma(6, 1e-3);
 
-    for (int i = 1; i + 1 < rod_config_.num_backbone_nodes; ++i) {
+    for (int i = 0; i + 1 < rod_config_.num_backbone_nodes; ++i) {
         auto wrench_factor = PriorFactor<Vector6>(
             rod_.get_wrench_key(i), 
             Vector6::Zero(),
