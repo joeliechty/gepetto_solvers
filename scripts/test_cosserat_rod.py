@@ -37,6 +37,6 @@ while(True):
     sigma = 1e-3 + sigma_amplitude - sigma_amplitude * np.cos(0.1 * t)
     tip_force_cov = sigma ** 2 * np.eye(3)
 
-    solution = solver.solve(tip_force_mean, tip_force_cov)
+    solution = solver.solve(tip_force_mean, tip_force_cov, None, None)
 
     plotter.update(solution)

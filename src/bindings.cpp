@@ -46,5 +46,7 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def("solve", &BasicCosseratSolver::solve,
             py::arg("tip_force_mean"),
             py::arg("tip_force_cov"),
+            py::arg("tip_pos_mean"),
+            py::arg("tip_pos_cov"),
             py::call_guard<py::gil_scoped_release>());
 }

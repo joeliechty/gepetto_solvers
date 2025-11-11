@@ -98,12 +98,18 @@ class BasicCosseratSolver {
 public:
     BasicCosseratSolver(const CosseratRodConfig& config);
 
-    CosseratRodSolution solve(const gtsam::Vector3& tip_force_mean, const gtsam::Matrix3& tip_force_cov);
+    CosseratRodSolution solve(
+        const std::optional<gtsam::Vector3>& tip_force_mean, 
+        const std::optional<gtsam::Matrix3>& tip_force_cov,
+        const std::optional<gtsam::Vector3>& tip_pos_mean,
+        const std::optional<gtsam::Matrix3>& tip_pos_cov);
 
 private:
     void add_boundary_factors();
 
-    void add_force_factors(const gtsam::Vector3& tip_force_mean, const gtsam::Matrix3& tip_force_cov);
+    void add_wrench_prior_factors(
+        const std::optional<gtsam::Vector3>& tip_force_mean, 
+        const std::optional<gtsam::Matrix3>& tip_force_cov);
 
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;

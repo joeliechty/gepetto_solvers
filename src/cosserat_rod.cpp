@@ -172,13 +172,18 @@ BasicCosseratSolver::BasicCosseratSolver(const CosseratRodConfig& config) {
 }
 
 
-CosseratRodSolution BasicCosseratSolver::solve(const Vector3& tip_force_mean, const Matrix3& tip_force_cov) {
+CosseratRodSolution BasicCosseratSolver::solve(
+    const std::optional<Vector3>& tip_force_mean, 
+    const std::optional<Matrix3>& tip_force_cov,
+    const std::optional<Vector3>& tip_pos_mean,
+    const std::optional<Matrix3>& tip_pos_cov) 
+{
     auto start = std::chrono::high_resolution_clock::now();
 
     graph_ = rod_->build_graph();
 
     add_boundary_factors();
-    add_force_factors(tip_force_mean, tip_force_cov);
+    add_wrench_prior_factors(tip_force_mean, tip_force_cov);
 
     DoglegParams params;
     params.setVerbosity("TERMINATION");
@@ -211,9 +216,9 @@ void BasicCosseratSolver::add_boundary_factors() {
 }
 
 
-void BasicCosseratSolver::add_force_factors(
-    const Vector3& tip_force_mean,
-    const Matrix3& tip_force_cov)
+void BasicCosseratSolver::add_wrench_prior_factors(
+    const std::optional<Vector3>& tip_force_mean,
+    const std::optional<Matrix3>& tip_force_cov)
 {
     std::vector<Key> wrench_keys = rod_->get_wrench_keys();
 
@@ -226,10 +231,17 @@ void BasicCosseratSolver::add_force_factors(
     }
 
     Vector6 tip_wrench_mean = Vector6::Zero();
-    tip_wrench_mean.tail<3>() = tip_force_mean;
+
+    if (tip_force_mean) {
+        tip_wrench_mean.tail<3>() = *tip_force_mean;
+    }
 
     Matrix6 cov = small_wrench_cov_->sigmas().array().square().matrix().asDiagonal();
-    cov.block<3,3>(3,3) = tip_force_cov;
+
+    if (tip_force_cov) {
+        cov.block<3,3>(3,3) = *tip_force_cov;
+    }
+    
     auto tip_wrench_cov = noiseModel::Gaussian::Covariance(cov);
 
     graph_.add(PriorFactor<Vector6>(
