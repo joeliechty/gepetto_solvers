@@ -135,16 +135,18 @@ Vector6 transform_wrench_adjoint(
 }
 
 
-TipStressWrenchFactor::TipStressWrenchFactor(
-    Key tip_stress_key,
-    Key tip_wrench_key,
-    Key tip_pose_key,
-    const SharedNoiseModel& model)
+BoundaryStressWrenchFactor::BoundaryStressWrenchFactor(
+    Key stress_key,
+    Key wrench_key,
+    Key pose_key,
+    const SharedNoiseModel& model,
+    bool is_base)
 :
-    NoiseModelFactorN(model, tip_stress_key, tip_wrench_key, tip_pose_key) {}
+    NoiseModelFactorN(model, stress_key, wrench_key, pose_key),
+    is_base_(is_base) {}
 
 
-Vector TipStressWrenchFactor::evaluateError(
+Vector BoundaryStressWrenchFactor::evaluateError(
     const Vector6& stress, 
     const Vector6& wrench,
     const Pose3& pose,
@@ -155,14 +157,17 @@ Vector TipStressWrenchFactor::evaluateError(
     // This factor assumes wrench is in spatial frame, must convert coordinates to body (pose_0) frame
     Matrix6 d_wrench_body_d_pose, d_wrench_body_d_wrench;
     Vector6 wrench_body = spatial_to_body_wrench(wrench, pose, d_wrench_body_d_wrench, d_wrench_body_d_pose);
-    
-    Vector6 stress_error = stress - wrench_body;
+
+    // At the base, the stress is negative wrench, since it flows out of the rod
+    double sign = is_base_ ? 1.0 : -1.0;
+
+    Vector6 stress_error = stress + sign * wrench_body;
 
     if (H1) { *H1 = Matrix6::Identity(); }
 
-    if (H2) { *H2 = -d_wrench_body_d_wrench; }
+    if (H2) { *H2 = sign * d_wrench_body_d_wrench; }
 
-    if (H3) { *H3 = -d_wrench_body_d_pose; }
+    if (H3) { *H3 = sign * d_wrench_body_d_pose; }
 
     return stress_error;
 }

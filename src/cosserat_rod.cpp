@@ -36,16 +36,29 @@ CosseratRod::CosseratRod (
         stress_keys_.push_back(Symbol('S', 1000 * id_ + i)); 
         wrench_keys_.push_back(Symbol('F', 1000 * id_ + i)); 
     }
+
+    dummy_wrench_key_ = Symbol('F', 1000 * id_ + 999); 
 }
 
 
-Key CosseratRod::get_pose_key(int node_idx) const { return pose_keys_[node_idx]; }
+int CosseratRod::clamp_node_idx(int node_idx) const {
+    if (node_idx == -1) 
+        return num_nodes_ - 1;
+    
+    if (node_idx < 0 || node_idx >= num_nodes_)
+        throw std::out_of_range("CosseratRod: invalid node_idx");
+    
+    return node_idx;
+}
+
+    
+Key CosseratRod::get_pose_key(int node_idx) const { return pose_keys_[clamp_node_idx(node_idx)]; }
 
 
-Key CosseratRod::get_stress_key(int node_idx) const { return stress_keys_[node_idx]; }
+Key CosseratRod::get_stress_key(int node_idx) const { return stress_keys_[clamp_node_idx(node_idx)]; }
 
 
-Key CosseratRod::get_wrench_key(int node_idx) const { return wrench_keys_[node_idx]; }
+Key CosseratRod::get_wrench_key(int node_idx) const { return wrench_keys_[clamp_node_idx(node_idx)]; }
 
 
 const std::vector<Key>& CosseratRod::get_wrench_keys() const {return wrench_keys_; }
@@ -60,6 +73,7 @@ Values CosseratRod::get_initial_values() const {
         values.insert(wrench_keys_[i], Vector6(Vector6::Zero()));
     }
 
+    values.insert(dummy_wrench_key_, Vector6(Vector6::Zero()));
     return values;
 }
 
@@ -67,6 +81,7 @@ Values CosseratRod::get_initial_values() const {
 NonlinearFactorGraph CosseratRod::build_graph() const {
     NonlinearFactorGraph graph;
 
+    // Cosserat twist factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
         auto factor = CosseratRodTwistFactor(
             pose_keys_[i], 
@@ -82,25 +97,47 @@ NonlinearFactorGraph CosseratRod::build_graph() const {
         
     // Cosserat stress factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
+        Key wrench_key = (i == 0) ? dummy_wrench_key_ : wrench_keys_[i];
+
         auto factor = CosseratRodStressFactor(
             pose_keys_[i], 
             pose_keys_[i + 1], 
             stress_keys_[i], 
             stress_keys_[i + 1],
-            wrench_keys_[i],
+            wrench_key,
             stress_cov_);
         
         graph.add(factor);
     }
 
-    // Constrain tip strain to be equal to tip force
-    auto factor = TipStressWrenchFactor(
+    // Constrain tip stress to be equal to tip force
+    bool is_base = false;
+    auto tip_wrench_factor = BoundaryStressWrenchFactor(
         stress_keys_.back(), 
         wrench_keys_.back(),
         pose_keys_.back(),
-        stress_cov_);
+        stress_cov_,
+        is_base);
     
-    graph.add(factor);
+    graph.add(tip_wrench_factor);
+    
+    // Makey dummy wrench zero
+    auto dummy_wrench_factor = PriorFactor<Vector6>(
+        dummy_wrench_key_, 
+        Vector6::Zero(),
+        stress_cov_);
+
+    graph.add(dummy_wrench_factor);
+    
+    is_base = true;
+    auto base_wrench_factor = BoundaryStressWrenchFactor(
+        stress_keys_.front(), 
+        wrench_keys_.front(),
+        pose_keys_.front(),
+        stress_cov_,
+        is_base);
+    
+    graph.add(base_wrench_factor);
 
     return graph;
 }
@@ -173,20 +210,22 @@ BasicCosseratSolver::BasicCosseratSolver(const CosseratRodConfig& config) {
 
 
 CosseratRodSolution BasicCosseratSolver::solve(
-    const std::optional<Vector3>& tip_force_mean, 
-    const std::optional<Matrix3>& tip_force_cov,
-    const std::optional<Vector3>& tip_pos_mean,
-    const std::optional<Matrix3>& tip_pos_cov) 
+    const std::optional<Vector6>& tip_wrench_mean, 
+    const std::optional<Matrix6>& tip_wrench_cov,
+    const std::optional<Matrix4>& tip_pose_mean,
+    const std::optional<Matrix6>& tip_pose_cov) 
 {
     auto start = std::chrono::high_resolution_clock::now();
 
     graph_ = rod_->build_graph();
 
-    add_boundary_factors();
-    add_wrench_prior_factors(tip_force_mean, tip_force_cov);
+    add_prior_factors(
+        tip_wrench_mean, 
+        tip_wrench_cov,
+        tip_pose_mean,
+        tip_pose_cov);
 
     DoglegParams params;
-    params.setVerbosity("TERMINATION");
     params.setLinearSolverType("MULTIFRONTAL_QR");
     DoglegOptimizer optimizer(graph_, values_, params);
 
@@ -205,47 +244,56 @@ CosseratRodSolution BasicCosseratSolver::solve(
 
     solution.meta.total_time_ms = std::chrono::duration<double, std::milli>(stop - start).count();
     solution.meta.solve_time_ms = std::chrono::duration<double, std::milli>(stop_solve - start_solve).count();
+    solution.meta.error = optimizer.error();
+    solution.meta.iterations = optimizer.iterations();
 
     return solution;
 }
 
 
-void BasicCosseratSolver::add_boundary_factors() {
-    auto factor = PriorFactor<Pose3>(rod_->get_pose_key(0), Pose3::Identity(), base_pose_cov_);
-    graph_.add(factor);
-}
-
-
-void BasicCosseratSolver::add_wrench_prior_factors(
-    const std::optional<Vector3>& tip_force_mean,
-    const std::optional<Matrix3>& tip_force_cov)
+void BasicCosseratSolver::add_prior_factors(
+    const std::optional<Vector6>& tip_wrench_mean,
+    const std::optional<Matrix6>& tip_wrench_cov,
+    const std::optional<Matrix4>& tip_pose_mean,
+    const std::optional<Matrix6>& tip_pose_cov)
 {
+    // Constrain base pose to identity 
+    auto base_pose_factor = PriorFactor<Pose3>(
+        rod_->get_pose_key(0), 
+        Pose3::Identity(), 
+        base_pose_cov_);
+    
+    graph_.add(base_pose_factor);
+
+    // Constrain all wrenches on the interior of the rod to be zero
     std::vector<Key> wrench_keys = rod_->get_wrench_keys();
 
-    for (size_t i = 0; i + 1 < wrench_keys.size(); ++i) {
-        auto wrench_factor = PriorFactor<Vector6>(
+    // Skip base and tip wrenches
+    for (size_t i = 1; i + 1 < wrench_keys.size(); ++i) {
+        auto factor = PriorFactor<Vector6>(
             wrench_keys[i],
             Vector6::Zero(),
             small_wrench_cov_);
-        graph_.add(wrench_factor);
+        
+        graph_.add(factor);
     }
 
-    Vector6 tip_wrench_mean = Vector6::Zero();
-
-    if (tip_force_mean) {
-        tip_wrench_mean.tail<3>() = *tip_force_mean;
+    // Set prior on tip wrench/pose based on user input
+    if (tip_wrench_mean) {
+        auto factor = PriorFactor<Vector6>(
+            wrench_keys.back(),
+            *tip_wrench_mean,
+            noiseModel::Gaussian::Covariance(*tip_wrench_cov));
+        
+        graph_.add(factor);
     }
 
-    Matrix6 cov = small_wrench_cov_->sigmas().array().square().matrix().asDiagonal();
+    if (tip_pose_mean) {
+        auto factor = PriorFactor<Pose3>(
+            rod_->get_pose_key(-1),
+            Pose3(*tip_pose_mean),
+            noiseModel::Gaussian::Covariance(*tip_pose_cov));
 
-    if (tip_force_cov) {
-        cov.block<3,3>(3,3) = *tip_force_cov;
+        graph_.add(factor);
     }
-    
-    auto tip_wrench_cov = noiseModel::Gaussian::Covariance(cov);
-
-    graph_.add(PriorFactor<Vector6>(
-        wrench_keys.back(),
-        tip_wrench_mean,
-        tip_wrench_cov));
 }

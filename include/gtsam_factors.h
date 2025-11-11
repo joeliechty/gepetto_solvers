@@ -79,17 +79,18 @@ public:
 };
 
 
-using TipStressBase = gtsam::NoiseModelFactorN<gtsam::Vector6, gtsam::Vector6, gtsam::Pose3>;
+using BoundaryStressBase = gtsam::NoiseModelFactorN<gtsam::Vector6, gtsam::Vector6, gtsam::Pose3>;
 
-class TipStressWrenchFactor: public TipStressBase {
-    using TipStressBase::evaluateError;
+class BoundaryStressWrenchFactor: public BoundaryStressBase {
+    using BoundaryStressBase::evaluateError;
 
 public:
-    TipStressWrenchFactor(
-        gtsam::Key tip_stress_key,
-        gtsam::Key tip_wrench_key,
-        gtsam::Key tip_pose_key,
-        const gtsam::SharedNoiseModel& model);
+    BoundaryStressWrenchFactor(
+        gtsam::Key stress_key,
+        gtsam::Key wrench_key,
+        gtsam::Key pose_key,
+        const gtsam::SharedNoiseModel& model,
+        bool is_base);
         
     gtsam::Vector evaluateError(
         const gtsam::Vector6& stress, 
@@ -98,11 +99,10 @@ public:
         gtsam::OptionalMatrixType H1, 
         gtsam::OptionalMatrixType H2,
         gtsam::OptionalMatrixType H3) const override;
+
+private:
+    const bool is_base_;
 };
-
-
-
-
 
 
 using TendonWrenchBase = gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector4, gtsam::Vector6>;

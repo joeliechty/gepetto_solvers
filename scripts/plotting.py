@@ -115,7 +115,7 @@ class PlotterBase:
                 self.plotter.show(auto_close=False, interactive_update=interactive_update)
 
         self.solve_time_ms_history.append(solution.meta.total_time_ms)
-        text = f"solve time: {solution.meta.total_time_ms:.2f} ms, average: {np.mean(self.solve_time_ms_history):.2f} ms"
+        text = f"iterations: {solution.meta.iterations}, error: {solution.meta.error:.2f}, solve time: {solution.meta.total_time_ms:.2f} ms, average: {np.mean(self.solve_time_ms_history):.2f} ms"
         self.plotter.add_text(text, position='upper_right', font_size=14, font="courier", name="solve_time")
 
         self.plotter.render()
@@ -127,15 +127,36 @@ class PlotterBase:
 
 
 class CosseratRodPlotter(PlotterBase):
-    def __init__(self, backbone_radius=0.01, force_scale=0.05, base_plate_size=0.1, **kwargs):
+    def __init__(self,
+                 plot_tip_plate=False,
+                 plot_wrenches=True,
+                 plot_internal_wrenches=False,
+                 plot_base_wrench=False,
+                 plot_backbone_frames=False,
+                 plot_backbone_ellipsoids=True,
+                 backbone_radius=0.01, 
+                 moment_scale = 0.2, 
+                 force_scale=0.1, 
+                 base_plate_size=0.1, 
+                 cartesian_frame_scale=0.05,
+                 **kwargs):
+        
         super().__init__(**kwargs)
 
+        self.plot_tip_plate = plot_tip_plate
+        self.plot_wrenches = plot_wrenches
+        self.plot_internal_wrenches = plot_internal_wrenches
+        self.plot_base_wrench = plot_base_wrench
+        self.plot_backbone_frames = plot_backbone_frames
+        self.plot_backbone_ellipsoids = plot_backbone_ellipsoids
+
         self.backbone_radius = backbone_radius
+        self.moment_scale = moment_scale
         self.force_scale = force_scale
         self.base_plate_size = base_plate_size
+        self.cartesian_frame_scale = cartesian_frame_scale
 
-    def get_base_plate(self):
-        #TODO transform using pose0
+    def get_end_plate(self, pose):
         thick = self.base_plate_size / 10.0
         plate = pv.Cube(
             center=(0, -thick / 2, 0), 
@@ -144,9 +165,47 @@ class CosseratRodPlotter(PlotterBase):
             z_length=thick
         )
 
+        plate.points = (plate.points @ pose[:3, :3].T) + pose[:3, 3]
+
         return plate
 
-    def get_backbone_ellipsoids(self, solution):
+    def update_base_plate(self, solution):
+        plate = self.get_end_plate(solution.pose_mean[0])
+
+        if self.frame == 0:
+            self.base_plate = plate
+            self.plotter.add_mesh(self.base_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
+            return
+        
+        self.base_plate.shallow_copy(plate)
+    
+    def update_tip_plate(self, solution):
+        if not self.plot_tip_plate:
+            return
+        
+        plate = self.get_end_plate(solution.pose_mean[-1])
+
+        if self.frame == 0:
+            self.tip_plate = plate
+            self.plotter.add_mesh(self.tip_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
+            return
+        
+        self.tip_plate.shallow_copy(plate)
+    
+    def update_rod_tube(self, solution):
+        tube = get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
+        
+        if self.frame == 0:
+            self.backbone_tube_mesh = tube
+            self.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.5)
+            return
+        
+        self.backbone_tube_mesh.shallow_copy(tube)
+
+    def update_backbone_ellipsoids(self, solution):
+        if not self.plot_backbone_ellipsoids:
+            return
+
         ellipsoids = []
 
         for pose, cov in zip(solution.pose_mean, solution.pose_cov):
@@ -157,67 +216,135 @@ class CosseratRodPlotter(PlotterBase):
             ellipsoid = get_ellipsoid(p, cov, scale=1.0)
             ellipsoids.append(ellipsoid)
 
-        return ellipsoids
-    
-    def get_force_meshes(self, solution):
-
-        force_arrows = []
-        force_ellipsoids = []
-
-        for pose, wrench, wrench_cov in zip(solution.pose_mean, solution.wrench_mean, solution.wrench_cov):
-            p = pose[:3,3]
-
-            force_mean = wrench[3:]
-            force_mean_mesh = get_arrow(p, self.force_scale * force_mean)
-            force_cov = wrench_cov[3:,3:]
-            
-            center = p + force_mean * self.force_scale
-            force_cov_mesh = get_ellipsoid(center, force_cov, self.force_scale)
-
-            force_arrows.append(force_mean_mesh)
-            force_ellipsoids.append(force_cov_mesh)
-        
-        return force_arrows, force_ellipsoids
-
-    def init_meshes(self, backbone_tube_mesh, backbone_ellipsoid_meshes, force_arrow_meshes, force_ellipsoid_meshes):
-        plate = self.get_base_plate()
-        self.plotter.add_mesh(plate, color="silver", show_edges=True, line_width=2)
-
-        self.backbone_tube_mesh = backbone_tube_mesh
-        self.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.7)
-
-        self.backbone_ellipsoid_meshes = backbone_ellipsoid_meshes
-        for ellipsoid in self.backbone_ellipsoid_meshes:
-            self.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
-
-        self.force_arrow_meshes = force_arrow_meshes
-        for arrow in self.force_arrow_meshes:
-            self.plotter.add_mesh(arrow, color='darkorchid', lighting=False)
-
-        self.force_ellipsoid_meshes = force_ellipsoid_meshes
-        for ellipsoid in self.force_ellipsoid_meshes:
-            self.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
-
-    def update_meshes(self, solution):
-        backbone_tube_mesh = get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
-        backbone_ellipsoid_meshes = self.get_backbone_ellipsoids(solution)
-        force_arrow_meshes, force_ellipsoid_meshes = self.get_force_meshes(solution)
-
         if self.frame == 0:
-            self.init_meshes(backbone_tube_mesh, backbone_ellipsoid_meshes, force_arrow_meshes, force_ellipsoid_meshes)
+            self.backbone_ellipsoid_meshes = ellipsoids
+            for ellipsoid in self.backbone_ellipsoid_meshes:
+                self.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
             return
         
-        self.backbone_tube_mesh.shallow_copy(backbone_tube_mesh)
-
-        for mesh_self, mesh_new in zip(self.backbone_ellipsoid_meshes, backbone_ellipsoid_meshes):
+        for mesh_self, mesh_new in zip(self.backbone_ellipsoid_meshes, ellipsoids):
             mesh_self.shallow_copy(mesh_new)
 
-        for mesh_self, mesh_new in zip(self.force_arrow_meshes, force_arrow_meshes):
+    def update_backbone_frames(self, solution):
+        if not self.plot_backbone_frames:
+            return
+
+        frames = []
+        shaft_radius = 0.001
+
+        for pose in solution.pose_mean:
+            R = pose[:3, :3]
+            p = pose[:3, 3]
+
+            frames.append([
+                get_arrow(p, self.cartesian_frame_scale * R[:,0], shaft_radius=shaft_radius),
+                get_arrow(p, self.cartesian_frame_scale * R[:,1], shaft_radius=shaft_radius),
+                get_arrow(p, self.cartesian_frame_scale * R[:,2], shaft_radius=shaft_radius)
+            ])
+
+        if self.frame == 0:
+            frame_colors = ["red", "green", "blue"]
+            self.backbone_frame_meshes = frames
+            for frame in self.backbone_frame_meshes:
+                for arrow, color in zip(frame, frame_colors):
+                    self.plotter.add_mesh(arrow, color=color, lighting=False, opacity=0.4)
+
+        for frame_self, frame_new in zip(self.backbone_frame_meshes, frames):
+            for mesh_self, mesh_new in zip(frame_self, frame_new):
+                mesh_self.shallow_copy(mesh_new)
+
+        return frames
+    
+    def get_wrench_meshes(self, solution):
+        poses = solution.pose_mean
+        wrenches = solution.wrench_mean
+        covs = solution.wrench_cov
+
+        if not self.plot_internal_wrenches:
+            poses = [poses[0], poses[-1]]
+            wrenches = [wrenches[0], wrenches[-1]]
+            covs = [covs[0], covs[-1]]
+
+        if not self.plot_base_wrench and len(poses) > 1:
+            poses = poses[1:]
+            wrenches = wrenches[1:]
+            covs = covs[1:]
+
+        moment_arrows, moment_ellipsoids = [], []
+        force_arrows, force_ellipsoids = [], []
+
+        for pose, wrench, wrench_cov in zip(poses, wrenches, covs):
+            p = pose[:3, 3]
+
+            moment_mean, force_mean = wrench[:3], wrench[3:]
+            moment_cov, force_cov = wrench_cov[:3, :3], wrench_cov[3:, 3:]
+
+            moment_arrow = get_arrow(p, self.moment_scale * moment_mean)
+            force_arrow = get_arrow(p, self.force_scale * force_mean)
+
+            moment_ellipsoid = get_ellipsoid(
+                p + self.moment_scale * moment_mean,
+                moment_cov,
+                self.moment_scale,
+            )
+
+            force_ellipsoid = get_ellipsoid(
+                p + self.force_scale * force_mean,
+                force_cov,
+                self.force_scale,
+            )
+
+            moment_arrows.append(moment_arrow)
+            moment_ellipsoids.append(moment_ellipsoid)
+            force_arrows.append(force_arrow)
+            force_ellipsoids.append(force_ellipsoid)
+
+        return moment_arrows, moment_ellipsoids, force_arrows, force_ellipsoids
+
+    def update_wrenches(self, solution):
+        if not self.plot_wrenches:
+            return 
+    
+        moment_arrows, moment_ellipsoids, force_arrows, force_ellipsoids = self.get_wrench_meshes(solution)
+
+        if self.frame == 0:
+            self.moment_arrow_meshes = moment_arrows
+            for arrow in self.moment_arrow_meshes:
+                self.plotter.add_mesh(arrow, color='deeppink', lighting=False)
+
+            self.moment_ellipsoid_meshes = moment_ellipsoids
+            for ellipsoid in self.moment_ellipsoid_meshes:
+                self.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+
+            self.force_arrow_meshes = force_arrows
+            for arrow in self.force_arrow_meshes:
+                self.plotter.add_mesh(arrow, color='darkorchid', lighting=False)
+
+            self.force_ellipsoid_meshes = force_ellipsoids
+            for ellipsoid in self.force_ellipsoid_meshes:
+                self.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+
+            return
+        
+        for mesh_self, mesh_new in zip(self.moment_arrow_meshes, moment_arrows):
             mesh_self.shallow_copy(mesh_new)
         
-        for mesh_self, mesh_new in zip(self.force_ellipsoid_meshes, force_ellipsoid_meshes):
+        for mesh_self, mesh_new in zip(self.moment_ellipsoid_meshes, moment_ellipsoids):
             mesh_self.shallow_copy(mesh_new)
 
+        for mesh_self, mesh_new in zip(self.force_arrow_meshes, force_arrows):
+            mesh_self.shallow_copy(mesh_new)
+        
+        for mesh_self, mesh_new in zip(self.force_ellipsoid_meshes, force_ellipsoids):
+            mesh_self.shallow_copy(mesh_new)
+            
+    def update_meshes(self, solution):
+        self.update_base_plate(solution)
+        self.update_tip_plate(solution)
+        self.update_rod_tube(solution)
+        self.update_backbone_ellipsoids(solution)
+        self.update_wrenches(solution)
+        self.update_backbone_frames(solution)
 
 
 # from pathlib import Path

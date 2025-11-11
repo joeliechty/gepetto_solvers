@@ -10,7 +10,9 @@ PYBIND11_MODULE(crest_sparse, m) {
     py::class_<SolutionMetadata>(m, "SolutionMetadata")
         .def(py::init<>())
         .def_readwrite("solve_time_ms", &SolutionMetadata::solve_time_ms)
-        .def_readwrite("total_time_ms", &SolutionMetadata::total_time_ms);
+        .def_readwrite("total_time_ms", &SolutionMetadata::total_time_ms)
+        .def_readwrite("iterations", &SolutionMetadata::iterations)
+        .def_readwrite("error", &SolutionMetadata::error);
 
     py::class_<CosseratRodMarginals>(m, "CosseratRodMarginals")
         .def(py::init<>())

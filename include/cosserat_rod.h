@@ -31,6 +31,8 @@ struct CosseratRodConfig {
 struct SolutionMetadata {
     double solve_time_ms;
     double total_time_ms;
+    int iterations;
+    int error;
 };
 
 
@@ -78,6 +80,8 @@ public:
     const std::vector<gtsam::Key>& get_wrench_keys() const;
 
 private:
+    int clamp_node_idx(int node_idx) const;
+    
     const int id_;
     inline static int next_id_ = 0;
 
@@ -91,6 +95,7 @@ private:
     std::vector<gtsam::Key> pose_keys_;
     std::vector<gtsam::Key> stress_keys_;
     std::vector<gtsam::Key> wrench_keys_;
+    gtsam::Key dummy_wrench_key_;
 };
 
 
@@ -99,17 +104,17 @@ public:
     BasicCosseratSolver(const CosseratRodConfig& config);
 
     CosseratRodSolution solve(
-        const std::optional<gtsam::Vector3>& tip_force_mean, 
-        const std::optional<gtsam::Matrix3>& tip_force_cov,
-        const std::optional<gtsam::Vector3>& tip_pos_mean,
-        const std::optional<gtsam::Matrix3>& tip_pos_cov);
+        const std::optional<gtsam::Vector6>& tip_wrench_mean, 
+        const std::optional<gtsam::Matrix6>& tip_wrench_cov,
+        const std::optional<gtsam::Matrix4>& tip_pose_mean,
+        const std::optional<gtsam::Matrix6>& tip_pose_cov);
 
 private:
-    void add_boundary_factors();
-
-    void add_wrench_prior_factors(
-        const std::optional<gtsam::Vector3>& tip_force_mean, 
-        const std::optional<gtsam::Matrix3>& tip_force_cov);
+    void add_prior_factors(
+        const std::optional<gtsam::Vector6>& tip_wrench_mean, 
+        const std::optional<gtsam::Matrix6>& tip_wrench_cov,
+        const std::optional<gtsam::Matrix4>& tip_pose_mean,
+        const std::optional<gtsam::Matrix6>& tip_pose_cov);
 
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
