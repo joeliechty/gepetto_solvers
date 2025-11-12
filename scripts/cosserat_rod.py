@@ -84,9 +84,9 @@ def main():
     # input_getter = get_tip_position_prior
     prior_getter = get_tip_pose_prior
 
-    config = crest_sparse.CosseratRodConfig()
+    config = crest_sparse.CosseratRodSolverConfig()
     config.rod_length = 0.5
-    config.num_nodes = 18
+    config.num_nodes = 15
     config.k_bending = 0.1
     config.k_torsion = 0.1
     config.k_shear = 1e2
@@ -98,16 +98,29 @@ def main():
     config.sigma_base_pose_pos = 1.0e-3
     config.sigma_base_pose_rot = 1.0e-3
 
-    solver = crest_sparse.BasicCosseratSolver(config)
-    plotter = CosseratRodPlotter(plot_wrenches=False, plot_backbone_frames=True, plot_tip_plate=True, camera_azimuth=45, camera_distance=1.5, camera_focal_point=np.array([0, 0, 0.3]))
+    solver = crest_sparse.CosseratRodSolver(config)
+    plotter = CosseratRodPlotter(
+        plot_wrenches=False, 
+        plot_backbone_frames=True, 
+        plot_tip_plate=True,
+        # save_frames_dir_name="both_ends_clamped",
+        camera_azimuth=60, 
+        camera_distance=1.0, 
+        camera_focal_point=np.array([0, 0, 0.25]))
 
-    t0 = time.time()
+    frame_rate = 30.0
+    dt = 1.0 / frame_rate
+    t_final = 30.0
+    num_steps = int(t_final / dt)
 
-    while(True):
-        t = time.time() - t0
+    for step in range(num_steps + 1):
+        t = step * dt
 
         solution = solver.solve(*prior_getter(t))
         plotter.update(solution)
+
+        progress = 100.0 * step / num_steps
+        print(f"Progress: {progress:5.1f}%", end="\r")
 
 if __name__ == "__main__":
     main()

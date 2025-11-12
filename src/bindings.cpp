@@ -2,7 +2,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include"cosserat_rod.h"
+#include "cosserat_rod.h"
+#include "cosserat_rod_solver.h"
 
 namespace py = pybind11;
 
@@ -28,24 +29,24 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("meta", &CosseratRodSolution::meta)
         .def_readwrite("marginals", &CosseratRodSolution::marginals);
     
-    py::class_<CosseratRodConfig>(m, "CosseratRodConfig")
+    py::class_<CosseratRodSolverConfig>(m, "CosseratRodSolverConfig")
         .def(py::init<>())  // default constructor
-        .def_readwrite("rod_length", &CosseratRodConfig::rod_length)
-        .def_readwrite("num_nodes", &CosseratRodConfig::num_nodes)
-        .def_readwrite("k_bending", &CosseratRodConfig::k_bending)
-        .def_readwrite("k_torsion", &CosseratRodConfig::k_torsion)
-        .def_readwrite("k_shear", &CosseratRodConfig::k_shear)
-        .def_readwrite("k_extension", &CosseratRodConfig::k_extension)
-        .def_readwrite("sigma_twist_pos", &CosseratRodConfig::sigma_twist_pos)
-        .def_readwrite("sigma_twist_rot", &CosseratRodConfig::sigma_twist_rot)
-        .def_readwrite("sigma_small_force", &CosseratRodConfig::sigma_small_force)
-        .def_readwrite("sigma_small_moment", &CosseratRodConfig::sigma_small_moment)
-        .def_readwrite("sigma_base_pose_pos", &CosseratRodConfig::sigma_base_pose_pos)
-        .def_readwrite("sigma_base_pose_rot", &CosseratRodConfig::sigma_base_pose_rot);
+        .def_readwrite("rod_length", &CosseratRodSolverConfig::rod_length)
+        .def_readwrite("num_nodes", &CosseratRodSolverConfig::num_nodes)
+        .def_readwrite("k_bending", &CosseratRodSolverConfig::k_bending)
+        .def_readwrite("k_torsion", &CosseratRodSolverConfig::k_torsion)
+        .def_readwrite("k_shear", &CosseratRodSolverConfig::k_shear)
+        .def_readwrite("k_extension", &CosseratRodSolverConfig::k_extension)
+        .def_readwrite("sigma_twist_pos", &CosseratRodSolverConfig::sigma_twist_pos)
+        .def_readwrite("sigma_twist_rot", &CosseratRodSolverConfig::sigma_twist_rot)
+        .def_readwrite("sigma_small_force", &CosseratRodSolverConfig::sigma_small_force)
+        .def_readwrite("sigma_small_moment", &CosseratRodSolverConfig::sigma_small_moment)
+        .def_readwrite("sigma_base_pose_pos", &CosseratRodSolverConfig::sigma_base_pose_pos)
+        .def_readwrite("sigma_base_pose_rot", &CosseratRodSolverConfig::sigma_base_pose_rot);
 
-    py::class_<BasicCosseratSolver>(m, "BasicCosseratSolver")
-        .def(py::init<const CosseratRodConfig&>())
-        .def("solve", &BasicCosseratSolver::solve,
+    py::class_<CosseratRodSolver>(m, "CosseratRodSolver")
+        .def(py::init<const CosseratRodSolverConfig&>())
+        .def("solve", &CosseratRodSolver::solve,
             py::arg("tip_force_mean"),
             py::arg("tip_force_cov"),
             py::arg("tip_pos_mean"),

@@ -55,16 +55,14 @@ def get_arrow(start, vec, shaft_radius=0.003):
 
 class PlotterBase:
     def __init__(self,
-                 save_frames_mode=False,
-                 frames_dir_name=None, 
+                 save_frames_dir_name=None, 
                  single_plot_mode=False,
                  camera_focal_point=None,
                  camera_azimuth=15,
                  camera_elevation=20,
                  camera_distance=0.6):
         
-        self.save_frames_mode = save_frames_mode
-        self.frames_dir_name = frames_dir_name
+        self.save_frames_dir_name = save_frames_dir_name
         self.single_plot_mode = single_plot_mode
 
         if camera_focal_point is None:
@@ -76,13 +74,13 @@ class PlotterBase:
         self.camera_elevation = camera_elevation
         self.camera_distance = camera_distance
 
-        if self.save_frames_mode:
-            self.frames_path = Path("videos") / "frames" / self.frames_dir_name
+        if self.save_frames_dir_name:
+            self.frames_path = Path("videos") / "frames" / self.save_frames_dir_name
             shutil.rmtree(self.frames_path, ignore_errors=True)
             self.frames_path.mkdir(parents=True, exist_ok=True)
 
         self.window_size = (2000, 2000)
-        self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_mode)
+        self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_dir_name)
         self.frame = 0
         self.solve_time_ms_history = []
 
@@ -109,7 +107,7 @@ class PlotterBase:
         self.update_meshes(solution.marginals)
 
         if self.frame == 0:
-            show_plot = not self.save_frames_mode
+            show_plot = not self.save_frames_dir_name
             if show_plot:
                 interactive_update = not self.single_plot_mode
                 self.plotter.show(auto_close=False, interactive_update=interactive_update)
@@ -120,7 +118,7 @@ class PlotterBase:
 
         self.plotter.render()
 
-        if self.save_frames_mode:
+        if self.save_frames_dir_name:
             self.plotter.screenshot(self.frames_path / f"{self.frame}.png", window_size=self.window_size)
         
         self.frame += 1
@@ -134,11 +132,11 @@ class CosseratRodPlotter(PlotterBase):
                  plot_base_wrench=False,
                  plot_backbone_frames=False,
                  plot_backbone_ellipsoids=True,
-                 backbone_radius=0.01, 
+                 backbone_radius=0.005, 
                  moment_scale = 0.2, 
                  force_scale=0.1, 
                  base_plate_size=0.1, 
-                 cartesian_frame_scale=0.05,
+                 cartesian_frame_scale=0.03,
                  **kwargs):
         
         super().__init__(**kwargs)

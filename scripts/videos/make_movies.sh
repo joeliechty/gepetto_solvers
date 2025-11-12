@@ -14,15 +14,4 @@ make_vid () {
         -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le "${output_base}.mov"
 }
 
-make_vid frames/kinematics_sim
-make_vid frames/tip_force_prior
-make_vid frames/tip_force_nominal
-make_vid frames/tip_force_tracking
-make_vid frames/dist_load_sim
-
-# Make side by side movie comparing tip force
-# ffmpeg -i tip_force_nominal.mp4 -i tip_force_tracking.mp4 \
-#   -filter_complex "[0:v][1:v]hstack=inputs=2" \
-#   -c:v libx264 -preset veryslow -crf 16 \
-#   -pix_fmt yuv420p -movflags +faststart \
-#   tip_force_comparison.mp4
+make_vid frames/both_ends_clamped

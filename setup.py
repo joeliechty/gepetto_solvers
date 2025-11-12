@@ -11,9 +11,11 @@ ext_modules = [
     Extension(
         "crest_sparse",
         sources=[
-            "src/cosserat_rod.cpp",
+            "src/bindings.cpp",
             "src/gtsam_factors.cpp",
-            "src/bindings.cpp"
+            "src/cosserat_rod.cpp",
+            "src/cosserat_rod_solver.cpp",
+            "src/parallel_robot.cpp"
         ],
         include_dirs=[
             "include",

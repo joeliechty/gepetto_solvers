@@ -5,35 +5,6 @@
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/inference/Symbol.h>
-#include <memory>
-
-
-struct CosseratRodConfig {
-    double rod_length;
-    int num_nodes;
-
-    double k_bending;
-    double k_torsion;
-    double k_shear;
-    double k_extension;
-
-    double sigma_twist_pos;
-    double sigma_twist_rot;
-
-    double sigma_small_force;
-    double sigma_small_moment;
-
-    double sigma_base_pose_pos;
-    double sigma_base_pose_rot;
-};
-
-
-struct SolutionMetadata {
-    double solve_time_ms;
-    double total_time_ms;
-    int iterations;
-    int error;
-};
 
 
 struct CosseratRodMarginals {
@@ -45,12 +16,6 @@ struct CosseratRodMarginals {
 
     std::vector<gtsam::Vector6> wrench_mean;
     std::vector<gtsam::Matrix6> wrench_cov;
-};
-
-
-struct CosseratRodSolution {
-    SolutionMetadata meta;
-    CosseratRodMarginals marginals;
 };
 
 
@@ -81,7 +46,7 @@ public:
 
 private:
     int clamp_node_idx(int node_idx) const;
-    
+
     const int id_;
     inline static int next_id_ = 0;
 
@@ -96,32 +61,4 @@ private:
     std::vector<gtsam::Key> stress_keys_;
     std::vector<gtsam::Key> wrench_keys_;
     gtsam::Key dummy_wrench_key_;
-};
-
-
-class BasicCosseratSolver {
-public:
-    BasicCosseratSolver(const CosseratRodConfig& config);
-
-    CosseratRodSolution solve(
-        const std::optional<gtsam::Vector6>& tip_wrench_mean, 
-        const std::optional<gtsam::Matrix6>& tip_wrench_cov,
-        const std::optional<gtsam::Matrix4>& tip_pose_mean,
-        const std::optional<gtsam::Matrix6>& tip_pose_cov);
-
-private:
-    void add_prior_factors(
-        const std::optional<gtsam::Vector6>& tip_wrench_mean, 
-        const std::optional<gtsam::Matrix6>& tip_wrench_cov,
-        const std::optional<gtsam::Matrix4>& tip_pose_mean,
-        const std::optional<gtsam::Matrix6>& tip_pose_cov);
-
-    gtsam::NonlinearFactorGraph graph_;
-    gtsam::Values values_;
-    gtsam::Marginals marginals_;
-
-    gtsam::SharedDiagonal small_wrench_cov_;
-    gtsam::SharedDiagonal base_pose_cov_;
-
-    std::unique_ptr<CosseratRod> rod_;
 };
