@@ -2,10 +2,11 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include "cosserat_rod.h"
 #include "cosserat_rod_solver.h"
+#include "parallel_robot_solver.h"
 
 namespace py = pybind11;
+
 
 PYBIND11_MODULE(crest_sparse, m) {
     py::class_<SolutionMetadata>(m, "SolutionMetadata")
@@ -49,4 +50,35 @@ PYBIND11_MODULE(crest_sparse, m) {
             py::arg("tip_pos_mean"),
             py::arg("tip_pos_cov"),
             py::call_guard<py::gil_scoped_release>());
+
+    py::class_<ParallelRobotSolverConfig>(m, "ParallelRobotSolverConfig")
+        .def(py::init<>())
+        .def_readwrite("nodes_per_rod", &ParallelRobotSolverConfig::nodes_per_rod)
+        .def_readwrite("K_inv", &ParallelRobotSolverConfig::K_inv)
+        .def_readwrite("sigma_twist_pos", &ParallelRobotSolverConfig::sigma_twist_pos)
+        .def_readwrite("sigma_twist_rot", &ParallelRobotSolverConfig::sigma_twist_rot)
+        .def_readwrite("sigma_small_force", &ParallelRobotSolverConfig::sigma_small_force)
+        .def_readwrite("sigma_small_moment", &ParallelRobotSolverConfig::sigma_small_moment)
+        .def_readwrite("base_end_poses", &ParallelRobotSolverConfig::base_end_poses)
+        .def_readwrite("tip_end_poses", &ParallelRobotSolverConfig::tip_end_poses)
+        .def_readwrite("sigma_end_pose_pos", &ParallelRobotSolverConfig::sigma_end_pose_pos)
+        .def_readwrite("sigma_end_pose_rot", &ParallelRobotSolverConfig::sigma_end_pose_rot);
+    
+    py::class_<ParallelRobotMarginals>(m, "ParallelRobotMarginals")
+        .def(py::init<>())
+        .def_readwrite("rods", &ParallelRobotMarginals::rods)
+        .def_readwrite("platform_pose_mean", &ParallelRobotMarginals::platform_pose_mean)
+        .def_readwrite("platform_pose_cov", &ParallelRobotMarginals::platform_pose_cov);
+        
+    py::class_<ParallelRobotSolution>(m, "ParallelRobotSolution")
+        .def_readwrite("meta", &ParallelRobotSolution::meta)
+        .def_readwrite("marginals", &ParallelRobotSolution::marginals);
+
+    py::class_<ParallelRobotSolver>(m, "ParallelRobotSolver")
+        .def(py::init<const ParallelRobotSolverConfig&>(), py::arg("config"))
+        .def("solve", &ParallelRobotSolver::solve, 
+            py::arg("rod_lengths"),
+            py::arg("sigma_rod_lengths"),
+            py::call_guard<py::gil_scoped_release>());
+        
 }

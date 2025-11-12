@@ -100,11 +100,10 @@ class PlotterBase:
         self.plotter.camera.focal_point = self.camera_focal_point
 
         self.plotter.add_axes()
-        self.plotter.enable_depth_peeling(10)
+        # self.plotter.enable_depth_peeling(10)
         self.plotter.enable_anti_aliasing()
     
     def update(self, solution):
-        self.update_meshes(solution.marginals)
 
         if self.frame == 0:
             show_plot = not self.save_frames_dir_name
@@ -124,8 +123,9 @@ class PlotterBase:
         self.frame += 1
 
 
-class CosseratRodPlotter(PlotterBase):
+class CosseratRodMeshManager:
     def __init__(self,
+                 plot_base_plate=True,
                  plot_tip_plate=False,
                  plot_wrenches=True,
                  plot_internal_wrenches=False,
@@ -136,11 +136,9 @@ class CosseratRodPlotter(PlotterBase):
                  moment_scale = 0.2, 
                  force_scale=0.1, 
                  base_plate_size=0.1, 
-                 cartesian_frame_scale=0.03,
-                 **kwargs):
+                 cartesian_frame_scale=0.03):
         
-        super().__init__(**kwargs)
-
+        self.plot_base_plate = plot_base_plate
         self.plot_tip_plate = plot_tip_plate
         self.plot_wrenches = plot_wrenches
         self.plot_internal_wrenches = plot_internal_wrenches
@@ -167,40 +165,43 @@ class CosseratRodPlotter(PlotterBase):
 
         return plate
 
-    def update_base_plate(self, solution):
+    def update_base_plate(self, solution, plotter):
+        if not self.plot_base_plate:
+            return
+        
         plate = self.get_end_plate(solution.pose_mean[0])
 
-        if self.frame == 0:
+        if plotter.frame == 0:
             self.base_plate = plate
-            self.plotter.add_mesh(self.base_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
+            plotter.plotter.add_mesh(self.base_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
             return
         
         self.base_plate.shallow_copy(plate)
     
-    def update_tip_plate(self, solution):
+    def update_tip_plate(self, solution, plotter):
         if not self.plot_tip_plate:
             return
         
         plate = self.get_end_plate(solution.pose_mean[-1])
 
-        if self.frame == 0:
+        if plotter.frame == 0:
             self.tip_plate = plate
-            self.plotter.add_mesh(self.tip_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
+            plotter.plotter.add_mesh(self.tip_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
             return
         
         self.tip_plate.shallow_copy(plate)
     
-    def update_rod_tube(self, solution):
+    def update_rod_tube(self, solution, plotter):
         tube = get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
         
-        if self.frame == 0:
+        if plotter.frame == 0:
             self.backbone_tube_mesh = tube
-            self.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.5)
+            plotter.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.5)
             return
         
         self.backbone_tube_mesh.shallow_copy(tube)
 
-    def update_backbone_ellipsoids(self, solution):
+    def update_backbone_ellipsoids(self, solution, plotter):
         if not self.plot_backbone_ellipsoids:
             return
 
@@ -214,16 +215,16 @@ class CosseratRodPlotter(PlotterBase):
             ellipsoid = get_ellipsoid(p, cov, scale=1.0)
             ellipsoids.append(ellipsoid)
 
-        if self.frame == 0:
+        if plotter.frame == 0:
             self.backbone_ellipsoid_meshes = ellipsoids
             for ellipsoid in self.backbone_ellipsoid_meshes:
-                self.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
+                plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
             return
         
         for mesh_self, mesh_new in zip(self.backbone_ellipsoid_meshes, ellipsoids):
             mesh_self.shallow_copy(mesh_new)
 
-    def update_backbone_frames(self, solution):
+    def update_backbone_frames(self, solution, plotter):
         if not self.plot_backbone_frames:
             return
 
@@ -240,13 +241,15 @@ class CosseratRodPlotter(PlotterBase):
                 get_arrow(p, self.cartesian_frame_scale * R[:,2], shaft_radius=shaft_radius)
             ])
 
-        if self.frame == 0:
+        if plotter.frame == 0:
             frame_colors = ["red", "green", "blue"]
             self.backbone_frame_meshes = frames
             for frame in self.backbone_frame_meshes:
                 for arrow, color in zip(frame, frame_colors):
-                    self.plotter.add_mesh(arrow, color=color, lighting=False, opacity=0.4)
+                    plotter.plotter.add_mesh(arrow, color=color, lighting=False, opacity=0.4)
 
+            return
+        
         for frame_self, frame_new in zip(self.backbone_frame_meshes, frames):
             for mesh_self, mesh_new in zip(frame_self, frame_new):
                 mesh_self.shallow_copy(mesh_new)
@@ -299,28 +302,28 @@ class CosseratRodPlotter(PlotterBase):
 
         return moment_arrows, moment_ellipsoids, force_arrows, force_ellipsoids
 
-    def update_wrenches(self, solution):
+    def update_wrenches(self, solution, plotter):
         if not self.plot_wrenches:
             return 
     
         moment_arrows, moment_ellipsoids, force_arrows, force_ellipsoids = self.get_wrench_meshes(solution)
 
-        if self.frame == 0:
+        if plotter.frame == 0:
             self.moment_arrow_meshes = moment_arrows
             for arrow in self.moment_arrow_meshes:
-                self.plotter.add_mesh(arrow, color='deeppink', lighting=False)
+                plotter.plotter.add_mesh(arrow, color='deeppink', lighting=False)
 
             self.moment_ellipsoid_meshes = moment_ellipsoids
             for ellipsoid in self.moment_ellipsoid_meshes:
-                self.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+                plotter.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
 
             self.force_arrow_meshes = force_arrows
             for arrow in self.force_arrow_meshes:
-                self.plotter.add_mesh(arrow, color='darkorchid', lighting=False)
+                plotter.plotter.add_mesh(arrow, color='darkorchid', lighting=False)
 
             self.force_ellipsoid_meshes = force_ellipsoids
             for ellipsoid in self.force_ellipsoid_meshes:
-                self.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+                plotter.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
 
             return
         
@@ -335,15 +338,102 @@ class CosseratRodPlotter(PlotterBase):
         
         for mesh_self, mesh_new in zip(self.force_ellipsoid_meshes, force_ellipsoids):
             mesh_self.shallow_copy(mesh_new)
-            
-    def update_meshes(self, solution):
-        self.update_base_plate(solution)
-        self.update_tip_plate(solution)
-        self.update_rod_tube(solution)
-        self.update_backbone_ellipsoids(solution)
-        self.update_wrenches(solution)
-        self.update_backbone_frames(solution)
 
+    def update(self, solution, plotter):
+        self.update_base_plate(solution, plotter)
+        self.update_tip_plate(solution, plotter)
+        self.update_rod_tube(solution, plotter)
+        self.update_backbone_ellipsoids(solution, plotter)
+        self.update_wrenches(solution, plotter)
+        self.update_backbone_frames(solution, plotter)
+
+
+class CosseratRodPlotter:
+    def __init__(self,
+                 plot_tip_plate=False,
+                 plot_wrenches=True,
+                 plot_internal_wrenches=False,
+                 plot_base_wrench=False,
+                 plot_backbone_frames=False,
+                 plot_backbone_ellipsoids=True,
+                 backbone_radius=0.005, 
+                 moment_scale = 0.2, 
+                 force_scale=0.1, 
+                 base_plate_size=0.1, 
+                 cartesian_frame_scale=0.03,
+                 **kwargs):
+    
+        self.plotter = PlotterBase(**kwargs)
+        self.mesh_manager = CosseratRodMeshManager(
+            plot_tip_plate=plot_tip_plate,
+            plot_wrenches=plot_wrenches,
+            plot_internal_wrenches=plot_internal_wrenches,
+            plot_base_wrench=plot_base_wrench,
+            plot_backbone_frames=plot_backbone_frames,
+            plot_backbone_ellipsoids=plot_backbone_ellipsoids,
+            backbone_radius=backbone_radius,
+            moment_scale = moment_scale,
+            force_scale=force_scale,
+            base_plate_size=base_plate_size,
+            cartesian_frame_scale=cartesian_frame_scale
+        )
+            
+    def update(self, solution):
+        self.mesh_manager.update(solution.marginals, self.plotter)
+        self.plotter.update(solution)
+
+
+class ParallelRobotPlotter:
+    def __init__(self,
+                 plot_wrenches=True,
+                 plot_base_wrenches=False,
+                 plot_backbone_frames=False,
+                 plot_backbone_ellipsoids=True,
+                 **kwargs):
+
+        self.plotter = PlotterBase(**kwargs)
+
+        self.rod_managers = []
+
+        for _ in range(6):
+            self.rod_managers.append(CosseratRodMeshManager(
+                plot_base_plate=False,
+                plot_wrenches=plot_wrenches,
+                plot_base_wrench=plot_base_wrenches,
+                plot_backbone_frames=plot_backbone_frames,
+                plot_backbone_ellipsoids=plot_backbone_ellipsoids,
+                backbone_radius=0.005,
+                moment_scale = 0.2, 
+                force_scale=0.1, 
+                base_plate_size=0.1, 
+                cartesian_frame_scale=0.03
+                )
+            )
+
+        base_plate = pv.Cylinder(direction=(0,0,1), radius=0.35, height=0.02)
+        self.plotter.plotter.add_mesh(base_plate, color="silver", show_edges=True, line_width=2, opacity=0.3)
+        
+  
+    def update_platform(self, solution, plotter):
+        plate = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
+
+        pose = solution.platform_pose_mean
+        plate.points = (plate.points @ pose[:3, :3].T) + pose[:3, 3]
+
+        if plotter.frame == 0:
+            self.platform_plate = plate
+            plotter.plotter.add_mesh(self.platform_plate, color="silver", show_edges=True, line_width=2, opacity=0.3)
+            return
+        
+        self.platform_plate.shallow_copy(plate)
+
+    def update(self, solution):
+        for i, manager in enumerate(self.rod_managers):
+            manager.update(solution.marginals.rods[i], self.plotter)
+        
+        self.update_platform(solution.marginals, self.plotter)
+
+        self.plotter.update(solution)
 
 # from pathlib import Path
 # import shutil

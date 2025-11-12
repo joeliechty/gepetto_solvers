@@ -2,17 +2,9 @@
 
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
+#include <gtsam/nonlinear/GaussNewtonOptimizer.h>
 
 using namespace gtsam;
-
-
-inline SharedDiagonal get_noise_model_rot_pos(double sigma_rot, double sigma_pos) {
-    SharedDiagonal model = noiseModel::Diagonal::Sigmas((Vector(6) << 
-        sigma_rot, sigma_rot, sigma_rot, 
-        sigma_pos, sigma_pos, sigma_pos).finished());
-
-    return model;
-}
 
 
 ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config) {
@@ -22,27 +14,29 @@ ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config
     small_wrench_cov_ = get_noise_model_rot_pos(
         config.sigma_small_moment, config.sigma_small_force); 
     
-    base_pose_cov_ = get_noise_model_rot_pos(
-        config.sigma_end_pose_rot, config.sigma_end_pose_pos);
-    
     robot_ = std::make_unique<ParallelRobot>(
-        config.num_rods,
         config.nodes_per_rod, 
         config.K_inv,
         twist_cov,
         small_wrench_cov_,
         config.base_end_poses,
         config.tip_end_poses,
-        base_pose_cov_);
+        config.sigma_end_pose_pos,
+        config.sigma_end_pose_rot);
 
     values_ = robot_->get_initial_values();
+    
+    print_values(values_);
 }
 
 
-ParallelRobotSolution ParallelRobotSolver::solve(const Vector& rod_lengths) {
+ParallelRobotSolution ParallelRobotSolver::solve(
+    const std::array<double, NUM_RODS>& rod_lengths, 
+    double sigma_rod_lengths) 
+{
     auto start = std::chrono::high_resolution_clock::now();
 
-    graph_ = robot_->build_graph(rod_lengths);
+    graph_ = robot_->build_graph(rod_lengths, sigma_rod_lengths);
 
     DoglegParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
@@ -59,6 +53,8 @@ ParallelRobotSolution ParallelRobotSolver::solve(const Vector& rod_lengths) {
     marginals_ = Marginals(graph_, values_);
     solution.marginals = robot_->get_marginals(values_, marginals_);
 
+    solution.platform_pose_jacobian = robot_->get_platform_pose_jacobian(marginals_);
+    
     auto stop = std::chrono::high_resolution_clock::now();
 
     solution.meta.total_time_ms = std::chrono::duration<double, std::milli>(stop - start).count();

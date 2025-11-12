@@ -1,4 +1,5 @@
 #include "gtsam_factors.h"
+#include <gtsam/base/numericalDerivative.h>
 
 using namespace gtsam;
 
@@ -210,6 +211,222 @@ Vector6 spatial_to_body_wrench(
 }
 
 
+PlatformWrenchBalanceFactor::PlatformWrenchBalanceFactor(
+    Key stress_key_0, Key pose_key_0,
+    Key stress_key_1, Key pose_key_1,
+    Key stress_key_2, Key pose_key_2,
+    Key stress_key_3, Key pose_key_3,
+    Key stress_key_4, Key pose_key_4,
+    Key stress_key_5, Key pose_key_5,
+    Key platform_stress_key, Key platform_pose_key,
+    const SharedNoiseModel& model)
+:
+    NoiseModelFactorN(model, 
+        stress_key_0, pose_key_0,
+        stress_key_1, pose_key_1,
+        stress_key_2, pose_key_2,
+        stress_key_3, pose_key_3,
+        stress_key_4, pose_key_4,
+        stress_key_5, pose_key_5,
+        platform_stress_key, platform_pose_key) {}
+
+Vector PlatformWrenchBalanceFactor::evaluateError(
+    const Vector6& stress_0, const Pose3& pose_0,
+    const Vector6& stress_1, const Pose3& pose_1,
+    const Vector6& stress_2, const Pose3& pose_2,
+    const Vector6& stress_3, const Pose3& pose_3,
+    const Vector6& stress_4, const Pose3& pose_4,
+    const Vector6& stress_5, const Pose3& pose_5,
+    const Vector6& platform_stress, const Pose3& platform_pose,
+    OptionalMatrixType H1, OptionalMatrixType H2,
+    OptionalMatrixType H3, OptionalMatrixType H4, 
+    OptionalMatrixType H5, OptionalMatrixType H6,
+    OptionalMatrixType H7, OptionalMatrixType H8,
+    OptionalMatrixType H9, OptionalMatrixType H10, 
+    OptionalMatrixType H11, OptionalMatrixType H12,
+    OptionalMatrixType H13, OptionalMatrixType H14) const 
+{
+    Vector6 stress_0_p = transform_wrench_adjoint(stress_0, pose_0, platform_pose);
+    Vector6 stress_1_p = transform_wrench_adjoint(stress_1, pose_1, platform_pose);
+    Vector6 stress_2_p = transform_wrench_adjoint(stress_2, pose_2, platform_pose);
+    Vector6 stress_3_p = transform_wrench_adjoint(stress_3, pose_3, platform_pose);
+    Vector6 stress_4_p = transform_wrench_adjoint(stress_4, pose_4, platform_pose);
+    Vector6 stress_5_p = transform_wrench_adjoint(stress_5, pose_5, platform_pose);
+
+    Vector6 stress_error = stress_0_p + stress_1_p + stress_2_p + stress_3_p + stress_4_p + stress_5_p - platform_stress;
+
+
+    if (H1) { 
+        *H1 = gtsam::numericalDerivative11<Vector6, Vector6>(
+            [&](const gtsam::Vector6& s) {return this->evaluateError(
+                s, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, stress_0, 1e-5);
+    }
+
+    if (H2) { 
+        *H2 = gtsam::numericalDerivative11<Vector6, Pose3>(
+            [&](const gtsam::Pose3& p) {return this->evaluateError(
+                stress_0, p,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, pose_0, 1e-5);
+    }
+
+    if (H3) { 
+        *H3 = gtsam::numericalDerivative11<Vector6, Vector6>(
+            [&](const gtsam::Vector6& s) {return this->evaluateError(
+                stress_0, pose_0,
+                s, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, stress_1, 1e-5);
+    }
+
+    if (H4) { 
+        *H4 = gtsam::numericalDerivative11<Vector6, Pose3>(
+            [&](const gtsam::Pose3& p) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, p,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, pose_1, 1e-5);
+    }
+
+    if (H5) { 
+        *H5 = gtsam::numericalDerivative11<Vector6, Vector6>(
+            [&](const gtsam::Vector6& s) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                s, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, stress_2, 1e-5);
+    }
+
+    if (H6) { 
+        *H6 = gtsam::numericalDerivative11<Vector6, Pose3>(
+            [&](const gtsam::Pose3& p) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, p,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, pose_2, 1e-5);
+    }
+
+    if (H7) { 
+        *H7 = gtsam::numericalDerivative11<Vector6, Vector6>(
+            [&](const gtsam::Vector6& s) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                s, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, stress_3, 1e-5);
+    }
+
+    if (H8) { 
+        *H8 = gtsam::numericalDerivative11<Vector6, Pose3>(
+            [&](const gtsam::Pose3& p) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, p,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, pose_3, 1e-5);
+    }
+
+    if (H9) { 
+        *H9 = gtsam::numericalDerivative11<Vector6, Vector6>(
+            [&](const gtsam::Vector6& s) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                s, pose_4,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, stress_4, 1e-5);
+    }
+
+    if (H10) { 
+        *H10 = gtsam::numericalDerivative11<Vector6, Pose3>(
+            [&](const gtsam::Pose3& p) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, p,
+                stress_5, pose_5,
+                platform_stress, platform_pose);}, pose_4, 1e-5);
+    }
+
+    if (H11) { 
+        *H11 = gtsam::numericalDerivative11<Vector6, Vector6>(
+            [&](const gtsam::Vector6& s) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                s, pose_5,
+                platform_stress, platform_pose);}, stress_5, 1e-5);
+    }
+
+    if (H12) { 
+        *H12 = gtsam::numericalDerivative11<Vector6, Pose3>(
+            [&](const gtsam::Pose3& p) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, p,
+                platform_stress, platform_pose);}, pose_5, 1e-5);
+    }
+
+    if (H13) { 
+        *H13 = gtsam::numericalDerivative11<Vector6, Vector6>(
+            [&](const gtsam::Vector6& s) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                s, platform_pose);}, platform_stress, 1e-5);
+    }
+
+    if (H14) { 
+        *H14 = gtsam::numericalDerivative11<Vector6, Pose3>(
+            [&](const gtsam::Pose3& p) {return this->evaluateError(
+                stress_0, pose_0,
+                stress_1, pose_1,
+                stress_2, pose_2,
+                stress_3, pose_3,
+                stress_4, pose_4,
+                stress_5, pose_5,
+                platform_stress, p);}, platform_pose, 1e-5);
+    }
+
+
+    return stress_error;
+}
 
 
 // TendonDiscWrenchFactor::TendonDiscWrenchFactor(

@@ -18,14 +18,6 @@ struct CosseratRodSolverConfig {
 };
 
 
-struct SolutionMetadata {
-    double solve_time_ms;
-    double total_time_ms;
-    int iterations;
-    int error;
-};
-
-
 struct CosseratRodSolution {
     SolutionMetadata meta;
     CosseratRodMarginals marginals;
@@ -48,6 +40,8 @@ private:
         const std::optional<gtsam::Matrix6>& tip_wrench_cov,
         const std::optional<gtsam::Matrix4>& tip_pose_mean,
         const std::optional<gtsam::Matrix6>& tip_pose_cov);
+    
+    double rod_length_;
 
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;

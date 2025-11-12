@@ -5,7 +5,6 @@
 
 struct ParallelRobotSolverConfig {
     int nodes_per_rod;
-    int num_rods;
 
     gtsam::Matrix6 K_inv;
 
@@ -15,25 +14,18 @@ struct ParallelRobotSolverConfig {
     double sigma_small_force;
     double sigma_small_moment;
 
-    std::vector<gtsam::Matrix4> base_end_poses;
-    std::vector<gtsam::Matrix4> tip_end_poses;
+    std::array<gtsam::Matrix4, NUM_RODS> base_end_poses;
+    std::array<gtsam::Matrix4, NUM_RODS> tip_end_poses;
 
     double sigma_end_pose_pos;
     double sigma_end_pose_rot;
 };
 
 
-struct SolutionMetadata {
-    double solve_time_ms;
-    double total_time_ms;
-    int iterations;
-    int error;
-};
-
-
 struct ParallelRobotSolution {
     SolutionMetadata meta;
     ParallelRobotMarginals marginals;
+    gtsam::Matrix6 platform_pose_jacobian;
 };
 
 
@@ -41,7 +33,9 @@ class ParallelRobotSolver {
 public:
     ParallelRobotSolver(const ParallelRobotSolverConfig& config);
 
-    ParallelRobotSolution solve(const gtsam::Vector& rod_lengths);
+    ParallelRobotSolution solve(
+        const std::array<double, NUM_RODS>& rod_lengths,
+        double sigma_rod_lengths);
 
 private:
     gtsam::NonlinearFactorGraph graph_;

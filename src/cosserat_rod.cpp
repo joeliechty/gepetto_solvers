@@ -1,6 +1,5 @@
 #include "cosserat_rod.h"
 
-#include <gtsam/base/Vector.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include "gtsam_factors.h"
@@ -9,9 +8,8 @@ using namespace gtsam;
 
 
 CosseratRod::CosseratRod (
-    double rod_length,
     int num_nodes,
-    Matrix6 K_inv,
+    const Matrix6& K_inv,
     SharedDiagonal twist_cov,
     SharedDiagonal stress_cov) 
 : 
@@ -20,9 +18,6 @@ CosseratRod::CosseratRod (
     twist_cov_(twist_cov), 
     stress_cov_(stress_cov)
 {
-    double ds = rod_length / (num_nodes - 1);
-    ds_ = std::vector<double>(num_nodes - 1, ds);
-
     K_inv_ = std::vector<Matrix6>(num_nodes - 1, K_inv);
 
     pose_keys_.reserve(num_nodes_);
@@ -66,7 +61,7 @@ Values CosseratRod::get_initial_values() const {
     Values values;
     
     for (int i = 0; i < num_nodes_; ++i) {
-        values.insert(pose_keys_[i], Pose3(Rot3::Identity(), Point3(0.0, 0.0, i * ds_[i])));
+        values.insert(pose_keys_[i], Pose3::Identity());
         values.insert(stress_keys_[i], Vector6(Vector6::Zero()));
         values.insert(wrench_keys_[i], Vector6(Vector6::Zero()));
     }
@@ -76,9 +71,12 @@ Values CosseratRod::get_initial_values() const {
 }
 
 
-NonlinearFactorGraph CosseratRod::build_graph() const {
+NonlinearFactorGraph CosseratRod::build_graph(double rod_length) const {
     NonlinearFactorGraph graph;
 
+    // We can overload build_graph later to support different ds per node
+    std::vector<double> ds(num_nodes_ - 1, rod_length / (num_nodes_ - 1));
+    
     // Cosserat twist factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
         auto factor = CosseratRodTwistFactor(
@@ -86,7 +84,7 @@ NonlinearFactorGraph CosseratRod::build_graph() const {
             pose_keys_[i + 1], 
             stress_keys_[i], 
             stress_keys_[i + 1], 
-            ds_[i], 
+            ds[i], 
             K_inv_[i], 
             twist_cov_);
 

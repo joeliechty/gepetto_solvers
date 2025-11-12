@@ -2,21 +2,14 @@
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/slam/BetweenFactor.h>
-#include "gtsam_factors.h"
 
 using namespace gtsam;
 
 
-inline SharedDiagonal get_noise_model_rot_pos(double sigma_rot, double sigma_pos) {
-    SharedDiagonal model = noiseModel::Diagonal::Sigmas((Vector(6) << 
-        sigma_rot, sigma_rot, sigma_rot, 
-        sigma_pos, sigma_pos, sigma_pos).finished());
-
-    return model;
-}
-
-
-CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config) {
+CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config) 
+:
+    rod_length_(config.rod_length)
+{
     SharedDiagonal twist_cov = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos); 
     
@@ -27,7 +20,6 @@ CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config) {
         config.sigma_base_pose_rot, config.sigma_base_pose_pos);
     
     rod_= std::make_unique<CosseratRod>(
-        config.rod_length, 
         config.num_nodes, 
         config.K_inv, 
         twist_cov, 
@@ -45,7 +37,7 @@ CosseratRodSolution CosseratRodSolver::solve(
 {
     auto start = std::chrono::high_resolution_clock::now();
 
-    graph_ = rod_->build_graph();
+    graph_ = rod_->build_graph(rod_length_);
 
     add_prior_factors(
         tip_wrench_mean, 

@@ -59,13 +59,13 @@ def get_tip_position_prior(t):
 
 def get_tip_pose_prior(t):
     x = 0.15
-    yz = 0.1 * np.array([np.cos(0.2 * t), np.sin(0.2 * t)])
+    yz = 0.15 * np.array([np.cos(0.2 * t), np.sin(0.2 * t)])
     yz[1] += 0.25
     p = np.hstack((x, yz))
 
     r0 = np.array([0, np.pi / 6, 0])
     R0 = Rotation.from_rotvec(r0).as_matrix()
-    dr = np.pi / 4 * np.array([np.sin(0.2 * t), np.sin(0.21 * t), np.sin(0.22 * t)])
+    dr = np.pi / 3 * np.array([np.sin(0.2 * t), np.sin(0.21 * t), np.sin(0.22 * t)])
     dR = Rotation.from_rotvec(dr).as_matrix()
     R = R0 @ dR
 
@@ -80,17 +80,27 @@ def get_tip_pose_prior(t):
 
 def main():
     # input_getter = get_tip_force_prior
-    # input_getter = get_tip_wrench_prior
+    # prior_getter = get_tip_wrench_prior
     # input_getter = get_tip_position_prior
     prior_getter = get_tip_pose_prior
+
+    k_bending = 0.1
+    k_torsion = 0.1
+    k_shear = 1e2
+    k_extension = 1e2
+
+    K_inv = np.eye(6)
+    K_inv[0,0] = 1 / k_bending
+    K_inv[1,1] = 1 / k_bending
+    K_inv[2,2] = 1 / k_torsion
+    K_inv[3,3] = 1 / k_shear
+    K_inv[4,4] = 1 / k_shear
+    K_inv[5,5] = 1 / k_extension
 
     config = crest_sparse.CosseratRodSolverConfig()
     config.rod_length = 0.5
     config.num_nodes = 15
-    config.k_bending = 0.1
-    config.k_torsion = 0.1
-    config.k_shear = 1e2
-    config.k_extension = 1e2
+    config.K_inv = K_inv
     config.sigma_twist_pos = 1.0e-3
     config.sigma_twist_rot = 1.0e-3
     config.sigma_small_force = 1.0e-3
@@ -105,12 +115,12 @@ def main():
         plot_tip_plate=True,
         # save_frames_dir_name="both_ends_clamped",
         camera_azimuth=60, 
-        camera_distance=1.0, 
+        camera_distance=1.5, 
         camera_focal_point=np.array([0, 0, 0.25]))
 
-    frame_rate = 30.0
+    frame_rate = 5.0
     dt = 1.0 / frame_rate
-    t_final = 30.0
+    t_final = 1200.0
     num_steps = int(t_final / dt)
 
     for step in range(num_steps + 1):

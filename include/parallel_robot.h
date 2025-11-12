@@ -2,11 +2,13 @@
 
 #include "cosserat_rod.h"
 #include <gtsam/linear/NoiseModel.h>
-#include <memory>
+
+
+constexpr int NUM_RODS = 6;
 
 
 struct ParallelRobotMarginals {
-    std::vector<CosseratRodMarginals> rods;
+    std::array<CosseratRodMarginals, NUM_RODS> rods;
 
     gtsam::Matrix4 platform_pose_mean;
     gtsam::Matrix6 platform_pose_cov;
@@ -16,16 +18,18 @@ struct ParallelRobotMarginals {
 class ParallelRobot {
 public:
     ParallelRobot(
-        int num_rods,
         int nodes_per_rod, 
         gtsam::Matrix6 K_inv,
         gtsam::SharedDiagonal rod_twist_cov,
         gtsam::SharedDiagonal small_wrench_cov_,
-        std::vector<gtsam::Matrix4> base_end_poses,
-        std::vector<gtsam::Matrix4> tip_end_poses,
-        gtsam::SharedDiagonal end_pose_cov);
+        std::array<gtsam::Matrix4, NUM_RODS> base_end_poses,
+        std::array<gtsam::Matrix4, NUM_RODS> tip_end_poses, 
+        double sigma_end_pose_pos,
+        double sigma_end_pose_rot);
 
-    gtsam::NonlinearFactorGraph build_graph(const gtsam::Vector& rod_lengths);
+    gtsam::NonlinearFactorGraph build_graph(
+        const std::array<double, NUM_RODS>& rod_lengths,
+        double sigma_rod_lengths);
 
     gtsam::Values get_initial_values() const;
 
@@ -34,15 +38,12 @@ public:
         const gtsam::Marginals& marginals) const;
 
 private:
-    const int num_rods_;
-    const int nodes_per_rod_;
-    const gtsam::Matrix6 K_inv_;
-    const gtsam::SharedDiagonal rod_twist_cov_;
+    const std::array<gtsam::Matrix4, NUM_RODS> base_end_poses_;
+    const std::array<gtsam::Matrix4, NUM_RODS> tip_end_poses_;
     const gtsam::SharedDiagonal small_wrench_cov_;
-
-    const std::vector<gtsam::Matrix4> base_end_poses_;
-    const std::vector<gtsam::Matrix4> tip_end_poses_;
-    const gtsam::SharedDiagonal end_pose_cov_;
-
-    std::vector<std::unique_ptr<CosseratRod>> rods_;
+    
+    const double sigma_end_pose_pos_;
+    const double sigma_end_pose_rot_;
+    
+    std::array<std::unique_ptr<CosseratRod>, NUM_RODS> rods_;
 };

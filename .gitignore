@@ -50,11 +50,6 @@ Makefile
 *.tmp
 *.bak
 
-# GTSAM specific: if you built GTSAM inside your repo (not recommended)
-gtsam/build/
-gtsam/cmake-build-debug/
-gtsam/cmake-build-release/
-
 # User-specific files
 *.user
 *.userprefs
@@ -80,3 +75,5 @@ dist/
 *.png
 *.webm
 *.mov
+
+*compile_commands.json
