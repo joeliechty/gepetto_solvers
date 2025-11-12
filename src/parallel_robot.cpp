@@ -11,8 +11,8 @@ ParallelRobot::ParallelRobot(
     Matrix6 K_inv,
     SharedDiagonal rod_twist_cov,
     SharedDiagonal small_wrench_cov_,
-    std::vector<Pose3> base_end_poses,
-    std::vector<Pose3> tip_end_poses,
+    std::vector<Matrix4> base_end_poses,
+    std::vector<Matrix4> tip_end_poses,
     SharedDiagonal end_pose_cov)
 :
     num_rods_(num_rods),
@@ -31,7 +31,7 @@ ParallelRobot::ParallelRobot(
 Key platform_pose_key() { return Symbol('P', 424242); }
 
 
-NonlinearFactorGraph ParallelRobot::build_graph(const std::vector<double>& rod_lengths) {
+NonlinearFactorGraph ParallelRobot::build_graph(const Vector& rod_lengths) {
     NonlinearFactorGraph graph;
 
     for (int i = 0; i < num_rods_; i++) {
@@ -49,13 +49,13 @@ NonlinearFactorGraph ParallelRobot::build_graph(const std::vector<double>& rod_l
         }
 
         // Base pose prior
-        graph.add(PriorFactor<Pose3>(rods_[i]->get_pose_key(0), base_end_poses_[i], end_pose_cov_));
+        graph.add(PriorFactor<Pose3>(rods_[i]->get_pose_key(0), Pose3(base_end_poses_[i]), end_pose_cov_));
 
         // Tip pose relative to platform
         graph.add(BetweenFactor<Pose3>(
             rods_[i]->get_pose_key(-1),
             platform_pose_key(),
-            tip_end_poses_[i],
+            Pose3(tip_end_poses_[i]),
             end_pose_cov_));
     }
 
@@ -66,6 +66,12 @@ NonlinearFactorGraph ParallelRobot::build_graph(const std::vector<double>& rod_l
 Values ParallelRobot::get_initial_values() const {
     Values values;
 
+    for (int i = 0; i < num_rods_; i++) {
+        values.insert(rods_[i]->get_initial_values());
+    }
+
+    values.insert(platform_pose_key(), Pose3::Identity());
+
     return values;
 }
 
@@ -75,6 +81,13 @@ ParallelRobotMarginals ParallelRobot::get_marginals(
     const Marginals& marginals) const
 {
     ParallelRobotMarginals solution;
+
+    for (int i = 0; i < num_rods_; i++) {
+        solution.rods[i] = rods_[i]->get_marginals(values, marginals);
+    }
+
+    solution.platform_pose_mean = values.at<Pose3>(platform_pose_key()).matrix();
+    solution.platform_pose_cov = marginals.marginalCovariance(platform_pose_key());
 
     return solution;
 }

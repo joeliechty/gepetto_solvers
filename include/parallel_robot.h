@@ -8,11 +8,8 @@
 struct ParallelRobotMarginals {
     std::vector<CosseratRodMarginals> rods;
 
-    gtsam::Matrix4 plate_pose_mean;
-    gtsam::Matrix6 plate_pose_cov;
-
-    gtsam::Vector6 plate_wrench_mean;
-    gtsam::Matrix6 plate_wrench_cov;
+    gtsam::Matrix4 platform_pose_mean;
+    gtsam::Matrix6 platform_pose_cov;
 };
 
 
@@ -24,11 +21,11 @@ public:
         gtsam::Matrix6 K_inv,
         gtsam::SharedDiagonal rod_twist_cov,
         gtsam::SharedDiagonal small_wrench_cov_,
-        std::vector<gtsam::Pose3> base_end_poses,
-        std::vector<gtsam::Pose3> tip_end_poses,
+        std::vector<gtsam::Matrix4> base_end_poses,
+        std::vector<gtsam::Matrix4> tip_end_poses,
         gtsam::SharedDiagonal end_pose_cov);
 
-    gtsam::NonlinearFactorGraph build_graph(const std::vector<double>& rod_lengths);
+    gtsam::NonlinearFactorGraph build_graph(const gtsam::Vector& rod_lengths);
 
     gtsam::Values get_initial_values() const;
 
@@ -43,8 +40,8 @@ private:
     const gtsam::SharedDiagonal rod_twist_cov_;
     const gtsam::SharedDiagonal small_wrench_cov_;
 
-    const std::vector<gtsam::Pose3> base_end_poses_;
-    const std::vector<gtsam::Pose3> tip_end_poses_;
+    const std::vector<gtsam::Matrix4> base_end_poses_;
+    const std::vector<gtsam::Matrix4> tip_end_poses_;
     const gtsam::SharedDiagonal end_pose_cov_;
 
     std::vector<std::unique_ptr<CosseratRod>> rods_;

@@ -15,7 +15,8 @@ ext_modules = [
             "src/gtsam_factors.cpp",
             "src/cosserat_rod.cpp",
             "src/cosserat_rod_solver.cpp",
-            "src/parallel_robot.cpp"
+            "src/parallel_robot.cpp",
+            "src/parallel_robot_solver.cpp"
         ],
         include_dirs=[
             "include",

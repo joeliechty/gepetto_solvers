@@ -17,14 +17,6 @@ inline SharedDiagonal get_noise_model_rot_pos(double sigma_rot, double sigma_pos
 
 
 CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config) {
-    Matrix6 K_inv = Matrix6::Zero();
-    K_inv(0, 0) = 1 / config.k_bending;
-    K_inv(1, 1) = 1 / config.k_bending;
-    K_inv(2, 2) = 1 / config.k_torsion;
-    K_inv(3, 3) = 1 / config.k_shear;
-    K_inv(4, 4) = 1 / config.k_shear;
-    K_inv(5, 5) = 1 / config.k_extension;
-
     SharedDiagonal twist_cov = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos); 
     
@@ -37,7 +29,7 @@ CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config) {
     rod_= std::make_unique<CosseratRod>(
         config.rod_length, 
         config.num_nodes, 
-        K_inv, 
+        config.K_inv, 
         twist_cov, 
         small_wrench_cov_);
 

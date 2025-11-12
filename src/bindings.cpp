@@ -33,10 +33,7 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def(py::init<>())  // default constructor
         .def_readwrite("rod_length", &CosseratRodSolverConfig::rod_length)
         .def_readwrite("num_nodes", &CosseratRodSolverConfig::num_nodes)
-        .def_readwrite("k_bending", &CosseratRodSolverConfig::k_bending)
-        .def_readwrite("k_torsion", &CosseratRodSolverConfig::k_torsion)
-        .def_readwrite("k_shear", &CosseratRodSolverConfig::k_shear)
-        .def_readwrite("k_extension", &CosseratRodSolverConfig::k_extension)
+        .def_readwrite("K_inv", &CosseratRodSolverConfig::K_inv)
         .def_readwrite("sigma_twist_pos", &CosseratRodSolverConfig::sigma_twist_pos)
         .def_readwrite("sigma_twist_rot", &CosseratRodSolverConfig::sigma_twist_rot)
         .def_readwrite("sigma_small_force", &CosseratRodSolverConfig::sigma_small_force)

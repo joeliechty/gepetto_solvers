@@ -5,10 +5,7 @@ struct CosseratRodSolverConfig {
     double rod_length;
     int num_nodes;
 
-    double k_bending;
-    double k_torsion;
-    double k_shear;
-    double k_extension;
+    gtsam::Matrix6 K_inv;
 
     double sigma_twist_pos;
     double sigma_twist_rot;
