@@ -1,5 +1,6 @@
 #pragma once
 
+#include "base/Vector.h"
 #include "cosserat_rod/CosseratRodModel.h"
 
 
@@ -34,7 +35,8 @@ public:
         const std::optional<gtsam::Vector6>& tip_wrench_mean, 
         const std::optional<gtsam::Matrix6>& tip_wrench_cov,
         const std::optional<gtsam::Matrix4>& tip_pose_mean,
-        const std::optional<gtsam::Matrix6>& tip_pose_cov);
+        const std::optional<gtsam::Matrix6>& tip_pose_cov,
+        const std::optional<gtsam::Vector6>& nominal_strain);
 
 private:
     void add_prior_factors(

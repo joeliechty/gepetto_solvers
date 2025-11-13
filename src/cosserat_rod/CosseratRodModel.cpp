@@ -71,69 +71,63 @@ Values CosseratRodModel::get_initial_values() const {
 }
 
 
-NonlinearFactorGraph CosseratRodModel::build_graph(double rod_length) const {
+NonlinearFactorGraph CosseratRodModel::build_graph(
+    double rod_length,
+    const std::optional<Vector6>& nominal_strain) const 
+{
     NonlinearFactorGraph graph;
 
     // We can overload build_graph later to support different ds per node
     std::vector<double> ds(num_nodes_ - 1, rod_length / (num_nodes_ - 1));
     
+    Vector6 straight_rod_strain = Vector6::Zero();
+    straight_rod_strain[5] = 1.0;
+
     // Cosserat twist factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
-        auto factor = CosseratTwistFactor(
+        graph.add(CosseratTwistFactor(
             pose_keys_[i], 
             pose_keys_[i + 1], 
             stress_keys_[i], 
             stress_keys_[i + 1], 
             ds[i], 
+            nominal_strain ? *nominal_strain : straight_rod_strain,
             K_inv_[i], 
-            twist_cov_);
-
-        graph.add(factor);
+            twist_cov_));
     }
         
     // Cosserat stress factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
         Key wrench_key = (i == 0) ? dummy_wrench_key_ : wrench_keys_[i];
 
-        auto factor = CosseratStressFactor(
+        graph.add(CosseratStressFactor(
             pose_keys_[i], 
             pose_keys_[i + 1], 
             stress_keys_[i], 
             stress_keys_[i + 1],
             wrench_key,
-            stress_cov_);
-        
-        graph.add(factor);
+            stress_cov_));
     }
 
     // Constrain tip stress to be equal to tip force
     bool is_base = false;
-    auto tip_wrench_factor = BoundaryStressFactor(
+    graph.add(BoundaryStressFactor(
         stress_keys_.back(), 
         wrench_keys_.back(),
         pose_keys_.back(),
         stress_cov_,
-        is_base);
-    
-    graph.add(tip_wrench_factor);
+        is_base));
     
     // Makey dummy wrench zero
-    auto dummy_wrench_factor = PriorFactor<Vector6>(
-        dummy_wrench_key_, 
-        Vector6::Zero(),
-        stress_cov_);
-
-    graph.add(dummy_wrench_factor);
+    graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_cov_));
     
     is_base = true;
-    auto base_wrench_factor = BoundaryStressFactor(
+    graph.add(BoundaryStressFactor(
         stress_keys_.front(), 
         wrench_keys_.front(),
         pose_keys_.front(),
         stress_cov_,
-        is_base);
-    
-    graph.add(base_wrench_factor);
+        is_base));
 
     return graph;
 }

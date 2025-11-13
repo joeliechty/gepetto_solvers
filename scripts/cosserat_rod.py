@@ -126,7 +126,7 @@ def main():
     for step in range(num_steps + 1):
         t = step * dt
 
-        solution = solver.solve(*prior_getter(t))
+        solution = solver.solve(*prior_getter(t), None)
         plotter.update(solution)
 
         progress = 100.0 * step / num_steps

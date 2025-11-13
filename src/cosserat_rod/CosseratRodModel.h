@@ -61,7 +61,9 @@ public:
         gtsam::SharedDiagonal twist_cov,
         gtsam::SharedDiagonal stress_cov);
 
-    gtsam::NonlinearFactorGraph build_graph(double rod_length) const;
+    gtsam::NonlinearFactorGraph build_graph(
+        double rod_length,
+        const std::optional<gtsam::Vector6>& nominal_strain = std::nullopt) const;
 
     gtsam::Values get_initial_values() const;
 

@@ -41,14 +41,26 @@ def get_tip_poses():
     return poses
 
 
-def get_rod_lengths(t):
-    rod_lengths = np.ones(6) + 0.1 * np.sin(np.array([1.0 * t, 1.1 * t, 1.2 * t, 1.3 * t, 1.4 * t, 1.5 * t]))
+def get_wrench_prior(t):
+    wrench_mean = np.zeros(6)
+    f = 5 * np.array([np.cos(0.1 * t), np.sin(0.1 * t), np.sin(0.15 * t)])
+    wrench_mean[3:] = f
 
-    sigma_amplitude = 0.01
-    sigma_rod_length = 1e-3 + sigma_amplitude - sigma_amplitude * np.cos(0.1 * t)
+    wrench_cov = 1e-6 * np.eye(6)
+    wrench_cov[3:,3:] = 1e-1 * np.eye(3)
 
-    return rod_lengths, sigma_rod_length
+    return wrench_mean, wrench_cov
 
+
+def get_goal_pose(t):
+    xy = 0.1 * np.array([np.cos(0.5 * t), np.sin(0.5 * t)])
+    z = 0.7 + 0.1 * np.sin(0.3 * t)
+    p = np.hstack([xy, z])
+
+    r = 0.1 * np.array([np.cos(0.5 * t), np.sin(0.5 * t), 0])
+    R = Rotation.from_rotvec(r).as_matrix()
+
+    return p, R
 
 def main():
 
@@ -95,40 +107,31 @@ def main():
 
     rod_lengths = 0.7 * np.ones(6)
     rod_lengths_sigma = 1e-3
-    wrench_mean = np.zeros(6)
-    wrench_mean[3] = -5.0
-    wrench_cov = 1e-6 * np.eye(6)
-    wrench_cov[3:,3:] = 1e-1 * np.eye(3)
-
-    p_goal = np.array([0.2, 0, 1.2])
-    R_goal = Rotation.from_rotvec([0, np.pi / 8, 0]).as_matrix()
 
     for step in range(num_steps + 1):
         t = step * dt
 
+        wrench_mean, wrench_cov = get_wrench_prior(t)
         solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench_mean, wrench_cov)
 
         J = solution.rod_lengths_jacobian
 
         p = solution.marginals.platform_pose_mean[:3, 3]
         R = solution.marginals.platform_pose_mean[:3,:3]
+
+        p_goal, R_goal = get_goal_pose(t)
+
         p_error = R.T @ (p_goal - p)
-
-        R_error = R.T @ R_goal
-        r_error = Rotation.from_matrix(R_error).as_rotvec()
-
+        r_error = Rotation.from_matrix(R.T @ R_goal).as_rotvec()
+        
         twist_error = np.hstack((r_error, p_error))
 
-        max_step = 0.01
+        max_step = 0.05
         d_twist = twist_error
         if np.linalg.norm(d_twist) > max_step:
             d_twist = d_twist / np.linalg.norm(d_twist) * max_step
 
-        U, S, VT = np.linalg.svd(J, full_matrices=False)
-        damping = 1e-3
-        S_damped = S / (S**2 + damping**2)
-        d_rod_lengths = VT.T @ (S_damped * (U.T @ d_twist))
-
+        d_rod_lengths = np.linalg.pinv(J) @ d_twist
         rod_lengths += d_rod_lengths
 
         plotter.update(solution)

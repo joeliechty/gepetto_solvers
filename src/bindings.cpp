@@ -53,6 +53,7 @@ PYBIND11_MODULE(crest_sparse, m) {
             py::arg("tip_force_cov"),
             py::arg("tip_pos_mean"),
             py::arg("tip_pos_cov"),
+            py::arg("nominal_strain"),
             py::call_guard<py::gil_scoped_release>());
 
     py::class_<ParallelRobotSolverConfig>(m, "ParallelRobotSolverConfig")

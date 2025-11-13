@@ -33,11 +33,17 @@ CosseratRodSolution CosseratRodSolver::solve(
     const std::optional<Vector6>& tip_wrench_mean, 
     const std::optional<Matrix6>& tip_wrench_cov,
     const std::optional<Matrix4>& tip_pose_mean,
-    const std::optional<Matrix6>& tip_pose_cov) 
+    const std::optional<Matrix6>& tip_pose_cov,
+    const std::optional<Vector6>& nominal_strain) 
 {
     auto start = std::chrono::high_resolution_clock::now();
 
-    graph_ = rod_->build_graph(rod_length_);
+    Vector6 straight_rod_strain = Vector6::Zero();
+    straight_rod_strain[5] = 1.0;
+
+    graph_ = rod_->build_graph(
+        rod_length_, 
+        nominal_strain ? *nominal_strain : straight_rod_strain);
 
     add_prior_factors(
         tip_wrench_mean, 
@@ -78,42 +84,34 @@ void CosseratRodSolver::add_prior_factors(
     const std::optional<Matrix6>& tip_pose_cov)
 {
     // Constrain base pose to identity 
-    auto base_pose_factor = PriorFactor<Pose3>(
+    graph_.add(PriorFactor<Pose3>(
         rod_->get_pose_key(0), 
         Pose3::Identity(), 
-        base_pose_cov_);
-    
-    graph_.add(base_pose_factor);
+        base_pose_cov_));
 
     // Constrain all wrenches on the interior of the rod to be zero
     std::vector<Key> wrench_keys = rod_->get_wrench_keys();
 
     // Skip base and tip wrenches
     for (size_t i = 1; i + 1 < wrench_keys.size(); ++i) {
-        auto factor = PriorFactor<Vector6>(
+        graph_.add(PriorFactor<Vector6>(
             wrench_keys[i],
             Vector6::Zero(),
-            small_wrench_cov_);
-        
-        graph_.add(factor);
+            small_wrench_cov_));
     }
 
     // Set prior on tip wrench/pose based on user input
     if (tip_wrench_mean) {
-        auto factor = PriorFactor<Vector6>(
+        graph_.add(PriorFactor<Vector6>(
             wrench_keys.back(),
             *tip_wrench_mean,
-            noiseModel::Gaussian::Covariance(*tip_wrench_cov));
-        
-        graph_.add(factor);
+            noiseModel::Gaussian::Covariance(*tip_wrench_cov)));
     }
 
     if (tip_pose_mean) {
-        auto factor = PriorFactor<Pose3>(
+        graph_.add(PriorFactor<Pose3>(
             rod_->get_pose_key(-1),
             Pose3(*tip_pose_mean),
-            noiseModel::Gaussian::Covariance(*tip_pose_cov));
-
-        graph_.add(factor);
+            noiseModel::Gaussian::Covariance(*tip_pose_cov)));
     }
 }

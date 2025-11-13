@@ -3,17 +3,20 @@
 using namespace gtsam;
 
 
+
 CosseratTwistFactor::CosseratTwistFactor(
     Key pose_0_key,
     Key pose_1_key,
     Key stress_0_key,
     Key stress_1_key,
     double ds,
-    const Matrix66& K_inv,
+    const Vector6& nominal_strain,
+    const Matrix6& K_inv,
     const SharedNoiseModel& model)
 :
     NoiseModelFactorN(model, pose_0_key, pose_1_key, stress_0_key, stress_1_key),
-    ds_(ds), 
+    ds_(ds),
+    nominal_strain_(nominal_strain),
     K_inv_(K_inv) {}
 
 
@@ -35,9 +38,7 @@ Vector CosseratTwistFactor::evaluateError(
     
     Vector6 stress_mid = 0.5 * (stress_0 + stress_1);
 
-    Vector6 nominal_strain = Vector6::Zero();
-    nominal_strain[5] = 1.0;  // Straight rod: linear velocity in z direction only
-    Vector6 twist_p = ds_ * (K_inv_ * stress_mid + nominal_strain);
+    Vector6 twist_p = ds_ * (K_inv_ * stress_mid + nominal_strain_);
     
     Vector6 twist_error = twist_p - twist;
 

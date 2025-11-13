@@ -15,7 +15,8 @@ public:
         gtsam::Key pose_1_key,
         gtsam::Key stress_0_key,
         gtsam::Key stress_1_key,
-        double segment_length,
+        double ds,
+        const gtsam::Vector6& nominal_strain,
         const gtsam::Matrix6& K_inv,
         const gtsam::SharedNoiseModel& model);
 
@@ -30,6 +31,7 @@ public:
         gtsam::OptionalMatrixType H4) const override;
 
 private:
-    double ds_;
-    gtsam::Matrix66 K_inv_;
+    const double ds_;
+    const gtsam::Vector6 nominal_strain_;
+    const gtsam::Matrix6 K_inv_;
 };

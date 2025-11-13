@@ -363,6 +363,7 @@ class CosseratRodMeshManager:
 
 class CosseratRodPlotter:
     def __init__(self,
+                 plot_base_plate=True,
                  plot_tip_plate=False,
                  plot_wrenches=True,
                  plot_internal_wrenches=False,
@@ -378,6 +379,7 @@ class CosseratRodPlotter:
     
         self.plotter = PlotterBase(**kwargs)
         self.mesh_manager = CosseratRodMeshManager(
+            plot_base_plate=plot_base_plate,
             plot_tip_plate=plot_tip_plate,
             plot_wrenches=plot_wrenches,
             plot_internal_wrenches=plot_internal_wrenches,
