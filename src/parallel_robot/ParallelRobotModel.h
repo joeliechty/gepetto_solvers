@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cosserat_rod.h"
+#include "cosserat_rod/CosseratRodModel.h"
 #include <gtsam/linear/NoiseModel.h>
 
 
@@ -12,6 +12,9 @@ struct ParallelRobotMarginals {
 
     gtsam::Matrix4 platform_pose_mean;
     gtsam::Matrix6 platform_pose_cov;
+
+    gtsam::Vector6 platform_wrench_mean;
+    gtsam::Matrix6 platform_wrench_cov;
 };
 
 
@@ -29,7 +32,9 @@ public:
 
     gtsam::NonlinearFactorGraph build_graph(
         const std::array<double, NUM_RODS>& rod_lengths,
-        double sigma_rod_lengths);
+        double sigma_rod_lengths,
+        const gtsam::Vector6& wrench_mean,
+        const gtsam::Matrix6& wrench_cov);
 
     gtsam::Values get_initial_values() const;
 
@@ -47,5 +52,5 @@ private:
     const double sigma_end_pose_pos_;
     const double sigma_end_pose_rot_;
     
-    std::array<std::unique_ptr<CosseratRod>, NUM_RODS> rods_;
+    std::array<std::unique_ptr<CosseratRodModel>, NUM_RODS> rods_;
 };

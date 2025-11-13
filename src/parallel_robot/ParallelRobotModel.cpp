@@ -1,13 +1,12 @@
-#include "parallel_robot.h"
+#include "ParallelRobotModel.h"
+
+#include "PlatformWrenchBalanceFactor.h"
 #include "base/Vector.h"
-#include "cosserat_rod.h"
-#include "linear/NoiseModel.h"
-#include "nonlinear/Marginals.h"
-#include "nonlinear/PriorFactor.h"
+#include "cosserat_rod/BoundaryStressFactor.h"
+#include "cosserat_rod/CosseratRodModel.h"
 
 #include <gtsam/slam/BetweenFactor.h>
 
-#include <gtsam_factors.h>
 
 using namespace gtsam;
 
@@ -30,7 +29,7 @@ ParallelRobot::ParallelRobot(
 {
     // Make each rod
     for (int i = 0; i < NUM_RODS; i++) {
-        rods_[i] = std::make_unique<CosseratRod>(
+        rods_[i] = std::make_unique<CosseratRodModel>(
             nodes_per_rod, K_inv, rod_twist_cov, small_wrench_cov_);
     }
 }
@@ -42,9 +41,14 @@ Key platform_pose_key() { return Symbol('P', 424242424242); }
 Key platform_stress_key() { return Symbol('S', 424242424242); }
 
 
+Key platform_wrench_key() { return Symbol('W', 424242424242); }
+
+
 NonlinearFactorGraph ParallelRobot::build_graph(
     const std::array<double, NUM_RODS>& rod_lengths,
-    double sigma_rod_lengths) 
+    double sigma_rod_lengths,
+    const Vector6& wrench_mean,
+    const Matrix6& wrench_cov) 
 {
     NonlinearFactorGraph graph;
 
@@ -76,8 +80,20 @@ NonlinearFactorGraph ParallelRobot::build_graph(
             tip_pose_noise));
     }
 
-    // Make platform stress zero
-    graph.add(PriorFactor<Vector6>(platform_stress_key(), Vector6(Vector6::Zero()), small_wrench_cov_));
+    // Constrain platform stress to be equal to platform wrench
+    bool is_base = false;
+    graph.add(BoundaryStressFactor(
+        platform_stress_key(), 
+        platform_wrench_key(),
+        platform_pose_key(),
+        small_wrench_cov_,
+        is_base));
+    
+    // Put prior on tip wrench based on user input
+    graph.add(PriorFactor<Vector6>(
+        platform_wrench_key(), 
+        wrench_mean, 
+        noiseModel::Gaussian::Covariance(wrench_cov)));
 
     // Sum of all transformed tip stresses equals zero (for now)
     graph.add(PlatformWrenchBalanceFactor(
@@ -110,6 +126,7 @@ Values ParallelRobot::get_initial_values() const {
 
     values.insert(platform_pose_key(), Pose3::Identity());
     values.insert(platform_stress_key(), Vector6(Vector6::Zero()));
+    values.insert(platform_wrench_key(), Vector6(Vector6::Zero()));
 
     return values;
 }
@@ -118,7 +135,7 @@ Values ParallelRobot::get_initial_values() const {
 ParallelRobotMarginals ParallelRobot::get_marginals(
     const Values& values, 
     const Marginals& marginals) const
-{
+{   
     ParallelRobotMarginals solution;
 
     for (int i = 0; i < NUM_RODS; i++) {
@@ -127,6 +144,9 @@ ParallelRobotMarginals ParallelRobot::get_marginals(
 
     solution.platform_pose_mean = values.at<Pose3>(platform_pose_key()).matrix();
     solution.platform_pose_cov = marginals.marginalCovariance(platform_pose_key());
+
+    solution.platform_wrench_mean = values.at<Vector6>(platform_wrench_key()).matrix();
+    solution.platform_wrench_cov = marginals.marginalCovariance(platform_wrench_key());
 
     return solution;
 }
@@ -169,55 +189,3 @@ Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) cons
     Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
     return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
 }
-
-
-// Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) const {
-//     KeyVector keys;
-    
-//     for (const auto& rod : rods_) {
-//         keys.push_back(rod->get_pose_key(0));
-//     }
-    
-//     keys.push_back(platform_pose_key());
-
-//     JointMarginal joint_marginal = marginals.jointMarginalCovariance(keys);
-
-//     Eigen::Matrix<double, 42, 42> rod_bases_joint;
-//     rod_bases_joint.setZero();
-
-//     int i = 0;
-//     for (Key& key_i : keys) {
-//         int j = 0;
-//         for (Key& key_j : keys) {
-//             rod_bases_joint.block<6,6>(6 * i, 6 * j) = joint_marginal(key_i, key_j);
-//             j++;
-//         }
-//         i++;
-//     }
-
-
-//         // Matrix4 sigma_tensions_tensions = tensions_pose_joint(Q(0), Q(0));
-//         // Matrix64 sigma_pose_tensions = tensions_pose_joint(T(num_backbone_poses_ - 1), Q(0));
-
-//         // Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_tensions_tensions);
-//         // solution.J_pose_tensions = sigma_pose_tensions * ldlt.solve(Matrix4::Identity());
-
-
-//     Vector12 indices;
-//     indices << 5, 11, 17, 23, 29, 35, 36, 37, 38, 39, 40, 41;
-
-//     Eigen::Matrix<double, 12, 12> rod_lengths_joint;
-//     for (int r = 0; r < indices.size(); ++r) {
-//         for (int c = 0; c < indices.size(); ++c) {
-//             rod_lengths_joint(r, c) = rod_bases_joint(indices[r], indices[c]);
-//         }
-//     }
-
-//     Matrix6 sigma_lengths = rod_lengths_joint.block<6,6>(0,0);
-//     Matrix6 sigma_pose_lengths = rod_lengths_joint.block<6,6>(0,6);
-
-//     Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
-
-//     return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
-// }
-

@@ -1,4 +1,5 @@
 import os
+import glob
 
 from setuptools import setup, Extension
 import pybind11
@@ -10,16 +11,9 @@ EIGEN3_INCLUDE_DIR = "/usr/include/eigen3"
 ext_modules = [
     Extension(
         "crest_sparse",
-        sources=[
-            "src/bindings.cpp",
-            "src/gtsam_factors.cpp",
-            "src/cosserat_rod.cpp",
-            "src/cosserat_rod_solver.cpp",
-            "src/parallel_robot.cpp",
-            "src/parallel_robot_solver.cpp"
-        ],
+        sources = glob.glob("src/**/*.cpp", recursive=True),
         include_dirs=[
-            "include",
+            "src",
             pybind11.get_include(),
             GTSAM_INCLUDE_DIR,
             EIGEN3_INCLUDE_DIR

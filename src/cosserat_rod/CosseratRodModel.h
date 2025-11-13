@@ -8,8 +8,12 @@
 
 
 struct SolutionMetadata {  //TODO put this elsewhere, maybe base solver class?
-    double optimize_time_ms;
     double total_time_ms;
+    double build_time_ms;
+    double optimize_time_ms;
+    double marginalize_time_ms;
+    double extract_time_ms;
+    
     int iterations;
     int error;
 };
@@ -49,9 +53,9 @@ struct CosseratRodMarginals {
 };
 
 
-class CosseratRod {
+class CosseratRodModel {
 public:
-    CosseratRod(
+    CosseratRodModel(
         int num_nodes, 
         const gtsam::Matrix6& K_inv, 
         gtsam::SharedDiagonal twist_cov,

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "parallel_robot.h"
+#include "base/Matrix.h"
+#include "parallel_robot/ParallelRobotModel.h"
 
 
 struct ParallelRobotSolverConfig {
@@ -35,7 +36,9 @@ public:
 
     ParallelRobotSolution solve(
         const std::array<double, NUM_RODS>& rod_lengths,
-        double sigma_rod_lengths);
+        double sigma_rod_lengths,
+        const gtsam::Vector6& wrench_mean,
+        const gtsam::Matrix6& wrench_cov);
 
 private:
     gtsam::NonlinearFactorGraph graph_;

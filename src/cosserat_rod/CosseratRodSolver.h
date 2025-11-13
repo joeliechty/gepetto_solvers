@@ -1,4 +1,6 @@
-#include "cosserat_rod.h"
+#pragma once
+
+#include "cosserat_rod/CosseratRodModel.h"
 
 
 struct CosseratRodSolverConfig {
@@ -46,9 +48,10 @@ private:
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
     gtsam::Marginals marginals_;
-
+    
+    // TODO need to change all of these to noise, its not actually a cov mat
     gtsam::SharedDiagonal small_wrench_cov_;
     gtsam::SharedDiagonal base_pose_cov_;
 
-    std::unique_ptr<CosseratRod> rod_;
+    std::unique_ptr<CosseratRodModel> rod_;
 };

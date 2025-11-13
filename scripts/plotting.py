@@ -5,6 +5,9 @@ import shutil
 import pyvista as pv
 
 
+frame_arrow_colors = ["red", "green", "blue"]
+
+
 def get_tube_from_points(points, radius):
     spline = pv.Spline(points, n_points=200)
     tube = spline.tube(radius=radius)
@@ -114,11 +117,14 @@ class PlotterBase:
         self.solve_time_ms_history.append(solution.meta.total_time_ms)
 
         text = (
-            f"iterations: {solution.meta.iterations:6d}, "
-            f"error: {solution.meta.error:10.2e}, "
-            f"optimize time: {solution.meta.optimize_time_ms:10.2f} ms, "
-            f"total time: {solution.meta.total_time_ms:10.2f} ms, "
-            f"average: {np.mean(self.solve_time_ms_history):10.2f} ms"
+            f"iter: {solution.meta.iterations:3d}, "
+            f"error: {solution.meta.error:3.2e}, "
+            f"build: {solution.meta.build_time_ms:3.2f} ms, "
+            f"optimize: {solution.meta.optimize_time_ms:3.2f} ms, "
+            f"marginalize: {solution.meta.marginalize_time_ms:3.2f} ms, "
+            f"extract: {solution.meta.extract_time_ms:3.2f} ms, "
+            f"total: {solution.meta.total_time_ms:3.2f} ms, "
+            f"avg: {np.mean(self.solve_time_ms_history):3.2f} ms"
         )
         
         self.plotter.add_text(text, position='upper_right', font_size=14, font="courier", name="solve_time")
@@ -250,10 +256,9 @@ class CosseratRodMeshManager:
             ])
 
         if plotter.frame == 0:
-            frame_colors = ["red", "green", "blue"]
             self.backbone_frame_meshes = frames
             for frame in self.backbone_frame_meshes:
-                for arrow, color in zip(frame, frame_colors):
+                for arrow, color in zip(frame, frame_arrow_colors):
                     plotter.plotter.add_mesh(arrow, color=color, lighting=False, opacity=0.4)
 
             return
@@ -393,7 +398,8 @@ class CosseratRodPlotter:
 
 class ParallelRobotPlotter:
     def __init__(self,
-                 plot_wrenches=True,
+                 platform_z_offset=0.0,
+                 plot_rod_wrenches=True,
                  plot_base_wrenches=False,
                  plot_backbone_frames=False,
                  plot_backbone_ellipsoids=True,
@@ -403,16 +409,20 @@ class ParallelRobotPlotter:
 
         self.rod_managers = []
 
+        self.moment_scale = 0.2
+        self.force_scale = 0.1
+        self.platform_z_offset = platform_z_offset
+
         for _ in range(6):
             self.rod_managers.append(CosseratRodMeshManager(
                 plot_base_plate=False,
-                plot_wrenches=plot_wrenches,
+                plot_wrenches=plot_rod_wrenches,
                 plot_base_wrench=plot_base_wrenches,
                 plot_backbone_frames=plot_backbone_frames,
                 plot_backbone_ellipsoids=plot_backbone_ellipsoids,
                 backbone_radius=0.005,
-                moment_scale = 0.2, 
-                force_scale=0.1, 
+                moment_scale=self.moment_scale, 
+                force_scale=self.force_scale, 
                 base_plate_size=0.1, 
                 cartesian_frame_scale=0.03
                 )
@@ -425,21 +435,101 @@ class ParallelRobotPlotter:
     def update_platform(self, solution, plotter):
         plate = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
 
-        pose = solution.platform_pose_mean
-        plate.points = (plate.points @ pose[:3, :3].T) + pose[:3, 3]
+        p = solution.platform_pose_mean[:3,3]
+        R = solution.platform_pose_mean[:3,:3]
+
+        plate.points[:,2] += self.platform_z_offset
+        plate.points = (plate.points @ R.T) + p
+
+        cylinder = pv.Cylinder(direction=(0,0,1), radius=0.005, height=np.abs(self.platform_z_offset))
+
+        cylinder.points[:,2] += self.platform_z_offset / 2
+        cylinder.points = (cylinder.points @ R.T) + p
+
+        frame_scale = 0.1
+        shaft_radius = 0.005
+
+        frame = [
+            get_arrow(p, frame_scale * R[:,0], shaft_radius=shaft_radius),
+            get_arrow(p, frame_scale * R[:,1], shaft_radius=shaft_radius),
+            get_arrow(p, frame_scale * R[:,2], shaft_radius=shaft_radius)
+        ]
+
+        cov = solution.platform_pose_cov
+        cov = R @ (cov[3:, 3:] @ R.T)
+
+        ellipsoid = get_ellipsoid(p, cov, scale=1.0)
 
         if plotter.frame == 0:
             self.platform_plate = plate
+            self.platform_cylinder = cylinder
+            self.platform_frame = frame
+            self.platform_ellipsoid = ellipsoid
+
             plotter.plotter.add_mesh(self.platform_plate, color="silver", show_edges=True, line_width=2, opacity=0.3)
+            plotter.plotter.add_mesh(self.platform_cylinder, color="silver")
+            plotter.plotter.add_mesh(self.platform_ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
+
+            for arrow, color in zip(frame, frame_arrow_colors):
+                plotter.plotter.add_mesh(arrow, color=color)
+
             return
         
         self.platform_plate.shallow_copy(plate)
+        self.platform_cylinder.shallow_copy(cylinder)
+        self.platform_ellipsoid.shallow_copy(ellipsoid)
+
+        for mesh_self, mesh in zip(self.platform_frame, frame):
+            mesh_self.shallow_copy(mesh)
+
+    def update_platform_wrench(self, solution, plotter):
+        wrench = solution.platform_wrench_mean
+        moment_mean, force_mean = wrench[:3], wrench[3:]
+            
+        wrench_cov = solution.platform_wrench_cov
+        moment_cov, force_cov = wrench_cov[:3, :3], wrench_cov[3:, 3:]
+
+        p = solution.platform_pose_mean[:3,3]
+
+        moment_arrow = get_arrow(p, self.moment_scale * moment_mean)
+        force_arrow = get_arrow(p, self.force_scale * force_mean)
+
+        moment_ellipsoid = get_ellipsoid(
+            p + self.moment_scale * moment_mean,
+            moment_cov,
+            self.moment_scale,
+        )
+
+        force_ellipsoid = get_ellipsoid(
+            p + self.force_scale * force_mean,
+            force_cov,
+            self.force_scale,
+        )
+    
+        if plotter.frame == 0:
+            self.force_arrow = force_arrow
+            self.moment_arrow = moment_arrow
+            self.force_ellipsoid = force_ellipsoid
+            self.moment_ellipsoid = moment_ellipsoid
+
+            plotter.plotter.add_mesh(self.force_arrow, color='darkorchid', lighting=False)
+            plotter.plotter.add_mesh(self.moment_arrow, color='deeppink', lighting=False)
+            plotter.plotter.add_mesh(self.force_ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+            plotter.plotter.add_mesh(self.moment_ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+
+            return
+        
+        self.force_arrow.shallow_copy(force_arrow)
+        self.moment_arrow.shallow_copy(moment_arrow)
+        self.force_ellipsoid.shallow_copy(force_ellipsoid)
+        self.moment_ellipsoid.shallow_copy(moment_ellipsoid)
 
     def update(self, solution):
         for i, manager in enumerate(self.rod_managers):
             manager.update(solution.marginals.rods[i], self.plotter)
         
         self.update_platform(solution.marginals, self.plotter)
+        self.update_platform_wrench(solution.marginals, self.plotter)
 
         self.plotter.update(solution)
 

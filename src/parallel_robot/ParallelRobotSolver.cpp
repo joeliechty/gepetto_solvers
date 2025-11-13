@@ -1,4 +1,4 @@
-#include "parallel_robot_solver.h"
+#include "ParallelRobotSolver.h"
 
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
@@ -32,33 +32,51 @@ ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config
 
 ParallelRobotSolution ParallelRobotSolver::solve(
     const std::array<double, NUM_RODS>& rod_lengths, 
-    double sigma_rod_lengths) 
+    double sigma_rod_lengths,
+    const Vector6& wrench_mean,
+    const Matrix6& wrench_cov) 
 {
     auto start = std::chrono::high_resolution_clock::now();
+    auto build_start = start;
 
-    graph_ = robot_->build_graph(rod_lengths, sigma_rod_lengths);
+    graph_ = robot_->build_graph(
+        rod_lengths, 
+        sigma_rod_lengths,
+        wrench_mean,
+        wrench_cov);
+
+    auto build_stop = std::chrono::high_resolution_clock::now();
+    auto optimize_start = build_stop;
 
     DoglegParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
     DoglegOptimizer optimizer(graph_, values_, params);
 
-    ParallelRobotSolution solution;
-
-    auto start_solve = std::chrono::high_resolution_clock::now();
-
     values_ = optimizer.optimize();
 
-    auto stop_solve = std::chrono::high_resolution_clock::now();
+    auto optimize_stop = std::chrono::high_resolution_clock::now();
+    auto marginalize_start = optimize_stop;
 
     marginals_ = Marginals(graph_, values_);
+
+    auto marginalize_stop = std::chrono::high_resolution_clock::now();
+    auto extract_start = marginalize_stop;
+
+    ParallelRobotSolution solution;
+    
     solution.marginals = robot_->get_marginals(values_, marginals_);
 
     solution.rod_lengths_jacobian = robot_->get_rod_lengths_jacobian(marginals_);
 
-    auto stop = std::chrono::high_resolution_clock::now();
+    auto extract_stop = std::chrono::high_resolution_clock::now();
+    auto stop = extract_stop;
 
     solution.meta.total_time_ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    solution.meta.optimize_time_ms = std::chrono::duration<double, std::milli>(stop_solve - start_solve).count();
+    solution.meta.build_time_ms = std::chrono::duration<double, std::milli>(build_stop - build_start).count();
+    solution.meta.optimize_time_ms = std::chrono::duration<double, std::milli>(optimize_stop - optimize_start).count();
+    solution.meta.marginalize_time_ms = std::chrono::duration<double, std::milli>(marginalize_stop - marginalize_start).count();
+    solution.meta.extract_time_ms = std::chrono::duration<double, std::milli>(extract_stop - extract_start).count();
+    
     solution.meta.error = optimizer.error();
     solution.meta.iterations = optimizer.iterations();
 

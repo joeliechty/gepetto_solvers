@@ -21,6 +21,7 @@ def get_base_poses():
 
     return poses
 
+platform_z_offset = -0.2
 
 def get_tip_poses():
     angles = np.array(np.deg2rad([50, 70, 170, 190, 290, 310]))
@@ -28,12 +29,13 @@ def get_tip_poses():
     radius = 0.15
     xs = radius * np.cos(angles)
     ys = radius * np.sin(angles)
-    
+    z = platform_z_offset
     poses = []
     for xi, yi in zip(xs, ys):
         pose = np.eye(4)
         pose[0, 3] = xi
         pose[1, 3] = yi
+        pose[2, 3] = z
         poses.append(pose)
 
     return poses
@@ -79,6 +81,8 @@ def main():
     solver = crest_sparse.ParallelRobotSolver(config)
 
     plotter = ParallelRobotPlotter(
+        plot_rod_wrenches=False,
+        platform_z_offset=platform_z_offset,
         camera_azimuth=60, 
         camera_distance=4, 
         camera_focal_point=np.array([0, 0, 0.7])
@@ -89,23 +93,43 @@ def main():
     t_final = 1200.0
     num_steps = int(t_final / dt)
 
-    rod_lengths = np.ones(6)
+    rod_lengths = 0.7 * np.ones(6)
+    rod_lengths_sigma = 1e-3
+    wrench_mean = np.zeros(6)
+    wrench_mean[3] = -5.0
+    wrench_cov = 1e-6 * np.eye(6)
+    wrench_cov[3:,3:] = 1e-1 * np.eye(3)
+
+    p_goal = np.array([0.2, 0, 1.2])
+    R_goal = Rotation.from_rotvec([0, np.pi / 8, 0]).as_matrix()
 
     for step in range(num_steps + 1):
         t = step * dt
 
-        solution = solver.solve(rod_lengths, 1e-3)
+        solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench_mean, wrench_cov)
 
         J = solution.rod_lengths_jacobian
-        
-        d_pose = np.zeros(6)
-        d_pose[0] = 5e-3
 
-        d_rod_lengths = np.linalg.pinv(J) @ d_pose
+        p = solution.marginals.platform_pose_mean[:3, 3]
+        R = solution.marginals.platform_pose_mean[:3,:3]
+        p_error = R.T @ (p_goal - p)
+
+        R_error = R.T @ R_goal
+        r_error = Rotation.from_matrix(R_error).as_rotvec()
+
+        twist_error = np.hstack((r_error, p_error))
+
+        max_step = 0.01
+        d_twist = twist_error
+        if np.linalg.norm(d_twist) > max_step:
+            d_twist = d_twist / np.linalg.norm(d_twist) * max_step
+
+        U, S, VT = np.linalg.svd(J, full_matrices=False)
+        damping = 1e-3
+        S_damped = S / (S**2 + damping**2)
+        d_rod_lengths = VT.T @ (S_damped * (U.T @ d_twist))
 
         rod_lengths += d_rod_lengths
-
-        print(d_rod_lengths)
 
         plotter.update(solution)
 

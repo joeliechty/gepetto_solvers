@@ -1,4 +1,4 @@
-#include "cosserat_rod_solver.h"
+#include "CosseratRodSolver.h"
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/slam/BetweenFactor.h>
@@ -19,7 +19,7 @@ CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config)
     base_pose_cov_ = get_noise_model_rot_pos(
         config.sigma_base_pose_rot, config.sigma_base_pose_pos);
     
-    rod_= std::make_unique<CosseratRod>(
+    rod_= std::make_unique<CosseratRodModel>(
         config.num_nodes, 
         config.K_inv, 
         twist_cov, 

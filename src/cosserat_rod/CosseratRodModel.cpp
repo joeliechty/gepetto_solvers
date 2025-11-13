@@ -1,13 +1,13 @@
-#include "cosserat_rod.h"
+#include "CosseratRodModel.h"
 
-#include <gtsam/linear/NoiseModel.h>
-#include <gtsam/nonlinear/NonlinearFactorGraph.h>
-#include "gtsam_factors.h"
+#include "CosseratTwistFactor.h"
+#include "CosseratStressFactor.h"
+#include "BoundaryStressFactor.h"
 
 using namespace gtsam;
 
 
-CosseratRod::CosseratRod (
+CosseratRodModel::CosseratRodModel (
     int num_nodes,
     const Matrix6& K_inv,
     SharedDiagonal twist_cov,
@@ -34,7 +34,7 @@ CosseratRod::CosseratRod (
 }
 
 
-int CosseratRod::clamp_node_idx(int node_idx) const {
+int CosseratRodModel::clamp_node_idx(int node_idx) const {
     if (node_idx == -1) 
         return num_nodes_ - 1;
     
@@ -45,19 +45,19 @@ int CosseratRod::clamp_node_idx(int node_idx) const {
 }
 
     
-Key CosseratRod::get_pose_key(int node_idx) const { return pose_keys_[clamp_node_idx(node_idx)]; }
+Key CosseratRodModel::get_pose_key(int node_idx) const { return pose_keys_[clamp_node_idx(node_idx)]; }
 
 
-Key CosseratRod::get_stress_key(int node_idx) const { return stress_keys_[clamp_node_idx(node_idx)]; }
+Key CosseratRodModel::get_stress_key(int node_idx) const { return stress_keys_[clamp_node_idx(node_idx)]; }
 
 
-Key CosseratRod::get_wrench_key(int node_idx) const { return wrench_keys_[clamp_node_idx(node_idx)]; }
+Key CosseratRodModel::get_wrench_key(int node_idx) const { return wrench_keys_[clamp_node_idx(node_idx)]; }
 
 
-const std::vector<Key>& CosseratRod::get_wrench_keys() const {return wrench_keys_; }
+const std::vector<Key>& CosseratRodModel::get_wrench_keys() const {return wrench_keys_; }
 
 
-Values CosseratRod::get_initial_values() const {
+Values CosseratRodModel::get_initial_values() const {
     Values values;
     
     for (int i = 0; i < num_nodes_; ++i) {
@@ -71,7 +71,7 @@ Values CosseratRod::get_initial_values() const {
 }
 
 
-NonlinearFactorGraph CosseratRod::build_graph(double rod_length) const {
+NonlinearFactorGraph CosseratRodModel::build_graph(double rod_length) const {
     NonlinearFactorGraph graph;
 
     // We can overload build_graph later to support different ds per node
@@ -79,7 +79,7 @@ NonlinearFactorGraph CosseratRod::build_graph(double rod_length) const {
     
     // Cosserat twist factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
-        auto factor = CosseratRodTwistFactor(
+        auto factor = CosseratTwistFactor(
             pose_keys_[i], 
             pose_keys_[i + 1], 
             stress_keys_[i], 
@@ -95,7 +95,7 @@ NonlinearFactorGraph CosseratRod::build_graph(double rod_length) const {
     for (int i = 0; i + 1 < num_nodes_; ++i) {
         Key wrench_key = (i == 0) ? dummy_wrench_key_ : wrench_keys_[i];
 
-        auto factor = CosseratRodStressFactor(
+        auto factor = CosseratStressFactor(
             pose_keys_[i], 
             pose_keys_[i + 1], 
             stress_keys_[i], 
@@ -108,7 +108,7 @@ NonlinearFactorGraph CosseratRod::build_graph(double rod_length) const {
 
     // Constrain tip stress to be equal to tip force
     bool is_base = false;
-    auto tip_wrench_factor = BoundaryStressWrenchFactor(
+    auto tip_wrench_factor = BoundaryStressFactor(
         stress_keys_.back(), 
         wrench_keys_.back(),
         pose_keys_.back(),
@@ -126,7 +126,7 @@ NonlinearFactorGraph CosseratRod::build_graph(double rod_length) const {
     graph.add(dummy_wrench_factor);
     
     is_base = true;
-    auto base_wrench_factor = BoundaryStressWrenchFactor(
+    auto base_wrench_factor = BoundaryStressFactor(
         stress_keys_.front(), 
         wrench_keys_.front(),
         pose_keys_.front(),
@@ -139,7 +139,7 @@ NonlinearFactorGraph CosseratRod::build_graph(double rod_length) const {
 }
 
 
-CosseratRodMarginals CosseratRod::get_marginals(
+CosseratRodMarginals CosseratRodModel::get_marginals(
     const gtsam::Values& values, 
     const gtsam::Marginals& marginals) const 
 {
@@ -162,6 +162,6 @@ CosseratRodMarginals CosseratRod::get_marginals(
         solution.wrench_mean[i] = values.at<Vector6>(wrench_keys_[i]);
         solution.wrench_cov[i] = marginals.marginalCovariance(wrench_keys_[i]);
     }
-
+    
     return solution;
 }

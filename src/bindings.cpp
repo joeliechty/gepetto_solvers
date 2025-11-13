@@ -2,8 +2,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include "cosserat_rod_solver.h"
-#include "parallel_robot_solver.h"
+#include "cosserat_rod/CosseratRodSolver.h"
+#include "parallel_robot/ParallelRobotSolver.h"
 
 namespace py = pybind11;
 
@@ -11,8 +11,12 @@ namespace py = pybind11;
 PYBIND11_MODULE(crest_sparse, m) {
     py::class_<SolutionMetadata>(m, "SolutionMetadata")
         .def(py::init<>())
-        .def_readwrite("optimize_time_ms", &SolutionMetadata::optimize_time_ms)
         .def_readwrite("total_time_ms", &SolutionMetadata::total_time_ms)
+        .def_readwrite("build_time_ms", &SolutionMetadata::build_time_ms)
+        .def_readwrite("optimize_time_ms", &SolutionMetadata::optimize_time_ms)
+        .def_readwrite("marginalize_time_ms", &SolutionMetadata::marginalize_time_ms)
+        .def_readwrite("extract_time_ms", &SolutionMetadata::extract_time_ms)
+        
         .def_readwrite("iterations", &SolutionMetadata::iterations)
         .def_readwrite("error", &SolutionMetadata::error);
 
@@ -68,7 +72,9 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def(py::init<>())
         .def_readwrite("rods", &ParallelRobotMarginals::rods)
         .def_readwrite("platform_pose_mean", &ParallelRobotMarginals::platform_pose_mean)
-        .def_readwrite("platform_pose_cov", &ParallelRobotMarginals::platform_pose_cov);
+        .def_readwrite("platform_pose_cov", &ParallelRobotMarginals::platform_pose_cov)
+        .def_readwrite("platform_wrench_mean", &ParallelRobotMarginals::platform_wrench_mean)
+        .def_readwrite("platform_wrench_cov", &ParallelRobotMarginals::platform_wrench_cov);
         
     py::class_<ParallelRobotSolution>(m, "ParallelRobotSolution")
         .def_readwrite("meta", &ParallelRobotSolution::meta)
@@ -80,6 +86,8 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def("solve", &ParallelRobotSolver::solve, 
             py::arg("rod_lengths"),
             py::arg("sigma_rod_lengths"),
+            py::arg("wrench_mean"),
+            py::arg("wrench_cov"),
             py::call_guard<py::gil_scoped_release>());
         
 }
