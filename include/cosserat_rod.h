@@ -8,7 +8,7 @@
 
 
 struct SolutionMetadata {  //TODO put this elsewhere, maybe base solver class?
-    double solve_time_ms;
+    double optimize_time_ms;
     double total_time_ms;
     int iterations;
     int error;

@@ -25,7 +25,7 @@ struct ParallelRobotSolverConfig {
 struct ParallelRobotSolution {
     SolutionMetadata meta;
     ParallelRobotMarginals marginals;
-    gtsam::Matrix6 platform_pose_jacobian;
+    gtsam::Matrix6 rod_lengths_jacobian;
 };
 
 

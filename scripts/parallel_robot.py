@@ -67,10 +67,10 @@ def main():
 
     config.nodes_per_rod = 10
     config.K_inv = K_inv
-    config.sigma_twist_pos = 1.0e-6
-    config.sigma_twist_rot = 1.0e-4
-    config.sigma_small_force = 1.0e-4
-    config.sigma_small_moment = 1.0e-4
+    config.sigma_twist_pos = 1.0e-4
+    config.sigma_twist_rot = 1.0e-2
+    config.sigma_small_force = 1.0e-3
+    config.sigma_small_moment = 1.0e-3
     config.base_end_poses = get_base_poses()
     config.tip_end_poses = get_tip_poses()
     config.sigma_end_pose_pos= 1.0e-4
@@ -89,12 +89,23 @@ def main():
     t_final = 1200.0
     num_steps = int(t_final / dt)
 
+    rod_lengths = np.ones(6)
+
     for step in range(num_steps + 1):
         t = step * dt
 
-        rod_lengths, sigma_rod_length = get_rod_lengths(t)
+        solution = solver.solve(rod_lengths, 1e-3)
 
-        solution = solver.solve(rod_lengths, sigma_rod_length)
+        J = solution.rod_lengths_jacobian
+        
+        d_pose = np.zeros(6)
+        d_pose[0] = 5e-3
+
+        d_rod_lengths = np.linalg.pinv(J) @ d_pose
+
+        rod_lengths += d_rod_lengths
+
+        print(d_rod_lengths)
 
         plotter.update(solution)
 

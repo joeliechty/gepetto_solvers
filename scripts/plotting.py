@@ -112,7 +112,15 @@ class PlotterBase:
                 self.plotter.show(auto_close=False, interactive_update=interactive_update)
 
         self.solve_time_ms_history.append(solution.meta.total_time_ms)
-        text = f"iterations: {solution.meta.iterations}, error: {solution.meta.error:.2f}, solve time: {solution.meta.total_time_ms:.2f} ms, average: {np.mean(self.solve_time_ms_history):.2f} ms"
+
+        text = (
+            f"iterations: {solution.meta.iterations:6d}, "
+            f"error: {solution.meta.error:10.2e}, "
+            f"optimize time: {solution.meta.optimize_time_ms:10.2f} ms, "
+            f"total time: {solution.meta.total_time_ms:10.2f} ms, "
+            f"average: {np.mean(self.solve_time_ms_history):10.2f} ms"
+        )
+        
         self.plotter.add_text(text, position='upper_right', font_size=14, font="courier", name="solve_time")
 
         self.plotter.render()

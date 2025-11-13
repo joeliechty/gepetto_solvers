@@ -53,12 +53,12 @@ ParallelRobotSolution ParallelRobotSolver::solve(
     marginals_ = Marginals(graph_, values_);
     solution.marginals = robot_->get_marginals(values_, marginals_);
 
-    solution.platform_pose_jacobian = robot_->get_platform_pose_jacobian(marginals_);
-    
+    solution.rod_lengths_jacobian = robot_->get_rod_lengths_jacobian(marginals_);
+
     auto stop = std::chrono::high_resolution_clock::now();
 
     solution.meta.total_time_ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    solution.meta.solve_time_ms = std::chrono::duration<double, std::milli>(stop_solve - start_solve).count();
+    solution.meta.optimize_time_ms = std::chrono::duration<double, std::milli>(stop_solve - start_solve).count();
     solution.meta.error = optimizer.error();
     solution.meta.iterations = optimizer.iterations();
 

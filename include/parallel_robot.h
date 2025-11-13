@@ -36,6 +36,8 @@ public:
     ParallelRobotMarginals get_marginals(
         const gtsam::Values& values, 
         const gtsam::Marginals& marginals) const;
+    
+    gtsam::Matrix6 get_rod_lengths_jacobian(const gtsam::Marginals& marginals) const;
 
 private:
     const std::array<gtsam::Matrix4, NUM_RODS> base_end_poses_;

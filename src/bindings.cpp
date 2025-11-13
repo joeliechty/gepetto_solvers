@@ -11,7 +11,7 @@ namespace py = pybind11;
 PYBIND11_MODULE(crest_sparse, m) {
     py::class_<SolutionMetadata>(m, "SolutionMetadata")
         .def(py::init<>())
-        .def_readwrite("solve_time_ms", &SolutionMetadata::solve_time_ms)
+        .def_readwrite("optimize_time_ms", &SolutionMetadata::optimize_time_ms)
         .def_readwrite("total_time_ms", &SolutionMetadata::total_time_ms)
         .def_readwrite("iterations", &SolutionMetadata::iterations)
         .def_readwrite("error", &SolutionMetadata::error);
@@ -72,7 +72,8 @@ PYBIND11_MODULE(crest_sparse, m) {
         
     py::class_<ParallelRobotSolution>(m, "ParallelRobotSolution")
         .def_readwrite("meta", &ParallelRobotSolution::meta)
-        .def_readwrite("marginals", &ParallelRobotSolution::marginals);
+        .def_readwrite("marginals", &ParallelRobotSolution::marginals)
+        .def_readwrite("rod_lengths_jacobian", &ParallelRobotSolution::rod_lengths_jacobian);
 
     py::class_<ParallelRobotSolver>(m, "ParallelRobotSolver")
         .def(py::init<const ParallelRobotSolverConfig&>(), py::arg("config"))

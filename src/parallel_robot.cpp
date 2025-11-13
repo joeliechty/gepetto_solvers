@@ -2,6 +2,7 @@
 #include "base/Vector.h"
 #include "cosserat_rod.h"
 #include "linear/NoiseModel.h"
+#include "nonlinear/Marginals.h"
 #include "nonlinear/PriorFactor.h"
 
 #include <gtsam/slam/BetweenFactor.h>
@@ -131,27 +132,92 @@ ParallelRobotMarginals ParallelRobot::get_marginals(
 }
 
 
-Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) {
+Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) const {
     KeyVector keys;
-    
     for (const auto& rod : rods_) {
         keys.push_back(rod->get_pose_key(0));
     }
-    
+
     keys.push_back(platform_pose_key());
 
-    Matrix rod_bases_joint = marginals.jointMarginalCovariance(keys).fullMatrix();
+    JointMarginal joint_marginal = marginals.jointMarginalCovariance(keys);
 
-    Vector indices(6);
+    const int n = keys.size();
+    Eigen::MatrixXd rod_bases_joint = Eigen::MatrixXd::Zero(6 * n, 6 * n);
+
+    int i = 0;
+    for (Key& key_i : keys) {
+        int j = 0;
+        for (Key& key_j : keys) {
+            rod_bases_joint.block<6,6>(6 * i, 6 * j) = joint_marginal(key_i, key_j);
+            j++;
+        }
+        i++;
+    }
+
+    Eigen::VectorXi indices(12);
     indices << 5, 11, 17, 23, 29, 35, 36, 37, 38, 39, 40, 41;
 
-    Matrix rod_lengths_joint = rod_bases_joint(indices, indices);
+    Eigen::Matrix<double, 12, 12> rod_lengths_joint;
+    for (int r = 0; r < indices.size(); ++r)
+        for (int c = 0; c < indices.size(); ++c)
+            rod_lengths_joint(r, c) = rod_bases_joint(indices[r], indices[c]);
 
     Matrix6 sigma_lengths = rod_lengths_joint.block<6,6>(0,0);
-    Matrix6 sigma_pose_lengths = rod_lengths_joint.block<6,6>(0,6);
+    Matrix6 sigma_pose_lengths = rod_lengths_joint.block<6,6>(6,0);
 
     Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
-
-    return sigma_pose_lengths * ldlt.solve(Matrix4::Identity());
+    return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
 }
+
+
+// Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) const {
+//     KeyVector keys;
+    
+//     for (const auto& rod : rods_) {
+//         keys.push_back(rod->get_pose_key(0));
+//     }
+    
+//     keys.push_back(platform_pose_key());
+
+//     JointMarginal joint_marginal = marginals.jointMarginalCovariance(keys);
+
+//     Eigen::Matrix<double, 42, 42> rod_bases_joint;
+//     rod_bases_joint.setZero();
+
+//     int i = 0;
+//     for (Key& key_i : keys) {
+//         int j = 0;
+//         for (Key& key_j : keys) {
+//             rod_bases_joint.block<6,6>(6 * i, 6 * j) = joint_marginal(key_i, key_j);
+//             j++;
+//         }
+//         i++;
+//     }
+
+
+//         // Matrix4 sigma_tensions_tensions = tensions_pose_joint(Q(0), Q(0));
+//         // Matrix64 sigma_pose_tensions = tensions_pose_joint(T(num_backbone_poses_ - 1), Q(0));
+
+//         // Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_tensions_tensions);
+//         // solution.J_pose_tensions = sigma_pose_tensions * ldlt.solve(Matrix4::Identity());
+
+
+//     Vector12 indices;
+//     indices << 5, 11, 17, 23, 29, 35, 36, 37, 38, 39, 40, 41;
+
+//     Eigen::Matrix<double, 12, 12> rod_lengths_joint;
+//     for (int r = 0; r < indices.size(); ++r) {
+//         for (int c = 0; c < indices.size(); ++c) {
+//             rod_lengths_joint(r, c) = rod_bases_joint(indices[r], indices[c]);
+//         }
+//     }
+
+//     Matrix6 sigma_lengths = rod_lengths_joint.block<6,6>(0,0);
+//     Matrix6 sigma_pose_lengths = rod_lengths_joint.block<6,6>(0,6);
+
+//     Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
+
+//     return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
+// }
 

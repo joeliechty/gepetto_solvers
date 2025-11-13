@@ -63,7 +63,7 @@ CosseratRodSolution CosseratRodSolver::solve(
     auto stop = std::chrono::high_resolution_clock::now();
 
     solution.meta.total_time_ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    solution.meta.solve_time_ms = std::chrono::duration<double, std::milli>(stop_solve - start_solve).count();
+    solution.meta.optimize_time_ms = std::chrono::duration<double, std::milli>(stop_solve - start_solve).count();
     solution.meta.error = optimizer.error();
     solution.meta.iterations = optimizer.iterations();
 
