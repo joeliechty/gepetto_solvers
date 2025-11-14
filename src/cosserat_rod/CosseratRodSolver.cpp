@@ -38,12 +38,7 @@ CosseratRodSolution CosseratRodSolver::solve(
 {
     auto start = std::chrono::high_resolution_clock::now();
 
-    Vector6 straight_rod_strain = Vector6::Zero();
-    straight_rod_strain[5] = 1.0;
-
-    graph_ = rod_->build_graph(
-        rod_length_, 
-        nominal_strain ? *nominal_strain : straight_rod_strain);
+    graph_ = rod_->build_graph(rod_length_, nominal_strain);
 
     add_prior_factors(
         tip_wrench_mean, 

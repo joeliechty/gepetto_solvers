@@ -20,15 +20,12 @@ def get_tube_from_poses(poses, radius):
     return get_tube_from_points(points, radius)
 
 
-def get_ellipsoid(center, cov, scale, num_sigma=2.0):
+def transform_ellipsoid(ellipsoid, center, cov, scale=1.0, num_sigma=2.0):
     eigvals, eigvecs = np.linalg.eigh(cov)
     one_sigma = np.sqrt(np.maximum(eigvals, 1e-12)) * scale
     radii = num_sigma * one_sigma
 
-    ellipsoid = pv.Sphere(radius=1.0, theta_resolution=50, phi_resolution=50)
-    ellipsoid.points = (eigvecs @ np.diag(radii) @ ellipsoid.points.T).T + center
-
-    return ellipsoid
+    return (eigvecs @ np.diag(radii) @ ellipsoid.points.T).T + center
 
 
 def get_arrow(start, vec, shaft_radius=0.003):
@@ -166,7 +163,7 @@ class CosseratRodMeshManager:
         self.base_plate_size = base_plate_size
         self.cartesian_frame_scale = cartesian_frame_scale
 
-    def get_end_plate(self, pose):
+    def get_end_plate(self):
         thick = self.base_plate_size / 10.0
         plate = pv.Cube(
             center=(0, -thick / 2, 0), 
@@ -175,35 +172,33 @@ class CosseratRodMeshManager:
             z_length=thick
         )
 
-        plate.points = (plate.points @ pose[:3, :3].T) + pose[:3, 3]
-
         return plate
 
     def update_base_plate(self, solution, plotter):
         if not self.plot_base_plate:
             return
         
-        plate = self.get_end_plate(solution.pose_mean[0])
-
         if plotter.frame == 0:
-            self.base_plate = plate
+            self.base_plate_ref = self.get_end_plate()
+            self.base_plate = self.get_end_plate()
             plotter.plotter.add_mesh(self.base_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
             return
         
-        self.base_plate.shallow_copy(plate)
+        pose = solution.pose_mean[0]
+        self.base_plate.points = (self.base_plate_ref.points @ pose[:3, :3].T) + pose[:3, 3]
     
     def update_tip_plate(self, solution, plotter):
         if not self.plot_tip_plate:
             return
         
-        plate = self.get_end_plate(solution.pose_mean[-1])
-
         if plotter.frame == 0:
-            self.tip_plate = plate
+            self.tip_plate_ref = self.get_end_plate()
+            self.tip_plate = self.get_end_plate()
             plotter.plotter.add_mesh(self.tip_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
             return
         
-        self.tip_plate.shallow_copy(plate)
+        pose = solution.pose_mean[-1]
+        self.tip_plate.points = (self.tip_plate_ref.points @ pose[:3, :3].T) + pose[:3, 3]
     
     def update_rod_tube(self, solution, plotter):
         tube = get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
@@ -219,24 +214,19 @@ class CosseratRodMeshManager:
         if not self.plot_backbone_ellipsoids:
             return
 
-        ellipsoids = []
-
-        for pose, cov in zip(solution.pose_mean, solution.pose_cov):
+        if plotter.frame == 0:
+            self.backbone_ellipsoid_ref = pv.Sphere(radius=1)
+            self.backbone_ellipsoid_meshes = [pv.Sphere(radius=1) for _ in range(len(solution.pose_mean))]
+            for ellipsoid in self.backbone_ellipsoid_meshes:
+                plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
+        
+        for ellipsoid, pose, cov in zip(self.backbone_ellipsoid_meshes, solution.pose_mean, solution.pose_cov):
             R = pose[:3, :3]
             p = pose[:3, 3]
             cov = R @ (cov[3:, 3:] @ R.T)  # World frame
 
-            ellipsoid = get_ellipsoid(p, cov, scale=1.0)
-            ellipsoids.append(ellipsoid)
+            ellipsoid.points = transform_ellipsoid(self.backbone_ellipsoid_ref, p, cov)
 
-        if plotter.frame == 0:
-            self.backbone_ellipsoid_meshes = ellipsoids
-            for ellipsoid in self.backbone_ellipsoid_meshes:
-                plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
-            return
-        
-        for mesh_self, mesh_new in zip(self.backbone_ellipsoid_meshes, ellipsoids):
-            mesh_self.shallow_copy(mesh_new)
 
     def update_backbone_frames(self, solution, plotter):
         if not self.plot_backbone_frames:
@@ -435,54 +425,50 @@ class ParallelRobotPlotter:
         
   
     def update_platform(self, solution, plotter):
-        plate = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
-
-        p = solution.platform_pose_mean[:3,3]
-        R = solution.platform_pose_mean[:3,:3]
-
-        plate.points[:,2] += self.platform_z_offset
-        plate.points = (plate.points @ R.T) + p
-
-        cylinder = pv.Cylinder(direction=(0,0,1), radius=0.005, height=np.abs(self.platform_z_offset))
-
-        cylinder.points[:,2] += self.platform_z_offset / 2
-        cylinder.points = (cylinder.points @ R.T) + p
-
-        frame_scale = 0.1
-        shaft_radius = 0.005
-
-        frame = [
-            get_arrow(p, frame_scale * R[:,0], shaft_radius=shaft_radius),
-            get_arrow(p, frame_scale * R[:,1], shaft_radius=shaft_radius),
-            get_arrow(p, frame_scale * R[:,2], shaft_radius=shaft_radius)
-        ]
-
-        cov = solution.platform_pose_cov
-        cov = R @ (cov[3:, 3:] @ R.T)
-
-        ellipsoid = get_ellipsoid(p, cov, scale=1.0)
 
         if plotter.frame == 0:
-            self.platform_plate = plate
-            self.platform_cylinder = cylinder
-            self.platform_frame = frame
-            self.platform_ellipsoid = ellipsoid
+            self.platform_plate_ref = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
+            self.platform_plate = self.platform_plate_ref.copy()
+
+            self.platform_cylinder_ref = pv.Cylinder(direction=(0,0,1), radius=0.005, height=np.abs(self.platform_z_offset))
+            self.platform_cylinder = self.platform_cylinder_ref.copy()
+
+            frame_scale = 0.1
+            shaft_radius = 0.005
+
+            # self.platform_frame_ref = [
+            #     get_arrow(p, frame_scale * R[:,0], shaft_radius=shaft_radius),
+            #     get_arrow(p, frame_scale * R[:,1], shaft_radius=shaft_radius),
+            #     get_arrow(p, frame_scale * R[:,2], shaft_radius=shaft_radius)
+            # ]
+
+            # self.platform_frame = [arrow.copy() for arrow in self.platform_frame_ref]
+
+            self.platform_ellipsoid_ref = pv.Sphere(radius=1)
+            self.platform_ellipsoid = self.platform_ellipsoid_ref.copy()
 
             plotter.plotter.add_mesh(self.platform_plate, color="silver", show_edges=True, line_width=2, opacity=0.3)
             plotter.plotter.add_mesh(self.platform_cylinder, color="silver")
             plotter.plotter.add_mesh(self.platform_ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
 
-            for arrow, color in zip(frame, frame_arrow_colors):
-                plotter.plotter.add_mesh(arrow, color=color)
+            # for arrow, color in zip(self.platform_frame, frame_arrow_colors):
+            #     plotter.plotter.add_mesh(arrow, color=color)
 
-            return
-        
-        self.platform_plate.shallow_copy(plate)
-        self.platform_cylinder.shallow_copy(cylinder)
-        self.platform_ellipsoid.shallow_copy(ellipsoid)
+        p = solution.platform_pose_mean[:3,3]
+        R = solution.platform_pose_mean[:3,:3]
 
-        for mesh_self, mesh in zip(self.platform_frame, frame):
-            mesh_self.shallow_copy(mesh)
+        self.platform_plate.points = self.platform_plate_ref.points.copy()
+        self.platform_plate.points[:,2] += self.platform_z_offset
+        self.platform_plate.points = (self.platform_plate.points @ R.T) + p
+
+        self.platform_cylinder.points = self.platform_cylinder_ref.points.copy()
+        self.platform_cylinder.points[:,2] += self.platform_z_offset / 2
+        self.platform_cylinder.points = (self.platform_cylinder.points @ R.T) + p
+
+        cov = solution.platform_pose_cov
+        cov = R @ (cov[3:, 3:] @ R.T)
+
+        self.platform_ellipsoid.points = transform_ellipsoid(self.platform_ellipsoid_ref, p, cov)
 
     def update_platform_wrench(self, solution, plotter):
         wrench = solution.platform_wrench_mean
@@ -496,35 +482,39 @@ class ParallelRobotPlotter:
         moment_arrow = get_arrow(p, self.moment_scale * moment_mean)
         force_arrow = get_arrow(p, self.force_scale * force_mean)
 
-        moment_ellipsoid = get_ellipsoid(
-            p + self.moment_scale * moment_mean,
-            moment_cov,
-            self.moment_scale,
-        )
-
-        force_ellipsoid = get_ellipsoid(
-            p + self.force_scale * force_mean,
-            force_cov,
-            self.force_scale,
-        )
-    
         if plotter.frame == 0:
             self.force_arrow = force_arrow
             self.moment_arrow = moment_arrow
-            self.force_ellipsoid = force_ellipsoid
-            self.moment_ellipsoid = moment_ellipsoid
+
+            self.force_ellipsoid_ref = pv.Sphere(radius=1)
+            self.force_ellipsoid = self.force_ellipsoid_ref.copy()
+
+            self.moment_ellipsoid_ref = pv.Sphere(radius=1)
+            self.moment_ellipsoid = self.moment_ellipsoid_ref.copy()
 
             plotter.plotter.add_mesh(self.force_arrow, color='darkorchid', lighting=False)
             plotter.plotter.add_mesh(self.moment_arrow, color='deeppink', lighting=False)
             plotter.plotter.add_mesh(self.force_ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
             plotter.plotter.add_mesh(self.moment_ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
 
-            return
-        
+
+        self.moment_ellipsoid.points = transform_ellipsoid(
+            self.moment_ellipsoid_ref, 
+            p + self.moment_scale * moment_mean,
+            moment_cov,
+            self.moment_scale,
+        )
+
+        self.force_ellipsoid.points = transform_ellipsoid(
+            self.force_ellipsoid_ref,
+            p + self.force_scale * force_mean,
+            force_cov,
+            self.force_scale,
+        )
+
+        # TODO .points
         self.force_arrow.shallow_copy(force_arrow)
         self.moment_arrow.shallow_copy(moment_arrow)
-        self.force_ellipsoid.shallow_copy(force_ellipsoid)
-        self.moment_ellipsoid.shallow_copy(moment_ellipsoid)
 
     def update(self, solution):
         for i, manager in enumerate(self.rod_managers):
