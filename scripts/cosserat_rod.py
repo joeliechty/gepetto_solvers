@@ -110,7 +110,7 @@ def main():
 
     solver = crest_sparse.CosseratRodSolver(config)
     plotter = CosseratRodPlotter(
-        plot_wrenches=False, 
+        plot_wrenches=True,
         plot_backbone_frames=True, 
         plot_tip_plate=True,
         # save_frames_dir_name="both_ends_clamped",

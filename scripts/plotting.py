@@ -2,6 +2,7 @@ import numpy as np
 from pathlib import Path
 import shutil
 
+import vtk
 import pyvista as pv
 
 
@@ -20,37 +21,70 @@ def get_tube_from_poses(poses, radius):
     return get_tube_from_points(points, radius)
 
 
-def transform_ellipsoid(ellipsoid, center, cov, scale=1.0, num_sigma=2.0):
+def get_ellipsoid_transform(center, cov, scale=1.0, num_sigma=2.0):
     eigvals, eigvecs = np.linalg.eigh(cov)
     one_sigma = np.sqrt(np.maximum(eigvals, 1e-12)) * scale
     radii = num_sigma * one_sigma
 
-    return (eigvecs @ np.diag(radii) @ ellipsoid.points.T).T + center
+    A = eigvecs @ np.diag(radii)
+    T = np.eye(4)
+    T[:3, :3] = A
+    T[:3,  3] = center
+
+    return T
 
 
-def get_arrow(start, vec, shaft_radius=0.003):
+def get_arrow(length=1.0, direction=None, shaft_scale=1.0):
+    if direction is None:
+        direction = np.array([1, 0, 0])
 
-    tip_radius = 2 * shaft_radius
-    tip_length = 5 * shaft_radius
-
-    scale = np.linalg.norm(vec)
-
-    if scale < 1e-8:
-        scale = 1e-8
-        vec = vec + scale
-    
     arrow = pv.Arrow(
-        start=start,
-        direction=vec,
-        scale='auto',
-        shaft_radius=shaft_radius/scale,
-        tip_radius=tip_radius/scale,
-        tip_length=tip_length/scale,
+        start=np.zeros(3),
+        direction=direction,
+        scale=length,
         tip_resolution=20,
         shaft_resolution=20,
+        shaft_radius=shaft_scale,
+        tip_radius=2 * shaft_scale,
+        tip_length=2 * shaft_scale
     )
 
     return arrow
+
+
+def get_axes_frame(length=1.0):
+    shaft_scale = length / 3
+    return [
+        get_arrow(length=length, direction=np.eye(3)[:,0], shaft_scale=shaft_scale),
+        get_arrow(length=length, direction=np.eye(3)[:,1], shaft_scale=shaft_scale),
+        get_arrow(length=length, direction=np.eye(3)[:,2], shaft_scale=shaft_scale)
+    ]
+
+
+def get_arrow_transform(p, vec, scale=1.0):
+    length = np.linalg.norm(vec) * scale
+    if length < 1e-12:
+        dir = np.array([1.0, 0.0, 0.0])
+    else:
+        dir = vec / np.linalg.norm(vec)
+
+    x_axis = np.array([1.0, 0.0, 0.0])
+    v = np.cross(x_axis, dir)
+    c = np.dot(x_axis, dir)
+    if np.linalg.norm(v) < 1e-12:
+        R = np.eye(3) if c > 0 else -np.eye(3)
+    else:
+        vx = np.array([[0, -v[2], v[1]],
+                       [v[2], 0, -v[0]],
+                       [-v[1], v[0], 0]])
+        R = np.eye(3) + vx + vx @ vx * (1 / (1 + c))
+
+    # Scale along x for magnitude, then rotate x vector to the target vector 
+    T = np.eye(4)
+    T[:3, :3] = R @ np.diag([length, 1.0, 1.0])
+    T[:3, 3] = p
+
+    return T
 
 
 class PlotterBase:
@@ -147,7 +181,7 @@ class CosseratRodMeshManager:
                  moment_scale = 0.2, 
                  force_scale=0.1, 
                  base_plate_size=0.1, 
-                 cartesian_frame_scale=0.03):
+                 cartesian_frame_scale=0.01):
         
         self.plot_base_plate = plot_base_plate
         self.plot_tip_plate = plot_tip_plate
@@ -179,26 +213,24 @@ class CosseratRodMeshManager:
             return
         
         if plotter.frame == 0:
-            self.base_plate_ref = self.get_end_plate()
-            self.base_plate = self.get_end_plate()
-            plotter.plotter.add_mesh(self.base_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
-            return
+            actor = plotter.plotter.add_mesh(self.get_end_plate(), color="silver", show_edges=True, line_width=2, opacity=0.7)
+            self.base_plate_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.base_plate_transform)
         
         pose = solution.pose_mean[0]
-        self.base_plate.points = (self.base_plate_ref.points @ pose[:3, :3].T) + pose[:3, 3]
+        self.base_plate_transform.SetMatrix(pose.flatten().tolist())
     
     def update_tip_plate(self, solution, plotter):
         if not self.plot_tip_plate:
             return
         
         if plotter.frame == 0:
-            self.tip_plate_ref = self.get_end_plate()
-            self.tip_plate = self.get_end_plate()
-            plotter.plotter.add_mesh(self.tip_plate, color="silver", show_edges=True, line_width=2, opacity=0.7)
-            return
+            actor = plotter.plotter.add_mesh(self.get_end_plate(), color="silver", show_edges=True, line_width=2, opacity=0.7)
+            self.tip_plate_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.tip_plate_transform)
         
         pose = solution.pose_mean[-1]
-        self.tip_plate.points = (self.tip_plate_ref.points @ pose[:3, :3].T) + pose[:3, 3]
+        self.tip_plate_transform.SetMatrix(pose.flatten().tolist())
     
     def update_rod_tube(self, solution, plotter):
         tube = get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
@@ -208,6 +240,7 @@ class CosseratRodMeshManager:
             plotter.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.5)
             return
         
+        # Not really a lightweight way to update this?
         self.backbone_tube_mesh.shallow_copy(tube)
 
     def update_backbone_ellipsoids(self, solution, plotter):
@@ -215,132 +248,97 @@ class CosseratRodMeshManager:
             return
 
         if plotter.frame == 0:
-            self.backbone_ellipsoid_ref = pv.Sphere(radius=1)
-            self.backbone_ellipsoid_meshes = [pv.Sphere(radius=1) for _ in range(len(solution.pose_mean))]
-            for ellipsoid in self.backbone_ellipsoid_meshes:
-                plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
-        
-        for ellipsoid, pose, cov in zip(self.backbone_ellipsoid_meshes, solution.pose_mean, solution.pose_cov):
+            self.backbone_ellipsoid_transforms = []
+            for _ in range(len(solution.pose_mean)):
+                transform = vtk.vtkTransform()
+                ellipsoid = pv.Sphere(radius=1)
+                actor = plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
+                actor.SetUserTransform(transform)
+                self.backbone_ellipsoid_transforms.append(transform)
+
+        for transform, pose, cov in zip(self.backbone_ellipsoid_transforms, solution.pose_mean, solution.pose_cov):
             R = pose[:3, :3]
             p = pose[:3, 3]
             cov = R @ (cov[3:, 3:] @ R.T)  # World frame
 
-            ellipsoid.points = transform_ellipsoid(self.backbone_ellipsoid_ref, p, cov)
+            matrix = get_ellipsoid_transform(p, cov)
+            transform.SetMatrix(matrix.flatten().tolist())
 
 
     def update_backbone_frames(self, solution, plotter):
         if not self.plot_backbone_frames:
             return
 
-        frames = []
-        shaft_radius = 0.001
-
-        for pose in solution.pose_mean:
-            R = pose[:3, :3]
-            p = pose[:3, 3]
-
-            frames.append([
-                get_arrow(p, self.cartesian_frame_scale * R[:,0], shaft_radius=shaft_radius),
-                get_arrow(p, self.cartesian_frame_scale * R[:,1], shaft_radius=shaft_radius),
-                get_arrow(p, self.cartesian_frame_scale * R[:,2], shaft_radius=shaft_radius)
-            ])
-
         if plotter.frame == 0:
-            self.backbone_frame_meshes = frames
-            for frame in self.backbone_frame_meshes:
-                for arrow, color in zip(frame, frame_arrow_colors):
-                    plotter.plotter.add_mesh(arrow, color=color, lighting=False, opacity=0.4)
+            self.backbone_frame_transforms = []
+            for _ in solution.pose_mean:
+                axes = get_axes_frame(length=self.cartesian_frame_scale)
+                transform = vtk.vtkTransform()
+                for arrow, color in zip(axes, frame_arrow_colors):
+                    actor = plotter.plotter.add_mesh(arrow, color=color)
+                    actor.SetUserTransform(transform)
+                self.backbone_frame_transforms.append(transform)
 
-            return
-        
-        for frame_self, frame_new in zip(self.backbone_frame_meshes, frames):
-            for mesh_self, mesh_new in zip(frame_self, frame_new):
-                mesh_self.shallow_copy(mesh_new)
-
-        return frames
-    
-    def get_wrench_meshes(self, solution):
-        poses = solution.pose_mean
-        wrenches = solution.wrench_mean
-        covs = solution.wrench_cov
-
-        if not self.plot_internal_wrenches:
-            poses = [poses[0], poses[-1]]
-            wrenches = [wrenches[0], wrenches[-1]]
-            covs = [covs[0], covs[-1]]
-
-        if not self.plot_base_wrench and len(poses) > 1:
-            poses = poses[1:]
-            wrenches = wrenches[1:]
-            covs = covs[1:]
-
-        moment_arrows, moment_ellipsoids = [], []
-        force_arrows, force_ellipsoids = [], []
-
-        for pose, wrench, wrench_cov in zip(poses, wrenches, covs):
-            p = pose[:3, 3]
-
-            moment_mean, force_mean = wrench[:3], wrench[3:]
-            moment_cov, force_cov = wrench_cov[:3, :3], wrench_cov[3:, 3:]
-
-            moment_arrow = get_arrow(p, self.moment_scale * moment_mean)
-            force_arrow = get_arrow(p, self.force_scale * force_mean)
-
-            moment_ellipsoid = get_ellipsoid(
-                p + self.moment_scale * moment_mean,
-                moment_cov,
-                self.moment_scale,
-            )
-
-            force_ellipsoid = get_ellipsoid(
-                p + self.force_scale * force_mean,
-                force_cov,
-                self.force_scale,
-            )
-
-            moment_arrows.append(moment_arrow)
-            moment_ellipsoids.append(moment_ellipsoid)
-            force_arrows.append(force_arrow)
-            force_ellipsoids.append(force_ellipsoid)
-
-        return moment_arrows, moment_ellipsoids, force_arrows, force_ellipsoids
+        for transform, pose in zip(self.backbone_frame_transforms, solution.pose_mean):
+            transform.SetMatrix(pose.flatten().tolist())
 
     def update_wrenches(self, solution, plotter):
         if not self.plot_wrenches:
             return 
     
-        moment_arrows, moment_ellipsoids, force_arrows, force_ellipsoids = self.get_wrench_meshes(solution)
-
         if plotter.frame == 0:
-            self.moment_arrow_meshes = moment_arrows
-            for arrow in self.moment_arrow_meshes:
-                plotter.plotter.add_mesh(arrow, color='deeppink', lighting=False)
+            self.moment_arrow_transforms = []
+            self.moment_ellipsoid_transforms = []
+            self.force_arrow_transforms = []
+            self.force_ellipsoid_transforms = []
 
-            self.moment_ellipsoid_meshes = moment_ellipsoids
-            for ellipsoid in self.moment_ellipsoid_meshes:
-                plotter.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+            for _ in range(len(solution.pose_cov)):
+                mesh = get_arrow(shaft_scale=0.002)
+                transform = vtk.vtkTransform()
+                actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
+                actor.SetUserTransform(transform)
+                self.moment_arrow_transforms.append(transform)
 
-            self.force_arrow_meshes = force_arrows
-            for arrow in self.force_arrow_meshes:
-                plotter.plotter.add_mesh(arrow, color='darkorchid', lighting=False)
+                mesh = get_arrow(shaft_scale=0.002)
+                transform = vtk.vtkTransform()
+                actor = plotter.plotter.add_mesh(mesh, color='darkorchid', lighting=False)
+                actor.SetUserTransform(transform)
+                self.force_arrow_transforms.append(transform)
 
-            self.force_ellipsoid_meshes = force_ellipsoids
-            for ellipsoid in self.force_ellipsoid_meshes:
-                plotter.plotter.add_mesh(ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+                mesh = pv.Sphere(radius=1)
+                transform = vtk.vtkTransform()
+                actor = plotter.plotter.add_mesh(mesh, color="cadmiumlemon", lighting=False, opacity=0.4)
+                actor.SetUserTransform(transform)
+                self.moment_ellipsoid_transforms.append(transform)
 
-            return
-        
-        for mesh_self, mesh_new in zip(self.moment_arrow_meshes, moment_arrows):
-            mesh_self.shallow_copy(mesh_new)
-        
-        for mesh_self, mesh_new in zip(self.moment_ellipsoid_meshes, moment_ellipsoids):
-            mesh_self.shallow_copy(mesh_new)
+                mesh = pv.Sphere(radius=1)
+                transform = vtk.vtkTransform()
+                actor = plotter.plotter.add_mesh(mesh, color="cadmiumlemon", lighting=False, opacity=0.4)
+                actor.SetUserTransform(transform)
+                self.force_ellipsoid_transforms.append(transform)
 
-        for mesh_self, mesh_new in zip(self.force_arrow_meshes, force_arrows):
-            mesh_self.shallow_copy(mesh_new)
-        
-        for mesh_self, mesh_new in zip(self.force_ellipsoid_meshes, force_ellipsoids):
-            mesh_self.shallow_copy(mesh_new)
+        # Update vtkTransforms for each actor
+        poses = solution.pose_mean
+        wrenches = solution.wrench_mean
+        covs = solution.wrench_cov
+
+        for ii in range(len(poses)):
+            p, w, cov = poses[ii][:3, 3], wrenches[ii], covs[ii]
+            
+            moment_mean, force_mean = w[:3], w[3:]
+            moment_cov, force_cov = cov[:3, :3], cov[3:, 3:]
+
+            matrix = get_arrow_transform(p, moment_mean, scale=self.moment_scale)
+            self.moment_arrow_transforms[ii].SetMatrix(matrix.flatten().tolist())
+
+            matrix = get_arrow_transform(p, force_mean, scale=self.force_scale)
+            self.force_arrow_transforms[ii].SetMatrix(matrix.flatten().tolist())
+
+            matrix = get_ellipsoid_transform(p + force_mean * self.force_scale, force_cov, scale=self.force_scale)
+            self.force_ellipsoid_transforms[ii].SetMatrix(matrix.flatten().tolist())
+
+            matrix = get_ellipsoid_transform(p + moment_mean * self.moment_scale, moment_cov, scale=self.force_scale)
+            self.moment_ellipsoid_transforms[ii].SetMatrix(matrix.flatten().tolist())
 
     def update(self, solution, plotter):
         self.update_base_plate(solution, plotter)
@@ -427,94 +425,78 @@ class ParallelRobotPlotter:
     def update_platform(self, solution, plotter):
 
         if plotter.frame == 0:
-            self.platform_plate_ref = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
-            self.platform_plate = self.platform_plate_ref.copy()
+            mesh = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
+            mesh.points = mesh.points + np.array([0, 0, self.platform_z_offset])
+            actor = plotter.plotter.add_mesh(mesh, color="silver", show_edges=True, line_width=2, opacity=0.3)
+            self.platform_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.platform_transform)
 
-            self.platform_cylinder_ref = pv.Cylinder(direction=(0,0,1), radius=0.005, height=np.abs(self.platform_z_offset))
-            self.platform_cylinder = self.platform_cylinder_ref.copy()
+            mesh = pv.Cylinder(direction=(0,0,1), radius=0.005, height=np.abs(self.platform_z_offset))
+            mesh.points = mesh.points + np.array([0, 0, self.platform_z_offset / 2])
+            actor = plotter.plotter.add_mesh(mesh, color="silver")
+            actor.SetUserTransform(self.platform_transform)
 
-            frame_scale = 0.1
-            shaft_radius = 0.005
+            axes = get_axes_frame(length=0.1)
+            for arrow, color in zip(axes, frame_arrow_colors):
+                actor = plotter.plotter.add_mesh(arrow, color=color)
+                actor.SetUserTransform(self.platform_transform)
+            
+            mesh = pv.Sphere(radius=1)
+            actor = plotter.plotter.add_mesh(mesh, color="deepcadmiumred", lighting=False, opacity=0.2)
+            self.platform_ellipsoid_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.platform_ellipsoid_transform)
 
-            # self.platform_frame_ref = [
-            #     get_arrow(p, frame_scale * R[:,0], shaft_radius=shaft_radius),
-            #     get_arrow(p, frame_scale * R[:,1], shaft_radius=shaft_radius),
-            #     get_arrow(p, frame_scale * R[:,2], shaft_radius=shaft_radius)
-            # ]
-
-            # self.platform_frame = [arrow.copy() for arrow in self.platform_frame_ref]
-
-            self.platform_ellipsoid_ref = pv.Sphere(radius=1)
-            self.platform_ellipsoid = self.platform_ellipsoid_ref.copy()
-
-            plotter.plotter.add_mesh(self.platform_plate, color="silver", show_edges=True, line_width=2, opacity=0.3)
-            plotter.plotter.add_mesh(self.platform_cylinder, color="silver")
-            plotter.plotter.add_mesh(self.platform_ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
-
-            # for arrow, color in zip(self.platform_frame, frame_arrow_colors):
-            #     plotter.plotter.add_mesh(arrow, color=color)
-
-        p = solution.platform_pose_mean[:3,3]
-        R = solution.platform_pose_mean[:3,:3]
-
-        self.platform_plate.points = self.platform_plate_ref.points.copy()
-        self.platform_plate.points[:,2] += self.platform_z_offset
-        self.platform_plate.points = (self.platform_plate.points @ R.T) + p
-
-        self.platform_cylinder.points = self.platform_cylinder_ref.points.copy()
-        self.platform_cylinder.points[:,2] += self.platform_z_offset / 2
-        self.platform_cylinder.points = (self.platform_cylinder.points @ R.T) + p
-
+        pose = solution.platform_pose_mean
+        self.platform_transform.SetMatrix(pose.flatten().tolist())
+        
+        p = pose[:3,3]
+        R = pose[:3,:3]
         cov = solution.platform_pose_cov
         cov = R @ (cov[3:, 3:] @ R.T)
-
-        self.platform_ellipsoid.points = transform_ellipsoid(self.platform_ellipsoid_ref, p, cov)
+        T = get_ellipsoid_transform(p, cov)
+        self.platform_ellipsoid_transform.SetMatrix(T.flatten().tolist())
 
     def update_platform_wrench(self, solution, plotter):
-        wrench = solution.platform_wrench_mean
-        moment_mean, force_mean = wrench[:3], wrench[3:]
-            
-        wrench_cov = solution.platform_wrench_cov
-        moment_cov, force_cov = wrench_cov[:3, :3], wrench_cov[3:, 3:]
-
-        p = solution.platform_pose_mean[:3,3]
-
-        moment_arrow = get_arrow(p, self.moment_scale * moment_mean)
-        force_arrow = get_arrow(p, self.force_scale * force_mean)
-
         if plotter.frame == 0:
-            self.force_arrow = force_arrow
-            self.moment_arrow = moment_arrow
+            mesh = get_arrow(shaft_scale=0.002)
+            actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
+            self.platform_moment_arrow_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.platform_moment_arrow_transform)
 
-            self.force_ellipsoid_ref = pv.Sphere(radius=1)
-            self.force_ellipsoid = self.force_ellipsoid_ref.copy()
+            mesh = mesh = pv.Sphere(radius=1)
+            actor = plotter.plotter.add_mesh(mesh, color="cadmiumlemon", lighting=False, opacity=0.4)
+            self.platform_moment_ellipsoid_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.platform_moment_ellipsoid_transform)
 
-            self.moment_ellipsoid_ref = pv.Sphere(radius=1)
-            self.moment_ellipsoid = self.moment_ellipsoid_ref.copy()
+            mesh = get_arrow(shaft_scale=0.002)
+            actor = plotter.plotter.add_mesh(mesh, color='darkorchid', lighting=False)
+            self.platform_force_arrow_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.platform_force_arrow_transform)
 
-            plotter.plotter.add_mesh(self.force_arrow, color='darkorchid', lighting=False)
-            plotter.plotter.add_mesh(self.moment_arrow, color='deeppink', lighting=False)
-            plotter.plotter.add_mesh(self.force_ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
-            plotter.plotter.add_mesh(self.moment_ellipsoid, color="cadmiumlemon", lighting=False, opacity=0.4)
+            mesh = mesh = pv.Sphere(radius=1)
+            actor = plotter.plotter.add_mesh(mesh, color="cadmiumlemon", lighting=False, opacity=0.4)
+            self.platform_force_ellipsoid_transform = vtk.vtkTransform()
+            actor.SetUserTransform(self.platform_force_ellipsoid_transform)
 
+        # Update vtkTransforms for each actor
+        p = solution.platform_pose_mean[:3,3]
+        wrench = solution.platform_wrench_mean
+        cov = solution.platform_wrench_cov
 
-        self.moment_ellipsoid.points = transform_ellipsoid(
-            self.moment_ellipsoid_ref, 
-            p + self.moment_scale * moment_mean,
-            moment_cov,
-            self.moment_scale,
-        )
+        moment_mean, force_mean = wrench[:3], wrench[3:]
+        moment_cov, force_cov = cov[:3, :3], cov[3:, 3:]
 
-        self.force_ellipsoid.points = transform_ellipsoid(
-            self.force_ellipsoid_ref,
-            p + self.force_scale * force_mean,
-            force_cov,
-            self.force_scale,
-        )
+        matrix = get_arrow_transform(p, moment_mean, scale=self.moment_scale)
+        self.platform_moment_arrow_transform.SetMatrix(matrix.flatten().tolist())
 
-        # TODO .points
-        self.force_arrow.shallow_copy(force_arrow)
-        self.moment_arrow.shallow_copy(moment_arrow)
+        matrix = get_arrow_transform(p, force_mean, scale=self.force_scale)
+        self.platform_force_arrow_transform.SetMatrix(matrix.flatten().tolist())
+
+        matrix = get_ellipsoid_transform(p + force_mean * self.force_scale, force_cov, scale=self.force_scale)
+        self.platform_force_ellipsoid_transform.SetMatrix(matrix.flatten().tolist())
+
+        matrix = get_ellipsoid_transform(p + moment_mean * self.moment_scale, moment_cov, scale=self.force_scale)
+        self.platform_moment_ellipsoid_transform.SetMatrix(matrix.flatten().tolist())
 
     def update(self, solution):
         for i, manager in enumerate(self.rod_managers):

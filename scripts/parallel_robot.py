@@ -79,7 +79,7 @@ def main():
 
     config = crest_sparse.ParallelRobotSolverConfig()
 
-    config.nodes_per_rod = 10
+    config.nodes_per_rod = 20
     config.K_inv = K_inv
     config.sigma_twist_pos = 1.0e-4
     config.sigma_twist_rot = 1.0e-2
