@@ -79,6 +79,8 @@ public:
     
     const std::vector<gtsam::Key>& get_wrench_keys() const;
 
+    const std::vector<gtsam::Key>& get_pose_keys() const;
+
 private:
     int clamp_node_idx(int node_idx) const;
     

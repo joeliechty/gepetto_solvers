@@ -4,6 +4,7 @@
 
 #include "cosserat_rod/CosseratRodSolver.h"
 #include "parallel_robot/ParallelRobotSolver.h"
+#include "cosserat_rod/CosseratRodDynamicsSolver.h"
 
 namespace py = pybind11;
 
@@ -34,6 +35,11 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("meta", &CosseratRodSolution::meta)
         .def_readwrite("marginals", &CosseratRodSolution::marginals);
     
+    py::class_<CosseratRodDynamicsSolution>(m, "CosseratRodDynamicsSolution")
+        .def(py::init<>())
+        .def_readwrite("meta", &CosseratRodDynamicsSolution::meta)
+        .def_readwrite("marginals", &CosseratRodDynamicsSolution::marginals);
+
     py::class_<CosseratRodSolverConfig>(m, "CosseratRodSolverConfig")
         .def(py::init<>())  // default constructor
         .def_readwrite("rod_length", &CosseratRodSolverConfig::rod_length)
@@ -46,6 +52,16 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("sigma_base_pose_pos", &CosseratRodSolverConfig::sigma_base_pose_pos)
         .def_readwrite("sigma_base_pose_rot", &CosseratRodSolverConfig::sigma_base_pose_rot);
 
+    py::class_<CosseratRodDynamicsConfig>(m, "CosseratRodDynamicsConfig")
+        .def(py::init<>())  // default constructor
+        .def_readwrite("rod_config", &CosseratRodDynamicsConfig::rod_config)
+        .def_readwrite("num_time_steps", &CosseratRodDynamicsConfig::num_time_steps)
+        .def_readwrite("dt", &CosseratRodDynamicsConfig::dt)
+        .def_readwrite("linear_damping", &CosseratRodDynamicsConfig::linear_damping)
+        .def_readwrite("rotational_damping", &CosseratRodDynamicsConfig::rotational_damping)
+        .def_readwrite("sigma_dynamics_noise", &CosseratRodDynamicsConfig::sigma_dynamics_noise)
+        .def_readwrite("initial_tip_wrench", &CosseratRodDynamicsConfig::initial_tip_wrench);
+
     py::class_<CosseratRodSolver>(m, "CosseratRodSolver")
         .def(py::init<const CosseratRodSolverConfig&>())
         .def("solve", &CosseratRodSolver::solve,
@@ -54,6 +70,11 @@ PYBIND11_MODULE(crest_sparse, m) {
             py::arg("tip_pos_mean"),
             py::arg("tip_pos_cov"),
             py::arg("nominal_strain"),
+            py::call_guard<py::gil_scoped_release>());
+
+    py::class_<CosseratRodDynamicsSolver>(m, "CosseratRodDynamicsSolver")
+        .def(py::init<const CosseratRodDynamicsConfig&>())
+        .def("solve", &CosseratRodDynamicsSolver::solve,
             py::call_guard<py::gil_scoped_release>());
 
     py::class_<ParallelRobotSolverConfig>(m, "ParallelRobotSolverConfig")

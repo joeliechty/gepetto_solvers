@@ -2,29 +2,50 @@
 
 #include "CosseratRodSolver.h"
 
-constexpr int NUM_STEPS = 10;
+
+struct CosseratRodDynamicsConfig {
+    CosseratRodSolverConfig rod_config;
+
+    int num_time_steps;
+    double dt;
+    double linear_damping;
+    double rotational_damping;
+    double sigma_dynamics_noise;
+
+    gtsam::Vector6 initial_tip_wrench;
+};
 
 
 struct CosseratRodDynamicsSolution {
     SolutionMetadata meta;
-    std::vector<CosseratRodMarginals> marginals;
+    std::vector<CosseratRodSolution> marginals;
 };
 
 class CosseratRodDynamicsSolver {
 public:
-    CosseratRodDynamicsSolver(const CosseratRodSolverConfig& config);
+    CosseratRodDynamicsSolver(const CosseratRodDynamicsConfig& config);
 
-    CosseratRodDynamicsSolution step();
-
-    void build_graph();
+    CosseratRodDynamicsSolution solve();
 
 private:
+    void init_values();
+    
+    void build_graph();
+
+    const int num_time_steps_;
+    const double dt_;
+    const double rod_length_;
+    const double linear_damping_;
+    const double rotational_damping_;
+
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
     gtsam::Marginals marginals_;
 
     gtsam::SharedDiagonal small_wrench_noise_;
     gtsam::SharedDiagonal base_pose_noise_;
+    gtsam::SharedDiagonal dynamics_noise_;
 
-    std::array<std::unique_ptr<CosseratRodModel>, NUM_STEPS> rods_t_;
+    CosseratRodSolution static_solution_;
+    std::vector<std::unique_ptr<CosseratRodModel>> rods_t_;
 };

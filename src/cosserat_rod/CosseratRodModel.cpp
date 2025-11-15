@@ -57,6 +57,9 @@ Key CosseratRodModel::get_wrench_key(int node_idx) const { return wrench_keys_[c
 const std::vector<Key>& CosseratRodModel::get_wrench_keys() const {return wrench_keys_; }
 
 
+const std::vector<Key>& CosseratRodModel::get_pose_keys() const { return pose_keys_; }
+
+
 Values CosseratRodModel::get_initial_values() const {
     Values values;
     
