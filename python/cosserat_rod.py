@@ -1,0 +1,136 @@
+import time
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+import crest_sparse
+from plotting import CosseratRodPlotter
+
+
+def get_tip_force_prior(t):
+    xy_dir = np.array([np.cos(0.1 * t), np.sin(0.1 * t)])
+    f_xy = 0.5 * xy_dir
+    f_z = 3 * np.sin(0.3 * t)
+
+    tip_wrench_mean = np.hstack((np.zeros(3), f_xy, f_z))
+
+    tip_wrench_cov = 1e-6 * np.eye(6)
+
+    sigma_amplitude = 0.1
+    sigma = 1e-3 + sigma_amplitude - sigma_amplitude * np.cos(0.1 * t)
+    tip_wrench_cov[3:,3:] = sigma ** 2 * np.eye(3)
+
+    return tip_wrench_mean, tip_wrench_cov, None, None
+
+
+def get_tip_wrench_prior(t):
+    xy_dir = np.array([np.cos(0.1 * t), np.sin(0.1 * t)])
+    f_xy = 1.0 * xy_dir
+    f_z = 2.0 * np.sin(0.3 * t)
+
+    tip_wrench_mean = np.hstack((f_xy, f_z, np.zeros(3)))
+
+    tip_wrench_cov = 1e-6 * np.eye(6)
+
+    sigma_amplitude = 0.1
+    sigma = 1e-3 + sigma_amplitude - sigma_amplitude * np.cos(0.1 * t)
+    tip_wrench_cov[:3,:3] = sigma ** 2 * np.eye(3)
+
+    return tip_wrench_mean, tip_wrench_cov, None, None
+
+
+def get_tip_position_prior(t):
+    xy_dir = np.array([np.cos(0.1 * t), np.sin(0.1 * t)])
+    p_xy = 0.3 * xy_dir
+    p_z = 0.4 + 0.1 * np.sin(0.3 * t)
+
+    tip_pose_mean = np.eye(4)
+    tip_pose_mean[:3,3] = np.hstack((p_xy, p_z))
+
+    tip_pose_cov = 1e-6 * np.eye(6)
+    tip_pose_cov[:3,:3] = 10 * np.eye(3) # Allow rotation to vary
+
+    tip_wrench_mean = np.zeros(6)
+
+    tip_wrench_cov = 1e-6 * np.eye(6)
+    tip_wrench_cov[3:,3:] = 10 * np.eye(3) # Allow tip force to vary
+
+    return tip_wrench_mean, tip_wrench_cov, tip_pose_mean, tip_pose_cov
+
+
+def get_tip_pose_prior(t):
+    x = 0.15
+    yz = 0.15 * np.array([np.cos(0.2 * t), np.sin(0.2 * t)])
+    yz[1] += 0.25
+    p = np.hstack((x, yz))
+
+    r0 = np.array([0, np.pi / 6, 0])
+    R0 = Rotation.from_rotvec(r0).as_matrix()
+    dr = np.pi / 3 * np.array([np.sin(0.2 * t), np.sin(0.21 * t), np.sin(0.22 * t)])
+    dR = Rotation.from_rotvec(dr).as_matrix()
+    R = R0 @ dR
+
+    tip_pose_mean = np.eye(4)
+    tip_pose_mean[:3,:3] = R
+    tip_pose_mean[:3,3] = p
+
+    tip_pose_cov = 1e-6 * np.eye(6)
+
+    return None, None, tip_pose_mean, tip_pose_cov
+
+
+def main():
+    # input_getter = get_tip_force_prior
+    # prior_getter = get_tip_wrench_prior
+    # input_getter = get_tip_position_prior
+    prior_getter = get_tip_pose_prior
+
+    k_bending = 0.1
+    k_torsion = 0.1
+    k_shear = 1e2
+    k_extension = 1e2
+
+    K_inv = np.eye(6)
+    K_inv[0,0] = 1 / k_bending
+    K_inv[1,1] = 1 / k_bending
+    K_inv[2,2] = 1 / k_torsion
+    K_inv[3,3] = 1 / k_shear
+    K_inv[4,4] = 1 / k_shear
+    K_inv[5,5] = 1 / k_extension
+
+    config = crest_sparse.CosseratRodSolverConfig()
+    config.rod_length = 0.5
+    config.num_nodes = 15
+    config.K_inv = K_inv
+    config.sigma_twist_pos = 1.0e-3
+    config.sigma_twist_rot = 1.0e-3
+    config.sigma_small_force = 1.0e-3
+    config.sigma_small_moment = 1.0e-3
+    config.sigma_base_pose_pos = 1.0e-3
+    config.sigma_base_pose_rot = 1.0e-3
+
+    solver = crest_sparse.CosseratRodSolver(config)
+    plotter = CosseratRodPlotter(
+        plot_wrenches=True,
+        plot_backbone_frames=True, 
+        plot_tip_plate=True,
+        # save_frames_dir_name="both_ends_clamped",
+        camera_azimuth=60, 
+        camera_distance=1.5, 
+        camera_focal_point=np.array([0, 0, 0.25]))
+
+    frame_rate = 5.0
+    dt = 1.0 / frame_rate
+    t_final = 1200.0
+    num_steps = int(t_final / dt)
+
+    for step in range(num_steps + 1):
+        t = step * dt
+
+        solution = solver.solve(*prior_getter(t), None)
+        plotter.update(solution)
+
+        progress = 100.0 * step / num_steps
+        print(f"Progress: {progress:5.1f}%", end="\r")
+
+if __name__ == "__main__":
+    main()

@@ -15,12 +15,16 @@ CosseratDynamicsFactor::CosseratDynamicsFactor(
     const SharedNoiseModel& model,
     double dt,
     double linear_damping,
-    double rotational_damping)
+    double rotational_damping,
+    double linear_inertia,
+    double rotational_inertia)
 :
     NoiseModelFactorN(model, pose_prev_key, pose_key, pose_next_key, wrench_key), 
     dt_(dt),
     linear_damping_(linear_damping),
-    rotational_damping_(rotational_damping) {}
+    rotational_damping_(rotational_damping),
+    linear_inertia_(linear_inertia),
+    rotational_inertia_(rotational_inertia) {}
 
 
 Vector CosseratDynamicsFactor::evaluateError(
@@ -33,17 +37,24 @@ Vector CosseratDynamicsFactor::evaluateError(
     OptionalMatrixType H3, 
     OptionalMatrixType H4) const
 {
+    Vector6 velocity_prev = Pose3::Logmap(pose_prev.inverse() * pose) / dt_;
     Vector6 velocity = Pose3::Logmap(pose.inverse() * pose_next) / dt_;
-    // Vector6 vel_next = Pose3::Logmap(pose.inverse() * pose_next) / dt_;
-    // Vector6 velocity = (vel_next + vel_prev) / 2.0;
+
+    velocity_prev = (pose * pose_prev.inverse()).Adjoint(velocity_prev);
+    
+    Vector6 accel = (velocity - velocity_prev) / dt_;
 
     Vector6 damping_wrench;
     damping_wrench.head<3>() = -rotational_damping_  * velocity.head<3>();
     damping_wrench.tail<3>() = -linear_damping_ * velocity.tail<3>();
     
+    Vector6 inertial_wrench;
+    inertial_wrench.head<3>() = -rotational_inertia_ * accel.head<3>();
+    inertial_wrench.tail<3>() = -linear_inertia_ * accel.tail<3>();
+
     Vector6 wrench_body = spatial_to_body_wrench(wrench, pose);
 
-    Vector6 wrench_error = damping_wrench - wrench_body;
+    Vector6 wrench_error = inertial_wrench + damping_wrench - wrench_body;
 
     if (H1) {
         *H1 = numericalDerivative11<Vector6, Pose3>(

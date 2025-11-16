@@ -1,6 +1,6 @@
 #pragma once
 
-#include "base/Vector.h"
+#include <gtsam/base/Vector.h>
 #include "cosserat_rod/CosseratRodModel.h"
 
 

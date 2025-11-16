@@ -1,10 +1,11 @@
 #include "CosseratRodDynamicsSolver.h"
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <optional>
-#include "cosserat_rod/CosseratRodSolver.h"
-#include "linear/NoiseModel.h"
+#include <gtsam/linear/NoiseModel.h>
 
+#include "cosserat_rod/CosseratRodSolver.h"
 #include "cosserat_rod/CosseratRodModel.h"
 #include "CosseratDynamicsFactor.h"
 
@@ -14,10 +15,13 @@ using namespace gtsam;
 CosseratRodDynamicsSolver::CosseratRodDynamicsSolver(const CosseratRodDynamicsConfig& config) 
 :   
     num_time_steps_(config.num_time_steps),
+    num_nodes_(config.rod_config.num_nodes),
     dt_(config.dt),
     rod_length_(config.rod_config.rod_length),
     linear_damping_(config.linear_damping),
-    rotational_damping_(config.rotational_damping)
+    rotational_damping_(config.rotational_damping),
+    linear_inertia_(config.linear_inertia),
+    rotational_inertia_(config.rotational_inertia)
 {
     auto static_solver = CosseratRodSolver(config.rod_config);
 
@@ -55,6 +59,12 @@ void CosseratRodDynamicsSolver::init_values() {
 
     for (auto& rod_t : rods_t_) {
         values_.insert(rod_t->get_initial_values());
+
+        for (int i = 0; i < num_nodes_; i++) {
+            values_.update(rod_t->get_pose_key(i), Pose3(static_solution_.marginals.pose_mean[i]));
+            values_.update(rod_t->get_stress_key(i), static_solution_.marginals.stress_mean[i]);
+            values_.update(rod_t->get_wrench_key(i), static_solution_.marginals.wrench_mean[i]);
+        }
     }
 }
 
@@ -83,11 +93,13 @@ void CosseratRodDynamicsSolver::build_graph() {
             rods_t_[i - 1]->get_pose_key(-1),
             rods_t_[i + 0]->get_pose_key(-1),
             rods_t_[i + 1]->get_pose_key(-1),
-            rods_t_[i]->get_wrench_key(-1),
+            rods_t_[i + 1]->get_wrench_key(-1),
             dynamics_noise_,
             dt_,
             linear_damping_,
-            rotational_damping_
+            rotational_damping_,
+            linear_inertia_,
+            rotational_inertia_
         ));
     }
 
@@ -118,9 +130,9 @@ CosseratRodDynamicsSolution CosseratRodDynamicsSolver::solve() {
     auto build_stop = std::chrono::high_resolution_clock::now();
     auto optimize_start = build_stop;
 
-    DoglegParams params;
+    LevenbergMarquardtParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
-    DoglegOptimizer optimizer(graph_, values_, params);
+    LevenbergMarquardtOptimizer optimizer(graph_, values_, params);
 
     values_ = optimizer.optimize();
 

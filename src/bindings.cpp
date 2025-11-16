@@ -59,6 +59,8 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("dt", &CosseratRodDynamicsConfig::dt)
         .def_readwrite("linear_damping", &CosseratRodDynamicsConfig::linear_damping)
         .def_readwrite("rotational_damping", &CosseratRodDynamicsConfig::rotational_damping)
+        .def_readwrite("linear_inertia", &CosseratRodDynamicsConfig::linear_inertia)
+        .def_readwrite("rotational_inertia", &CosseratRodDynamicsConfig::rotational_inertia)
         .def_readwrite("sigma_dynamics_noise", &CosseratRodDynamicsConfig::sigma_dynamics_noise)
         .def_readwrite("initial_tip_wrench", &CosseratRodDynamicsConfig::initial_tip_wrench);
 

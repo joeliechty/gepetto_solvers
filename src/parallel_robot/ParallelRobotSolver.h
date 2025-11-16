@@ -1,6 +1,6 @@
 #pragma once
 
-#include "base/Matrix.h"
+#include <gtsam/base/Matrix.h>
 #include "parallel_robot/ParallelRobotModel.h"
 
 

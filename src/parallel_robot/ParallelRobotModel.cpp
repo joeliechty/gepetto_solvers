@@ -1,7 +1,7 @@
 #include "ParallelRobotModel.h"
 
 #include "PlatformWrenchBalanceFactor.h"
-#include "base/Vector.h"
+#include <gtsam/base/Vector.h>
 #include "cosserat_rod/BoundaryStressFactor.h"
 #include "cosserat_rod/CosseratRodModel.h"
 
