@@ -88,12 +88,12 @@ void CosseratRodDynamicsSolver::build_graph() {
     }
 
     // Now add all the finite difference dynamics factors at each time step
-    for (int i = 1; i +1 < num_time_steps_; i++) {
+    for (int i = 1; i + 1 < num_time_steps_; i++) {
         graph_.add(CosseratDynamicsFactor(
             rods_t_[i - 1]->get_pose_key(-1),
             rods_t_[i + 0]->get_pose_key(-1),
             rods_t_[i + 1]->get_pose_key(-1),
-            rods_t_[i + 1]->get_wrench_key(-1),
+            rods_t_[i + 0]->get_wrench_key(-1),
             dynamics_noise_,
             dt_,
             linear_damping_,
@@ -102,6 +102,10 @@ void CosseratRodDynamicsSolver::build_graph() {
             rotational_inertia_
         ));
     }
+
+    // Need to constrain first and last wrenches
+    graph_.add(PriorFactor<Vector6>(rods_t_.front()->get_wrench_key(-1), Vector6::Zero(), small_wrench_noise_));
+    graph_.add(PriorFactor<Vector6>(rods_t_.back()->get_wrench_key(-1), Vector6::Zero(), small_wrench_noise_));
 
     // Add initial condition factors: first two poses in time are set to known values from static config
     std::vector<Key> pose_keys_0 = rods_t_[0]->get_pose_keys();
@@ -132,6 +136,7 @@ CosseratRodDynamicsSolution CosseratRodDynamicsSolver::solve() {
 
     LevenbergMarquardtParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
+    params.setlambdaInitial(10.0);
     LevenbergMarquardtOptimizer optimizer(graph_, values_, params);
 
     values_ = optimizer.optimize();

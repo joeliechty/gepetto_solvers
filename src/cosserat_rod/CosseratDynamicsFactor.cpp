@@ -37,12 +37,14 @@ Vector CosseratDynamicsFactor::evaluateError(
     OptionalMatrixType H3, 
     OptionalMatrixType H4) const
 {
-    Vector6 velocity_prev = Pose3::Logmap(pose_prev.inverse() * pose) / dt_;
-    Vector6 velocity = Pose3::Logmap(pose.inverse() * pose_next) / dt_;
+    Vector6 velocity = Pose3::Logmap(pose_prev.inverse() * pose_next) / (2.0 * dt_);
+    // velocity = (pose * pose_prev.inverse()).Adjoint(velocity);
 
-    velocity_prev = (pose * pose_prev.inverse()).Adjoint(velocity_prev);
-    
-    Vector6 accel = (velocity - velocity_prev) / dt_;
+    Vector6 velocity_prev = Pose3::Logmap(pose_prev.inverse() * pose) / dt_;
+    // velocity_prev = (pose * pose_prev.inverse()).Adjoint(velocity_prev);
+    Vector6 velocity_next = Pose3::Logmap(pose.inverse() * pose_next) / dt_;
+
+    Vector6 accel = (velocity_next - velocity_prev) / dt_;
 
     Vector6 damping_wrench;
     damping_wrench.head<3>() = -rotational_damping_  * velocity.head<3>();

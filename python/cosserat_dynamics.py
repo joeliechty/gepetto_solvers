@@ -30,20 +30,20 @@ def main():
     config.rod_config.sigma_base_pose_pos = 1.0e-3
     config.rod_config.sigma_base_pose_rot = 1.0e-3
 
-    config.num_time_steps = 500
-    config.dt = 0.03
+    config.num_time_steps = 100
+    config.dt = 0.01
     config.linear_damping = 0
     config.rotational_damping = 0
     config.linear_inertia = 1e-2
-    config.rotational_inertia = 0
-    config.sigma_dynamics_noise = 1e-6
-    config.initial_tip_wrench = np.array([0, 0, 0, 0.5, 0, 0])
+    config.rotational_inertia = 3e-3
+    config.sigma_dynamics_noise = 1e-4
+    config.initial_tip_wrench = np.array([0.2, 0, 0, 0.5, 0, 0])
 
     solver = crest_sparse.CosseratRodDynamicsSolver(config)
     solution = solver.solve()
 
     plotter = CosseratRodPlotter(
-        plot_wrenches=True,
+        plot_wrenches=False,
         plot_backbone_frames=True,
         plot_internal_wrenches=True,
         camera_azimuth=60, 
