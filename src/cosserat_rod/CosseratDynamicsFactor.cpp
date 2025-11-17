@@ -20,71 +20,91 @@ CosseratDynamicsFactor::CosseratDynamicsFactor(
     double rotational_inertia)
 :
     NoiseModelFactorN(model, pose_prev_key, pose_key, pose_next_key, wrench_key), 
-    dt_(dt),
-    linear_damping_(linear_damping),
-    rotational_damping_(rotational_damping),
-    linear_inertia_(linear_inertia),
-    rotational_inertia_(rotational_inertia) {}
+    dt_(dt)
+{
+    Vector6 damping;
+    damping << 
+        rotational_damping, rotational_damping, rotational_damping,
+        linear_damping, linear_damping, linear_damping;
+    
+    damping_ = damping.asDiagonal();
+
+    Vector6 inertia;
+    inertia <<
+        rotational_inertia, rotational_inertia, rotational_inertia,
+        linear_inertia, linear_inertia, linear_inertia;
+
+    inertia_ = inertia.asDiagonal();
+}
+
+
+Vector6 get_velocity_from_poses(
+    Pose3 p0, 
+    Pose3 p1,
+    double dt,
+    Matrix6& d_v_d_p0, 
+    Matrix6& d_v_d_p1)
+{
+    Matrix6 d_p0_inv_d_p0;
+    Pose3 p0_inv = p0.inverse(d_p0_inv_d_p0);
+
+    Matrix6 d_comp_d_p0_inv, d_comp_d_p1;
+    Pose3 comp = p0_inv.compose(p1, d_comp_d_p0_inv, d_comp_d_p1);
+
+    Matrix6 d_delta_d_comp;
+    Vector6 delta = Pose3::Logmap(comp, d_delta_d_comp);
+
+    Vector6 v = delta / dt;
+
+    d_v_d_p0 = (1.0 / dt) * d_delta_d_comp * d_comp_d_p0_inv * d_p0_inv_d_p0;
+    d_v_d_p1 = (1.0 / dt) * d_delta_d_comp * d_comp_d_p1;
+
+    return v;
+}
 
 
 Vector CosseratDynamicsFactor::evaluateError(
-    const Pose3& pose_prev, 
-    const Pose3& pose,
-    const Pose3& pose_next, 
+    const Pose3& p0, 
+    const Pose3& p1,
+    const Pose3& p2, 
     const Vector6& wrench,
     OptionalMatrixType H1, 
     OptionalMatrixType H2, 
     OptionalMatrixType H3, 
     OptionalMatrixType H4) const
 {
-    Vector6 velocity = Pose3::Logmap(pose_prev.inverse() * pose_next) / (2.0 * dt_);
-    // velocity = (pose * pose_prev.inverse()).Adjoint(velocity);
-
-    Vector6 velocity_prev = Pose3::Logmap(pose_prev.inverse() * pose) / dt_;
-    // velocity_prev = (pose * pose_prev.inverse()).Adjoint(velocity_prev);
-    Vector6 velocity_next = Pose3::Logmap(pose.inverse() * pose_next) / dt_;
-
-    Vector6 accel = (velocity_next - velocity_prev) / dt_;
-
-    Vector6 damping_wrench;
-    damping_wrench.head<3>() = -rotational_damping_  * velocity.head<3>();
-    damping_wrench.tail<3>() = -linear_damping_ * velocity.tail<3>();
+    Matrix6 d_v_d_p0, d_v_d_p2;
+    Vector6 v = get_velocity_from_poses(p0, p2, 2.0 * dt_, d_v_d_p0, d_v_d_p2); // central difference
     
-    Vector6 inertial_wrench;
-    inertial_wrench.head<3>() = -rotational_inertia_ * accel.head<3>();
-    inertial_wrench.tail<3>() = -linear_inertia_ * accel.tail<3>();
+    Matrix6 d_v0_d_p0, d_v0_d_p1;
+    Vector6 v0 = get_velocity_from_poses(p0, p1, dt_, d_v0_d_p0, d_v0_d_p1);
 
-    Vector6 wrench_body = spatial_to_body_wrench(wrench, pose);
+    Matrix6 d_v1_d_p1, d_v1_d_p2;
+    Vector6 v1 = get_velocity_from_poses(p1, p2, dt_, d_v1_d_p1, d_v1_d_p2);
+
+    Vector6 a = (v1 - v0) / dt_;
+
+    Vector6 damping_wrench = -damping_ * v;
+    Vector6 inertial_wrench = -inertia_ * a;
+
+    Matrix6 d_wrench_body_d_wrench, d_wrench_body_d_p1;
+    Vector6 wrench_body = spatial_to_body_wrench(wrench, p1, d_wrench_body_d_wrench, d_wrench_body_d_p1);
 
     Vector6 wrench_error = inertial_wrench + damping_wrench - wrench_body;
 
     if (H1) {
-        *H1 = numericalDerivative11<Vector6, Pose3>(
-            [&](const Pose3& p) {
-                return this->evaluateError(p, pose, pose_next, wrench, nullptr, nullptr, nullptr, nullptr);
-            }, pose_prev);
+        *H1 = -inertia_ * (1 / dt_) * (-d_v0_d_p0) - damping_ * d_v_d_p0;
     }
 
     if (H2) {
-        *H2 = numericalDerivative11<Vector6, Pose3>(
-            [&](const Pose3& p) {
-                return this->evaluateError(pose_prev, p, pose_next, wrench, nullptr, nullptr, nullptr, nullptr);
-            }, pose);
+        *H2 = -inertia_ * (1 / dt_) * (d_v1_d_p1 - d_v0_d_p1) - d_wrench_body_d_p1;
     }
 
     if (H3) {
-        *H3 = numericalDerivative11<Vector6, Pose3>(
-            [&](const Pose3& p) {
-                return this->evaluateError(pose_prev, pose, p, wrench, nullptr, nullptr, nullptr, nullptr);
-            }, pose_next);
+        *H3 = -inertia_ * (1/ dt_) * d_v1_d_p2 - damping_ * d_v_d_p2;
     }
 
-    if (H4) {
-        *H4 = numericalDerivative11<Vector6, Vector6>(
-            [&](const Vector6& w) {
-                return this->evaluateError(pose_prev, pose, pose_next, w, nullptr, nullptr, nullptr, nullptr);
-            }, wrench);
-    }
+    if (H4) { *H4 = -d_wrench_body_d_wrench; }
 
     return wrench_error;
 }

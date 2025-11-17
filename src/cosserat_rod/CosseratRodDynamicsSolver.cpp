@@ -2,7 +2,7 @@
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
-#include <optional>
+#include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/linear/NoiseModel.h>
 
 #include "cosserat_rod/CosseratRodSolver.h"
@@ -40,8 +40,6 @@ CosseratRodDynamicsSolver::CosseratRodDynamicsSolver(const CosseratRodDynamicsCo
     
     base_pose_noise_ = get_noise_model_rot_pos(
         config.rod_config.sigma_base_pose_rot, config.rod_config.sigma_base_pose_pos);
-    
-    dynamics_noise_ = noiseModel::Isotropic::Sigma(6, config.sigma_dynamics_noise);
 
     rods_t_.resize(num_time_steps_);
 
@@ -73,54 +71,51 @@ void CosseratRodDynamicsSolver::build_graph() {
     graph_.resize(0);
 
     // First add all twist/stress factors to all the rods
-    for (auto& rod_t : rods_t_) {
-        auto rod_graph = rod_t->build_graph(rod_length_);
+    for (int t = 0; t < num_time_steps_; t++) {
+        auto rod_graph = rods_t_[t]->build_graph(rod_length_);
         graph_.push_back(rod_graph.begin(), rod_graph.end());
+    }
 
-        // Constrain interior wrenches to zero (skip base and tip)
-        std::vector<Key> wrench_keys = rod_t->get_wrench_keys();
-        for (size_t j = 1; j + 1 < wrench_keys.size(); ++j) {
-            graph_.add(PriorFactor<Vector6>(wrench_keys[j], Vector6::Zero(), small_wrench_noise_));
+    // Base pose prior
+    for (int t = 0; t < num_time_steps_; t++) { 
+        graph_.add(PriorFactor<Pose3>(rods_t_[t]->get_pose_key(0), Pose3::Identity(), base_pose_noise_));
+    }
+
+    // Initial conditions: first two rods in time known from static config
+    for (int t = 0; t < 2; t++) {
+        // Skip base pose, already taken care of above
+        for (int i = 1; i < num_nodes_; i++){
+            graph_.add(PriorFactor<Pose3>(
+                rods_t_[t]->get_pose_key(i),
+                Pose3(static_solution_.marginals.pose_mean[i]), 
+                base_pose_noise_));
         }
+    }
 
-        // Base pose prior
-        graph_.add(PriorFactor<Pose3>(rod_t->get_pose_key(0), Pose3::Identity(), base_pose_noise_));
+    // Need to constrain last wrenches in time: approx equal to second to last
+    for (int i = 0; i < num_nodes_; i++) {
+        graph_.add(BetweenFactor<Vector6>(
+            rods_t_[num_time_steps_ - 1]->get_wrench_key(i),
+            rods_t_[num_time_steps_ - 2]->get_wrench_key(i),
+            Vector6::Zero(),
+            small_wrench_noise_));
     }
 
     // Now add all the finite difference dynamics factors at each time step
-    for (int i = 1; i + 1 < num_time_steps_; i++) {
-        graph_.add(CosseratDynamicsFactor(
-            rods_t_[i - 1]->get_pose_key(-1),
-            rods_t_[i + 0]->get_pose_key(-1),
-            rods_t_[i + 1]->get_pose_key(-1),
-            rods_t_[i + 0]->get_wrench_key(-1),
-            dynamics_noise_,
-            dt_,
-            linear_damping_,
-            rotational_damping_,
-            linear_inertia_,
-            rotational_inertia_
-        ));
-    }
-
-    // Need to constrain first and last wrenches
-    graph_.add(PriorFactor<Vector6>(rods_t_.front()->get_wrench_key(-1), Vector6::Zero(), small_wrench_noise_));
-    graph_.add(PriorFactor<Vector6>(rods_t_.back()->get_wrench_key(-1), Vector6::Zero(), small_wrench_noise_));
-
-    // Add initial condition factors: first two poses in time are set to known values from static config
-    std::vector<Key> pose_keys_0 = rods_t_[0]->get_pose_keys();
-    std::vector<Key> pose_keys_1 = rods_t_[1]->get_pose_keys();
-
-    for (size_t i = 0; i < pose_keys_0.size(); ++i) {
-        graph_.add(PriorFactor<Pose3>(
-            pose_keys_0[i], 
-            Pose3(static_solution_.marginals.pose_mean[i]), 
-            base_pose_noise_));
-
-        graph_.add(PriorFactor<Pose3>(
-            pose_keys_1[i], 
-            Pose3(static_solution_.marginals.pose_mean[i]), 
-            base_pose_noise_));
+    for (int t = 2; t + 1 < num_time_steps_; t++) {
+        for (int i = 1; i < num_nodes_; i++) {
+            graph_.add(CosseratDynamicsFactor(
+                rods_t_[t - 1]->get_pose_key(i),
+                rods_t_[t + 0]->get_pose_key(i),
+                rods_t_[t + 1]->get_pose_key(i),
+                rods_t_[t + 0]->get_wrench_key(i),
+                small_wrench_noise_,
+                dt_,
+                linear_damping_,
+                rotational_damping_,
+                linear_inertia_,
+                rotational_inertia_));
+        }
     }
 }
 
@@ -134,9 +129,14 @@ CosseratRodDynamicsSolution CosseratRodDynamicsSolver::solve() {
     auto build_stop = std::chrono::high_resolution_clock::now();
     auto optimize_start = build_stop;
 
+    // DoglegParams params;
+    // params.setLinearSolverType("MULTIFRONTAL_QR");
+    // params.setDeltaInitial(1e-4);
+    // DoglegOptimizer optimizer(graph_, values_, params);
+
     LevenbergMarquardtParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
-    params.setlambdaInitial(10.0);
+    // params.setlambdaInitial(10.0);
     LevenbergMarquardtOptimizer optimizer(graph_, values_, params);
 
     values_ = optimizer.optimize();

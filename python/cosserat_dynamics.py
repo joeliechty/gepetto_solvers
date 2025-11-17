@@ -23,21 +23,20 @@ def main():
     config.rod_config.rod_length = 0.5
     config.rod_config.num_nodes = 15
     config.rod_config.K_inv = K_inv
-    config.rod_config.sigma_twist_pos = 1.0e-3
-    config.rod_config.sigma_twist_rot = 1.0e-3
-    config.rod_config.sigma_small_force = 1.0e-3
-    config.rod_config.sigma_small_moment = 1.0e-3
-    config.rod_config.sigma_base_pose_pos = 1.0e-3
-    config.rod_config.sigma_base_pose_rot = 1.0e-3
+    config.rod_config.sigma_twist_pos = 1.0e-4
+    config.rod_config.sigma_twist_rot = 1.0e-4
+    config.rod_config.sigma_small_force = 1.0e-4
+    config.rod_config.sigma_small_moment = 1.0e-4
+    config.rod_config.sigma_base_pose_pos = 1.0e-5
+    config.rod_config.sigma_base_pose_rot = 1.0e-5
 
-    config.num_time_steps = 100
-    config.dt = 0.01
-    config.linear_damping = 0
-    config.rotational_damping = 0
-    config.linear_inertia = 1e-2
-    config.rotational_inertia = 3e-3
-    config.sigma_dynamics_noise = 1e-4
-    config.initial_tip_wrench = np.array([0.2, 0, 0, 0.5, 0, 0])
+    config.num_time_steps = 50
+    config.dt = 0.1
+    config.linear_damping = 1
+    config.rotational_damping = 1e-2
+    config.linear_inertia = 1
+    config.rotational_inertia = 1e-2
+    config.initial_tip_wrench = np.array([0, 0.3, 0, -0.7, 0, 0])
 
     solver = crest_sparse.CosseratRodDynamicsSolver(config)
     solution = solver.solve()

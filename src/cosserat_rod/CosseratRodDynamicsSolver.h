@@ -12,7 +12,6 @@ struct CosseratRodDynamicsConfig {
     double rotational_damping;
     double linear_inertia;
     double rotational_inertia;
-    double sigma_dynamics_noise;
     
     gtsam::Vector6 initial_tip_wrench;
 };
@@ -49,7 +48,6 @@ private:
 
     gtsam::SharedDiagonal small_wrench_noise_;
     gtsam::SharedDiagonal base_pose_noise_;
-    gtsam::SharedDiagonal dynamics_noise_;
 
     CosseratRodSolution static_solution_;
     std::vector<std::unique_ptr<CosseratRodModel>> rods_t_;
