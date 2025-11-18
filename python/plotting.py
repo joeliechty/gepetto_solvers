@@ -507,6 +507,37 @@ class ParallelRobotPlotter:
 
         self.plotter.update(solution)
 
+
+class CosseratShellPlotter:
+    def __init__(self, **kwargs):
+        self.cartesian_frame_scale = 0.05
+
+        self.plotter = PlotterBase(**kwargs)
+    
+    def update_frames(self, solution, plotter):
+        if plotter.frame == 0:
+            self.frame_transforms = []
+            for pose_col in solution.pose_mean:
+                transforms_col = []
+                for pose in pose_col:
+                    axes = get_axes_frame(length=self.cartesian_frame_scale)
+                    transform = vtk.vtkTransform()
+                    for arrow, color in zip(axes, frame_arrow_colors):
+                        actor = plotter.plotter.add_mesh(arrow, color=color)
+                        actor.SetUserTransform(transform)
+                    transforms_col.append(transform)
+                self.frame_transforms.append(transforms_col)
+
+        for transform_col, pose_col in zip(self.frame_transforms, solution.pose_mean):
+            for transform, pose in zip(transform_col, pose_col):
+                transform.SetMatrix(pose.flatten().tolist())
+        
+    def update(self, solution):
+        self.update_frames(solution.marginals, self.plotter)
+
+        self.plotter.update(solution)
+
+
 # from pathlib import Path
 # import shutil
 

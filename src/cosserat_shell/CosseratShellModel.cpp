@@ -2,7 +2,6 @@
 
 #include "cosserat_rod/CosseratTwistFactor.h"
 #include "CosseratShellStressFactor.h"
-// #include "BoundaryStressFactor.h"
 
 using namespace gtsam;
 
@@ -24,26 +23,22 @@ CosseratShellModel::CosseratShellModel (
 {
     pose_keys_.resize(num_nodes_x_);
     stress_keys_.resize(num_nodes_x_);
-    wrench_keys_.resize(num_nodes_x_);
 
     for (int i = 0; i < num_nodes_x_; i++) {
         pose_keys_[i].resize(num_nodes_y_);
         stress_keys_[i].resize(num_nodes_y_);
-        wrench_keys_[i].resize(num_nodes_y_);
     }
 
     for (int i = 0; i < num_nodes_x_; i++) {
         for (int j = 0; j < num_nodes_y_; j++) {
 
-            size_t id = i * num_nodes_y_ + j;
+            int id = i * num_nodes_y_ + j;
 
             pose_keys_[i][j]   = Symbol('T', id);
-            stress_keys_[i][j] = Symbol('S', id);
-            wrench_keys_[i][j] = Symbol('F', id);
+            stress_keys_[i][j][X] = Symbol('X', id);
+            stress_keys_[i][j][Y] = Symbol('Y', id);
         }
     }
-
-    dummy_wrench_key_ = Symbol('F', 999); 
 }
 
 
@@ -73,17 +68,9 @@ Key CosseratShellModel::get_pose_key(int node_x_idx, int node_y_idx) const {
 }
 
 
-Key CosseratShellModel::get_stress_key(int node_x_idx, int node_y_idx) const { 
-    return stress_keys_[clamp_node_x_idx(node_x_idx)][clamp_node_y_idx(node_y_idx)]; 
+Key CosseratShellModel::get_stress_key(int node_x_idx, int node_y_idx, StressDir dir) const { 
+    return stress_keys_[clamp_node_x_idx(node_x_idx)][clamp_node_y_idx(node_y_idx)][dir]; 
 }
-
-
-Key CosseratShellModel::get_wrench_key(int node_x_idx, int node_y_idx) const { 
-    return wrench_keys_[clamp_node_x_idx(node_x_idx)][clamp_node_y_idx(node_y_idx)]; 
-}
-
-
-const std::vector<std::vector<Key>>& CosseratShellModel::get_wrench_keys() const {return wrench_keys_; }
 
 
 Values CosseratShellModel::get_initial_values() const {
@@ -92,12 +79,11 @@ Values CosseratShellModel::get_initial_values() const {
     for (int i = 0; i < num_nodes_x_; ++i) {
         for (int j = 0; j < num_nodes_y_; ++j) {
             values.insert(pose_keys_[i][j], Pose3::Identity());
-            values.insert(stress_keys_[i][j], Vector6(Vector6::Zero()));
-            values.insert(wrench_keys_[i][j], Vector6(Vector6::Zero()));
+            values.insert(stress_keys_[i][j][X], Vector6(Vector6::Zero()));
+            values.insert(stress_keys_[i][j][Y], Vector6(Vector6::Zero()));
         }
     }
 
-    values.insert(dummy_wrench_key_, Vector6(Vector6::Zero()));
     return values;
 }
 
@@ -106,54 +92,86 @@ NonlinearFactorGraph CosseratShellModel::build_graph() const
 {
     NonlinearFactorGraph graph;
 
-    Vector6 straight_rod_strain = Vector6::Zero();
-    straight_rod_strain[5] = 1.0;
+    Vector6 nominal_strain_x = Vector6::Zero();
+    nominal_strain_x[3] = 1.0;
 
-    // // Cosserat twist factors
-    // for (int i = 0; i + 1 < num_nodes_; ++i) {
-    //     graph.add(CosseratTwistFactor(
-    //         pose_keys_[i], 
-    //         pose_keys_[i + 1], 
-    //         stress_keys_[i], 
-    //         stress_keys_[i + 1], 
-    //         ds[i], 
-    //         nominal_strain ? *nominal_strain : straight_rod_strain,
-    //         K_inv_[i], 
-    //         twist_cov_));
-    // }
-        
-    // // Cosserat stress factors
-    // for (int i = 0; i + 1 < num_nodes_; ++i) {
-    //     Key wrench_key = (i == 0) ? dummy_wrench_key_ : wrench_keys_[i];
+    Vector6 nominal_strain_y = Vector6::Zero();
+    nominal_strain_y[4] = 1.0;
 
-    //     graph.add(CosseratStressFactor(
-    //         pose_keys_[i], 
-    //         pose_keys_[i + 1], 
-    //         stress_keys_[i], 
-    //         stress_keys_[i + 1],
-    //         wrench_key,
-    //         stress_cov_));
-    // }
+    // Twist factors in X direction
+    for (int j = 0; j < num_nodes_y_; j++) {
+        for (int i = 0; i + 1 < num_nodes_x_; i++) {
+            graph.add(CosseratTwistFactor(
+                pose_keys_[i][j],
+                pose_keys_[i + 1][j], 
+                stress_keys_[i][j][X], 
+                stress_keys_[i + 1][j][X], 
+                element_size_,
+                nominal_strain_x,
+                K_inv_,
+                twist_cov_));
+        }
+    }
 
-    // // Constrain tip stress to be equal to tip force
-    // bool is_base = false;
-    // graph.add(BoundaryStressFactor(
-    //     stress_keys_.back(), 
-    //     wrench_keys_.back(),
-    //     pose_keys_.back(),
-    //     stress_cov_,
-    //     is_base));
-    
-    // // Makey dummy wrench zero
-    // graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_cov_));
-    
-    // is_base = true;
-    // graph.add(BoundaryStressFactor(
-    //     stress_keys_.front(), 
-    //     wrench_keys_.front(),
-    //     pose_keys_.front(),
-    //     stress_cov_,
-    //     is_base));
+    // Twist factors in Y direction
+    for (int i = 0; i < num_nodes_x_; i++) {
+        for (int j = 0; j + 1 < num_nodes_y_; j++) {
+            graph.add(CosseratTwistFactor(
+                pose_keys_[i][j],
+                pose_keys_[i][j + 1], 
+                stress_keys_[i][j][Y], 
+                stress_keys_[i][j + 1][Y], 
+                element_size_,
+                nominal_strain_y,
+                K_inv_,
+                twist_cov_));
+        }
+    }
+
+    // Cosserat stress factors
+    for (int i = 0; i + 1 < num_nodes_x_; i++) {
+        for (int j = 0; j + 1 < num_nodes_y_; j++) {
+            graph.add(CosseratShellStressFactor(
+                pose_keys_[i][j],
+                pose_keys_[i + 1][j],
+                pose_keys_[i][j + 1],
+                stress_keys_[i][j][X],
+                stress_keys_[i][j][Y],
+                stress_keys_[i + 1][j][X],
+                stress_keys_[i][j + 1][Y],
+                stress_cov_));
+        }
+    }
+
+    // Make the x axis fixed by adding base pose constraints
+    for (int i = 0; i < num_nodes_x_; i++) {
+        graph.add(PriorFactor<Pose3>(
+            pose_keys_[i][0],
+            Pose3(Rot3::Identity(), Point3(element_size_ * i, 0, 0)),
+            twist_cov_));
+    }
+
+    // Make top Y stresses zero except for corner
+    Vector6 s;
+    s << 0, 1, 0, 0, 0, 0;
+    for (int i = 0; i < num_nodes_x_; i++) {
+        graph.add(PriorFactor<Vector6>(
+            stress_keys_[i][num_nodes_y_ - 1][Y],
+            s,
+            stress_cov_));
+    }
+
+    // Make side X stresses zero
+    for (int j = 0; j < num_nodes_y_; j++) {
+        graph.add(PriorFactor<Vector6>(
+            stress_keys_[0][j][X],
+            Vector6::Zero(),
+            stress_cov_));
+        graph.add(PriorFactor<Vector6>(
+            stress_keys_[num_nodes_x_ - 1][j][X],
+            Vector6::Zero(),
+            stress_cov_));
+    }
 
     return graph;
 }
@@ -169,16 +187,12 @@ CosseratShellMarginals CosseratShellModel::get_marginals(
     solution.pose_cov.resize(num_nodes_x_);
     solution.stress_mean.resize(num_nodes_x_);
     solution.stress_cov.resize(num_nodes_x_);
-    solution.wrench_mean.resize(num_nodes_x_);
-    solution.wrench_cov.resize(num_nodes_x_);
 
     for (int i = 0; i < num_nodes_x_; i++) {
         solution.pose_mean[i].resize(num_nodes_y_);
         solution.pose_cov[i].resize(num_nodes_y_);
         solution.stress_mean[i].resize(num_nodes_y_);
         solution.stress_cov[i].resize(num_nodes_y_);
-        solution.wrench_mean[i].resize(num_nodes_y_);
-        solution.wrench_cov[i].resize(num_nodes_y_);
     }
 
     for (int i = 0; i < num_nodes_x_; ++i) {
@@ -186,11 +200,11 @@ CosseratShellMarginals CosseratShellModel::get_marginals(
             solution.pose_mean[i][j] = values.at<Pose3>(pose_keys_[i][j]).matrix();
             solution.pose_cov[i][j] = marginals.marginalCovariance(pose_keys_[i][j]);
 
-            solution.stress_mean[i][j] = values.at<Vector6>(stress_keys_[i][j]);
-            solution.stress_cov[i][j] = marginals.marginalCovariance(stress_keys_[i][j]);
+            solution.stress_mean[i][j][X] = values.at<Vector6>(stress_keys_[i][j][X]);
+            solution.stress_cov[i][j][X] = marginals.marginalCovariance(stress_keys_[i][j][X]);
 
-            solution.wrench_mean[i][j] = values.at<Vector6>(wrench_keys_[i][j]);
-            solution.wrench_cov[i][j] = marginals.marginalCovariance(wrench_keys_[i][j]);
+            solution.stress_mean[i][j][Y] = values.at<Vector6>(stress_keys_[i][j][Y]);
+            solution.stress_cov[i][j][Y] = marginals.marginalCovariance(stress_keys_[i][j][Y]);
         }
     }
     

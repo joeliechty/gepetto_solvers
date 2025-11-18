@@ -7,15 +7,18 @@
 #include <gtsam/inference/Symbol.h>
     
 
+enum StressDir {
+    X, Y,
+    NUM_DIR
+};
+
+
 struct CosseratShellMarginals {
     std::vector<std::vector<gtsam::Matrix4>> pose_mean;
     std::vector<std::vector<gtsam::Matrix6>> pose_cov;
 
-    std::vector<std::vector<gtsam::Vector6>> stress_mean;
-    std::vector<std::vector<gtsam::Matrix6>> stress_cov;
-
-    std::vector<std::vector<gtsam::Vector6>> wrench_mean;
-    std::vector<std::vector<gtsam::Matrix6>> wrench_cov;
+    std::vector<std::vector<std::array<gtsam::Vector6, NUM_DIR>>> stress_mean;
+    std::vector<std::vector<std::array<gtsam::Matrix6, NUM_DIR>>> stress_cov;
 };
 
 
@@ -39,11 +42,7 @@ public:
 
     gtsam::Key get_pose_key(int node_x_idx, int node_y_idx) const;
 
-    gtsam::Key get_stress_key(int node_x_idx, int node_y_idx) const;
-    
-    gtsam::Key get_wrench_key(int node_x_idx, int node_y_idx) const;
-    
-    const std::vector<std::vector<gtsam::Key>>& get_wrench_keys() const;
+    gtsam::Key get_stress_key(int node_x_idx, int node_y_idx, StressDir dir) const;
 
 private:
     int clamp_node_x_idx(int node_idx) const;
@@ -59,7 +58,5 @@ private:
     gtsam::SharedDiagonal stress_cov_;
 
     std::vector<std::vector<gtsam::Key>> pose_keys_;
-    std::vector<std::vector<gtsam::Key>> stress_keys_;
-    std::vector<std::vector<gtsam::Key>> wrench_keys_;
-    gtsam::Key dummy_wrench_key_;
+    std::vector<std::vector<std::array<gtsam::Key, NUM_DIR>>> stress_keys_;
 };
