@@ -1,6 +1,8 @@
 #include "CosseratShellModel.h"
 
+#include <gtsam/slam/BetweenFactor.h>
 #include "cosserat_rod/CosseratTwistFactor.h"
+#include "cosserat_rod/CosseratStressFactor.h"
 #include "CosseratShellStressFactor.h"
 
 using namespace gtsam;
@@ -39,6 +41,8 @@ CosseratShellModel::CosseratShellModel (
             stress_keys_[i][j][Y] = Symbol('Y', id);
         }
     }
+
+    dummy_wrench_key_ = Symbol('F', 9999999);
 }
 
 
@@ -78,17 +82,19 @@ Values CosseratShellModel::get_initial_values() const {
     
     for (int i = 0; i < num_nodes_x_; ++i) {
         for (int j = 0; j < num_nodes_y_; ++j) {
-            values.insert(pose_keys_[i][j], Pose3::Identity());
+            values.insert(pose_keys_[i][j], Pose3(Rot3::Identity(), Point3(i * element_size_, j * element_size_, 0)));
             values.insert(stress_keys_[i][j][X], Vector6(Vector6::Zero()));
             values.insert(stress_keys_[i][j][Y], Vector6(Vector6::Zero()));
         }
     }
 
+    values.insert(dummy_wrench_key_, Vector6(Vector6::Zero()));
+    
     return values;
 }
 
 
-NonlinearFactorGraph CosseratShellModel::build_graph() const 
+NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displacement) const 
 {
     NonlinearFactorGraph graph;
 
@@ -128,7 +134,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph() const
         }
     }
 
-    // Cosserat stress factors
+    // 2D Stress factors on interior of shell
     for (int i = 0; i + 1 < num_nodes_x_; i++) {
         for (int j = 0; j + 1 < num_nodes_y_; j++) {
             graph.add(CosseratShellStressFactor(
@@ -143,22 +149,37 @@ NonlinearFactorGraph CosseratShellModel::build_graph() const
         }
     }
 
+    // Need dummy wrench, set equal to zero
+    graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_cov_));
+
+    // 1D stress factors on TOP edge
+    for (int i = 0; i + 1 < num_nodes_x_; i++) {
+        graph.add(CosseratStressFactor(
+            pose_keys_[i][num_nodes_y_ - 1],
+            pose_keys_[i + 1][num_nodes_y_ - 1],
+            stress_keys_[i][num_nodes_y_ - 1][X],
+            stress_keys_[i + 1][num_nodes_y_ - 1][X],
+            dummy_wrench_key_,
+            stress_cov_));
+    }
+
+    // 1D stress factors on RIGHT edge
+    for (int j = 0; j + 1 < num_nodes_y_; j++) {
+        graph.add(CosseratStressFactor(
+            pose_keys_[num_nodes_x_ - 1][j],
+            pose_keys_[num_nodes_x_ - 1][j + 1],
+            stress_keys_[num_nodes_x_ - 1][j][Y],
+            stress_keys_[num_nodes_x_ - 1][j + 1][Y],
+            dummy_wrench_key_,
+            stress_cov_));
+    }
+
     // Make the x axis fixed by adding base pose constraints
     for (int i = 0; i < num_nodes_x_; i++) {
         graph.add(PriorFactor<Pose3>(
             pose_keys_[i][0],
             Pose3(Rot3::Identity(), Point3(element_size_ * i, 0, 0)),
             twist_cov_));
-    }
-
-    // Make top Y stresses zero except for corner
-    Vector6 s;
-    s << 0, 1, 0, 0, 0, 0;
-    for (int i = 0; i < num_nodes_x_; i++) {
-        graph.add(PriorFactor<Vector6>(
-            stress_keys_[i][num_nodes_y_ - 1][Y],
-            s,
-            stress_cov_));
     }
 
     // Make side X stresses zero
@@ -173,6 +194,34 @@ NonlinearFactorGraph CosseratShellModel::build_graph() const
             stress_cov_));
     }
 
+    Pose3 nominal_middle_top_pose = Pose3(
+        Rot3::Identity(), 
+        Point3((num_nodes_x_ - 1) * element_size_ / 2, (num_nodes_y_ - 1) * element_size_, 0));
+    
+    int middle_top_idx = num_nodes_x_ / 2;
+    
+    graph.add(PriorFactor<Pose3>(
+        pose_keys_[middle_top_idx][num_nodes_y_ - 1],
+        nominal_middle_top_pose.compose(Pose3(top_displacement)),
+        twist_cov_));
+    
+    for (int i = 0; i + 1 < num_nodes_x_; i++) {
+        graph.add(BetweenFactor<Pose3>(
+            pose_keys_[i][num_nodes_y_ - 1],
+            pose_keys_[i + 1][num_nodes_y_ - 1],
+            Pose3(Rot3::Identity(), Point3(element_size_, 0, 0)),
+            twist_cov_));
+    }
+
+
+    // // Set TOP Y stresses equal to known values    
+    // for (int i = 0; i + 1 < num_nodes_x_; i++) {
+    //     graph.add(PriorFactor<Vector6>(
+    //         stress_keys_[i][num_nodes_y_ - 1][Y],
+    //         top_stress,
+    //         stress_cov_));
+    // }
+    
     return graph;
 }
 

@@ -4,7 +4,7 @@ import shutil
 
 import vtk
 import pyvista as pv
-
+import matplotlib.pyplot as plt
 
 frame_arrow_colors = ["red", "green", "blue"]
 
@@ -510,10 +510,20 @@ class ParallelRobotPlotter:
 
 class CosseratShellPlotter:
     def __init__(self, **kwargs):
-        self.cartesian_frame_scale = 0.05
+        self.cartesian_frame_scale = 0.04
 
         self.plotter = PlotterBase(**kwargs)
-    
+
+        yz_length = 0.05
+        x_length = 0.6
+        base_plate = pv.Cube(center=(x_length / 2, -yz_length / 2, 0), x_length=x_length, y_length=yz_length, z_length=yz_length)
+        self.plotter.plotter.add_mesh(base_plate, color="silver", show_edges=True, line_width=2)
+        
+        tip_plate = base_plate = pv.Cube(center=(x_length / 2, yz_length / 2, 0), x_length=x_length, y_length=yz_length, z_length=yz_length)
+        actor = self.plotter.plotter.add_mesh(tip_plate, color="silver", show_edges=True, line_width=2)
+        self.tip_plate_transform = vtk.vtkTransform()
+        actor.SetUserTransform(self.tip_plate_transform)
+
     def update_frames(self, solution, plotter):
         if plotter.frame == 0:
             self.frame_transforms = []
@@ -531,11 +541,87 @@ class CosseratShellPlotter:
         for transform_col, pose_col in zip(self.frame_transforms, solution.pose_mean):
             for transform, pose in zip(transform_col, pose_col):
                 transform.SetMatrix(pose.flatten().tolist())
-        
+    
+    def update_mesh(self, solution, plotter):
+        points = []
+        for pose_col in solution.pose_mean:
+            points_col = [pose[:3,3] for pose in pose_col]
+            points.append(points_col)
+
+        pts = np.array(points).transpose(1, 0, 2)
+        nx, ny, _ = pts.shape
+        flat_points = pts.reshape(-1, 3)
+
+        if plotter.frame == 0:
+            def idx(i, j):
+                return i * ny + j
+
+            faces = []
+            for i in range(nx - 1):
+                for j in range(ny - 1):
+                    p00 = idx(i, j)
+                    p10 = idx(i+1, j)
+                    p01 = idx(i, j+1)
+                    p11 = idx(i+1, j+1)
+
+                    faces += [
+                        3, p00, p10, p11,   # triangle 1
+                        3, p00, p11, p01    # triangle 2
+                    ]
+
+            self.mesh = pv.PolyData(flat_points, faces=np.array(faces))
+            plotter.plotter.add_mesh(self.mesh, color="slateblue", opacity=0.4, show_edges=False)
+
+        self.mesh.points = flat_points
+
+    def update_stress_plots(self, solution):
+        nx = len(solution.stress_mean)
+        ny = len(solution.stress_mean[0])
+
+        bending = np.zeros((nx, ny))
+        torsion = np.zeros_like(bending)
+        shear = np.zeros_like(bending)
+        tensile = np.zeros_like(bending)
+
+        for i in range(nx):
+            for j in range(ny):
+                sx = solution.stress_mean[i][j][0]
+                sy = solution.stress_mean[i][j][1]
+
+                bending[i, j] = np.linalg.norm([sx[1], sx[2], sy[0], sy[2]])
+                torsion[i, j] = np.linalg.norm([sx[0], sy[1]])
+                shear[i, j] = np.linalg.norm([sx[4], sx[5], sy[3], sy[5]])
+                tensile[i, j] = np.linalg.norm([sx[3], sy[4]])
+
+        plt.figure(figsize=(8,15))
+        plt.subplot(4,1,1)
+        plt.imshow(bending, origin='lower', cmap='inferno')
+        plt.colorbar(label="Bending Stress")
+
+        plt.subplot(4,1,2)
+        plt.imshow(torsion, origin='lower', cmap='inferno')
+        plt.colorbar(label="Torsion Stress")
+
+        plt.subplot(4,1,3)
+        plt.imshow(shear, origin='lower', cmap='inferno')
+        plt.colorbar(label="Shear Stress")
+
+        plt.subplot(4,1,4)
+        plt.imshow(tensile, origin='lower', cmap='inferno')
+        plt.colorbar(label="Tensile Stress")
+
+        plt.show()
+
+    def update_tip_plate(self, solution):
+        self.tip_plate_transform.SetMatrix(solution.pose_mean[0][-1].flatten().tolist())
+
     def update(self, solution):
         self.update_frames(solution.marginals, self.plotter)
+        self.update_mesh(solution.marginals, self.plotter)
+        self.update_tip_plate(solution.marginals)
 
         self.plotter.update(solution)
+        # self.update_stress_plots(solution.marginals)
 
 
 # from pathlib import Path

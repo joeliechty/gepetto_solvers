@@ -29,7 +29,7 @@ class CosseratShellSolver {
 public:
     CosseratShellSolver(const CosseratShellSolverConfig& config);
 
-    CosseratShellSolution solve();
+    CosseratShellSolution solve(const gtsam::Matrix4& top_displacement);
 
 private:
     gtsam::NonlinearFactorGraph graph_;

@@ -32,7 +32,7 @@ public:
         gtsam::SharedDiagonal twist_cov,
         gtsam::SharedDiagonal stress_cov);
 
-    gtsam::NonlinearFactorGraph build_graph() const;
+    gtsam::NonlinearFactorGraph build_graph(const gtsam::Matrix4& top_dispacement) const;
 
     gtsam::Values get_initial_values() const;
 
@@ -59,4 +59,5 @@ private:
 
     std::vector<std::vector<gtsam::Key>> pose_keys_;
     std::vector<std::vector<std::array<gtsam::Key, NUM_DIR>>> stress_keys_;
+    gtsam::Key dummy_wrench_key_;
 };
