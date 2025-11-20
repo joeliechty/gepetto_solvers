@@ -153,15 +153,6 @@ NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displace
             Pose3(Rot3::Identity(), Point3(element_size_, 0, 0)),
             twist_cov_));
     }
-
-
-    // // Set TOP Y stresses equal to known values    
-    // for (int i = 0; i + 1 < num_nodes_x_; i++) {
-    //     graph.add(PriorFactor<Vector6>(
-    //         stress_keys_[i][num_nodes_y_ - 1][Y],
-    //         top_stress,
-    //         stress_cov_));
-    // }
     
     return graph;
 }
