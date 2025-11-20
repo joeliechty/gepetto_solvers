@@ -25,16 +25,19 @@ CosseratShellSolver::CosseratShellSolver(const CosseratShellSolverConfig& config
 }
 
 
-CosseratShellSolution CosseratShellSolver::solve(const Matrix4& top_displacement) {
+CosseratShellSolution CosseratShellSolver::solve(
+    const Vector6& top_stress,
+    const Matrix6& top_stress_cov) 
+{
     auto start = std::chrono::high_resolution_clock::now();
 
-    graph_ = shell_->build_graph(top_displacement);
+    graph_ = shell_->build_graph(top_stress, top_stress_cov);
 
     auto stop_build = std::chrono::high_resolution_clock::now();
 
     DoglegParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
-    // params.setDeltaInitial(1e-4);
+    params.setDeltaInitial(1e-4);
     DoglegOptimizer optimizer(graph_, values_, params);
 
     CosseratShellSolution solution;

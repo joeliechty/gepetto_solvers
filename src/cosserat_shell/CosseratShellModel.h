@@ -32,7 +32,9 @@ public:
         gtsam::SharedDiagonal twist_cov,
         gtsam::SharedDiagonal stress_cov);
 
-    gtsam::NonlinearFactorGraph build_graph(const gtsam::Matrix4& top_dispacement) const;
+    gtsam::NonlinearFactorGraph build_graph(
+        const gtsam::Vector6& top_stress,
+        const gtsam::Matrix6& top_stress_cov) const;
 
     gtsam::Values get_initial_values() const;
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gtsam/base/Matrix.h>
+
 #include "cosserat_rod/CosseratRodModel.h"
 #include "CosseratShellModel.h"
 
@@ -29,7 +31,9 @@ class CosseratShellSolver {
 public:
     CosseratShellSolver(const CosseratShellSolverConfig& config);
 
-    CosseratShellSolution solve(const gtsam::Matrix4& top_displacement);
+    CosseratShellSolution solve(
+        const gtsam::Vector6& top_stress,
+        const gtsam::Matrix6& top_stress_cov);
 
 private:
     gtsam::NonlinearFactorGraph graph_;

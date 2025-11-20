@@ -9,8 +9,8 @@ from plotting import CosseratShellPlotter
 def main():
     k_bending = 1
     k_torsion = 1
-    k_shear = 10
-    k_extension = 10
+    k_shear = 1
+    k_extension = 1
 
     K_inv = np.eye(6)
     K_inv[0,0] = 1 / k_bending
@@ -21,8 +21,8 @@ def main():
     K_inv[5,5] = 1 / k_extension
 
     config = crest_sparse.CosseratShellSolverConfig()
-    config.num_nodes_x = 7
-    config.num_nodes_y = 28
+    config.num_nodes_x = 8
+    config.num_nodes_y = 30
     config.element_size = 0.1
     config.K_inv = K_inv
     config.sigma_twist_pos = 1.0e-4
@@ -34,24 +34,29 @@ def main():
     
     plotter = CosseratShellPlotter(
         # single_plot_mode=True,
-        camera_distance=5,
-        camera_focal_point=(0, 1.5, 0)
+        save_frames_dir_name="cosserat_shell",
+        camera_distance=9,
+        camera_focal_point=(0, 2.1, 0)
     )
 
-    frame_rate = 5.0
+    frame_rate = 30.0
     dt = 1.0 / frame_rate
-    t_final = 1200.0
+    t_final = 30.0
     num_steps = int(t_final / dt)
 
     for step in range(num_steps + 1):
         t = step * dt
+        
+        top_stress = np.array([
+            0,
+            5.0 * np.sin(1.0 * t),
+            0,
+            0,
+            0.1,
+            0
+        ])
 
-        top_displacement = np.eye(4)
-        top_displacement[:3,:3] = Rotation.from_rotvec([
-            np.sin(0.21 * t), 
-            3 * np.sin(0.2 * t), 
-            np.sin(0.22 * t)
-        ]).as_matrix()
+        # top_stress = np.array([0, 0, 0, 0, 0, 0.1])
 
         top_displacement[0,3] = 1.0 * np.sin(0.23 * t)
         top_displacement[0,3] = 2.0 * np.sin(0.24 * t)
@@ -67,6 +72,9 @@ def main():
 
         solution = solver.solve(top_displacement)
         plotter.update(solution)
+
+        progress = 100.0 * step / num_steps
+        print(f"Progress: {progress:5.1f}%", end="\r")
     
 
 if __name__ == "__main__":

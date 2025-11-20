@@ -1,9 +1,14 @@
 #include "CosseratShellModel.h"
 
 #include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/geometry/Rot3.h>
+#include <gtsam/nonlinear/PriorFactor.h>
+#include <gtsam/linear/NoiseModel.h>
+
 #include "cosserat_rod/CosseratTwistFactor.h"
-#include "cosserat_rod/CosseratStressFactor.h"
 #include "CosseratShellStressFactor.h"
+#include "EdgeStressFactor.h"
+#include "CornerStressFactor.h"
 
 using namespace gtsam;
 
@@ -60,7 +65,9 @@ Values CosseratShellModel::get_initial_values() const {
 }
 
 
-NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displacement) const 
+NonlinearFactorGraph CosseratShellModel::build_graph(
+    const Vector6& top_stress,
+    const Matrix6& top_stress_cov) const 
 {
     NonlinearFactorGraph graph;
 
@@ -135,9 +142,9 @@ NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displace
             stress_cov_));
     }
 
-    Pose3 nominal_middle_top_pose = Pose3(
-        Rot3::Identity(), 
-        Point3((num_nodes_x_ - 1) * element_size_ / 2, (num_nodes_y_ - 1) * element_size_, 0));
+    // Pose3 nominal_middle_top_pose = Pose3(Rot3::Identity(), Point3(x_length/ 2, y_length, 0));
+    // Pose3 middle_top_pose = nominal_middle_top_pose * Pose3(top_displacement);
+    // Pose3 left_top_pose = middle_top_pose * Pose3(Rot3::Identity(), Point3(-x_length / 2, 0, 0));
     
     int middle_top_idx = num_nodes_x_ / 2;
     

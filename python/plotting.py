@@ -34,9 +34,11 @@ def get_ellipsoid_transform(center, cov, scale=1.0, num_sigma=2.0):
     return T
 
 
-def get_arrow(length=1.0, direction=None, shaft_scale=1.0):
+def get_arrow(length=1.0, direction=None):
     if direction is None:
         direction = np.array([1, 0, 0])
+
+    shaft_scale = length / 25
 
     arrow = pv.Arrow(
         start=np.zeros(3),
@@ -44,20 +46,19 @@ def get_arrow(length=1.0, direction=None, shaft_scale=1.0):
         scale=length,
         tip_resolution=20,
         shaft_resolution=20,
-        shaft_radius=shaft_scale,
-        tip_radius=2 * shaft_scale,
-        tip_length=2 * shaft_scale
+        shaft_radius=shaft_scale / length,
+        tip_radius=2 * shaft_scale / length,
+        tip_length=2 * shaft_scale / length
     )
 
     return arrow
 
 
 def get_axes_frame(length=1.0):
-    shaft_scale = length / 3
     return [
-        get_arrow(length=length, direction=np.eye(3)[:,0], shaft_scale=shaft_scale),
-        get_arrow(length=length, direction=np.eye(3)[:,1], shaft_scale=shaft_scale),
-        get_arrow(length=length, direction=np.eye(3)[:,2], shaft_scale=shaft_scale)
+        get_arrow(length=length, direction=np.eye(3)[:,0]),
+        get_arrow(length=length, direction=np.eye(3)[:,1]),
+        get_arrow(length=length, direction=np.eye(3)[:,2])
     ]
 
 
@@ -113,7 +114,7 @@ class PlotterBase:
             shutil.rmtree(self.frames_path, ignore_errors=True)
             self.frames_path.mkdir(parents=True, exist_ok=True)
 
-        self.window_size = (2000, 2000)
+        self.window_size = (4000, 4000)
         self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_dir_name)
         self.frame = 0
         self.solve_time_ms_history = []
@@ -515,7 +516,7 @@ class CosseratShellPlotter:
         self.plotter = PlotterBase(**kwargs)
 
         yz_length = 0.05
-        x_length = 0.6
+        x_length = 0.7
         base_plate = pv.Cube(center=(x_length / 2, -yz_length / 2, 0), x_length=x_length, y_length=yz_length, z_length=yz_length)
         self.plotter.plotter.add_mesh(base_plate, color="silver", show_edges=True, line_width=2)
         
@@ -569,10 +570,14 @@ class CosseratShellPlotter:
                         3, p00, p11, p01    # triangle 2
                     ]
 
-            self.mesh = pv.PolyData(flat_points, faces=np.array(faces))
-            plotter.plotter.add_mesh(self.mesh, color="slateblue", opacity=0.4, show_edges=False)
+            self.edge_mesh = pv.PolyData(flat_points, faces=np.array(faces))
+            self.face_mesh = pv.PolyData(flat_points, faces=np.array(faces))
 
-        self.mesh.points = flat_points
+            plotter.plotter.add_mesh(self.face_mesh, color="slateblue", opacity=0.3)
+            plotter.plotter.add_mesh(self.edge_mesh, color="black", style="wireframe", line_width=2)
+
+        self.face_mesh.points = flat_points
+        self.edge_mesh.points = flat_points
 
     def update_stress_plots(self, solution):
         nx = len(solution.stress_mean)
@@ -595,33 +600,57 @@ class CosseratShellPlotter:
 
         plt.figure(figsize=(8,15))
         plt.subplot(4,1,1)
-        plt.imshow(bending, origin='lower', cmap='inferno')
+        plt.imshow(np.abs(bending), origin='lower', cmap='Oranges', vmin=0)
         plt.colorbar(label="Bending Stress")
 
         plt.subplot(4,1,2)
-        plt.imshow(torsion, origin='lower', cmap='inferno')
+        plt.imshow(np.abs(torsion), origin='lower', cmap='Oranges', vmin=0)
         plt.colorbar(label="Torsion Stress")
 
         plt.subplot(4,1,3)
-        plt.imshow(shear, origin='lower', cmap='inferno')
+        plt.imshow(np.abs(shear), origin='lower', cmap='Oranges', vmin=0)
         plt.colorbar(label="Shear Stress")
 
         plt.subplot(4,1,4)
-        plt.imshow(tensile, origin='lower', cmap='inferno')
+        plt.imshow(np.abs(tensile), origin='lower', cmap='Oranges', vmin=0)
         plt.colorbar(label="Tensile Stress")
-
-        plt.show()
+        
+        # plt.show()
+        plt.savefig(f"videos/frames/{self.plotter.save_frames_dir_name}/plt_{self.plotter.frame}.png")
 
     def update_tip_plate(self, solution):
         self.tip_plate_transform.SetMatrix(solution.pose_mean[0][-1].flatten().tolist())
 
+    def update_ellipsoids(self, solution, plotter):
+        if plotter.frame == 0:
+            self.ellipsoid_transforms = []
+            for _ in range(len(solution.pose_mean)):
+                transforms_col = []
+                for _ in range(len(solution.pose_mean[0])):
+                    transform = vtk.vtkTransform()
+                    ellipsoid = pv.Sphere(radius=1)
+                    actor = plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
+                    actor.SetUserTransform(transform)
+                    transforms_col.append(transform)
+                self.ellipsoid_transforms.append(transforms_col)
+
+        for transform_col, pose_col, cov_col in zip(self.ellipsoid_transforms, solution.pose_mean, solution.pose_cov):
+            for transform, pose, cov in zip (transform_col, pose_col, cov_col):
+                R = pose[:3, :3]
+                p = pose[:3, 3]
+                cov = R @ (cov[3:, 3:] @ R.T)  # World frame
+
+                matrix = get_ellipsoid_transform(p, cov)
+                transform.SetMatrix(matrix.flatten().tolist())
+
     def update(self, solution):
         self.update_frames(solution.marginals, self.plotter)
         self.update_mesh(solution.marginals, self.plotter)
-        self.update_tip_plate(solution.marginals)
+        # self.update_tip_plate(solution.marginals)
+        self.update_ellipsoids(solution.marginals, self.plotter)
 
         self.plotter.update(solution)
-        # self.update_stress_plots(solution.marginals)
+        self.update_stress_plots(solution.marginals)
 
 
 # from pathlib import Path
