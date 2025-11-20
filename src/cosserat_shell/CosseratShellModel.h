@@ -40,15 +40,7 @@ public:
         const gtsam::Values& values, 
         const gtsam::Marginals& marginals) const;
 
-    gtsam::Key get_pose_key(int node_x_idx, int node_y_idx) const;
-
-    gtsam::Key get_stress_key(int node_x_idx, int node_y_idx, StressDir dir) const;
-
 private:
-    int clamp_node_x_idx(int node_idx) const;
-
-    int clamp_node_y_idx(int node_idx) const;
-
     const int num_nodes_x_;
     const int num_nodes_y_;
     const double element_size_;
@@ -59,5 +51,4 @@ private:
 
     std::vector<std::vector<gtsam::Key>> pose_keys_;
     std::vector<std::vector<std::array<gtsam::Key, NUM_DIR>>> stress_keys_;
-    gtsam::Key dummy_wrench_key_;
 };

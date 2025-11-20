@@ -23,72 +23,38 @@ CosseratShellModel::CosseratShellModel (
     twist_cov_(twist_cov), 
     stress_cov_(stress_cov)
 {
-    pose_keys_.resize(num_nodes_x_);
-    stress_keys_.resize(num_nodes_x_);
+    // We need to build one more node in each direction, since there is one more edge than elements
+    pose_keys_.resize(num_nodes_x_ + 1);
+    stress_keys_.resize(num_nodes_x_ + 1);
 
-    for (int i = 0; i < num_nodes_x_; i++) {
-        pose_keys_[i].resize(num_nodes_y_);
-        stress_keys_[i].resize(num_nodes_y_);
+    for (int i = 0; i <= num_nodes_x_; i++) {
+        pose_keys_[i].resize(num_nodes_y_ + 1);
+        stress_keys_[i].resize(num_nodes_y_ + 1);
     }
 
-    for (int i = 0; i < num_nodes_x_; i++) {
-        for (int j = 0; j < num_nodes_y_; j++) {
+    for (int i = 0; i <= num_nodes_x_; i++) {
+        for (int j = 0; j <= num_nodes_y_; j++) {
 
-            int id = i * num_nodes_y_ + j;
+            int id = i * (num_nodes_y_ + 1) + j;
 
             pose_keys_[i][j]   = Symbol('T', id);
             stress_keys_[i][j][X] = Symbol('X', id);
             stress_keys_[i][j][Y] = Symbol('Y', id);
         }
     }
-
-    dummy_wrench_key_ = Symbol('F', 9999999);
-}
-
-
-int clamp_node_idx(int idx, int num_nodes) {
-    if (idx == -1) 
-        return num_nodes - 1;
-    
-    if (idx < 0 || idx >= num_nodes)
-        throw std::out_of_range("CosseratShell: invalid node_idx");
-    
-    return idx;
-}
-
-
-int CosseratShellModel::clamp_node_x_idx(int node_idx) const {
-    return clamp_node_idx(node_idx, num_nodes_x_);
-}
-
-
-int CosseratShellModel::clamp_node_y_idx(int node_idx) const {
-    return clamp_node_idx(node_idx, num_nodes_y_);
-}
-
-    
-Key CosseratShellModel::get_pose_key(int node_x_idx, int node_y_idx) const { 
-    return pose_keys_[clamp_node_x_idx(node_x_idx)][clamp_node_y_idx(node_y_idx)]; 
-}
-
-
-Key CosseratShellModel::get_stress_key(int node_x_idx, int node_y_idx, StressDir dir) const { 
-    return stress_keys_[clamp_node_x_idx(node_x_idx)][clamp_node_y_idx(node_y_idx)][dir]; 
 }
 
 
 Values CosseratShellModel::get_initial_values() const {
     Values values;
     
-    for (int i = 0; i < num_nodes_x_; ++i) {
-        for (int j = 0; j < num_nodes_y_; ++j) {
+    for (int i = 0; i <= num_nodes_x_; ++i) {
+        for (int j = 0; j <= num_nodes_y_; ++j) {
             values.insert(pose_keys_[i][j], Pose3(Rot3::Identity(), Point3(i * element_size_, j * element_size_, 0)));
             values.insert(stress_keys_[i][j][X], Vector6(Vector6::Zero()));
             values.insert(stress_keys_[i][j][Y], Vector6(Vector6::Zero()));
         }
     }
-
-    values.insert(dummy_wrench_key_, Vector6(Vector6::Zero()));
     
     return values;
 }
@@ -106,7 +72,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displace
 
     // Twist factors in X direction
     for (int j = 0; j < num_nodes_y_; j++) {
-        for (int i = 0; i + 1 < num_nodes_x_; i++) {
+        for (int i = 0; i < num_nodes_x_; i++) {
             graph.add(CosseratTwistFactor(
                 pose_keys_[i][j],
                 pose_keys_[i + 1][j], 
@@ -121,7 +87,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displace
 
     // Twist factors in Y direction
     for (int i = 0; i < num_nodes_x_; i++) {
-        for (int j = 0; j + 1 < num_nodes_y_; j++) {
+        for (int j = 0; j < num_nodes_y_; j++) {
             graph.add(CosseratTwistFactor(
                 pose_keys_[i][j],
                 pose_keys_[i][j + 1], 
@@ -135,8 +101,8 @@ NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displace
     }
 
     // 2D Stress factors on interior of shell
-    for (int i = 0; i + 1 < num_nodes_x_; i++) {
-        for (int j = 0; j + 1 < num_nodes_y_; j++) {
+    for (int i = 0; i < num_nodes_x_; i++) {
+        for (int j = 0; j < num_nodes_y_; j++) {
             graph.add(CosseratShellStressFactor(
                 pose_keys_[i][j],
                 pose_keys_[i + 1][j],
@@ -147,31 +113,6 @@ NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displace
                 stress_keys_[i][j + 1][Y],
                 stress_cov_));
         }
-    }
-
-    // Need dummy wrench, set equal to zero
-    graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_cov_));
-
-    // 1D stress factors on TOP edge
-    for (int i = 0; i + 1 < num_nodes_x_; i++) {
-        graph.add(CosseratStressFactor(
-            pose_keys_[i][num_nodes_y_ - 1],
-            pose_keys_[i + 1][num_nodes_y_ - 1],
-            stress_keys_[i][num_nodes_y_ - 1][X],
-            stress_keys_[i + 1][num_nodes_y_ - 1][X],
-            dummy_wrench_key_,
-            stress_cov_));
-    }
-
-    // 1D stress factors on RIGHT edge
-    for (int j = 0; j + 1 < num_nodes_y_; j++) {
-        graph.add(CosseratStressFactor(
-            pose_keys_[num_nodes_x_ - 1][j],
-            pose_keys_[num_nodes_x_ - 1][j + 1],
-            stress_keys_[num_nodes_x_ - 1][j][Y],
-            stress_keys_[num_nodes_x_ - 1][j + 1][Y],
-            dummy_wrench_key_,
-            stress_cov_));
     }
 
     // Make the x axis fixed by adding base pose constraints
@@ -189,7 +130,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(const Matrix4& top_displace
             Vector6::Zero(),
             stress_cov_));
         graph.add(PriorFactor<Vector6>(
-            stress_keys_[num_nodes_x_ - 1][j][X],
+            stress_keys_[num_nodes_x_ - 1 + 1][j][X],
             Vector6::Zero(),
             stress_cov_));
     }

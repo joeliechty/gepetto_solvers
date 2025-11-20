@@ -33,6 +33,7 @@ def main():
     solver = crest_sparse.CosseratShellSolver(config)
     
     plotter = CosseratShellPlotter(
+        # single_plot_mode=True,
         camera_distance=5,
         camera_focal_point=(0, 1.5, 0)
     )
@@ -55,6 +56,14 @@ def main():
         top_displacement[0,3] = 1.0 * np.sin(0.23 * t)
         top_displacement[0,3] = 2.0 * np.sin(0.24 * t)
         top_displacement[0,3] = 1.0 * np.sin(0.25 * t)
+
+        # top_displacement = np.eye(4)
+        # top_displacement[:3,:3] = Rotation.from_rotvec([
+        #     0, 
+        #     np.pi / 2, 
+        #     0
+        # ]).as_matrix()
+
 
         solution = solver.solve(top_displacement)
         plotter.update(solution)
