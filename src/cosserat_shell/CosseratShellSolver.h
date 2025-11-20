@@ -32,8 +32,8 @@ public:
     CosseratShellSolver(const CosseratShellSolverConfig& config);
 
     CosseratShellSolution solve(
-        const gtsam::Vector6& top_stress,
-        const gtsam::Matrix6& top_stress_cov);
+        const gtsam::Matrix4& displacement_mean,
+        const gtsam::Matrix6& displacement_cov);
 
 private:
     gtsam::NonlinearFactorGraph graph_;

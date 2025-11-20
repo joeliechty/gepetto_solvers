@@ -573,8 +573,8 @@ class CosseratShellPlotter:
             self.edge_mesh = pv.PolyData(flat_points, faces=np.array(faces))
             self.face_mesh = pv.PolyData(flat_points, faces=np.array(faces))
 
-            plotter.plotter.add_mesh(self.face_mesh, color="slateblue", opacity=0.3)
-            plotter.plotter.add_mesh(self.edge_mesh, color="black", style="wireframe", line_width=2)
+            plotter.plotter.add_mesh(self.face_mesh, color="slateblue", opacity=0.15)
+            plotter.plotter.add_mesh(self.edge_mesh, color="black", style="wireframe", line_width=1.5)
 
         self.face_mesh.points = flat_points
         self.edge_mesh.points = flat_points
@@ -598,7 +598,7 @@ class CosseratShellPlotter:
                 shear[i, j] = np.linalg.norm([sx[4], sx[5], sy[3], sy[5]])
                 tensile[i, j] = np.linalg.norm([sx[3], sy[4]])
 
-        plt.figure(figsize=(8,15))
+        plt.figure(figsize=(15,15))
         plt.subplot(4,1,1)
         plt.imshow(np.abs(bending), origin='lower', cmap='Oranges', vmin=0)
         plt.colorbar(label="Bending Stress")
@@ -616,7 +616,9 @@ class CosseratShellPlotter:
         plt.colorbar(label="Tensile Stress")
         
         # plt.show()
+        plt.tight_layout()
         plt.savefig(f"videos/frames/{self.plotter.save_frames_dir_name}/plt_{self.plotter.frame}.png")
+        plt.close()
 
     def update_tip_plate(self, solution):
         self.tip_plate_transform.SetMatrix(solution.pose_mean[0][-1].flatten().tolist())
@@ -646,7 +648,7 @@ class CosseratShellPlotter:
     def update(self, solution):
         self.update_frames(solution.marginals, self.plotter)
         self.update_mesh(solution.marginals, self.plotter)
-        # self.update_tip_plate(solution.marginals)
+        self.update_tip_plate(solution.marginals)
         self.update_ellipsoids(solution.marginals, self.plotter)
 
         self.plotter.update(solution)

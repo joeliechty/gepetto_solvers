@@ -9,8 +9,8 @@ from plotting import CosseratShellPlotter
 def main():
     k_bending = 1
     k_torsion = 1
-    k_shear = 1
-    k_extension = 1
+    k_shear = 100
+    k_extension = 100
 
     K_inv = np.eye(6)
     K_inv[0,0] = 1 / k_bending
@@ -46,31 +46,24 @@ def main():
 
     for step in range(num_steps + 1):
         t = step * dt
+
+        displacement_mean = np.eye(4)
+        displacement_mean[:3,:3] = Rotation.from_rotvec([
+            1 / 2 * np.pi * np.sin(0.3 * t), 
+            2 * np.pi * np.sin(0.35 * t),
+            1 / 2 * np.pi * np.sin(0.4 * t),
+        ]).as_matrix()
+
+        displacement_mean[0,3] = 1.5 * np.sin(0.23 * t)
+        displacement_mean[1,3] = 1.5 * np.sin(0.24 * t)
+        displacement_mean[2,3] = 1.5 * np.sin(0.25 * t)
+
+        displacement_cov = (1e-2) ** 2 * np.eye(6)
+        displacement_cov[1,1] = (0.2) ** 2
         
-        top_stress = np.array([
-            0,
-            5.0 * np.sin(1.0 * t),
-            0,
-            0,
-            0.1,
-            0
-        ])
-
-        # top_stress = np.array([0, 0, 0, 0, 0, 0.1])
-
-        top_displacement[0,3] = 1.0 * np.sin(0.23 * t)
-        top_displacement[0,3] = 2.0 * np.sin(0.24 * t)
-        top_displacement[0,3] = 1.0 * np.sin(0.25 * t)
-
-        # top_displacement = np.eye(4)
-        # top_displacement[:3,:3] = Rotation.from_rotvec([
-        #     0, 
-        #     np.pi / 2, 
-        #     0
-        # ]).as_matrix()
 
 
-        solution = solver.solve(top_displacement)
+        solution = solver.solve(displacement_mean, displacement_cov)
         plotter.update(solution)
 
         progress = 100.0 * step / num_steps

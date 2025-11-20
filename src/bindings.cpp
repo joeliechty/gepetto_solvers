@@ -106,8 +106,8 @@ PYBIND11_MODULE(crest_sparse, m) {
     py::class_<CosseratShellSolver>(m, "CosseratShellSolver")
         .def(py::init<const CosseratShellSolverConfig&>())
         .def("solve", &CosseratShellSolver::solve,
-            py::arg("top_stress"),
-            py::arg("top_stress_cov"),
+            py::arg("displacement_mean"),
+            py::arg("displacement_cov"),
             py::call_guard<py::gil_scoped_release>());
 
     py::class_<ParallelRobotSolverConfig>(m, "ParallelRobotSolverConfig")

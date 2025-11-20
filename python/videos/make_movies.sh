@@ -14,4 +14,5 @@ make_vid () {
         -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le "${output_base}.mov"
 }
 
-make_vid frames/both_ends_clamped
+# make_vid frames/both_ends_clamped
+make_vid frames/cosserat_shell
