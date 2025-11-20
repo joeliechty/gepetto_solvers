@@ -10,8 +10,13 @@ make_vid () {
     #     -pix_fmt yuv420p -profile:v high -level 4.2 \
     #     -movflags +faststart "${output_base}.mp4"
 
+    # ffmpeg -framerate 30 -i "$input_dir/%d.png" \
+    #     -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le "${output_base}.mov"
+
     ffmpeg -framerate 30 -i "$input_dir/%d.png" \
-        -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le "${output_base}.mov"
+    -c:v libx264 -crf 20 -preset medium \
+    "${output_base}.mp4"
+
 }
 
 # make_vid frames/both_ends_clamped

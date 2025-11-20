@@ -55,11 +55,11 @@ def main():
         ]).as_matrix()
 
         displacement_mean[0,3] = 1.5 * np.sin(0.23 * t)
-        displacement_mean[1,3] = 1.5 * np.sin(0.24 * t)
+        displacement_mean[1,3] = 1.2 * np.sin(0.24 * t)
         displacement_mean[2,3] = 1.5 * np.sin(0.25 * t)
 
         displacement_cov = (1e-2) ** 2 * np.eye(6)
-        displacement_cov[1,1] = (0.2) ** 2
+        displacement_cov[1,1] = (0.15) ** 2
         
 
 
