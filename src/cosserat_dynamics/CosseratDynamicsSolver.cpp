@@ -1,4 +1,4 @@
-#include "CosseratRodDynamicsSolver.h"
+#include "CosseratDynamicsSolver.h"
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
@@ -12,7 +12,7 @@
 using namespace gtsam;
 
 
-CosseratRodDynamicsSolver::CosseratRodDynamicsSolver(const CosseratRodDynamicsConfig& config) 
+CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& config) 
 :   
     num_time_steps_(config.num_time_steps),
     num_nodes_(config.rod_config.num_nodes),
@@ -52,7 +52,7 @@ CosseratRodDynamicsSolver::CosseratRodDynamicsSolver(const CosseratRodDynamicsCo
 }
 
 
-void CosseratRodDynamicsSolver::init_values() {
+void CosseratDynamicsSolver::init_values() {
     values_.clear();
 
     for (auto& rod_t : rods_t_) {
@@ -67,7 +67,7 @@ void CosseratRodDynamicsSolver::init_values() {
 }
 
 
-void CosseratRodDynamicsSolver::build_graph() {
+void CosseratDynamicsSolver::build_graph() {
     graph_.resize(0);
 
     // First add all twist/stress factors to all the rods
@@ -120,7 +120,7 @@ void CosseratRodDynamicsSolver::build_graph() {
 }
 
 
-CosseratRodDynamicsSolution CosseratRodDynamicsSolver::solve() {
+CosseratDynamicsSolution CosseratDynamicsSolver::solve() {
     auto start = std::chrono::high_resolution_clock::now();
     auto build_start = start;
 
@@ -149,7 +149,7 @@ CosseratRodDynamicsSolution CosseratRodDynamicsSolver::solve() {
     auto marginalize_stop = std::chrono::high_resolution_clock::now();
     auto extract_start = marginalize_stop;
 
-    CosseratRodDynamicsSolution solution;
+    CosseratDynamicsSolution solution;
     
     for (auto& rod_t : rods_t_) {
         CosseratRodSolution sol_i;

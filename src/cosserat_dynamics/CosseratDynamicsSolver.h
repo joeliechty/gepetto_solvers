@@ -1,9 +1,9 @@
 #pragma once
 
-#include "CosseratRodSolver.h"
+#include "cosserat_rod/CosseratRodSolver.h"
 
 
-struct CosseratRodDynamicsConfig {
+struct CosseratDynamicsConfig {
     CosseratRodSolverConfig rod_config;
 
     int num_time_steps;
@@ -17,16 +17,16 @@ struct CosseratRodDynamicsConfig {
 };
 
 
-struct CosseratRodDynamicsSolution {
+struct CosseratDynamicsSolution {
     SolutionMetadata meta;
     std::vector<CosseratRodSolution> marginals;
 };
 
-class CosseratRodDynamicsSolver {
+class CosseratDynamicsSolver {
 public:
-    CosseratRodDynamicsSolver(const CosseratRodDynamicsConfig& config);
+    CosseratDynamicsSolver(const CosseratDynamicsConfig& config);
 
-    CosseratRodDynamicsSolution solve();
+    CosseratDynamicsSolution solve();
 
 private:
     void init_values();

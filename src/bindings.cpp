@@ -3,10 +3,9 @@
 #include <pybind11/eigen.h>
 
 #include "cosserat_rod/CosseratRodSolver.h"
-#include "cosserat_shell/CosseratShellModel.h"
-#include "parallel_robot/ParallelRobotSolver.h"
-#include "cosserat_rod/CosseratRodDynamicsSolver.h"
+#include "cosserat_dynamics/CosseratDynamicsSolver.h"
 #include "cosserat_shell/CosseratShellSolver.h"
+#include "parallel_robot/ParallelRobotSolver.h"
 
 namespace py = pybind11;
 
@@ -44,10 +43,10 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("meta", &CosseratRodSolution::meta)
         .def_readwrite("marginals", &CosseratRodSolution::marginals);
     
-    py::class_<CosseratRodDynamicsSolution>(m, "CosseratRodDynamicsSolution")
+    py::class_<CosseratDynamicsSolution>(m, "CosseratRodDynamicsSolution")
         .def(py::init<>())
-        .def_readwrite("meta", &CosseratRodDynamicsSolution::meta)
-        .def_readwrite("marginals", &CosseratRodDynamicsSolution::marginals);
+        .def_readwrite("meta", &CosseratDynamicsSolution::meta)
+        .def_readwrite("marginals", &CosseratDynamicsSolution::marginals);
 
      py::class_<CosseratShellSolution>(m, "CosseratShellSolution")
         .def(py::init<>())
@@ -66,16 +65,16 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("sigma_base_pose_pos", &CosseratRodSolverConfig::sigma_base_pose_pos)
         .def_readwrite("sigma_base_pose_rot", &CosseratRodSolverConfig::sigma_base_pose_rot);
 
-    py::class_<CosseratRodDynamicsConfig>(m, "CosseratRodDynamicsConfig")
+    py::class_<CosseratDynamicsConfig>(m, "CosseratRodDynamicsConfig")
         .def(py::init<>())  // default constructor
-        .def_readwrite("rod_config", &CosseratRodDynamicsConfig::rod_config)
-        .def_readwrite("num_time_steps", &CosseratRodDynamicsConfig::num_time_steps)
-        .def_readwrite("dt", &CosseratRodDynamicsConfig::dt)
-        .def_readwrite("linear_damping", &CosseratRodDynamicsConfig::linear_damping)
-        .def_readwrite("rotational_damping", &CosseratRodDynamicsConfig::rotational_damping)
-        .def_readwrite("linear_inertia", &CosseratRodDynamicsConfig::linear_inertia)
-        .def_readwrite("rotational_inertia", &CosseratRodDynamicsConfig::rotational_inertia)
-        .def_readwrite("initial_tip_wrench", &CosseratRodDynamicsConfig::initial_tip_wrench);
+        .def_readwrite("rod_config", &CosseratDynamicsConfig::rod_config)
+        .def_readwrite("num_time_steps", &CosseratDynamicsConfig::num_time_steps)
+        .def_readwrite("dt", &CosseratDynamicsConfig::dt)
+        .def_readwrite("linear_damping", &CosseratDynamicsConfig::linear_damping)
+        .def_readwrite("rotational_damping", &CosseratDynamicsConfig::rotational_damping)
+        .def_readwrite("linear_inertia", &CosseratDynamicsConfig::linear_inertia)
+        .def_readwrite("rotational_inertia", &CosseratDynamicsConfig::rotational_inertia)
+        .def_readwrite("initial_tip_wrench", &CosseratDynamicsConfig::initial_tip_wrench);
 
     py::class_<CosseratShellSolverConfig>(m, "CosseratShellSolverConfig")
         .def(py::init<>())
@@ -98,9 +97,9 @@ PYBIND11_MODULE(crest_sparse, m) {
             py::arg("nominal_strain"),
             py::call_guard<py::gil_scoped_release>());
 
-    py::class_<CosseratRodDynamicsSolver>(m, "CosseratRodDynamicsSolver")
-        .def(py::init<const CosseratRodDynamicsConfig&>())
-        .def("solve", &CosseratRodDynamicsSolver::solve,
+    py::class_<CosseratDynamicsSolver>(m, "CosseratRodDynamicsSolver")
+        .def(py::init<const CosseratDynamicsConfig&>())
+        .def("solve", &CosseratDynamicsSolver::solve,
             py::call_guard<py::gil_scoped_release>());
     
     py::class_<CosseratShellSolver>(m, "CosseratShellSolver")

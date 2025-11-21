@@ -3,7 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 import crest_sparse
-from plotting import CosseratShellPlotter
+from plotting.cosserat_shell_plotter import CosseratShellPlotter
 
 
 def main():

@@ -2,7 +2,7 @@ import time
 import numpy as np
 
 import crest_sparse
-from plotting import CosseratRodPlotter
+from plotting.cosserat_rod_plotter import CosseratRodPlotter
 
 
 def main():
@@ -36,7 +36,7 @@ def main():
     config.rotational_damping = 1e-2
     config.linear_inertia = 1
     config.rotational_inertia = 1e-2
-    config.initial_tip_wrench = np.array([0, 0.3, 0, -0.7, 0, 0])
+    config.initial_tip_wrench = np.array([0, 0.3, 0, -0.9, 0, 0])
 
     solver = crest_sparse.CosseratRodDynamicsSolver(config)
     solution = solver.solve()

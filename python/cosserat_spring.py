@@ -3,7 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 import crest_sparse
-from plotting import CosseratRodPlotter
+from plotting.cosserat_rod_plotter import CosseratRodPlotter
 
 
 def get_tip_wrench_prior(t):

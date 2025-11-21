@@ -2,7 +2,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 import crest_sparse
-from plotting import ParallelRobotPlotter
+from plotting.parallel_robot_plotter import ParallelRobotPlotter
 
 
 def get_base_poses():
