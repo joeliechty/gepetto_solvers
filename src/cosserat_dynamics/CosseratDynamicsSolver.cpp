@@ -120,7 +120,7 @@ void CosseratDynamicsSolver::build_graph() {
 }
 
 
-CosseratDynamicsSolution CosseratDynamicsSolver::solve() {
+Solution<CosseratDynamicsMarginals> CosseratDynamicsSolver::solve() {
     auto start = std::chrono::high_resolution_clock::now();
     auto build_start = start;
 
@@ -149,12 +149,12 @@ CosseratDynamicsSolution CosseratDynamicsSolver::solve() {
     auto marginalize_stop = std::chrono::high_resolution_clock::now();
     auto extract_start = marginalize_stop;
 
-    CosseratDynamicsSolution solution;
+    Solution<CosseratDynamicsMarginals> solution;
     
     for (auto& rod_t : rods_t_) {
-        CosseratRodSolution sol_i;
+        Solution<CosseratRodMarginals> sol_i;
         sol_i.marginals = rod_t->get_marginals(values_, marginals_);
-        solution.marginals.push_back(sol_i);
+        solution.marginals.rods_t.push_back(sol_i);
     }
 
     auto extract_stop = std::chrono::high_resolution_clock::now();

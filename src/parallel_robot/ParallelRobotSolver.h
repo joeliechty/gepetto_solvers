@@ -1,7 +1,9 @@
 #pragma once
 
 #include <gtsam/base/Matrix.h>
+
 #include "parallel_robot/ParallelRobotModel.h"
+#include "utils/SolverBase.h"
 
 
 struct ParallelRobotSolverConfig {
@@ -23,18 +25,11 @@ struct ParallelRobotSolverConfig {
 };
 
 
-struct ParallelRobotSolution {
-    SolutionMetadata meta;
-    ParallelRobotMarginals marginals;
-    gtsam::Matrix6 rod_lengths_jacobian;
-};
-
-
 class ParallelRobotSolver {
 public:
     ParallelRobotSolver(const ParallelRobotSolverConfig& config);
 
-    ParallelRobotSolution solve(
+    Solution<ParallelRobotMarginals> solve(
         const std::array<double, NUM_RODS>& rod_lengths,
         double sigma_rod_lengths,
         const gtsam::Vector6& wrench_mean,

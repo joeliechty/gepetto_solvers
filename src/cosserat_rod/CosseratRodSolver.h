@@ -1,7 +1,9 @@
 #pragma once
 
 #include <gtsam/base/Vector.h>
+
 #include "cosserat_rod/CosseratRodModel.h"
+#include "utils/SolverBase.h"
 
 
 struct CosseratRodSolverConfig {
@@ -21,17 +23,12 @@ struct CosseratRodSolverConfig {
 };
 
 
-struct CosseratRodSolution {
-    SolutionMetadata meta;
-    CosseratRodMarginals marginals;
-};
 
-
-class CosseratRodSolver {
+class CosseratRodSolver : public SolverBase {
 public:
     CosseratRodSolver(const CosseratRodSolverConfig& config);
 
-    CosseratRodSolution solve(
+    Solution<CosseratRodMarginals> solve(
         const std::optional<gtsam::Vector6>& tip_wrench_mean, 
         const std::optional<gtsam::Matrix6>& tip_wrench_cov,
         const std::optional<gtsam::Matrix4>& tip_pose_mean,
@@ -39,21 +36,23 @@ public:
         const std::optional<gtsam::Vector6>& nominal_strain);
 
 private:
-    void add_prior_factors(
-        const std::optional<gtsam::Vector6>& tip_wrench_mean, 
-        const std::optional<gtsam::Matrix6>& tip_wrench_cov,
-        const std::optional<gtsam::Matrix4>& tip_pose_mean,
-        const std::optional<gtsam::Matrix6>& tip_pose_cov);
-    
-    double rod_length_;
+    void build_graph() override;
 
-    gtsam::NonlinearFactorGraph graph_;
-    gtsam::Values values_;
-    gtsam::Marginals marginals_;
+    void extract_solution() override;
+
+    void get_initial_values() override;
+
+    std::optional<gtsam::Vector6> tip_wrench_mean_; 
+    std::optional<gtsam::Matrix6> tip_wrench_cov_;
+    std::optional<gtsam::Matrix4> tip_pose_mean_;
+    std::optional<gtsam::Matrix6> tip_pose_cov_;
+    std::optional<gtsam::Vector6> nominal_strain_;
+
+    double rod_length_;
     
-    // TODO need to change all of these to noise, its not actually a cov mat
-    gtsam::SharedDiagonal small_wrench_cov_;
-    gtsam::SharedDiagonal base_pose_cov_;
+    gtsam::SharedDiagonal small_wrench_noise_;
+    gtsam::SharedDiagonal base_pose_noise_;
 
     std::unique_ptr<CosseratRodModel> rod_;
+    CosseratRodMarginals extracted_;
 };

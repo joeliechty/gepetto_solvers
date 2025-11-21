@@ -4,6 +4,7 @@
 
 #include "cosserat_rod/CosseratRodModel.h"
 #include "CosseratShellModel.h"
+#include "utils/SolverBase.h"
 
 
 struct CosseratShellSolverConfig {
@@ -21,17 +22,11 @@ struct CosseratShellSolverConfig {
 };
 
 
-struct CosseratShellSolution {
-    SolutionMetadata meta;
-    CosseratShellMarginals marginals;
-};
-
-
 class CosseratShellSolver {
 public:
     CosseratShellSolver(const CosseratShellSolverConfig& config);
 
-    CosseratShellSolution solve(
+    Solution<CosseratShellMarginals> solve(
         const gtsam::Matrix4& displacement_mean,
         const gtsam::Matrix6& displacement_cov);
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cosserat_rod/CosseratRodModel.h"
 #include "cosserat_rod/CosseratRodSolver.h"
 
 
@@ -17,16 +18,16 @@ struct CosseratDynamicsConfig {
 };
 
 
-struct CosseratDynamicsSolution {
-    SolutionMetadata meta;
-    std::vector<CosseratRodSolution> marginals;
+struct CosseratDynamicsMarginals {
+    std::vector<Solution<CosseratRodMarginals>> rods_t;
 };
+
 
 class CosseratDynamicsSolver {
 public:
     CosseratDynamicsSolver(const CosseratDynamicsConfig& config);
 
-    CosseratDynamicsSolution solve();
+    Solution<CosseratDynamicsMarginals> solve();
 
 private:
     void init_values();
@@ -49,6 +50,6 @@ private:
     gtsam::SharedDiagonal small_wrench_noise_;
     gtsam::SharedDiagonal base_pose_noise_;
 
-    CosseratRodSolution static_solution_;
+    Solution<CosseratRodMarginals> static_solution_;
     std::vector<std::unique_ptr<CosseratRodModel>> rods_t_;
 };

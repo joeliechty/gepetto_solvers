@@ -15,6 +15,8 @@ struct ParallelRobotMarginals {
 
     gtsam::Vector6 platform_wrench_mean;
     gtsam::Matrix6 platform_wrench_cov;
+
+    gtsam::Matrix6 rod_lengths_jacobian;
 };
 
 

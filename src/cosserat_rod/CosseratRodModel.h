@@ -7,17 +7,6 @@
 #include <gtsam/inference/Symbol.h>
 
 
-struct SolutionMetadata {  //TODO put this elsewhere, maybe base solver class?
-    double total_time_ms;
-    double build_time_ms;
-    double optimize_time_ms;
-    double marginalize_time_ms;
-    double extract_time_ms;
-    
-    int iterations;
-    int error;
-};
-
 
 inline gtsam::SharedDiagonal get_noise_model_rot_pos(double sigma_rot, double sigma_pos) {  //This also shouldnt go here
     gtsam::SharedDiagonal model = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 

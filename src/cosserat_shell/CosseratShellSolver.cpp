@@ -1,4 +1,5 @@
 #include "CosseratShellSolver.h"
+#include "cosserat_shell/CosseratShellModel.h"
 
 #include <chrono>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
@@ -25,7 +26,7 @@ CosseratShellSolver::CosseratShellSolver(const CosseratShellSolverConfig& config
 }
 
 
-CosseratShellSolution CosseratShellSolver::solve(
+Solution<CosseratShellMarginals> CosseratShellSolver::solve(
     const Matrix4& displacement_mean,
     const Matrix6& displacement_cov) 
 {
@@ -39,7 +40,7 @@ CosseratShellSolution CosseratShellSolver::solve(
     params.setLinearSolverType("MULTIFRONTAL_QR");
     DoglegOptimizer optimizer(graph_, values_, params);
 
-    CosseratShellSolution solution;
+    Solution<CosseratShellMarginals> solution;
 
     values_ = optimizer.optimize();
 

@@ -1,4 +1,5 @@
 #include "ParallelRobotSolver.h"
+#include "parallel_robot/ParallelRobotModel.h"
 
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
@@ -30,7 +31,7 @@ ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config
 }
 
 
-ParallelRobotSolution ParallelRobotSolver::solve(
+Solution<ParallelRobotMarginals> ParallelRobotSolver::solve(
     const std::array<double, NUM_RODS>& rod_lengths, 
     double sigma_rod_lengths,
     const Vector6& wrench_mean,
@@ -62,11 +63,11 @@ ParallelRobotSolution ParallelRobotSolver::solve(
     auto marginalize_stop = std::chrono::high_resolution_clock::now();
     auto extract_start = marginalize_stop;
 
-    ParallelRobotSolution solution;
+    Solution<ParallelRobotMarginals> solution;
     
     solution.marginals = robot_->get_marginals(values_, marginals_);
 
-    solution.rod_lengths_jacobian = robot_->get_rod_lengths_jacobian(marginals_);
+    solution.marginals.rod_lengths_jacobian = robot_->get_rod_lengths_jacobian(marginals_);
 
     auto extract_stop = std::chrono::high_resolution_clock::now();
     auto stop = extract_stop;
