@@ -149,5 +149,5 @@ class CosseratShellPlotter:
         self.update_ellipsoids(solution.marginals, self.plotter)
 
         self.plotter.update(solution)
-        self.update_stress_plots(solution.marginals)
+        # self.update_stress_plots(solution.marginals)
 

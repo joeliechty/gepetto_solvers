@@ -5,29 +5,6 @@
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/inference/Symbol.h>
-
-
-
-inline gtsam::SharedDiagonal get_noise_model_rot_pos(double sigma_rot, double sigma_pos) {  //This also shouldnt go here
-    gtsam::SharedDiagonal model = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
-        sigma_rot, sigma_rot, sigma_rot, 
-        sigma_pos, sigma_pos, sigma_pos).finished());
-
-    return model;
-}
-
-
-inline void print_values(gtsam::Values values) {
-    for (const auto& key_value : values) {
-        gtsam::Key key = key_value.key;
-        const auto& value = key_value.value;
-
-        std::cout << "Key: " << gtsam::Symbol(key) << std::endl;
-
-        // Use the polymorphic print function of the value
-        value.print("Value: ");
-    }
-}
     
 
 struct CosseratRodMarginals {
@@ -47,8 +24,8 @@ public:
     CosseratRodModel(
         int num_nodes, 
         const gtsam::Matrix6& K_inv, 
-        gtsam::SharedDiagonal twist_cov,
-        gtsam::SharedDiagonal stress_cov);
+        gtsam::SharedDiagonal twist_noise,
+        gtsam::SharedDiagonal stress_noise);
 
     gtsam::NonlinearFactorGraph build_graph(
         double rod_length,
@@ -80,8 +57,8 @@ private:
     const int num_nodes_;
     std::vector<gtsam::Matrix6> K_inv_;
 
-    gtsam::SharedDiagonal twist_cov_;
-    gtsam::SharedDiagonal stress_cov_;
+    gtsam::SharedDiagonal twist_noise_;
+    gtsam::SharedDiagonal stress_noise_;
 
     std::vector<gtsam::Key> pose_keys_;
     std::vector<gtsam::Key> stress_keys_;

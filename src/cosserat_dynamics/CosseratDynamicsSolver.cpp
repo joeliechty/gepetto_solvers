@@ -8,6 +8,7 @@
 #include "cosserat_rod/CosseratRodSolver.h"
 #include "cosserat_rod/CosseratRodModel.h"
 #include "CosseratDynamicsFactor.h"
+#include "utils/MiscInline.h"
 
 using namespace gtsam;
 
@@ -32,7 +33,7 @@ CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& con
         std::nullopt,
         std::nullopt);
 
-    SharedDiagonal twist_cov = get_noise_model_rot_pos(
+    SharedDiagonal twist_noise = get_noise_model_rot_pos(
         config.rod_config.sigma_twist_rot, config.rod_config.sigma_twist_pos); 
     
     small_wrench_noise_ = get_noise_model_rot_pos(
@@ -45,14 +46,14 @@ CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& con
 
     for (auto& rod_t : rods_t_) {
         rod_t = std::make_unique<CosseratRodModel>(
-            config.rod_config.num_nodes, config.rod_config.K_inv, twist_cov, small_wrench_noise_);
+            config.rod_config.num_nodes, config.rod_config.K_inv, twist_noise, small_wrench_noise_);
     }
 
-    init_values();
+    get_initial_values();
 }
 
 
-void CosseratDynamicsSolver::init_values() {
+void CosseratDynamicsSolver::get_initial_values() {
     values_.clear();
 
     for (auto& rod_t : rods_t_) {
@@ -120,54 +121,19 @@ void CosseratDynamicsSolver::build_graph() {
 }
 
 
-Solution<CosseratDynamicsMarginals> CosseratDynamicsSolver::solve() {
-    auto start = std::chrono::high_resolution_clock::now();
-    auto build_start = start;
-
-    build_graph();
-
-    auto build_stop = std::chrono::high_resolution_clock::now();
-    auto optimize_start = build_stop;
-
-    // DoglegParams params;
-    // params.setLinearSolverType("MULTIFRONTAL_QR");
-    // params.setDeltaInitial(1e-4);
-    // DoglegOptimizer optimizer(graph_, values_, params);
-
-    LevenbergMarquardtParams params;
-    params.setLinearSolverType("MULTIFRONTAL_QR");
-    // params.setlambdaInitial(10.0);
-    LevenbergMarquardtOptimizer optimizer(graph_, values_, params);
-
-    values_ = optimizer.optimize();
-
-    auto optimize_stop = std::chrono::high_resolution_clock::now();
-    auto marginalize_start = optimize_stop;
-
-    marginals_ = Marginals(graph_, values_);
-
-    auto marginalize_stop = std::chrono::high_resolution_clock::now();
-    auto extract_start = marginalize_stop;
-
-    Solution<CosseratDynamicsMarginals> solution;
-    
+void CosseratDynamicsSolver::extract_solution() {
     for (auto& rod_t : rods_t_) {
         Solution<CosseratRodMarginals> sol_i;
         sol_i.marginals = rod_t->get_marginals(values_, marginals_);
-        solution.marginals.rods_t.push_back(sol_i);
+        extracted_.rods_t.push_back(sol_i);
     }
+}
 
-    auto extract_stop = std::chrono::high_resolution_clock::now();
-    auto stop = extract_stop;
 
-    solution.meta.total_time_ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    solution.meta.build_time_ms = std::chrono::duration<double, std::milli>(build_stop - build_start).count();
-    solution.meta.optimize_time_ms = std::chrono::duration<double, std::milli>(optimize_stop - optimize_start).count();
-    solution.meta.marginalize_time_ms = std::chrono::duration<double, std::milli>(marginalize_stop - marginalize_start).count();
-    solution.meta.extract_time_ms = std::chrono::duration<double, std::milli>(extract_stop - extract_start).count();
-    
-    solution.meta.error = optimizer.error();
-    solution.meta.iterations = optimizer.iterations();
+Solution<CosseratDynamicsMarginals> CosseratDynamicsSolver::solve() {
+    Solution<CosseratDynamicsMarginals> solution;
+    solution.meta = optimize();
+    solution.marginals = extracted_;
 
     return solution;
 }

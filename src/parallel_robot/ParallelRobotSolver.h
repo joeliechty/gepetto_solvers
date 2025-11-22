@@ -25,7 +25,7 @@ struct ParallelRobotSolverConfig {
 };
 
 
-class ParallelRobotSolver {
+class ParallelRobotSolver : SolverBase {
 public:
     ParallelRobotSolver(const ParallelRobotSolverConfig& config);
 
@@ -36,12 +36,21 @@ public:
         const gtsam::Matrix6& wrench_cov);
 
 private:
-    gtsam::NonlinearFactorGraph graph_;
-    gtsam::Values values_;
-    gtsam::Marginals marginals_;
+    void build_graph() override;
 
-    gtsam::SharedDiagonal small_wrench_cov_;
-    gtsam::SharedDiagonal base_pose_cov_;
+    void extract_solution() override;
+
+    void get_initial_values() override;
+
+    gtsam::SharedDiagonal small_wrench_noise_;
+    gtsam::SharedDiagonal base_pose_noise_;
 
     std::unique_ptr<ParallelRobot> robot_;
+
+    std::array<double, NUM_RODS> rod_lengths_;
+    double sigma_rod_lengths_;
+    gtsam::Vector6 wrench_mean_;
+    gtsam::Matrix6 wrench_cov_;
+
+    ParallelRobotMarginals extracted_;
 };

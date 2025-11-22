@@ -5,7 +5,6 @@
 #include "cosserat_rod/CosseratRodModel.h"
 #include "cosserat_rod/CosseratRodSolver.h"
 #include "cosserat_dynamics/CosseratDynamicsSolver.h"
-#include "cosserat_shell/CosseratShellModel.h"
 #include "cosserat_shell/CosseratShellSolver.h"
 #include "parallel_robot/ParallelRobotModel.h"
 #include "parallel_robot/ParallelRobotSolver.h"
@@ -51,6 +50,10 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("meta", &Solution<CosseratDynamicsMarginals>::meta)
         .def_readwrite("marginals", &Solution<CosseratDynamicsMarginals>::marginals);
     
+    py::class_<CosseratDynamicsMarginals>(m, "CosseratDynamicsMarginals")
+        .def(py::init<>())
+        .def_readwrite("rods_t", &CosseratDynamicsMarginals::rods_t);
+
     py::class_<Solution<CosseratShellMarginals>>(m, "CosseratShellSolution")
         .def(py::init<>())
         .def_readwrite("meta", &Solution<CosseratShellMarginals>::meta)
@@ -131,7 +134,8 @@ PYBIND11_MODULE(crest_sparse, m) {
         .def_readwrite("platform_pose_mean", &ParallelRobotMarginals::platform_pose_mean)
         .def_readwrite("platform_pose_cov", &ParallelRobotMarginals::platform_pose_cov)
         .def_readwrite("platform_wrench_mean", &ParallelRobotMarginals::platform_wrench_mean)
-        .def_readwrite("platform_wrench_cov", &ParallelRobotMarginals::platform_wrench_cov);
+        .def_readwrite("platform_wrench_cov", &ParallelRobotMarginals::platform_wrench_cov)
+        .def_readwrite("rod_lengths_jacobian", &ParallelRobotMarginals::rod_lengths_jacobian);
         
     py::class_<Solution<ParallelRobotMarginals>>(m, "ParallelRobotSolution")
         .def_readwrite("meta", &Solution<ParallelRobotMarginals>::meta)
@@ -145,5 +149,4 @@ PYBIND11_MODULE(crest_sparse, m) {
             py::arg("wrench_mean"),
             py::arg("wrench_cov"),
             py::call_guard<py::gil_scoped_release>());
-        
 }

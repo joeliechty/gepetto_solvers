@@ -55,10 +55,8 @@ def main():
           f"opt:   {solution.meta.optimize_time_ms:.2f}\n"
           f"total: {solution.meta.total_time_ms:.2f}\n")
 
-    for ii in range(len(solution.marginals)):
-        sol = solution.marginals[ii]
-
-        plotter.update(sol)
+    for rod_t in solution.marginals.rods_t:
+        plotter.update(rod_t)
         time.sleep(0.1)
 
 if __name__ == "__main__":

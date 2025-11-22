@@ -10,13 +10,13 @@ using namespace gtsam;
 CosseratRodModel::CosseratRodModel (
     int num_nodes,
     const Matrix6& K_inv,
-    SharedDiagonal twist_cov,
-    SharedDiagonal stress_cov) 
+    SharedDiagonal twist_noise,
+    SharedDiagonal stress_noise) 
 : 
     id_(next_id_++),
     num_nodes_(num_nodes),
-    twist_cov_(twist_cov), 
-    stress_cov_(stress_cov)
+    twist_noise_(twist_noise), 
+    stress_noise_(stress_noise)
 {
     K_inv_ = std::vector<Matrix6>(num_nodes - 1, K_inv);
 
@@ -96,7 +96,7 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
             ds[i], 
             nominal_strain ? *nominal_strain : straight_rod_strain,
             K_inv_[i], 
-            twist_cov_));
+            twist_noise_));
     }
         
     // Cosserat stress factors
@@ -109,7 +109,7 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
             stress_keys_[i], 
             stress_keys_[i + 1],
             wrench_key,
-            stress_cov_));
+            stress_noise_));
     }
 
     // Constrain tip stress to be equal to tip force
@@ -118,18 +118,18 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
         stress_keys_.back(), 
         wrench_keys_.back(),
         pose_keys_.back(),
-        stress_cov_,
+        stress_noise_,
         is_base));
     
     // Makey dummy wrench zero
-    graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_cov_));
+    graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_noise_));
     
     is_base = true;
     graph.add(BoundaryStressFactor(
         stress_keys_.front(), 
         wrench_keys_.front(),
         pose_keys_.front(),
-        stress_cov_,
+        stress_noise_,
         is_base));
 
     return graph;

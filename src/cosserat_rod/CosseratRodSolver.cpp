@@ -1,8 +1,10 @@
 #include "CosseratRodSolver.h"
-#include "cosserat_rod/CosseratRodModel.h"
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/slam/BetweenFactor.h>
+
+#include "cosserat_rod/CosseratRodModel.h"
+#include "utils/MiscInline.h"
 
 using namespace gtsam;
 

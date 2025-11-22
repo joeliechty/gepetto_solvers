@@ -33,8 +33,8 @@ def main():
     solver = crest_sparse.CosseratShellSolver(config)
     
     plotter = CosseratShellPlotter(
-        # single_plot_mode=True,
-        save_frames_dir_name="cosserat_shell",
+        single_plot_mode=True,
+        # save_frames_dir_name="cosserat_shell",
         camera_distance=9,
         camera_focal_point=(0, 2.1, 0)
     )
@@ -47,16 +47,19 @@ def main():
     for step in range(num_steps + 1):
         t = step * dt
 
-        displacement_mean = np.eye(4)
-        displacement_mean[:3,:3] = Rotation.from_rotvec([
-            1 / 2 * np.pi * np.sin(0.3 * t), 
-            2 * np.pi * np.sin(0.35 * t),
-            1 / 2 * np.pi * np.sin(0.4 * t),
-        ]).as_matrix()
+        # displacement_mean = np.eye(4)
+        # displacement_mean[:3,:3] = Rotation.from_rotvec([
+        #     1 / 2 * np.pi * np.sin(0.3 * t), 
+        #     2 * np.pi * np.sin(0.35 * t),
+        #     1 / 2 * np.pi * np.sin(0.4 * t),
+        # ]).as_matrix()
 
-        displacement_mean[0,3] = 1.5 * np.sin(0.23 * t)
-        displacement_mean[1,3] = 1.2 * np.sin(0.24 * t)
-        displacement_mean[2,3] = 1.5 * np.sin(0.25 * t)
+        # displacement_mean[0,3] = 1.5 * np.sin(0.23 * t)
+        # displacement_mean[1,3] = 1.2 * np.sin(0.24 * t)
+        # displacement_mean[2,3] = 1.5 * np.sin(0.25 * t)
+
+        displacement_mean = np.eye(4)
+        displacement_mean[:3,:3] = Rotation.from_rotvec([0, np.pi/2, 0]).as_matrix()
 
         displacement_cov = (1e-2) ** 2 * np.eye(6)
         displacement_cov[1,1] = (0.15) ** 2

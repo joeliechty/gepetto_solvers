@@ -114,7 +114,7 @@ def main():
         wrench_mean, wrench_cov = get_wrench_prior(t)
         solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench_mean, wrench_cov)
 
-        J = solution.rod_lengths_jacobian
+        J = solution.marginals.rod_lengths_jacobian
 
         p = solution.marginals.platform_pose_mean[:3, 3]
         R = solution.marginals.platform_pose_mean[:3,:3]

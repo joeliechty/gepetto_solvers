@@ -25,8 +25,8 @@ public:
     ParallelRobot(
         int nodes_per_rod, 
         gtsam::Matrix6 K_inv,
-        gtsam::SharedDiagonal rod_twist_cov,
-        gtsam::SharedDiagonal small_wrench_cov_,
+        gtsam::SharedDiagonal twist_noise,
+        gtsam::SharedDiagonal stress_noise,
         std::array<gtsam::Matrix4, NUM_RODS> base_end_poses,
         std::array<gtsam::Matrix4, NUM_RODS> tip_end_poses, 
         double sigma_end_pose_pos,
@@ -49,7 +49,7 @@ public:
 private:
     const std::array<gtsam::Matrix4, NUM_RODS> base_end_poses_;
     const std::array<gtsam::Matrix4, NUM_RODS> tip_end_poses_;
-    const gtsam::SharedDiagonal small_wrench_cov_;
+    const gtsam::SharedDiagonal small_wrench_noise_;
     
     const double sigma_end_pose_pos_;
     const double sigma_end_pose_rot_;

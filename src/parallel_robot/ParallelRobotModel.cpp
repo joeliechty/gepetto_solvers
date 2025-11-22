@@ -1,12 +1,12 @@
 #include "ParallelRobotModel.h"
 
-#include "PlatformWrenchBalanceFactor.h"
 #include <gtsam/base/Vector.h>
-#include "cosserat_rod/BoundaryStressFactor.h"
-#include "cosserat_rod/CosseratRodModel.h"
-
 #include <gtsam/slam/BetweenFactor.h>
 
+#include "PlatformWrenchBalanceFactor.h"
+#include "cosserat_rod/BoundaryStressFactor.h"
+#include "cosserat_rod/CosseratRodModel.h"
+#include "utils/MiscInline.h"
 
 using namespace gtsam;
 
@@ -14,8 +14,8 @@ using namespace gtsam;
 ParallelRobot::ParallelRobot(
     int nodes_per_rod, 
     Matrix6 K_inv,
-    SharedDiagonal rod_twist_cov,
-    SharedDiagonal small_wrench_cov,
+    SharedDiagonal twist_noise,
+    SharedDiagonal stress_noise,
     std::array<Matrix4, NUM_RODS> base_end_poses,
     std::array<Matrix4, NUM_RODS> tip_end_poses,
     double sigma_end_pose_pos,
@@ -23,14 +23,14 @@ ParallelRobot::ParallelRobot(
 :
     base_end_poses_(base_end_poses),
     tip_end_poses_(tip_end_poses),
-    small_wrench_cov_(small_wrench_cov),
+    small_wrench_noise_(stress_noise),
     sigma_end_pose_pos_(sigma_end_pose_pos),
     sigma_end_pose_rot_(sigma_end_pose_rot)
 {
     // Make each rod
     for (int i = 0; i < NUM_RODS; i++) {
         rods_[i] = std::make_unique<CosseratRodModel>(
-            nodes_per_rod, K_inv, rod_twist_cov, small_wrench_cov_);
+            nodes_per_rod, K_inv, twist_noise, stress_noise);
     }
 }
 
@@ -52,12 +52,15 @@ NonlinearFactorGraph ParallelRobot::build_graph(
 {
     NonlinearFactorGraph graph;
 
+    // Tip of the rods relative to platform is relatively certain
+    SharedDiagonal tip_pose_noise = get_noise_model_rot_pos(sigma_end_pose_rot_, sigma_end_pose_pos_);
+
+    // Base of rods relative to world is certain, except for z extension, which is uncertain
     gtsam::SharedDiagonal base_pose_noise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
         sigma_end_pose_rot_, sigma_end_pose_rot_, sigma_end_pose_rot_, 
         sigma_end_pose_pos_, sigma_end_pose_pos_, sigma_rod_lengths).finished());
 
-    SharedDiagonal tip_pose_noise = get_noise_model_rot_pos(sigma_end_pose_rot_, sigma_end_pose_pos_);
-
+    // Build each rod
     for (int i = 0; i < NUM_RODS; i++) {
         // Build base cosserat rod graph
         auto rod_graph = rods_[i]->build_graph(rod_lengths[i]);
@@ -66,7 +69,7 @@ NonlinearFactorGraph ParallelRobot::build_graph(
         // Constrain interior wrenches to zero (skip base and tip)
         std::vector<Key> wrench_keys = rods_[i]->get_wrench_keys();
         for (size_t j = 1; j + 1 < wrench_keys.size(); ++j) {
-            graph.add(PriorFactor<Vector6>(wrench_keys[j], Vector6::Zero(), small_wrench_cov_));
+            graph.add(PriorFactor<Vector6>(wrench_keys[j], Vector6::Zero(), small_wrench_noise_));
         }
 
         // Base pose prior
@@ -86,7 +89,7 @@ NonlinearFactorGraph ParallelRobot::build_graph(
         platform_stress_key(), 
         platform_wrench_key(),
         platform_pose_key(),
-        small_wrench_cov_,
+        small_wrench_noise_,
         is_base));
     
     // Put prior on tip wrench based on user input
@@ -111,7 +114,7 @@ NonlinearFactorGraph ParallelRobot::build_graph(
         rods_[5]->get_pose_key(-1),
         platform_stress_key(),
         platform_pose_key(),
-        small_wrench_cov_));
+        small_wrench_noise_));
     
     return graph;
 }
@@ -120,10 +123,12 @@ NonlinearFactorGraph ParallelRobot::build_graph(
 Values ParallelRobot::get_initial_values() const {
     Values values;
 
+    // Values for each rod
     for (int i = 0; i < NUM_RODS; i++) {
         values.insert(rods_[i]->get_initial_values());
     }
 
+    // Values for moving platform variables
     values.insert(platform_pose_key(), Pose3::Identity());
     values.insert(platform_stress_key(), Vector6(Vector6::Zero()));
     values.insert(platform_wrench_key(), Vector6(Vector6::Zero()));
