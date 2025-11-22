@@ -29,8 +29,8 @@ public:
         int num_nodes_y,
         double element_size,
         const gtsam::Matrix6& K_inv, 
-        gtsam::SharedDiagonal twist_cov,
-        gtsam::SharedDiagonal stress_cov);
+        gtsam::SharedDiagonal twist_noise,
+        gtsam::SharedDiagonal stress_noise);
 
     gtsam::NonlinearFactorGraph build_graph(
         const gtsam::Matrix4& displacement_mean,
@@ -48,8 +48,8 @@ private:
     const double element_size_;
     const gtsam::Matrix6 K_inv_;
 
-    gtsam::SharedDiagonal twist_cov_;
-    gtsam::SharedDiagonal stress_cov_;
+    gtsam::SharedDiagonal twist_noise_;
+    gtsam::SharedDiagonal stress_noise_;
 
     std::vector<std::vector<gtsam::Key>> pose_keys_;
     std::vector<std::vector<std::array<gtsam::Key, NUM_DIR>>> stress_keys_;

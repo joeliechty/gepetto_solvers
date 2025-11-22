@@ -2,7 +2,6 @@
 
 #include <gtsam/base/Matrix.h>
 
-#include "cosserat_rod/CosseratRodModel.h"
 #include "CosseratShellModel.h"
 #include "utils/SolverBase.h"
 
@@ -22,7 +21,7 @@ struct CosseratShellSolverConfig {
 };
 
 
-class CosseratShellSolver {
+class CosseratShellSolver : SolverBase {
 public:
     CosseratShellSolver(const CosseratShellSolverConfig& config);
 
@@ -31,9 +30,16 @@ public:
         const gtsam::Matrix6& displacement_cov);
 
 private:
-    gtsam::NonlinearFactorGraph graph_;
-    gtsam::Values values_;
-    gtsam::Marginals marginals_;
+    void build_graph() override;
+
+    void extract_solution() override;
+
+    void get_initial_values() override;
 
     std::unique_ptr<CosseratShellModel> shell_;
+
+    gtsam::Matrix4 displacement_mean_;
+    gtsam::Matrix6 displacement_cov_;
+
+    CosseratShellMarginals extracted_;
 };

@@ -17,15 +17,15 @@ CosseratShellModel::CosseratShellModel (
     int num_nodes_y,
     double element_size,
     const Matrix6& K_inv,
-    SharedDiagonal twist_cov,
-    SharedDiagonal stress_cov) 
+    SharedDiagonal twist_noise,
+    SharedDiagonal stress_noise) 
 : 
     num_nodes_x_(num_nodes_x),
     num_nodes_y_(num_nodes_y),
     element_size_(element_size),
     K_inv_(K_inv),
-    twist_cov_(twist_cov), 
-    stress_cov_(stress_cov)
+    twist_noise_(twist_noise), 
+    stress_noise_(stress_noise)
 {
     // We need to build one more node in each direction, since there is one more edge than elements
     pose_keys_.resize(num_nodes_x_ + 1);
@@ -87,7 +87,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(
                 element_size_,
                 nominal_strain_x,
                 K_inv_,
-                twist_cov_));
+                twist_noise_));
         }
     }
 
@@ -102,7 +102,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(
                 element_size_,
                 nominal_strain_y,
                 K_inv_,
-                twist_cov_));
+                twist_noise_));
         }
     }
 
@@ -117,7 +117,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(
                 stress_keys_[i][j][Y],
                 stress_keys_[i + 1][j][X],
                 stress_keys_[i][j + 1][Y],
-                stress_cov_));
+                stress_noise_));
         }
     }
 
@@ -126,7 +126,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(
         graph.add(PriorFactor<Pose3>(
             pose_keys_[i][0],
             Pose3(Rot3::Identity(), Point3(element_size_ * i, 0, 0)),
-            twist_cov_));
+            twist_noise_));
     }
 
     // Make side X stresses zero
@@ -134,11 +134,11 @@ NonlinearFactorGraph CosseratShellModel::build_graph(
         graph.add(PriorFactor<Vector6>(
             stress_keys_[0][j][X],
             Vector6::Zero(),
-            stress_cov_));
+            stress_noise_));
         graph.add(PriorFactor<Vector6>(
             stress_keys_[num_nodes_x_ - 1 + 1][j][X],
             Vector6::Zero(),
-            stress_cov_));
+            stress_noise_));
     }
 
     double x_length = element_size_ * (num_nodes_x_ - 1);
@@ -157,7 +157,7 @@ NonlinearFactorGraph CosseratShellModel::build_graph(
             pose_keys_[i][num_nodes_y_ - 1],
             pose_keys_[i + 1][num_nodes_y_ - 1],
             Pose3(Rot3::Identity(), Point3(element_size_, 0, 0)),
-            twist_cov_));
+            twist_noise_));
     }
     
     return graph;
