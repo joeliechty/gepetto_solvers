@@ -1,4 +1,14 @@
-using TendonWrenchBase = gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector4, gtsam::Vector6>;
+#pragma once
+
+#include <gtsam/geometry/Pose3.h>
+#include <gtsam/nonlinear/NonlinearFactor.h>
+
+#include "tendon_robot/TendonRobotModel.h"
+
+
+// TODO: this class uses Vector4, Matrix4, etc. in a lot of places, But should use the NUM_TENDONS variable.
+using TendonWrenchBase = gtsam::NoiseModelFactorN<
+    gtsam::Pose3, gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector4, gtsam::Vector6>;
 
 class TendonDiscWrenchFactor: public TendonWrenchBase {
     using TendonWrenchBase::evaluateError;
@@ -12,9 +22,9 @@ public:
         gtsam::Key tensions_key,
         gtsam::Key external_wrench_key,
         const bool is_tip,
-        const std::vector<gtsam::Point3>& holes_prev,
-        const std::vector<gtsam::Point3>& holes,
-        const std::vector<gtsam::Point3>& holes_next, // Not used if we are at the tip
+        const std::array<gtsam::Point3, NUM_TENDONS>& holes_prev,
+        const std::array<gtsam::Point3, NUM_TENDONS>& holes,
+        const std::array<gtsam::Point3, NUM_TENDONS>& holes_next, // Not used if we are at the tip
         const gtsam::SharedNoiseModel& model);
         
     gtsam::Vector evaluateError(
@@ -43,7 +53,7 @@ private:
         gtsam::OptionalJacobian<6, 6> H_pose_other = {}) const;
 
     bool is_tip_;
-    std::vector<gtsam::Point3> holes_prev_;  // Previous disc hole location in local frame of previous disc, z = 0
-    std::vector<gtsam::Point3> holes_;       // Tip disc hole locations in local frame of tip disc
-    std::vector<gtsam::Point3> holes_next_;  // Disc hole locations in the next frame 
+    std::array<gtsam::Point3, NUM_TENDONS> holes_prev_;  // Previous disc hole location in local frame of previous disc, z = 0
+    std::array<gtsam::Point3, NUM_TENDONS> holes_;       // Tip disc hole locations in local frame of tip disc
+    std::array<gtsam::Point3, NUM_TENDONS> holes_next_;  // Disc hole locations in the next frame 
 };

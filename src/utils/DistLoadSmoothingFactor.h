@@ -1,14 +1,4 @@
-#pragma once 
-
-#include "nonlinear/NonlinearFactor.h"
-#include <gtsam/geometry/Pose3.h>
-#include <gtsam/nonlinear/NonlinearFactorGraph.h>
-
-
-
-
-
-
+#pragma once
 
 // class DistLoadSmoothingFactor: public NoiseModelFactorN<Vector6, Vector6, Vector6, Vector6> {
 // public:

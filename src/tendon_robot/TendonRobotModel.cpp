@@ -3,39 +3,42 @@
 
 #include <gtsam/base/Vector.h>
 #include <gtsam/linear/NoiseModel.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <memory>
 #include <unordered_set>
+
+#include "TendonDiscWrenchFactor.h"
 
 using namespace gtsam;
 
 
 TendonRobotModel::TendonRobotModel(
+    double rod_length,
     int num_discs,
     int num_between_nodes,
-    TendonRoutingInput routing_input,
+    TendonInput tendon_input,
     const gtsam::Matrix6& K_inv, 
-    gtsam::SharedDiagonal tensions_noise,
     gtsam::SharedDiagonal twist_noise,
     gtsam::SharedDiagonal stress_noise)
 :
+    rod_length_(rod_length),
     num_discs_(num_discs),
     num_nodes_(num_discs + (num_discs - 1) * num_between_nodes),
-    tensions_noise_(tensions_noise),
     twist_noise_(twist_noise),
     stress_noise_(stress_noise)
 {
     rod_ = std::make_unique<CosseratRodModel>(
         num_nodes_, K_inv, twist_noise, stress_noise);
 
-    init_tendon_disc_config(routing_input);
+    init_tendon_disc_config(tendon_input);
 }
 
 
-void TendonRobotModel::init_tendon_disc_config(TendonRoutingInput routing) {
-    tendon_disc_config_.num_discs = num_discs_;
-    tendon_disc_config_.disc_pose_idx.reserve(num_discs_);
-    tendon_disc_config_.routing_radius = routing.routing_radius;
-    tendon_disc_config_.hole_locations.reserve(num_discs_);
+void TendonRobotModel::init_tendon_disc_config(TendonInput routing) {
+    tendon_config_.num_discs = num_discs_;
+    tendon_config_.disc_pose_idx.reserve(num_discs_);
+    tendon_config_.routing_radius = routing.routing_radius;
+    tendon_config_.hole_locations.reserve(num_discs_);
 
     // Compute normalized arc-length positions for poses and discs
     std::vector<double> pose_s(num_nodes_);
@@ -63,7 +66,7 @@ void TendonRobotModel::init_tendon_disc_config(TendonRoutingInput routing) {
             }
         }
 
-        tendon_disc_config_.disc_pose_idx.push_back(closest_pose_idx);
+        tendon_config_.disc_pose_idx.push_back(closest_pose_idx);
         std::array<Vector3, NUM_TENDONS> holes;
 
         for (int tendon_idx = 0; tendon_idx < NUM_TENDONS; ++tendon_idx) {
@@ -84,31 +87,22 @@ void TendonRobotModel::init_tendon_disc_config(TendonRoutingInput routing) {
             holes[tendon_idx] = Vector3(x, y, z);
         }
 
-        tendon_disc_config_.hole_locations.push_back(holes);
+        tendon_config_.hole_locations.push_back(holes);
     }
 
     std::unordered_set<int> disc_pose_set(
-        tendon_disc_config_.disc_pose_idx.begin(), 
-        tendon_disc_config_.disc_pose_idx.end());
+        tendon_config_.disc_pose_idx.begin(), 
+        tendon_config_.disc_pose_idx.end());
 
-    tendon_disc_config_.no_disc_pose_idx.reserve(num_nodes_ - num_discs_);
+    tendon_config_.no_disc_pose_idx.reserve(num_nodes_ - num_discs_);
 
     for (int i = 0; i < num_nodes_; ++i) {
         if (disc_pose_set.find(i) == disc_pose_set.end()) {
-            tendon_disc_config_.no_disc_pose_idx.push_back(i);
+            tendon_config_.no_disc_pose_idx.push_back(i);
         }
     }
 }
 
-
-
-
-
-// using symbol_shorthand::T; // poses
-// using symbol_shorthand::F; // applied wrenches
-// using symbol_shorthand::D; // disc wrenches
-// using symbol_shorthand::S; // internal stresses
-// using symbol_shorthand::Q; // tendon tensions
 
 inline Key get_tensions_key() { return Symbol('Q', 424242); }
 
@@ -116,7 +110,7 @@ inline Key get_tensions_key() { return Symbol('Q', 424242); }
 inline Key get_disc_wrench_key(int disc_idx) { return Symbol('D', disc_idx); }
 
 
-Values TendonRobotModel::get_initial_values() {
+Values TendonRobotModel::get_initial_values() const {
     Values values;
 
     values.insert(rod_->get_initial_values());
@@ -124,8 +118,8 @@ Values TendonRobotModel::get_initial_values() {
     Eigen::Vector<double, NUM_TENDONS> zero = Eigen::Vector<double, NUM_TENDONS>::Zero();
     values.insert(get_tensions_key(), zero);
 
-    for (size_t disc_idx = 1; disc_idx < tendon_disc_config_.disc_pose_idx.size(); ++disc_idx) {
-        int idx = tendon_disc_config_.disc_pose_idx[disc_idx];
+    for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
+        int idx = tendon_config_.disc_pose_idx[disc_idx];
         values.insert(get_disc_wrench_key(idx), Vector6(Vector6::Zero()));
     }
 
@@ -133,73 +127,64 @@ Values TendonRobotModel::get_initial_values() {
 }
 
 
+NonlinearFactorGraph TendonRobotModel::build_graph(
+    const Vector4& tensions_mean,
+    const Matrix4& tensions_cov) const 
+{
+    NonlinearFactorGraph graph = rod_->build_graph(rod_length_);
+    
+    // Measurement prior on tensions
+    graph.add(PriorFactor<Vector4>(
+        get_tensions_key(), 
+        tensions_mean, 
+        noiseModel::Gaussian::Covariance(tensions_cov)));
 
+    // Priors for discs (using disc indices), start at 1, no force at base disc
+    for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
+        int pose_idx = tendon_config_.disc_pose_idx[disc_idx];
+        int pose_idx_prev = tendon_config_.disc_pose_idx[disc_idx - 1];
+        std::array<Vector3, NUM_TENDONS> holes_prev = tendon_config_.hole_locations[disc_idx - 1];
+        std::array<Vector3, NUM_TENDONS> holes = tendon_config_.hole_locations[disc_idx];
 
+        // Some inputs change based on whether we are at the final disc
+        bool is_tip;
+        int pose_idx_next; 
+        std::array<Vector3, NUM_TENDONS> holes_next;
 
-    // void build_graph(const gtsam::Vector4& tensions) {
-    //     graph_.resize(0);
-        
-    //     // Measurement prior on tensions
-    //     graph_.add(PriorFactor<Vector4>(Q(0), tensions, tensions_cov_));
+        // TODO change to: bool is_tip = (disc_idx == ...)
+        if (disc_idx == (tendon_config_.disc_pose_idx.size() - 1)) {
+            is_tip = true;
+            pose_idx_next = rod_->get_pose_key(0); // Dummy pose for tip factor, not used for tip disc
+            holes_next = tendon_config_.hole_locations[0]; // Dummy holes, not used in factor
+        } else {
+            is_tip = false;
+            pose_idx_next = tendon_config_.disc_pose_idx[disc_idx + 1];
+            holes_next = tendon_config_.hole_locations[disc_idx + 1];
+        }
 
-    //     // Drift prior on tensions
-    //     graph_.add(PriorFactor<Vector4>(Q(0), last_tensions_mean_, 
-    //         noiseModel::Gaussian::Covariance(last_tensions_cov_ + tensions_drift_cov_)));
+        graph.add(TendonDiscWrenchFactor(
+            rod_->get_pose_key(pose_idx_prev), 
+            rod_->get_pose_key(pose_idx), 
+            rod_->get_pose_key(pose_idx_next), 
+            rod_->get_wrench_key(pose_idx),
+            get_tensions_key(), 
+            get_disc_wrench_key(pose_idx),
+            is_tip, 
+            holes_prev, 
+            holes, 
+            holes_next, 
+            stress_noise_));
+    }
 
-    //     // Priors for discs (using disc indices), start at 1, no force at base disc
-    //     for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
-    //         int pose_idx = tendon_config_.disc_pose_idx[disc_idx];
-    //         int pose_idx_prev = tendon_config_.disc_pose_idx[disc_idx - 1];
-    //         std::vector<Vector3> holes_prev = tendon_config_.local_holes[disc_idx - 1];
-    //         std::vector<Vector3> holes = tendon_config_.local_holes[disc_idx];
+    // Base frame soft constraint
+    Rot3 base_rot = Rot3::Rx(-M_PI / 2).compose(Rot3::Rz(M_PI));
+    graph.add(PriorFactor<Pose3>(
+        rod_->get_pose_key(0), 
+        Pose3(base_rot, Point3::Zero()), 
+        twist_noise_));
 
-    //         // Some inputs change based on whether we are at the final disc
-    //         bool is_tip;
-    //         int pose_idx_next; 
-    //         std::vector<Vector3> holes_next;
-
-    //         if (disc_idx == (tendon_config_.disc_pose_idx.size() - 1)) {
-    //             is_tip = true;
-    //             pose_idx_next = T(0); // Dummy pose for tip factor, not used for tip disc
-    //             holes_next = tendon_config_.local_holes[0]; // Dummy holes, not used in factor
-    //         } else {
-    //             is_tip = false;
-    //             pose_idx_next = tendon_config_.disc_pose_idx[disc_idx + 1];
-    //             holes_next = tendon_config_.local_holes[disc_idx + 1];
-    //         }
-
-    //         graph_.add(TendonDiscWrenchFactor(
-    //                    T(pose_idx_prev), T(pose_idx), T(pose_idx_next), D(pose_idx), Q(0), F(pose_idx),
-    //                    is_tip, holes_prev, holes, holes_next, small_wrench_cov_));
-    //     }
-
-    //     // Base frame soft constraint
-    //     Rot3 base_rot = Rot3::Rx(-M_PI / 2).compose(Rot3::Rz(M_PI));
-    //     graph_.add(PriorFactor<Pose3>(T(0), Pose3(base_rot, Point3()), base_frame_cov_));
-
-    //     // Cosserat twist factors
-    //     for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
-    //         graph_.add(CosseratRodTwistFactor(
-    //             T(i), T(i + 1), S(i), S(i + 1), ds_, K_inv_, use_midpoint_, cosserat_twist_cov_));
-    //     }
-
-    //     // Cosserat stress factors
-    //     for (int i = 0; i + 1 < num_backbone_poses_; ++i) {
-    //         // If a disc is next, then that changes whether we use an applied wrench F or a disc wrench D
-    //         bool is_disc_next = std::find(tendon_config_.disc_pose_idx.begin(), tendon_config_.disc_pose_idx.end(), i + 1) 
-    //             != tendon_config_.disc_pose_idx.end();
-            
-    //         graph_.add(CosseratRodStressFactor(
-    //             T(i), T(i + 1), 
-    //             S(i), S(i + 1),
-    //             is_disc_next ? D(i + 1) : F(i + 1), 
-    //             is_disc_next ? false : true,
-    //             small_wrench_cov_));
-    //     }
-
-    //     // Near-zero prior constraint for tip stress
-    //     graph_.add(PriorFactor<Vector6>(S(num_backbone_poses_ - 1), Vector6::Zero(), small_wrench_cov_));
-    // }
+    return graph;
+}
 
 
 

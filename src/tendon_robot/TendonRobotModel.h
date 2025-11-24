@@ -22,14 +22,14 @@ struct RoutingFunctionParams {
 };
 
 
-struct TendonRoutingInput {
+struct TendonInput {
     std::array<RoutingAngleFunction, NUM_TENDONS> functions;
     std::array<RoutingFunctionParams, NUM_TENDONS> params;
     double routing_radius;
 };
 
 
-struct TendonDiscConfig {
+struct TendonConfig {
     int num_discs;
     double routing_radius;
     std::vector<int> disc_pose_idx;
@@ -47,7 +47,7 @@ struct TendonRobotSamples {
 struct TendonRobotMarginals {
     CosseratRodMarginals rod;
     TendonRobotSamples samples;
-    TendonDiscConfig tendon_disc_config;
+    TendonConfig tendon_config;
 
     std::vector<gtsam::Vector6> external_wrench_mean;
     std::vector<gtsam::Matrix6> external_wrench_cov;
@@ -62,32 +62,36 @@ struct TendonRobotMarginals {
 class TendonRobotModel {
 public:
     TendonRobotModel(
+        double rod_length,
         int num_discs,
         int num_between_nodes,
-        TendonRoutingInput routing_info,
+        TendonInput tendon_input,
         const gtsam::Matrix6& K_inv, 
-        gtsam::SharedDiagonal tensions_noise,
         gtsam::SharedDiagonal twist_noise,
         gtsam::SharedDiagonal stress_noise);
         
-    gtsam::Values get_initial_values();
+    gtsam::Values get_initial_values() const;
 
-    gtsam::NonlinearFactorGraph build_graph(const gtsam::Vector4& tensions);
+    gtsam::NonlinearFactorGraph build_graph(
+        const gtsam::Vector4& tensions_mean, 
+        const gtsam::Matrix4& tensions_cov) const;
+
+    gtsam::Key get_external_wrench_key(int node_idx) const;
 
     TendonRobotMarginals get_marginals(
         const gtsam::Values& values, 
         const gtsam::Marginals& marginals) const;
 
 private:
-    void init_tendon_disc_config(TendonRoutingInput routing_info);
+    void init_tendon_disc_config(TendonInput tendon_input);
 
+    const double rod_length_;
     const int num_discs_;
     const int num_nodes_;
     
-    gtsam::SharedDiagonal tensions_noise_;
     gtsam::SharedDiagonal twist_noise_;
     gtsam::SharedDiagonal stress_noise_;
 
     std::unique_ptr<CosseratRodModel> rod_;
-    TendonDiscConfig tendon_disc_config_;
+    TendonConfig tendon_config_;
 };

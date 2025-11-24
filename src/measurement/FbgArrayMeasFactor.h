@@ -1,4 +1,4 @@
-
+#pragma once
 
 // Vector3 stress_to_fbg_signal(const Vector6& stress, const Matrix6& K_inv, const double rod_diameter, OptionalJacobian<3, 6> H_stress = {}) {
 //     Vector6 strain = K_inv * stress;
