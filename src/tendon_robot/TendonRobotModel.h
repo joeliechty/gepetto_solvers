@@ -84,6 +84,8 @@ public:
 
 private:
     void init_tendon_disc_config(TendonInput tendon_input);
+    
+    void get_J_pose_tensions(const gtsam::Marginals& marginals, TendonRobotMarginals& out) const;
 
     const double rod_length_;
     const int num_discs_;

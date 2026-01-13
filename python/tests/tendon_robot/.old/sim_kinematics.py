@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
-from plotting import TendonRobotPlotter
+from _plotting import TendonRobotPlotter
 from config import get_base_config
 from utils import TipForceFunction, generate_waypoint_trajectory, setup_plt
 from benchmark import solve_kinematics_bvp

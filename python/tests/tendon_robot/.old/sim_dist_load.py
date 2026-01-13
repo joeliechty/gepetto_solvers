@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 from tendon_robot import DistLoadSolver
 
-from plotting import TendonRobotPlotter
+from _plotting import TendonRobotPlotter
 from config import get_base_config
 from utils import moving_savgol, setup_plt, generate_trajectory, GaussianProcessNoiseModel
 

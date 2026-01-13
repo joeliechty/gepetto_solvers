@@ -1,7 +1,7 @@
 import pyvista as pv
 import vtk
 
-from . import plotting_tools
+from . import utils
 
 
 class CosseratRodMeshManager:
@@ -69,7 +69,7 @@ class CosseratRodMeshManager:
         self.tip_plate_transform.SetMatrix(pose.flatten().tolist())
     
     def update_rod_tube(self, solution, plotter):
-        tube = plotting_tools.get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
+        tube = utils.get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
         
         if plotter.frame == 0:
             self.backbone_tube_mesh = tube
@@ -97,7 +97,7 @@ class CosseratRodMeshManager:
             p = pose[:3, 3]
             cov = R @ (cov[3:, 3:] @ R.T)  # World frame
 
-            matrix = plotting_tools.get_ellipsoid_transform(p, cov)
+            matrix = utils.get_ellipsoid_transform(p, cov)
             transform.SetMatrix(matrix.flatten().tolist())
 
 
@@ -108,9 +108,9 @@ class CosseratRodMeshManager:
         if plotter.frame == 0:
             self.backbone_frame_transforms = []
             for _ in solution.pose_mean:
-                axes = plotting_tools.get_axes_frame(length=self.cartesian_frame_scale)
+                axes = utils.get_axes_frame(length=self.cartesian_frame_scale)
                 transform = vtk.vtkTransform()
-                for arrow, color in zip(axes, plotting_tools.frame_arrow_colors):
+                for arrow, color in zip(axes, utils.frame_arrow_colors):
                     actor = plotter.plotter.add_mesh(arrow, color=color)
                     actor.SetUserTransform(transform)
                 self.backbone_frame_transforms.append(transform)
@@ -131,13 +131,13 @@ class CosseratRodMeshManager:
             shaft_scale=0.05
             
             for _ in range(len(solution.pose_cov)):
-                mesh = plotting_tools.get_arrow(shaft_scale=shaft_scale)
+                mesh = utils.get_arrow(shaft_scale=shaft_scale)
                 transform = vtk.vtkTransform()
                 actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
                 actor.SetUserTransform(transform)
                 self.moment_arrow_transforms.append(transform)
 
-                mesh = plotting_tools.get_arrow(shaft_scale=shaft_scale)
+                mesh = utils.get_arrow(shaft_scale=shaft_scale)
                 transform = vtk.vtkTransform()
                 actor = plotter.plotter.add_mesh(mesh, color='darkorchid', lighting=False)
                 actor.SetUserTransform(transform)
@@ -166,16 +166,16 @@ class CosseratRodMeshManager:
             moment_mean, force_mean = w[:3], w[3:]
             moment_cov, force_cov = cov[:3, :3], cov[3:, 3:]
 
-            matrix = plotting_tools.get_arrow_transform(p, moment_mean, scale=self.moment_scale)
+            matrix = utils.get_arrow_transform(p, moment_mean, scale=self.moment_scale)
             self.moment_arrow_transforms[ii].SetMatrix(matrix.flatten().tolist())
 
-            matrix = plotting_tools.get_arrow_transform(p, force_mean, scale=self.force_scale)
+            matrix = utils.get_arrow_transform(p, force_mean, scale=self.force_scale)
             self.force_arrow_transforms[ii].SetMatrix(matrix.flatten().tolist())
 
-            matrix = plotting_tools.get_ellipsoid_transform(p + force_mean * self.force_scale, force_cov, scale=self.force_scale)
+            matrix = utils.get_ellipsoid_transform(p + force_mean * self.force_scale, force_cov, scale=self.force_scale)
             self.force_ellipsoid_transforms[ii].SetMatrix(matrix.flatten().tolist())
 
-            matrix = plotting_tools.get_ellipsoid_transform(p + moment_mean * self.moment_scale, moment_cov, scale=self.force_scale)
+            matrix = utils.get_ellipsoid_transform(p + moment_mean * self.moment_scale, moment_cov, scale=self.force_scale)
             self.moment_ellipsoid_transforms[ii].SetMatrix(matrix.flatten().tolist())
 
     def update(self, solution, plotter):
@@ -203,7 +203,7 @@ class CosseratRodPlotter:
                  cartesian_frame_scale=0.03,
                  **kwargs):
     
-        self.plotter = plotting_tools.PlotterBase(**kwargs)
+        self.plotter = utils.PlotterBase(**kwargs)
         self.mesh_manager = CosseratRodMeshManager(
             plot_base_plate=plot_base_plate,
             plot_tip_plate=plot_tip_plate,

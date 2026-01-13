@@ -3,14 +3,14 @@ import pyvista as pv
 import vtk
 import matplotlib.pyplot as plt 
 
-from . import plotting_tools
+from . import utils
 
 
 class CosseratShellPlotter:
     def __init__(self, **kwargs):
         self.cartesian_frame_scale = 0.04
 
-        self.plotter = plotting_tools.PlotterBase(**kwargs)
+        self.plotter = utils.PlotterBase(**kwargs)
 
         yz_length = 0.05
         x_length = 0.7
@@ -28,9 +28,9 @@ class CosseratShellPlotter:
             for pose_col in solution.pose_mean:
                 transforms_col = []
                 for pose in pose_col:
-                    axes = plotting_tools.get_axes_frame(length=self.cartesian_frame_scale)
+                    axes = utils.get_axes_frame(length=self.cartesian_frame_scale)
                     transform = vtk.vtkTransform()
-                    for arrow, color in zip(axes, plotting_tools.frame_arrow_colors):
+                    for arrow, color in zip(axes, utils.frame_arrow_colors):
                         actor = plotter.plotter.add_mesh(arrow, color=color)
                         actor.SetUserTransform(transform)
                     transforms_col.append(transform)
@@ -139,7 +139,7 @@ class CosseratShellPlotter:
                 p = pose[:3, 3]
                 cov = R @ (cov[3:, 3:] @ R.T)  # World frame
 
-                matrix = plotting_tools.get_ellipsoid_transform(p, cov)
+                matrix = utils.get_ellipsoid_transform(p, cov)
                 transform.SetMatrix(matrix.flatten().tolist())
 
     def update(self, solution):

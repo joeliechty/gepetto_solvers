@@ -2,8 +2,8 @@ import pyvista as pv
 import vtk
 import numpy as np
 
-from . import plotting_tools
-from .cosserat_rod_plotter import CosseratRodMeshManager
+from . import utils
+from .._plotting.cosserat_rod_plotter import CosseratRodMeshManager
 
 
 class ParallelRobotPlotter:
@@ -15,7 +15,7 @@ class ParallelRobotPlotter:
                  plot_backbone_ellipsoids=True,
                  **kwargs):
 
-        self.plotter = plotting_tools.PlotterBase(**kwargs)
+        self.plotter = utils.PlotterBase(**kwargs)
 
         self.rod_managers = []
 
@@ -56,8 +56,8 @@ class ParallelRobotPlotter:
             actor = plotter.plotter.add_mesh(mesh, color="silver")
             actor.SetUserTransform(self.platform_transform)
 
-            axes = plotting_tools.get_axes_frame(length=0.1)
-            for arrow, color in zip(axes, plotting_tools.frame_arrow_colors):
+            axes = utils.get_axes_frame(length=0.1)
+            for arrow, color in zip(axes, utils.frame_arrow_colors):
                 actor = plotter.plotter.add_mesh(arrow, color=color)
                 actor.SetUserTransform(self.platform_transform)
             
@@ -73,12 +73,12 @@ class ParallelRobotPlotter:
         R = pose[:3,:3]
         cov = solution.platform_pose_cov
         cov = R @ (cov[3:, 3:] @ R.T)
-        T = plotting_tools.get_ellipsoid_transform(p, cov)
+        T = utils.get_ellipsoid_transform(p, cov)
         self.platform_ellipsoid_transform.SetMatrix(T.flatten().tolist())
 
     def update_platform_wrench(self, solution, plotter):
         if plotter.frame == 0:
-            mesh = plotting_tools.get_arrow(shaft_scale=0.2)
+            mesh = utils.get_arrow(shaft_scale=0.2)
             actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
             self.platform_moment_arrow_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.platform_moment_arrow_transform)
@@ -88,7 +88,7 @@ class ParallelRobotPlotter:
             self.platform_moment_ellipsoid_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.platform_moment_ellipsoid_transform)
 
-            mesh = plotting_tools.get_arrow(shaft_scale=0.2)
+            mesh = utils.get_arrow(shaft_scale=0.2)
             actor = plotter.plotter.add_mesh(mesh, color='darkorchid', lighting=False)
             self.platform_force_arrow_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.platform_force_arrow_transform)
@@ -106,16 +106,16 @@ class ParallelRobotPlotter:
         moment_mean, force_mean = wrench[:3], wrench[3:]
         moment_cov, force_cov = cov[:3, :3], cov[3:, 3:]
 
-        matrix = plotting_tools.get_arrow_transform(p, moment_mean, scale=self.moment_scale)
+        matrix = utils.get_arrow_transform(p, moment_mean, scale=self.moment_scale)
         self.platform_moment_arrow_transform.SetMatrix(matrix.flatten().tolist())
 
-        matrix = plotting_tools.get_arrow_transform(p, force_mean, scale=self.force_scale)
+        matrix = utils.get_arrow_transform(p, force_mean, scale=self.force_scale)
         self.platform_force_arrow_transform.SetMatrix(matrix.flatten().tolist())
 
-        matrix = plotting_tools.get_ellipsoid_transform(p + force_mean * self.force_scale, force_cov, scale=self.force_scale)
+        matrix = utils.get_ellipsoid_transform(p + force_mean * self.force_scale, force_cov, scale=self.force_scale)
         self.platform_force_ellipsoid_transform.SetMatrix(matrix.flatten().tolist())
 
-        matrix = plotting_tools.get_ellipsoid_transform(p + moment_mean * self.moment_scale, moment_cov, scale=self.force_scale)
+        matrix = utils.get_ellipsoid_transform(p + moment_mean * self.moment_scale, moment_cov, scale=self.force_scale)
         self.platform_moment_ellipsoid_transform.SetMatrix(matrix.flatten().tolist())
 
     def update(self, solution):

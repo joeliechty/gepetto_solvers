@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from tendon_robot import TipForceSolver
-from plotting import TendonRobotPlotter
+from _plotting import TendonRobotPlotter
 from config import get_base_config, get_sim_config
 from utils import TipForceFunction, setup_plt, generate_waypoint_trajectory, GaussianProcessNoiseModel
 

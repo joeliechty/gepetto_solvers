@@ -2,7 +2,7 @@ import time
 import numpy as np
 
 import crest_sparse
-from plotting.cosserat_rod_plotter import CosseratRodPlotter
+from .._plotting.cosserat_rod_plotter import CosseratRodPlotter
 
 
 def main():

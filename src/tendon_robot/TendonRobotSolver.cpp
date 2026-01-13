@@ -40,18 +40,16 @@ Solution<TendonRobotMarginals> TendonRobotSolver::solve(
 }
 
 
-// void TendonRobotSolver::build_graph() {
-
-// }
-
-
-// void TendonRobotSolver::extract_solution() {
-
-// }
+void TendonRobotSolver::build_graph() {
+    graph_ = robot_->build_graph(tensions_mean_, tensions_cov_);
+}
 
 
-// void TendonRobotSolver::get_initial_values() {
+void TendonRobotSolver::extract_solution() {
+    extracted_ = robot_->get_marginals(values_, marginals_);
+}
 
-// }
 
-
+void TendonRobotSolver::get_initial_values() {
+    values_ = robot_->get_initial_values();
+}

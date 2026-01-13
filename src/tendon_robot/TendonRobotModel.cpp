@@ -187,9 +187,41 @@ NonlinearFactorGraph TendonRobotModel::build_graph(
 }
 
 
+void TendonRobotModel::get_J_pose_tensions(const Marginals& marginals, TendonRobotMarginals& out) const{
+    // Get joint marginal between tip pose and tensions
+    Key Q = get_tensions_key();
+    Key T = rod_->get_pose_key(num_nodes_ - 1);
+    KeyVector keys;
+    keys.push_back(Q);
+    keys.push_back(T);
+    JointMarginal joint = marginals.jointMarginalCovariance(keys);
 
-    // void extract_solution(TendonRobotSolution& solution){
-    //     marginals_ = Marginals(graph_, values_);
+    // Get individual blocks
+    Matrix4 sigma_QQ = joint(Q, Q);
+    Matrix64 sigma_TQ = joint(T, Q);
+
+    // Compute J_pose_tensions = sigma_TQ * inv(sigma_QQ)
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_QQ);
+    out.J_pose_tensions = sigma_TQ * ldlt.solve(Matrix4::Identity());
+}
+
+
+TendonRobotMarginals TendonRobotModel::get_marginals(
+    const Values& values, 
+    const Marginals& marginals) const 
+{
+    TendonRobotMarginals m;
+
+    m.rod = rod_->get_marginals(values, marginals);
+    // TODO samples, external wrenches
+    m.tendon_config = tendon_config_;
+    m.tensions_mean = values.at<Vector4>(get_tensions_key());
+    m.tensions_cov = marginals.marginalCovariance(get_tensions_key());
+
+    get_J_pose_tensions(marginals, m);
+
+    return m;
+}
 
     //     for (int i = 0; i < num_backbone_poses_; ++i) {
     //         solution.backbone_pose_mean[i] = values_.at<Pose3>(T(i)).matrix();
@@ -201,20 +233,3 @@ NonlinearFactorGraph TendonRobotModel::build_graph(
     //             solution.applied_wrench_cov[i - 1] = marginals_.marginalCovariance(F(i));
     //         }
     //     }
-
-    //     solution.tensions_mean = values_.at<Vector4>(Q(0));
-    //     solution.tensions_cov = marginals_.marginalCovariance(Q(0));
-
-    //     solution.tendon_disc_config = TendonDiscConfig(tendon_config_);
-
-    //     KeyVector keys;
-    //     keys.push_back(Q(0));
-    //     keys.push_back(T(num_backbone_poses_ - 1));
-    //     JointMarginal tensions_pose_joint = marginals_.jointMarginalCovariance(keys);
-
-    //     Matrix4 sigma_tensions_tensions = tensions_pose_joint(Q(0), Q(0));
-    //     Matrix64 sigma_pose_tensions = tensions_pose_joint(T(num_backbone_poses_ - 1), Q(0));
-
-    //     Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_tensions_tensions);
-    //     solution.J_pose_tensions = sigma_pose_tensions * ldlt.solve(Matrix4::Identity());
-    // }

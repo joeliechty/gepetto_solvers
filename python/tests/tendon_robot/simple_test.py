@@ -1,7 +1,9 @@
 import numpy as np
 import time
-from tendon_robot import TipForceSolver
-from plotting import TendonRobotPlotter
+
+from crest_sparse import TendonRobotSolver
+from .._plotting.tendon_robot_plotter import TendonRobotPlotter
+
 from config import get_base_config
 
 
