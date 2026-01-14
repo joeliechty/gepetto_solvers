@@ -54,14 +54,14 @@ def get_base_config():
     config = TendonRobotSolverConfig()
 
     config.rod_length = 0.25
-    config.num_discs = 9
+    config.num_discs = 5
     config.num_between_nodes = 3
     config.K_inv = get_sim_K_inv()
-    config.sigma_twist_rot = 1.0e-2
-    config.sigma_twist_pos = 1.03-3
-    config.sigma_stress_force = 1.0e-2
-    config.sigma_stress_moment = 1.0e-3
-    config.sigma_base_pos = 1.0e-2
+    config.sigma_twist_rot = 1.0e-3
+    config.sigma_twist_pos = 1.0e-4
+    config.sigma_stress_force = 1.0e-4
+    config.sigma_stress_moment = 1.0e-5
+    config.sigma_base_pos = 1.0e-4
     config.sigma_base_rot = 1.0e-3
     config.tendon_input = get_sim_tendon_input()
     

@@ -13,8 +13,8 @@ def main():
     solver = TendonRobotSolver(config)
     plotter = TendonRobotPlotter('kinematics_sim', single_plot_mode=True)
 
-    tensions_mean = np.array([0.1, 0.0, 0.0, 0.0])
-    tensions_cov = 1e-1 *np.eye(4)
+    tensions_mean = np.array([2.0, 0.0, 0.0, 0.0])
+    tensions_cov = (1e-2) ** 2 * np.eye(4)
 
     solution = solver.solve(tensions_mean, tensions_cov)
     plotter.update(solution)

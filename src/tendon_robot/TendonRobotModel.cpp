@@ -109,10 +109,14 @@ void TendonRobotModel::init_tendon_disc_config(TendonInput routing) {
 }
 
 
-Key TendonRobotModel::get_tensions_key() const { return Symbol('Q', 424242); }
+Key TendonRobotModel::get_tensions_key() const { 
+    return Symbol('Q', 424242); 
+}
 
 
-Key TendonRobotModel::get_disc_wrench_key(int disc_idx) const { return Symbol('D', disc_idx); }
+Key TendonRobotModel::get_disc_wrench_key(int disc_idx) const { 
+    return Symbol('D', disc_idx); 
+}
 
 
 Key TendonRobotModel::get_external_wrench_key(int node_idx) const {
@@ -135,11 +139,6 @@ Values TendonRobotModel::get_initial_values() const {
     
     Eigen::Vector<double, NUM_TENDONS> zero = Eigen::Vector<double, NUM_TENDONS>::Zero();
     values.insert(get_tensions_key(), zero);
-
-    // for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
-    //     int idx = tendon_config_.disc_pose_idx[disc_idx];
-    //     values.insert(get_disc_wrench_key(idx), Vector6(Vector6::Zero()));
-    // }
 
     for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
         values.insert(get_disc_wrench_key(disc_idx), Vector6(Vector6::Zero()));

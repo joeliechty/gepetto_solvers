@@ -49,6 +49,9 @@ Solution<TendonRobotMarginals> TendonRobotSolver::solve(
 
 void TendonRobotSolver::build_graph() {
     graph_ = robot_->build_graph(tensions_mean_, tensions_cov_);
+
+    // Save graph as pdf for debgging
+    graph_.saveGraph("tendon_robot_graph.dot", values_);
 }
 
 

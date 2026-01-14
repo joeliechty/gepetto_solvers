@@ -20,7 +20,8 @@ class TendonRobotPlotter:
             plot_backbone_frames=plot_backbone_frames,
             backbone_radius=0.005,
             cartesian_frame_scale=0.01,
-            force_scale=0.01,
+            force_scale=0.1,
+            moment_scale=0.2
         )
   
     # def update_platform(self, solution, plotter):

@@ -58,9 +58,9 @@ Vector TendonDiscWrenchFactor::evaluateError(
             pose_prev,
             holes_[tendon_idx],
             holes_prev_[tendon_idx],
-            H5 ? &d_wrench_prev_d_tension : 0,
-            H2 ? &d_wrench_prev_d_pose : 0,
-            H1 ? &d_wrench_prev_d_pose_prev : 0);
+            d_wrench_prev_d_tension,
+            d_wrench_prev_d_pose,
+            d_wrench_prev_d_pose_prev);
         
         wrench_tendons += wrench_prev;
         Vector6 d_wrench_d_tension = d_wrench_prev_d_tension;
@@ -78,9 +78,9 @@ Vector TendonDiscWrenchFactor::evaluateError(
                 pose_next, 
                 holes_[tendon_idx],
                 holes_next_[tendon_idx],
-                H5 ? &d_wrench_next_d_tension : 0,
-                H2 ? &d_wrench_next_d_pose : 0,
-                H3 ? &d_wrench_next_d_pose_next : 0);
+                d_wrench_next_d_tension,
+                d_wrench_next_d_pose,
+                d_wrench_next_d_pose_next);
             
             wrench_tendons += wrench_next;
             d_wrench_d_tension += d_wrench_next_d_tension;
