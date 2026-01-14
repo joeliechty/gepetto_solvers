@@ -2,6 +2,7 @@
 #include "cosserat_rod/CosseratRodModel.h"
 
 #include <gtsam/base/Vector.h>
+#include <gtsam/geometry/Pose3.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <memory>
@@ -17,15 +18,19 @@ TendonRobotModel::TendonRobotModel(
     int num_discs,
     int num_between_nodes,
     TendonInput tendon_input,
-    const gtsam::Matrix6& K_inv, 
-    gtsam::SharedDiagonal twist_noise,
-    gtsam::SharedDiagonal stress_noise)
+    const Matrix6& K_inv, 
+    SharedDiagonal twist_noise,
+    SharedDiagonal stress_noise,
+    Pose3 base_pose_mean,
+    SharedDiagonal base_pose_noise)
 :
     rod_length_(rod_length),
     num_discs_(num_discs),
     num_nodes_(num_discs + (num_discs - 1) * num_between_nodes),
     twist_noise_(twist_noise),
-    stress_noise_(stress_noise)
+    stress_noise_(stress_noise),
+    base_pose_mean_(base_pose_mean),
+    base_pose_noise_(base_pose_noise)
 {
     rod_ = std::make_unique<CosseratRodModel>(
         num_nodes_, K_inv, twist_noise, stress_noise);
@@ -104,10 +109,23 @@ void TendonRobotModel::init_tendon_disc_config(TendonInput routing) {
 }
 
 
-inline Key get_tensions_key() { return Symbol('Q', 424242); }
+Key TendonRobotModel::get_tensions_key() const { return Symbol('Q', 424242); }
 
 
-inline Key get_disc_wrench_key(int disc_idx) { return Symbol('D', disc_idx); }
+Key TendonRobotModel::get_disc_wrench_key(int disc_idx) const { return Symbol('D', disc_idx); }
+
+
+Key TendonRobotModel::get_external_wrench_key(int node_idx) const {
+    // If we are at a disc, use disc wrench key
+    for (size_t disc_idx = 0; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
+        if (tendon_config_.disc_pose_idx[disc_idx] == node_idx) {
+            return get_disc_wrench_key(disc_idx);
+        }
+    }
+
+    // Else use wrench key from rod model
+    return rod_->get_wrench_key(node_idx);
+}
 
 
 Values TendonRobotModel::get_initial_values() const {
@@ -118,9 +136,13 @@ Values TendonRobotModel::get_initial_values() const {
     Eigen::Vector<double, NUM_TENDONS> zero = Eigen::Vector<double, NUM_TENDONS>::Zero();
     values.insert(get_tensions_key(), zero);
 
+    // for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
+    //     int idx = tendon_config_.disc_pose_idx[disc_idx];
+    //     values.insert(get_disc_wrench_key(idx), Vector6(Vector6::Zero()));
+    // }
+
     for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
-        int idx = tendon_config_.disc_pose_idx[disc_idx];
-        values.insert(get_disc_wrench_key(idx), Vector6(Vector6::Zero()));
+        values.insert(get_disc_wrench_key(disc_idx), Vector6(Vector6::Zero()));
     }
 
     return values;
@@ -131,13 +153,13 @@ NonlinearFactorGraph TendonRobotModel::build_graph(
     const Vector4& tensions_mean,
     const Matrix4& tensions_cov) const 
 {
+    // To fully constrain a Cosserat rod graph, all we need to do is add:
+    //   1. Base pose prior constraint
+    //   2. All wrenches except base wrench need to be constrained somehow
     NonlinearFactorGraph graph = rod_->build_graph(rod_length_);
     
-    // Measurement prior on tensions
-    graph.add(PriorFactor<Vector4>(
-        get_tensions_key(), 
-        tensions_mean, 
-        noiseModel::Gaussian::Covariance(tensions_cov)));
+    // Base frame prior constraint
+    graph.add(PriorFactor<Pose3>(rod_->get_pose_key(0), base_pose_mean_, base_pose_noise_));
 
     // Priors for discs (using disc indices), start at 1, no force at base disc
     for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
@@ -168,7 +190,7 @@ NonlinearFactorGraph TendonRobotModel::build_graph(
             rod_->get_pose_key(pose_idx_next), 
             rod_->get_wrench_key(pose_idx),
             get_tensions_key(), 
-            get_disc_wrench_key(pose_idx),
+            get_disc_wrench_key(disc_idx),
             is_tip, 
             holes_prev, 
             holes, 
@@ -176,12 +198,23 @@ NonlinearFactorGraph TendonRobotModel::build_graph(
             stress_noise_));
     }
 
-    // Base frame soft constraint
-    Rot3 base_rot = Rot3::Rx(-M_PI / 2).compose(Rot3::Rz(M_PI));
-    graph.add(PriorFactor<Pose3>(
-        rod_->get_pose_key(0), 
-        Pose3(base_rot, Point3::Zero()), 
-        twist_noise_));
+    // Measurement prior on tensions
+    graph.add(PriorFactor<Vector4>(
+        get_tensions_key(), 
+        tensions_mean, 
+        noiseModel::Gaussian::Covariance(tensions_cov)));
+
+    // Now we need to constrain all disc wrenches AND all internal wrenches that are not at discs.
+    // These are collected into a set of external wrenches.
+    for (int i = 1; i < num_nodes_; ++i) {
+        Key key = get_external_wrench_key(i);
+
+        // For now, set to zero TODO
+        graph.add(PriorFactor<Vector6>(
+            key, 
+            Vector6::Zero(), 
+            stress_noise_));
+    }
 
     return graph;
 }

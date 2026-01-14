@@ -15,7 +15,9 @@ struct TendonRobotSolverConfig{
     double sigma_twist_pos;
     double sigma_stress_force;
     double sigma_stress_moment;
-
+    double sigma_base_pos;
+    double sigma_base_rot;
+    
     TendonInput tendon_input;
 };
 

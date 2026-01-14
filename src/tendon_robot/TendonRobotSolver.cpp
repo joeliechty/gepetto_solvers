@@ -12,6 +12,11 @@ TendonRobotSolver::TendonRobotSolver(const TendonRobotSolverConfig& config) {
     small_wrench_noise_ = get_noise_model_rot_pos(
         config.sigma_stress_moment, config.sigma_stress_force); 
     
+    Rot3 base_rot = Rot3::Rx(-M_PI / 2).compose(Rot3::Rz(M_PI));
+    Pose3 base_pose_mean = Pose3(base_rot, Point3::Zero());
+    SharedDiagonal base_pose_noise = get_noise_model_rot_pos(
+        config.sigma_base_rot, config.sigma_base_pos);
+    
     robot_ = std::make_unique<TendonRobotModel>(
         config.rod_length,
         config.num_discs,
@@ -19,7 +24,9 @@ TendonRobotSolver::TendonRobotSolver(const TendonRobotSolverConfig& config) {
         config.tendon_input,
         config.K_inv, 
         twist_noise,
-        small_wrench_noise_);
+        small_wrench_noise_,
+        base_pose_mean,
+        base_pose_noise);
 
     get_initial_values();
 }
@@ -48,7 +55,6 @@ void TendonRobotSolver::build_graph() {
 void TendonRobotSolver::extract_solution() {
     extracted_ = robot_->get_marginals(values_, marginals_);
 }
-
 
 void TendonRobotSolver::get_initial_values() {
     values_ = robot_->get_initial_values();

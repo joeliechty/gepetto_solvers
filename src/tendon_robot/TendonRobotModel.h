@@ -68,7 +68,9 @@ public:
         TendonInput tendon_input,
         const gtsam::Matrix6& K_inv, 
         gtsam::SharedDiagonal twist_noise,
-        gtsam::SharedDiagonal stress_noise);
+        gtsam::SharedDiagonal stress_noise,
+        gtsam::Pose3 base_pose_mean,
+        gtsam::SharedDiagonal base_pose_noise);
         
     gtsam::Values get_initial_values() const;
 
@@ -77,6 +79,10 @@ public:
         const gtsam::Matrix4& tensions_cov) const;
 
     gtsam::Key get_external_wrench_key(int node_idx) const;
+    
+    gtsam::Key get_tensions_key() const;
+
+    gtsam::Key get_disc_wrench_key(int disc_idx) const;
 
     TendonRobotMarginals get_marginals(
         const gtsam::Values& values, 
@@ -93,7 +99,10 @@ private:
     
     gtsam::SharedDiagonal twist_noise_;
     gtsam::SharedDiagonal stress_noise_;
-
+    
+    gtsam::Pose3 base_pose_mean_;
+    gtsam::SharedDiagonal base_pose_noise_;
+    
     std::unique_ptr<CosseratRodModel> rod_;
     TendonConfig tendon_config_;
 };

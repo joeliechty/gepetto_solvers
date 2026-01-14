@@ -11,16 +11,18 @@ from .config import get_base_config
 def main():
     config = get_base_config()
     solver = TendonRobotSolver(config)
+    plotter = TendonRobotPlotter('kinematics_sim', single_plot_mode=True)
 
-    tensions_mean = np.array([0, 0, 0, 0])
-    tensions_cov = 1e-4 *np.eye(4)
+    tensions_mean = np.array([0.1, 0.0, 0.0, 0.0])
+    tensions_cov = 1e-1 *np.eye(4)
 
     solution = solver.solve(tensions_mean, tensions_cov)
-
-    # tip_force = np.zeros(3)
-    # tensions = np.array([6, 0, 2, 0])
+    plotter.update(solution)
     
-    # plotter = TendonRobotPlotter('kinematics_sim', plot_tip_force=False, single_plot_mode=True, save_frames_mode=False, plot_backbone_ellipsoids=False)
+    
+    # tip_force = np.zeros(3)
+    
+    
     # solution = solver.simulation_step(tensions, tip_force)
 
     # py::class_<TendonRobotSolver>(m, "TendonRobotSolver")

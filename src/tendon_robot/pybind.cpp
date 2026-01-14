@@ -35,6 +35,8 @@ void bind_tendon_robot(py::module& m) {
         .def_readwrite("sigma_twist_pos", &TendonRobotSolverConfig::sigma_twist_pos)
         .def_readwrite("sigma_stress_force", &TendonRobotSolverConfig::sigma_stress_force)
         .def_readwrite("sigma_stress_moment", &TendonRobotSolverConfig::sigma_stress_moment)
+        .def_readwrite("sigma_base_pos", &TendonRobotSolverConfig::sigma_base_pos)
+        .def_readwrite("sigma_base_rot", &TendonRobotSolverConfig::sigma_base_rot)
         .def_readwrite("tendon_input", &TendonRobotSolverConfig::tendon_input);
 
     py::class_<TendonRobotMarginals>(m, "TendonRobotMarginals")
