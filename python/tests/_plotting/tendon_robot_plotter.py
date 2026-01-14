@@ -1,4 +1,8 @@
 
+class TendonRobotPlotter:
+    def __init__(self):
+        pass
+    
 # def get_tendon_disc_meshes(solution):
 #     num_discs = solution.tendon_disc_config.num_discs
 #     num_tendons = solution.tendon_disc_config.num_tendons

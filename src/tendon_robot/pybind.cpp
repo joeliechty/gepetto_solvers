@@ -8,6 +8,17 @@
 namespace py = pybind11;
 
 void bind_tendon_robot(py::module& m) {
+    py::enum_<RoutingAngleFunction>(m, "RoutingAngleFunction")
+        .value("CONSTANT", RoutingAngleFunction::CONSTANT)
+        .value("LINEAR", RoutingAngleFunction::LINEAR)
+        .export_values();
+
+    py::class_<RoutingFunctionParams>(m, "RoutingFunctionParams")
+        .def(py::init<>())
+        .def(py::init<double, double>(), py::arg("angle_offset"), py::arg("total_angle"))
+        .def_readwrite("angle_offset", &RoutingFunctionParams::angle_offset)
+        .def_readwrite("total_angle", &RoutingFunctionParams::total_angle);
+    
     py::class_<TendonInput>(m, "TendonInput")
         .def(py::init<>())
         .def_readwrite("functions", &TendonInput::functions)
