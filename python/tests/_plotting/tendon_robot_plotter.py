@@ -1,4 +1,6 @@
 import numpy as np
+import pyvista as pv
+import vtk
 
 from . import utils
 from .cosserat_rod_plotter import CosseratRodMeshManager
@@ -24,7 +26,82 @@ class TendonRobotPlotter:
             moment_scale=0.2
         )
   
-    # def update_platform(self, solution, plotter):
+    def update_tendons(self, solution):
+        num_tendons = solution.marginals.tendon_config.num_tendons
+        num_discs = solution.marginals.tendon_config.num_discs
+
+        if self.plotter.frame == 0:
+            tendon_colors = ["crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod", "deeppink"]
+            self.tendon_meshes = []
+            for i in range(num_tendons):
+                points = np.zeros((num_discs, 3))
+                mesh = pv.lines_from_points(points)
+                self.plotter.plotter.add_mesh(mesh, line_width=6, color=tendon_colors[i])
+                self.tendon_meshes.append(mesh)
+
+        for jj in range(num_tendons):
+            points = []
+            for ii in range(num_discs):
+                disc_pose_idx = solution.marginals.tendon_config.disc_pose_idx[ii]
+                hole = solution.marginals.tendon_config.hole_locations[ii][jj]
+                T = solution.marginals.rod.pose_mean[disc_pose_idx]
+                p_world = T[:3, :3] @ hole + T[:3, 3]
+                points.append(p_world)
+            
+            self.tendon_meshes[jj].points[:] = points
+
+    def update_discs(self, solution):
+        num_discs = solution.marginals.tendon_config.num_discs
+        disc_pose_idx = solution.marginals.tendon_config.disc_pose_idx
+
+        if self.plotter.frame == 0:
+            routing_radius = solution.marginals.tendon_config.routing_radius
+            disc_radius = 1.3 * routing_radius
+            disc_width = 0.3 * routing_radius
+
+            self.disc_transforms = []
+
+            for i in range(num_discs):
+                T = solution.marginals.rod.pose_mean[disc_pose_idx[i]]
+                mesh = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
+                actor = self.plotter.plotter.add_mesh(mesh, color='cornflowerblue', opacity=0.2, show_edges=True, line_width=3.0)
+                disc_transform = vtk.vtkTransform()
+                actor.SetUserTransform(disc_transform)
+                self.disc_transforms.append(disc_transform)
+        
+        # Update vtkTransforms for each actor
+        for ii in range(num_discs):
+            T = solution.marginals.rod.pose_mean[disc_pose_idx[ii]]
+            self.disc_transforms[ii].SetMatrix(T.flatten().tolist())
+        
+
+#     discs = []
+
+#     for i in disc_pose_idx:
+#         T = solution.backbone_pose_mean[i]
+#         cylinder = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
+#         cylinder.points = (T[:3,:3] @ cylinder.points.T + T[:3,3].reshape((3,1))).T
+#         discs.append(cylinder)
+
+
+
+#     angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
+#     x = routing_radius * np.cos(angles)
+#     y = routing_radius * np.sin(angles)
+#     z = np.zeros_like(x)
+#     hole_locations = np.array((x, y, z)).T
+
+#     holes = []
+#     hole_radius = 2 * tendon_radius
+#     for idx in disc_pose_idx:
+#         T = solution.backbone_pose_mean[idx]
+#         for loc in hole_locations:
+#             loc_world = T[:3,:3] @ loc + T[:3,3]
+#             if idx == 0: loc_world[1] += hole_radius 
+#             hole = pv.Sphere(radius=hole_radius, center=loc_world)
+#             holes.append(hole)
+    
+#     return tendons, discs, holes
 
     #     if plotter.frame == 0:
     #         mesh = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
@@ -58,103 +135,16 @@ class TendonRobotPlotter:
     #     T = utils.get_ellipsoid_transform(p, cov)
     #     self.platform_ellipsoid_transform.SetMatrix(T.flatten().tolist())
 
-    # def update_platform_wrench(self, solution, plotter):
-    #     if plotter.frame == 0:
-    #         mesh = utils.get_arrow(shaft_scale=0.2)
-    #         actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
-    #         self.platform_moment_arrow_transform = vtk.vtkTransform()
-    #         actor.SetUserTransform(self.platform_moment_arrow_transform)
 
-    #         mesh = mesh = pv.Sphere(radius=1)
-    #         actor = plotter.plotter.add_mesh(mesh, color="cadmiumlemon", lighting=False, opacity=0.4)
-    #         self.platform_moment_ellipsoid_transform = vtk.vtkTransform()
-    #         actor.SetUserTransform(self.platform_moment_ellipsoid_transform)
-
-    #         mesh = utils.get_arrow(shaft_scale=0.2)
-    #         actor = plotter.plotter.add_mesh(mesh, color='darkorchid', lighting=False)
-    #         self.platform_force_arrow_transform = vtk.vtkTransform()
-    #         actor.SetUserTransform(self.platform_force_arrow_transform)
-
-    #         mesh = mesh = pv.Sphere(radius=1)
-    #         actor = plotter.plotter.add_mesh(mesh, color="cadmiumlemon", lighting=False, opacity=0.4)
-    #         self.platform_force_ellipsoid_transform = vtk.vtkTransform()
-    #         actor.SetUserTransform(self.platform_force_ellipsoid_transform)
-
-    #     # Update vtkTransforms for each actor
-    #     p = solution.platform_pose_mean[:3,3]
-    #     wrench = solution.platform_wrench_mean
-    #     cov = solution.platform_wrench_cov
-
-    #     moment_mean, force_mean = wrench[:3], wrench[3:]
-    #     moment_cov, force_cov = cov[:3, :3], cov[3:, 3:]
-
-    #     matrix = utils.get_arrow_transform(p, moment_mean, scale=self.moment_scale)
-    #     self.platform_moment_arrow_transform.SetMatrix(matrix.flatten().tolist())
-
-    #     matrix = utils.get_arrow_transform(p, force_mean, scale=self.force_scale)
-    #     self.platform_force_arrow_transform.SetMatrix(matrix.flatten().tolist())
-
-    #     matrix = utils.get_ellipsoid_transform(p + force_mean * self.force_scale, force_cov, scale=self.force_scale)
-    #     self.platform_force_ellipsoid_transform.SetMatrix(matrix.flatten().tolist())
-
-    #     matrix = utils.get_ellipsoid_transform(p + moment_mean * self.moment_scale, moment_cov, scale=self.force_scale)
-    #     self.platform_moment_ellipsoid_transform.SetMatrix(matrix.flatten().tolist())
 
     def update(self, solution):
         self.rod_manager.update(solution.marginals.rod, self.plotter)
+        self.update_tendons(solution)
+        self.update_discs(solution)
 
         self.plotter.update(solution)
 
 
-# def get_tendon_disc_meshes(solution):
-#     num_discs = solution.tendon_disc_config.num_discs
-#     num_tendons = solution.tendon_disc_config.num_tendons
-#     routing_radius = solution.tendon_disc_config.routing_radius
-#     local_holes = solution.tendon_disc_config.local_holes # num_discs, num_tendons, 3
-#     disc_pose_idx = solution.tendon_disc_config.disc_pose_idx
-
-#     disc_radius = 1.3 * routing_radius
-#     disc_width = 0.3 * routing_radius
-#     tendon_radius = 0.03 * routing_radius
-
-#     discs = []
-
-#     for i in disc_pose_idx:
-#         T = solution.backbone_pose_mean[i]
-#         cylinder = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
-#         cylinder.points = (T[:3,:3] @ cylinder.points.T + T[:3,3].reshape((3,1))).T
-#         discs.append(cylinder)
-
-#     tendons = []
-#     for jj in range(num_tendons):
-#         # collect all points along this tendon
-#         points = []
-#         for ii in range(num_discs):
-#             T = solution.backbone_pose_mean[disc_pose_idx[ii]]
-#             p_world = T[:3, :3] @ local_holes[ii][jj] + T[:3, 3]
-#             points.append(p_world)
-        
-#         line = pv.lines_from_points(points)
-#         tendon = line.tube(radius=tendon_radius)
-#         tendons.append(tendon)
-
-#     angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
-#     x = routing_radius * np.cos(angles)
-#     y = routing_radius * np.sin(angles)
-#     z = np.zeros_like(x)
-#     hole_locations = np.array((x, y, z)).T
-
-#     holes = []
-#     hole_radius = 2 * tendon_radius
-#     for idx in disc_pose_idx:
-#         T = solution.backbone_pose_mean[idx]
-#         for loc in hole_locations:
-#             loc_world = T[:3,:3] @ loc + T[:3,3]
-#             if idx == 0: loc_world[1] += hole_radius 
-#             hole = pv.Sphere(radius=hole_radius, center=loc_world)
-#             holes.append(hole)
-    
-#     return tendons, discs, holes
 
 
 # def get_largest_norm(f_samples, f_gt, f_mean):

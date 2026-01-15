@@ -31,6 +31,7 @@ struct TendonInput {
 
 struct TendonConfig {
     int num_discs;
+    int num_tendons = NUM_TENDONS;
     double routing_radius;
     std::vector<int> disc_pose_idx;
     std::vector<int> no_disc_pose_idx;

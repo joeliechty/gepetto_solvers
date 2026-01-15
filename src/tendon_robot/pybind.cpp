@@ -25,6 +25,15 @@ void bind_tendon_robot(py::module& m) {
         .def_readwrite("params", &TendonInput::params)
         .def_readwrite("routing_radius", &TendonInput::routing_radius);
 
+    py::class_<TendonConfig>(m, "TendonConfig")
+        .def(py::init<>())
+        .def_readwrite("num_discs", &TendonConfig::num_discs)
+        .def_readwrite("num_tendons", &TendonConfig::num_tendons)
+        .def_readwrite("routing_radius", &TendonConfig::routing_radius)
+        .def_readwrite("disc_pose_idx", &TendonConfig::disc_pose_idx)
+        .def_readwrite("no_disc_pose_idx", &TendonConfig::no_disc_pose_idx)
+        .def_readwrite("hole_locations", &TendonConfig::hole_locations);
+    
     py::class_<TendonRobotSolverConfig>(m, "TendonRobotSolverConfig")
         .def(py::init<>())
         .def_readwrite("rod_length", &TendonRobotSolverConfig::rod_length)
