@@ -22,7 +22,7 @@ class TendonRobotPlotter:
             plot_backbone_frames=plot_backbone_frames,
             backbone_radius=0.005,
             cartesian_frame_scale=0.01,
-            force_scale=0.1,
+            force_scale=0.05,
             moment_scale=0.2
         )
   
@@ -58,84 +58,30 @@ class TendonRobotPlotter:
             routing_radius = solution.marginals.tendon_config.routing_radius
             disc_radius = 1.3 * routing_radius
             disc_width = 0.3 * routing_radius
+            hole_radius = 0.1 * routing_radius
+            num_holes_per_disc = 8
 
             self.disc_transforms = []
 
             for i in range(num_discs):
-                T = solution.marginals.rod.pose_mean[disc_pose_idx[i]]
+                # Add disc mesh and transform to update later
                 mesh = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
                 actor = self.plotter.plotter.add_mesh(mesh, color='cornflowerblue', opacity=0.2, show_edges=True, line_width=3.0)
                 disc_transform = vtk.vtkTransform()
                 actor.SetUserTransform(disc_transform)
                 self.disc_transforms.append(disc_transform)
+
+                # Add holes to disc using same transform
+                for angle in np.linspace(0, 2 * np.pi, num_holes_per_disc, endpoint=False):
+                    hole_location = np.array([routing_radius * np.cos(angle), routing_radius * np.sin(angle), 0.0])
+                    mesh = pv.Sphere(radius=hole_radius, center=hole_location)
+                    actor = self.plotter.plotter.add_mesh(mesh, color='black', opacity=0.5, lighting=False)
+                    actor.SetUserTransform(disc_transform)
         
         # Update vtkTransforms for each actor
         for ii in range(num_discs):
             T = solution.marginals.rod.pose_mean[disc_pose_idx[ii]]
             self.disc_transforms[ii].SetMatrix(T.flatten().tolist())
-        
-
-#     discs = []
-
-#     for i in disc_pose_idx:
-#         T = solution.backbone_pose_mean[i]
-#         cylinder = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
-#         cylinder.points = (T[:3,:3] @ cylinder.points.T + T[:3,3].reshape((3,1))).T
-#         discs.append(cylinder)
-
-
-
-#     angles = np.linspace(0, 2 * np.pi, 8, endpoint=False)
-#     x = routing_radius * np.cos(angles)
-#     y = routing_radius * np.sin(angles)
-#     z = np.zeros_like(x)
-#     hole_locations = np.array((x, y, z)).T
-
-#     holes = []
-#     hole_radius = 2 * tendon_radius
-#     for idx in disc_pose_idx:
-#         T = solution.backbone_pose_mean[idx]
-#         for loc in hole_locations:
-#             loc_world = T[:3,:3] @ loc + T[:3,3]
-#             if idx == 0: loc_world[1] += hole_radius 
-#             hole = pv.Sphere(radius=hole_radius, center=loc_world)
-#             holes.append(hole)
-    
-#     return tendons, discs, holes
-
-    #     if plotter.frame == 0:
-    #         mesh = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
-    #         mesh.points = mesh.points + np.array([0, 0, self.platform_z_offset])
-    #         actor = plotter.plotter.add_mesh(mesh, color="silver", show_edges=True, line_width=2, opacity=0.3)
-    #         self.platform_transform = vtk.vtkTransform()
-    #         actor.SetUserTransform(self.platform_transform)
-
-    #         mesh = pv.Cylinder(direction=(0,0,1), radius=0.005, height=np.abs(self.platform_z_offset))
-    #         mesh.points = mesh.points + np.array([0, 0, self.platform_z_offset / 2])
-    #         actor = plotter.plotter.add_mesh(mesh, color="silver")
-    #         actor.SetUserTransform(self.platform_transform)
-
-    #         axes = utils.get_axes_frame(length=0.1)
-    #         for arrow, color in zip(axes, utils.frame_arrow_colors):
-    #             actor = plotter.plotter.add_mesh(arrow, color=color)
-    #             actor.SetUserTransform(self.platform_transform)
-            
-    #         mesh = pv.Sphere(radius=1)
-    #         actor = plotter.plotter.add_mesh(mesh, color="deepcadmiumred", lighting=False, opacity=0.2)
-    #         self.platform_ellipsoid_transform = vtk.vtkTransform()
-    #         actor.SetUserTransform(self.platform_ellipsoid_transform)
-
-    #     pose = solution.platform_pose_mean
-    #     self.platform_transform.SetMatrix(pose.flatten().tolist())
-        
-    #     p = pose[:3,3]
-    #     R = pose[:3,:3]
-    #     cov = solution.platform_pose_cov
-    #     cov = R @ (cov[3:, 3:] @ R.T)
-    #     T = utils.get_ellipsoid_transform(p, cov)
-    #     self.platform_ellipsoid_transform.SetMatrix(T.flatten().tolist())
-
-
 
     def update(self, solution):
         self.rod_manager.update(solution.marginals.rod, self.plotter)

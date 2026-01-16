@@ -11,15 +11,15 @@ from .config import get_base_config
 def main():
     config = get_base_config()
     solver = TendonRobotSolver(config)
-    plotter = TendonRobotPlotter('kinematics_sim', single_plot_mode=True)
+    plotter = TendonRobotPlotter('kinematics_sim', single_plot_mode=False)
 
-    tensions_mean = np.array([2.0, 0.0, 0.0, 0.0])
-    tensions_cov = (1e-2) ** 2 * np.eye(4)
+    tensions_cov = (1e-1) ** 2 * np.eye(4)
 
-    solution = solver.solve(tensions_mean, tensions_cov)
-    plotter.update(solution)
-    
-    
+    for i in range(100):
+        tensions_mean = np.array([0.1 * i, 0.0, 0.05 * i, 0.0])
+        solution = solver.solve(tensions_mean, tensions_cov)
+        plotter.update(solution)
+
     # tip_force = np.zeros(3)
     
     
