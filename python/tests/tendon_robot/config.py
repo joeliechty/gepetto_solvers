@@ -55,7 +55,7 @@ def get_base_config():
 
     config.rod_length = 0.25
     config.num_discs = 9
-    config.num_between_nodes = 5
+    config.num_between_nodes = 3
     config.K_inv = get_sim_K_inv()
     config.sigma_twist_rot = 1.0e-3
     config.sigma_twist_pos = 1.0e-4

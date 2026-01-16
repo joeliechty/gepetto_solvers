@@ -40,4 +40,6 @@ protected:
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
     gtsam::Marginals marginals_;
+
+    std::optional<double> dogleg_delta_;
 };

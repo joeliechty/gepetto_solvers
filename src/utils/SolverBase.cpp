@@ -1,6 +1,7 @@
 #include "SolverBase.h"
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 
 using namespace gtsam;
 
@@ -30,10 +31,16 @@ SolutionMetadata SolverBase::optimize() {
 
     DoglegParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
+    params.deltaInitial = dogleg_delta_.value_or(1.0);  // If we have a delta from previous solve, use it
     DoglegOptimizer optimizer(graph_, values_, params);
 
-    values_ = optimizer.optimize();
+    // LevenbergMarquardtParams params;
+    // params.setLinearSolverType("MULTIFRONTAL_QR");
+    // LevenbergMarquardtOptimizer optimizer(graph_, values_, params);
 
+    values_ = optimizer.optimize();
+    dogleg_delta_ = optimizer.getDelta(); // Save delta for next solve
+    
     auto stop_optimize = now();
     auto start_marginalize = stop_optimize;
 
