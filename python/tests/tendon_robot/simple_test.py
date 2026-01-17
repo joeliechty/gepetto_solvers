@@ -10,7 +10,7 @@ from .config import get_base_config
 
 def main():
     config = get_base_config()
-    solver = crest_sparse.TendonRobotSolver(config)
+    # solver = crest_sparse.TendonRobotSolver(config)
     plotter = TendonRobotPlotter(single_plot_mode=False)
 
     tensions_cov = (1e-2) ** 2 * np.eye(4)
@@ -19,9 +19,9 @@ def main():
         tensions_mean = np.zeros(4)
         tensions_mean[0] = 0.1 * i
 
-        tensions = crest_sparse.Vector4Gaussian(tensions_mean, tensions_cov)
-        solution = solver.solve(tensions, None)
-        plotter.update(solution)
+        # tensions = crest_sparse.Vector4Gaussian(tensions_mean, tensions_cov)
+        # solution = solver.solve(tensions, None)
+        # plotter.update(solution)
 
     # tip_force = np.zeros(3)
     
