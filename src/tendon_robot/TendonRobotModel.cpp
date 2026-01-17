@@ -193,7 +193,7 @@ NonlinearFactorGraph TendonRobotModel::build_graph(const Vector4Gaussian& tensio
             holes_prev, 
             holes, 
             holes_next, 
-            stress_noise_));
+            stress_noise_));  // TODO: this could actually be a friction error noise instead of being "small"
     }
 
     // Measurement prior on tensions

@@ -16,7 +16,9 @@ def main():
     tensions_cov = (1e-2) ** 2 * np.eye(4)
 
     for i in range(100):
-        tensions_mean = np.array([0.1 * i, 0.0, 0.05 * i, 0.0])
+        tensions_mean = np.zeros(4)
+        tensions_mean[0] = 0.1 * i
+
         tensions = crest_sparse.Vector4Gaussian(tensions_mean, tensions_cov)
         solution = solver.solve(tensions, None)
         plotter.update(solution)
