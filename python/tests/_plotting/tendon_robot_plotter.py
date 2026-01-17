@@ -21,7 +21,7 @@ class TendonRobotPlotter:
             plot_wrenches=plot_rod_wrenches,
             plot_base_wrench=plot_base_wrenches,
             plot_backbone_frames=plot_backbone_frames,
-            backbone_radius=0.005,
+            backbone_radius=0.001,
             cartesian_frame_scale=0.01,
             force_scale=0.05,
             moment_scale=0.2
@@ -59,19 +59,21 @@ class TendonRobotPlotter:
             routing_radius = solution.marginals.tendon_config.routing_radius
             disc_radius = 1.3 * routing_radius
             disc_width = 0.3 * routing_radius
-            hole_radius = 0.1 * routing_radius
+            hole_radius = 0.05 * routing_radius
             num_holes_per_disc = 8
 
             self.disc_transforms = []
 
             for i in range(num_discs):
-                # Add disc mesh and transform to update later
-                mesh = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
-                actor = self.plotter.plotter.add_mesh(mesh, color='cornflowerblue', opacity=0.2, show_edges=True, line_width=3.0)
                 disc_transform = vtk.vtkTransform()
-                actor.SetUserTransform(disc_transform)
                 self.disc_transforms.append(disc_transform)
 
+                # Exclude base "disc"
+                if i > 0:
+                    mesh = pv.Cylinder(direction=(0,0,1), radius=disc_radius, height=disc_width, resolution=8)
+                    actor = self.plotter.plotter.add_mesh(mesh, color='cornflowerblue', opacity=0.2, show_edges=True, line_width=3.0)
+                    actor.SetUserTransform(disc_transform)
+                
                 # Add holes to disc using same transform
                 for angle in np.linspace(0, 2 * np.pi, num_holes_per_disc, endpoint=False):
                     hole_location = np.array([routing_radius * np.cos(angle), routing_radius * np.sin(angle), 0.0])

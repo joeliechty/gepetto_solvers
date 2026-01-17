@@ -36,7 +36,7 @@ class CosseratRodMeshManager:
     def get_end_plate(self):
         thick = self.base_plate_size / 10.0
         plate = pv.Cube(
-            center=(0, -thick / 2, 0), 
+            center=(0, 0, -thick / 2.0), 
             x_length=self.base_plate_size, 
             y_length=self.base_plate_size, 
             z_length=thick
@@ -49,7 +49,7 @@ class CosseratRodMeshManager:
             return
         
         if plotter.frame == 0:
-            actor = plotter.plotter.add_mesh(self.get_end_plate(), color="silver", show_edges=True, line_width=2, opacity=0.7)
+            actor = plotter.plotter.add_mesh(self.get_end_plate(), color="silver", show_edges=True, line_width=2)
             self.base_plate_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.base_plate_transform)
         
@@ -61,7 +61,7 @@ class CosseratRodMeshManager:
             return
         
         if plotter.frame == 0:
-            actor = plotter.plotter.add_mesh(self.get_end_plate(), color="silver", show_edges=True, line_width=2, opacity=0.7)
+            actor = plotter.plotter.add_mesh(self.get_end_plate(), color="silver", show_edges=True, line_width=2)
             self.tip_plate_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.tip_plate_transform)
         
