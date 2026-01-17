@@ -3,6 +3,7 @@
 #include <gtsam/base/Vector.h>
 
 #include "cosserat_rod/CosseratRodModel.h"
+#include "utils/Gaussians.h"
 #include "utils/SolverBase.h"
 
 
@@ -23,16 +24,13 @@ struct CosseratRodSolverConfig {
 };
 
 
-
 class CosseratRodSolver : public SolverBase {
 public:
     CosseratRodSolver(const CosseratRodSolverConfig& config);
 
     Solution<CosseratRodMarginals> solve(
-        const std::optional<gtsam::Vector6>& tip_wrench_mean, 
-        const std::optional<gtsam::Matrix6>& tip_wrench_cov,
-        const std::optional<gtsam::Matrix4>& tip_pose_mean,
-        const std::optional<gtsam::Matrix6>& tip_pose_cov,
+        const std::optional<Vector6Gaussian>& tip_wrench,
+        const std::optional<Pose3Gaussian>& tip_pose,
         const std::optional<gtsam::Vector6>& nominal_strain);
 
 private:
@@ -41,11 +39,9 @@ private:
     void extract_solution() override;
 
     void get_initial_values() override;
-
-    std::optional<gtsam::Vector6> tip_wrench_mean_; 
-    std::optional<gtsam::Matrix6> tip_wrench_cov_;
-    std::optional<gtsam::Matrix4> tip_pose_mean_;
-    std::optional<gtsam::Matrix6> tip_pose_cov_;
+    
+    std::optional<Vector6Gaussian> tip_wrench_;
+    std::optional<Pose3Gaussian> tip_pose_;
     std::optional<gtsam::Vector6> nominal_strain_;
 
     double rod_length_;

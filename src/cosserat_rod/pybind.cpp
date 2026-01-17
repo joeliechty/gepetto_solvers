@@ -9,24 +9,15 @@ namespace py = pybind11;
 
 
 void bind_cosserat_rod(py::module& m) {
-    py::class_<SolutionMetadata>(m, "SolutionMetadata")
+    py::class_<CosseratRodState>(m, "CosseratRodState")
         .def(py::init<>())
-        .def_readwrite("total_time_ms", &SolutionMetadata::total_time_ms)
-        .def_readwrite("build_time_ms", &SolutionMetadata::build_time_ms)
-        .def_readwrite("optimize_time_ms", &SolutionMetadata::optimize_time_ms)
-        .def_readwrite("marginalize_time_ms", &SolutionMetadata::marginalize_time_ms)
-        .def_readwrite("extract_time_ms", &SolutionMetadata::extract_time_ms)
-        .def_readwrite("iterations", &SolutionMetadata::iterations)
-        .def_readwrite("error", &SolutionMetadata::error);
-
+        .def_readwrite("pose", &CosseratRodState::pose)
+        .def_readwrite("stress", &CosseratRodState::stress)
+        .def_readwrite("wrench", &CosseratRodState::wrench);
+    
     py::class_<CosseratRodMarginals>(m, "CosseratRodMarginals")
         .def(py::init<>())
-        .def_readwrite("pose_mean", &CosseratRodMarginals::pose_mean)
-        .def_readwrite("pose_cov", &CosseratRodMarginals::pose_cov)
-        .def_readwrite("stress_mean", &CosseratRodMarginals::stress_mean)
-        .def_readwrite("stress_cov", &CosseratRodMarginals::stress_cov)
-        .def_readwrite("wrench_mean", &CosseratRodMarginals::wrench_mean)
-        .def_readwrite("wrench_cov", &CosseratRodMarginals::wrench_cov);
+        .def_readwrite("states", &CosseratRodMarginals::states);
     
     py::class_<Solution<CosseratRodMarginals>>(m, "CosseratRodSolution")
         .def(py::init<>())
@@ -48,10 +39,8 @@ void bind_cosserat_rod(py::module& m) {
     py::class_<CosseratRodSolver>(m, "CosseratRodSolver")
         .def(py::init<const CosseratRodSolverConfig&>())
         .def("solve", &CosseratRodSolver::solve,
-            py::arg("tip_force_mean"),
-            py::arg("tip_force_cov"),
-            py::arg("tip_pos_mean"),
-            py::arg("tip_pos_cov"),
+            py::arg("tip_force"),
+            py::arg("tip_pose"),
             py::arg("nominal_strain"),
             py::call_guard<py::gil_scoped_release>());
 }

@@ -25,9 +25,9 @@ class CosseratShellPlotter:
     def update_frames(self, solution, plotter):
         if plotter.frame == 0:
             self.frame_transforms = []
-            for pose_col in solution.pose_mean:
+            for states_col in solution.states:
                 transforms_col = []
-                for pose in pose_col:
+                for state_col in states_col:
                     axes = utils.get_axes_frame(length=self.cartesian_frame_scale)
                     transform = vtk.vtkTransform()
                     for arrow, color in zip(axes, utils.frame_arrow_colors):
@@ -36,14 +36,14 @@ class CosseratShellPlotter:
                     transforms_col.append(transform)
                 self.frame_transforms.append(transforms_col)
 
-        for transform_col, pose_col in zip(self.frame_transforms, solution.pose_mean):
-            for transform, pose in zip(transform_col, pose_col):
-                transform.SetMatrix(pose.flatten().tolist())
+        for transform_col, state_col in zip(self.frame_transforms, solution.states):
+            for transform, state in zip(transform_col, state_col):
+                transform.SetMatrix(state.pose.mean.flatten().tolist())
     
     def update_mesh(self, solution, plotter):
         points = []
-        for pose_col in solution.pose_mean:
-            points_col = [pose[:3,3] for pose in pose_col]
+        for state_col in solution.states:
+            points_col = [state.pose.mean[:3,3] for state in state_col]
             points.append(points_col)
 
         pts = np.array(points).transpose(1, 0, 2)
@@ -118,14 +118,14 @@ class CosseratShellPlotter:
         plt.close()
 
     def update_tip_plate(self, solution):
-        self.tip_plate_transform.SetMatrix(solution.pose_mean[0][-1].flatten().tolist())
+        self.tip_plate_transform.SetMatrix(solution.states[0][-1].pose.mean.flatten().tolist())
 
     def update_ellipsoids(self, solution, plotter):
         if plotter.frame == 0:
             self.ellipsoid_transforms = []
-            for _ in range(len(solution.pose_mean)):
+            for _ in range(len(solution.states)):
                 transforms_col = []
-                for _ in range(len(solution.pose_mean[0])):
+                for _ in range(len(solution.states[0])):
                     transform = vtk.vtkTransform()
                     ellipsoid = pv.Sphere(radius=1)
                     actor = plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
@@ -133,8 +133,10 @@ class CosseratShellPlotter:
                     transforms_col.append(transform)
                 self.ellipsoid_transforms.append(transforms_col)
 
-        for transform_col, pose_col, cov_col in zip(self.ellipsoid_transforms, solution.pose_mean, solution.pose_cov):
-            for transform, pose, cov in zip (transform_col, pose_col, cov_col):
+        for transform_col, state_col in zip(self.ellipsoid_transforms, solution.states):
+            for transform, state in zip(transform_col, state_col):
+                pose = state.pose.mean
+                cov = state.pose.cov
                 R = pose[:3, :3]
                 p = pose[:3, 3]
                 cov = R @ (cov[3:, 3:] @ R.T)  # World frame

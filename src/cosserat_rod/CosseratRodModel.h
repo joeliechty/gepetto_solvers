@@ -5,17 +5,21 @@
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/inference/Symbol.h>
-    
+
+#include "utils/Gaussians.h"
+
+
+struct CosseratRodState {
+    Pose3Gaussian pose;
+    Vector6Gaussian stress;
+    Vector6Gaussian wrench;
+};
+
 
 struct CosseratRodMarginals {
-    std::vector<gtsam::Matrix4> pose_mean;
-    std::vector<gtsam::Matrix6> pose_cov;
+    std::vector<CosseratRodState> states;
 
-    std::vector<gtsam::Vector6> stress_mean;
-    std::vector<gtsam::Matrix6> stress_cov;
-
-    std::vector<gtsam::Vector6> wrench_mean;
-    std::vector<gtsam::Matrix6> wrench_cov;
+    // We could add other things here later
 };
 
 

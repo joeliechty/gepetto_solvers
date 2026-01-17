@@ -3,6 +3,7 @@
 #include <gtsam/base/Matrix.h>
 
 #include "parallel_robot/ParallelRobotModel.h"
+#include "utils/Gaussians.h"
 #include "utils/SolverBase.h"
 
 
@@ -32,8 +33,7 @@ public:
     Solution<ParallelRobotMarginals> solve(
         const std::array<double, NUM_RODS>& rod_lengths,
         double sigma_rod_lengths,
-        const gtsam::Vector6& wrench_mean,
-        const gtsam::Matrix6& wrench_cov);
+        const Vector6Gaussian& wrench);
 
 private:
     void build_graph() override;
@@ -49,8 +49,7 @@ private:
 
     std::array<double, NUM_RODS> rod_lengths_;
     double sigma_rod_lengths_;
-    gtsam::Vector6 wrench_mean_;
-    gtsam::Matrix6 wrench_cov_;
+    Vector6Gaussian wrench_;
 
     ParallelRobotMarginals extracted_;
 };

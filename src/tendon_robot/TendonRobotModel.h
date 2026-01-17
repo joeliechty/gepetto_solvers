@@ -5,6 +5,7 @@
 #include <gtsam/base/Matrix.h>
 
 #include "cosserat_rod/CosseratRodModel.h"
+#include "utils/Gaussians.h"
 
 
 constexpr int NUM_TENDONS = 4;
@@ -50,11 +51,8 @@ struct TendonRobotMarginals {
     TendonRobotSamples samples;
     TendonConfig tendon_config;
 
-    std::vector<gtsam::Vector6> external_wrench_mean;
-    std::vector<gtsam::Matrix6> external_wrench_cov;
-
-    Eigen::Vector<double, NUM_TENDONS> tensions_mean;
-    Eigen::Matrix<double, NUM_TENDONS, NUM_TENDONS> tensions_cov;
+    std::vector<Vector6Gaussian> external_wrench;
+    Vector4Gaussian tensions;
 
     Eigen::Matrix<double, 6, NUM_TENDONS> J_pose_tensions;
 };
@@ -75,9 +73,7 @@ public:
         
     gtsam::Values get_initial_values() const;
 
-    gtsam::NonlinearFactorGraph build_graph(
-        const gtsam::Vector4& tensions_mean, 
-        const gtsam::Matrix4& tensions_cov) const;
+    gtsam::NonlinearFactorGraph build_graph(const Vector4Gaussian& tensions) const;
 
     gtsam::Key get_external_wrench_key(int node_idx) const;
     

@@ -49,7 +49,7 @@ def get_wrench_prior(t):
     wrench_cov = 1e-6 * np.eye(6)
     wrench_cov[3:,3:] = 1e-1 * np.eye(3)
 
-    return wrench_mean, wrench_cov
+    return crest_sparse.Vector6Gaussian(wrench_mean, wrench_cov)
 
 
 def get_goal_pose(t):
@@ -111,13 +111,13 @@ def main():
     for step in range(num_steps + 1):
         t = step * dt
 
-        wrench_mean, wrench_cov = get_wrench_prior(t)
-        solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench_mean, wrench_cov)
+        wrench = get_wrench_prior(t)
+        solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
 
         J = solution.marginals.rod_lengths_jacobian
 
-        p = solution.marginals.platform_pose_mean[:3, 3]
-        R = solution.marginals.platform_pose_mean[:3,:3]
+        p = solution.marginals.platform_pose.mean[:3, 3]
+        R = solution.marginals.platform_pose.mean[:3,:3]
 
         p_goal, R_goal = get_goal_pose(t)
 

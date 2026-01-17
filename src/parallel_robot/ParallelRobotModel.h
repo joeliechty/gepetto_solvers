@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cosserat_rod/CosseratRodModel.h"
+#include "utils/Gaussians.h"
 #include <gtsam/linear/NoiseModel.h>
 
 
@@ -10,11 +11,8 @@ constexpr int NUM_RODS = 6;
 struct ParallelRobotMarginals {
     std::array<CosseratRodMarginals, NUM_RODS> rods;
 
-    gtsam::Matrix4 platform_pose_mean;
-    gtsam::Matrix6 platform_pose_cov;
-
-    gtsam::Vector6 platform_wrench_mean;
-    gtsam::Matrix6 platform_wrench_cov;
+    Pose3Gaussian platform_pose;
+    Vector6Gaussian platform_wrench;
 
     gtsam::Matrix6 rod_lengths_jacobian;
 };
@@ -35,8 +33,7 @@ public:
     gtsam::NonlinearFactorGraph build_graph(
         const std::array<double, NUM_RODS>& rod_lengths,
         double sigma_rod_lengths,
-        const gtsam::Vector6& wrench_mean,
-        const gtsam::Matrix6& wrench_cov);
+        const Vector6Gaussian& wrench);
 
     gtsam::Values get_initial_values() const;
 

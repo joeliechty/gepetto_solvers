@@ -63,8 +63,8 @@ def main():
 
         displacement_cov = (1e-2) ** 2 * np.eye(6)
         displacement_cov[1,1] = (0.15) ** 2
-        
-        solution = solver.solve(displacement_mean, displacement_cov)
+
+        solution = solver.solve(crest_sparse.Pose3Gaussian(displacement_mean, displacement_cov))
         plotter.update(solution)
 
         progress = 100.0 * step / num_steps

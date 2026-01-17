@@ -8,9 +8,10 @@ from .cosserat_rod_plotter import CosseratRodMeshManager
 class TendonRobotPlotter:
     def __init__(self,
                  plot_rod_wrenches=False,
+                 plot_external_wrenches=True,
                  plot_base_wrenches=False,
                  plot_backbone_frames=False,
-                 plot_backbone_ellipsoids=False,
+                 plot_backbone_ellipsoids=True,
                  **kwargs):
 
         self.plotter = utils.PlotterBase(**kwargs)
@@ -44,7 +45,7 @@ class TendonRobotPlotter:
             for ii in range(num_discs):
                 disc_pose_idx = solution.marginals.tendon_config.disc_pose_idx[ii]
                 hole = solution.marginals.tendon_config.hole_locations[ii][jj]
-                T = solution.marginals.rod.pose_mean[disc_pose_idx]
+                T = solution.marginals.rod.states[disc_pose_idx].pose.mean
                 p_world = T[:3, :3] @ hole + T[:3, 3]
                 points.append(p_world)
             
@@ -80,7 +81,7 @@ class TendonRobotPlotter:
         
         # Update vtkTransforms for each actor
         for ii in range(num_discs):
-            T = solution.marginals.rod.pose_mean[disc_pose_idx[ii]]
+            T = solution.marginals.rod.states[disc_pose_idx[ii]].pose.mean
             self.disc_transforms[ii].SetMatrix(T.flatten().tolist())
 
     def update(self, solution):

@@ -11,7 +11,7 @@ using namespace gtsam;
 
 
 ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config) {
-    SharedDiagonal twist_cov = get_noise_model_rot_pos(
+    SharedDiagonal twist_noise = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos); 
     
     small_wrench_noise_ = get_noise_model_rot_pos(
@@ -20,7 +20,7 @@ ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config
     robot_ = std::make_unique<ParallelRobot>(
         config.nodes_per_rod, 
         config.K_inv,
-        twist_cov,
+        twist_noise,
         small_wrench_noise_,
         config.base_end_poses,
         config.tip_end_poses,
@@ -37,7 +37,7 @@ void ParallelRobotSolver::get_initial_values() {
 
 
 void ParallelRobotSolver::build_graph() {
-    graph_ = robot_->build_graph(rod_lengths_, sigma_rod_lengths_, wrench_mean_, wrench_cov_);
+    graph_ = robot_->build_graph(rod_lengths_, sigma_rod_lengths_, wrench_);
 }
 
 
@@ -50,13 +50,11 @@ void ParallelRobotSolver::extract_solution() {
 Solution<ParallelRobotMarginals> ParallelRobotSolver::solve(
     const std::array<double, NUM_RODS>& rod_lengths, 
     double sigma_rod_lengths,
-    const Vector6& wrench_mean,
-    const Matrix6& wrench_cov) 
+    const Vector6Gaussian& wrench) 
 {
     rod_lengths_ = rod_lengths;
     sigma_rod_lengths_ = sigma_rod_lengths;
-    wrench_mean_ = wrench_mean;
-    wrench_cov_ = wrench_cov;
+    wrench_ = wrench;
     
     Solution<ParallelRobotMarginals> solution;
     solution.meta = optimize();

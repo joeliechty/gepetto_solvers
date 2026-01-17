@@ -22,7 +22,7 @@ def get_tip_wrench_prior(t):
     sigma = 1e-3 + sigma_amplitude - sigma_amplitude * np.cos(0.1 * t)
     tip_wrench_cov[3:,3:] = sigma ** 2 * np.eye(3)
     
-    return tip_wrench_mean, tip_wrench_cov, None, None
+    return crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov), None
 
 
 def main():

@@ -142,22 +142,17 @@ CosseratRodMarginals CosseratRodModel::get_marginals(
 {
     CosseratRodMarginals solution;
 
-    solution.pose_mean.resize(num_nodes_);
-    solution.pose_cov.resize(num_nodes_);
-    solution.stress_mean.resize(num_nodes_);
-    solution.stress_cov.resize(num_nodes_);
-    solution.wrench_mean.resize(num_nodes_);
-    solution.wrench_cov.resize(num_nodes_);
+    solution.states.resize(num_nodes_);
 
     for (int i = 0; i < num_nodes_; ++i) {
-        solution.pose_mean[i] = values.at<Pose3>(pose_keys_[i]).matrix();
-        solution.pose_cov[i] = marginals.marginalCovariance(pose_keys_[i]);
+        solution.states[i].pose.mean = values.at<Pose3>(pose_keys_[i]).matrix();
+        solution.states[i].pose.cov = marginals.marginalCovariance(pose_keys_[i]);
 
-        solution.stress_mean[i] = values.at<Vector6>(stress_keys_[i]);
-        solution.stress_cov[i] = marginals.marginalCovariance(stress_keys_[i]);
-
-        solution.wrench_mean[i] = values.at<Vector6>(wrench_keys_[i]);
-        solution.wrench_cov[i] = marginals.marginalCovariance(wrench_keys_[i]);
+        solution.states[i].stress.mean = values.at<Vector6>(stress_keys_[i]);
+        solution.states[i].stress.cov = marginals.marginalCovariance(stress_keys_[i]);
+        
+        solution.states[i].wrench.mean = values.at<Vector6>(wrench_keys_[i]);
+        solution.states[i].wrench.cov = marginals.marginalCovariance(wrench_keys_[i]);
     }
     
     return solution;

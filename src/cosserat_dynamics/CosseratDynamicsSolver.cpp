@@ -26,10 +26,13 @@ CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& con
 {
     auto static_solver = CosseratRodSolver(config.rod_config);
 
-    static_solution_ = static_solver.solve(
+    std::optional<Vector6Gaussian> tip_wrench = Vector6Gaussian{
         config.initial_tip_wrench,
-        1e-6 * Matrix6::Identity(),
-        std::nullopt,
+        1e-6 * Matrix6::Identity()
+    };
+
+    static_solution_ = static_solver.solve(
+        tip_wrench,
         std::nullopt,
         std::nullopt);
 
@@ -60,9 +63,10 @@ void CosseratDynamicsSolver::get_initial_values() {
         values_.insert(rod_t->get_initial_values());
 
         for (int i = 0; i < num_nodes_; i++) {
-            values_.update(rod_t->get_pose_key(i), Pose3(static_solution_.marginals.pose_mean[i]));
-            values_.update(rod_t->get_stress_key(i), static_solution_.marginals.stress_mean[i]);
-            values_.update(rod_t->get_wrench_key(i), static_solution_.marginals.wrench_mean[i]);
+            auto& state = static_solution_.marginals.states[i];
+            values_.update(rod_t->get_pose_key(i), Pose3(state.pose.mean));
+            values_.update(rod_t->get_stress_key(i), state.stress.mean);
+            values_.update(rod_t->get_wrench_key(i), state.wrench.mean);
         }
     }
 }
@@ -88,7 +92,7 @@ void CosseratDynamicsSolver::build_graph() {
         for (int i = 1; i < num_nodes_; i++){
             graph_.add(PriorFactor<Pose3>(
                 rods_t_[t]->get_pose_key(i),
-                Pose3(static_solution_.marginals.pose_mean[i]), 
+                Pose3(static_solution_.marginals.states[i].pose.mean), 
                 base_pose_noise_));
         }
     }

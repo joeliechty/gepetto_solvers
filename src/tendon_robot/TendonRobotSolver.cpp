@@ -1,5 +1,6 @@
 #include "TendonRobotSolver.h"
 
+#include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
 
 using namespace gtsam;
@@ -33,12 +34,12 @@ TendonRobotSolver::TendonRobotSolver(const TendonRobotSolverConfig& config) {
 
 
 Solution<TendonRobotMarginals> TendonRobotSolver::solve(
-    const gtsam::Vector4& tensions_mean,
-    const gtsam::Matrix4& tensions_cov) 
+    const Vector4Gaussian& tensions,
+    const std::optional<Vector3Gaussian>& tip_force)
 {
-    tensions_mean_ = tensions_mean;
-    tensions_cov_ = tensions_cov;
-    
+    tensions_ = tensions;
+    tip_force_ = tip_force;
+
     Solution<TendonRobotMarginals> solution;
     solution.meta = optimize();
     solution.marginals = extracted_;
@@ -48,10 +49,8 @@ Solution<TendonRobotMarginals> TendonRobotSolver::solve(
 
 
 void TendonRobotSolver::build_graph() {
-    graph_ = robot_->build_graph(tensions_mean_, tensions_cov_);
-
-    // Save graph as pdf for debgging
-    graph_.saveGraph("tendon_robot_graph.dot", values_);
+    // TODO add tip force constraint if provided
+    graph_ = robot_->build_graph(tensions_);
 }
 
 

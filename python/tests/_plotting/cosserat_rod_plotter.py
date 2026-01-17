@@ -53,7 +53,7 @@ class CosseratRodMeshManager:
             self.base_plate_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.base_plate_transform)
         
-        pose = solution.pose_mean[0]
+        pose = solution.states[0].pose.mean
         self.base_plate_transform.SetMatrix(pose.flatten().tolist())
     
     def update_tip_plate(self, solution, plotter):
@@ -65,11 +65,11 @@ class CosseratRodMeshManager:
             self.tip_plate_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.tip_plate_transform)
         
-        pose = solution.pose_mean[-1]
+        pose = solution.states[-1].pose.mean
         self.tip_plate_transform.SetMatrix(pose.flatten().tolist())
     
     def update_rod_tube(self, solution, plotter):
-        tube = utils.get_tube_from_poses(solution.pose_mean, radius=self.backbone_radius)
+        tube = utils.get_tube_from_poses([state.pose.mean for state in solution.states], radius=self.backbone_radius)
         
         if plotter.frame == 0:
             self.backbone_tube_mesh = tube
@@ -85,14 +85,17 @@ class CosseratRodMeshManager:
 
         if plotter.frame == 0:
             self.backbone_ellipsoid_transforms = []
-            for _ in range(len(solution.pose_mean)):
+            for _ in range(len(solution.states)):
                 transform = vtk.vtkTransform()
                 ellipsoid = pv.Sphere(radius=1)
                 actor = plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
                 actor.SetUserTransform(transform)
                 self.backbone_ellipsoid_transforms.append(transform)
 
-        for transform, pose, cov in zip(self.backbone_ellipsoid_transforms, solution.pose_mean, solution.pose_cov):
+        for transform, state in zip(self.backbone_ellipsoid_transforms, solution.states):
+            pose = state.pose.mean
+            cov = state.pose.cov
+
             R = pose[:3, :3]
             p = pose[:3, 3]
             cov = R @ (cov[3:, 3:] @ R.T)  # World frame
@@ -107,7 +110,7 @@ class CosseratRodMeshManager:
 
         if plotter.frame == 0:
             self.backbone_frame_transforms = []
-            for _ in solution.pose_mean:
+            for _ in solution.states:
                 axes = utils.get_axes_frame(length=self.cartesian_frame_scale)
                 transform = vtk.vtkTransform()
                 for arrow, color in zip(axes, utils.frame_arrow_colors):
@@ -115,9 +118,9 @@ class CosseratRodMeshManager:
                     actor.SetUserTransform(transform)
                 self.backbone_frame_transforms.append(transform)
 
-        for transform, pose in zip(self.backbone_frame_transforms, solution.pose_mean):
-            transform.SetMatrix(pose.flatten().tolist())
-
+        for transform, state in zip(self.backbone_frame_transforms, solution.states):
+            transform.SetMatrix(state.pose.mean.flatten().tolist())
+            
     def update_wrenches(self, solution, plotter):
         if not self.plot_wrenches:
             return 
@@ -130,7 +133,7 @@ class CosseratRodMeshManager:
 
             shaft_scale=0.05
             
-            for _ in range(len(solution.pose_cov)):
+            for _ in range(len(solution.states)):
                 mesh = utils.get_arrow(shaft_scale=shaft_scale)
                 transform = vtk.vtkTransform()
                 actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
@@ -156,9 +159,9 @@ class CosseratRodMeshManager:
                 self.force_ellipsoid_transforms.append(transform)
 
         # Update vtkTransforms for each actor
-        poses = solution.pose_mean
-        wrenches = solution.wrench_mean
-        covs = solution.wrench_cov
+        poses = [state.pose.mean for state in solution.states]
+        wrenches = [state.wrench.mean for state in solution.states]
+        covs = [state.wrench.cov for state in solution.states]
 
         for ii in range(len(poses)):
             p, w, cov = poses[ii][:3, 3], wrenches[ii], covs[ii]

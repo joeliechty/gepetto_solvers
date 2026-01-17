@@ -19,7 +19,7 @@ def get_tip_force_prior(t):
     sigma = 1e-3 + sigma_amplitude - sigma_amplitude * np.cos(0.1 * t)
     tip_wrench_cov[3:,3:] = sigma ** 2 * np.eye(3)
 
-    return tip_wrench_mean, tip_wrench_cov, None, None
+    return crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov), None
 
 
 def get_tip_wrench_prior(t):
@@ -35,7 +35,7 @@ def get_tip_wrench_prior(t):
     sigma = 1e-3 + sigma_amplitude - sigma_amplitude * np.cos(0.1 * t)
     tip_wrench_cov[:3,:3] = sigma ** 2 * np.eye(3)
 
-    return tip_wrench_mean, tip_wrench_cov, None, None
+    return crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov), None
 
 
 def get_tip_pose_prior(t):
@@ -56,7 +56,7 @@ def get_tip_pose_prior(t):
 
     tip_pose_cov = 1e-6 * np.eye(6)
 
-    return None, None, tip_pose_mean, tip_pose_cov
+    return None, crest_sparse.Pose3Gaussian(tip_pose_mean, tip_pose_cov)
 
 
 def main():

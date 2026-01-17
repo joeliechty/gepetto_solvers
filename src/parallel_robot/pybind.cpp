@@ -25,10 +25,8 @@ void bind_parallel_robot(py::module& m) {
     py::class_<ParallelRobotMarginals>(m, "ParallelRobotMarginals")
         .def(py::init<>())
         .def_readwrite("rods", &ParallelRobotMarginals::rods)
-        .def_readwrite("platform_pose_mean", &ParallelRobotMarginals::platform_pose_mean)
-        .def_readwrite("platform_pose_cov", &ParallelRobotMarginals::platform_pose_cov)
-        .def_readwrite("platform_wrench_mean", &ParallelRobotMarginals::platform_wrench_mean)
-        .def_readwrite("platform_wrench_cov", &ParallelRobotMarginals::platform_wrench_cov)
+        .def_readwrite("platform_pose", &ParallelRobotMarginals::platform_pose)
+        .def_readwrite("platform_wrench", &ParallelRobotMarginals::platform_wrench)
         .def_readwrite("rod_lengths_jacobian", &ParallelRobotMarginals::rod_lengths_jacobian);
         
     py::class_<Solution<ParallelRobotMarginals>>(m, "ParallelRobotSolution")
@@ -40,7 +38,6 @@ void bind_parallel_robot(py::module& m) {
         .def("solve", &ParallelRobotSolver::solve, 
             py::arg("rod_lengths"),
             py::arg("sigma_rod_lengths"),
-            py::arg("wrench_mean"),
-            py::arg("wrench_cov"),
+            py::arg("wrench"),
             py::call_guard<py::gil_scoped_release>());
 }

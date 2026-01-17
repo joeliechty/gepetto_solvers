@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include "TendonDiscWrenchFactor.h"
+#include "utils/Gaussians.h"
 
 using namespace gtsam;
 
@@ -148,9 +149,7 @@ Values TendonRobotModel::get_initial_values() const {
 }
 
 
-NonlinearFactorGraph TendonRobotModel::build_graph(
-    const Vector4& tensions_mean,
-    const Matrix4& tensions_cov) const 
+NonlinearFactorGraph TendonRobotModel::build_graph(const Vector4Gaussian& tensions_) const 
 {
     // To fully constrain a Cosserat rod graph, all we need to do is add:
     //   1. Base pose prior constraint
@@ -200,8 +199,8 @@ NonlinearFactorGraph TendonRobotModel::build_graph(
     // Measurement prior on tensions
     graph.add(PriorFactor<Vector4>(
         get_tensions_key(), 
-        tensions_mean, 
-        noiseModel::Gaussian::Covariance(tensions_cov)));
+        tensions_.mean, 
+        noiseModel::Gaussian::Covariance(tensions_.cov)));
 
     // Now we need to constrain all disc wrenches AND all internal wrenches that are not at discs.
     // These are collected into a set of external wrenches.
@@ -247,8 +246,9 @@ TendonRobotMarginals TendonRobotModel::get_marginals(
     m.rod = rod_->get_marginals(values, marginals);
     // TODO samples, external wrenches
     m.tendon_config = tendon_config_;
-    m.tensions_mean = values.at<Vector4>(get_tensions_key());
-    m.tensions_cov = marginals.marginalCovariance(get_tensions_key());
+    
+    m.tensions.mean = values.at<Vector4>(get_tensions_key());
+    m.tensions.cov = marginals.marginalCovariance(get_tensions_key());
 
     get_J_pose_tensions(marginals, m);
 

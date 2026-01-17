@@ -53,10 +53,8 @@ void bind_tendon_robot(py::module& m) {
         .def_readwrite("rod", &TendonRobotMarginals::rod)
         .def_readwrite("samples", &TendonRobotMarginals::samples)
         .def_readwrite("tendon_config", &TendonRobotMarginals::tendon_config)
-        .def_readwrite("external_wrench_mean", &TendonRobotMarginals::external_wrench_mean)
-        .def_readwrite("external_wrench_cov", &TendonRobotMarginals::external_wrench_cov)
-        .def_readwrite("tensions_mean", &TendonRobotMarginals::tensions_mean)
-        .def_readwrite("tensions_cov", &TendonRobotMarginals::tensions_cov)
+        .def_readwrite("external_wrench", &TendonRobotMarginals::external_wrench)
+        .def_readwrite("tensions", &TendonRobotMarginals::tensions)
         .def_readwrite("J_pose_tensions", &TendonRobotMarginals::J_pose_tensions);
 
     py::class_<Solution<TendonRobotMarginals>>(m, "TendonRobotSolution")
@@ -67,8 +65,8 @@ void bind_tendon_robot(py::module& m) {
     py::class_<TendonRobotSolver>(m, "TendonRobotSolver")
         .def(py::init<const TendonRobotSolverConfig&>())
         .def("solve", &TendonRobotSolver::solve,
-             py::arg("tensions_mean"),
-             py::arg("tensions_cov"));
+             py::arg("tensions"),
+             py::arg("tip_force"));
 }
 
 // OLD

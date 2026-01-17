@@ -1,5 +1,6 @@
 #pragma once
 
+#include "utils/Gaussians.h"
 #include "utils/SolverBase.h"
 #include "TendonRobotModel.h"
 #include <gtsam/linear/NoiseModel.h>
@@ -27,8 +28,8 @@ public:
     TendonRobotSolver(const TendonRobotSolverConfig& config);
 
     Solution<TendonRobotMarginals> solve(
-        const gtsam::Vector4& tensions_mean,
-        const gtsam::Matrix4& tensions_cov);
+        const Vector4Gaussian& tensions,
+        const std::optional<Vector3Gaussian>& tip_force);
 
 private:
     void build_graph() override;
@@ -40,10 +41,10 @@ private:
     gtsam::SharedDiagonal small_wrench_noise_;
 
     std::unique_ptr<TendonRobotModel> robot_;
-
-    gtsam::Vector4 tensions_mean_;
-    gtsam::Matrix4 tensions_cov_;
     
+    Vector4Gaussian tensions_;
+    std::optional<Vector3Gaussian> tip_force_;
+
     TendonRobotMarginals extracted_;
 };
 

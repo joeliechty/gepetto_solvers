@@ -65,8 +65,7 @@ Values CosseratShellModel::get_initial_values() const {
 
 
 NonlinearFactorGraph CosseratShellModel::build_graph(
-    const Matrix4& displacement_mean,
-    const Matrix6& displacement_cov) const 
+    const Pose3Gaussian& displacement) const
 {
     NonlinearFactorGraph graph;
 
@@ -149,8 +148,8 @@ NonlinearFactorGraph CosseratShellModel::build_graph(
     
     graph.add(PriorFactor<Pose3>(
         pose_keys_[middle_top_idx][num_nodes_y_ - 1],
-        nominal_middle_top_pose.compose(Pose3(displacement_mean)),
-        noiseModel::Gaussian::Covariance(displacement_cov)));
+        nominal_middle_top_pose.compose(Pose3(displacement.mean)),
+        noiseModel::Gaussian::Covariance(displacement.cov)));
     
     for (int i = 0; i + 1 < num_nodes_x_; i++) {
         graph.add(BetweenFactor<Pose3>(
@@ -170,28 +169,22 @@ CosseratShellMarginals CosseratShellModel::get_marginals(
 {
     CosseratShellMarginals solution;
 
-    solution.pose_mean.resize(num_nodes_x_);
-    solution.pose_cov.resize(num_nodes_x_);
-    solution.stress_mean.resize(num_nodes_x_);
-    solution.stress_cov.resize(num_nodes_x_);
-
+    solution.states.resize(num_nodes_x_);
     for (int i = 0; i < num_nodes_x_; i++) {
-        solution.pose_mean[i].resize(num_nodes_y_);
-        solution.pose_cov[i].resize(num_nodes_y_);
-        solution.stress_mean[i].resize(num_nodes_y_);
-        solution.stress_cov[i].resize(num_nodes_y_);
+        solution.states[i].resize(num_nodes_y_);
     }
 
     for (int i = 0; i < num_nodes_x_; ++i) {
         for (int j = 0; j < num_nodes_y_; ++j) {
-            solution.pose_mean[i][j] = values.at<Pose3>(pose_keys_[i][j]).matrix();
-            solution.pose_cov[i][j] = marginals.marginalCovariance(pose_keys_[i][j]);
+            auto& state = solution.states[i][j];
+            state.pose.mean = values.at<Pose3>(pose_keys_[i][j]).matrix();
+            state.pose.cov = marginals.marginalCovariance(pose_keys_[i][j]);
 
-            solution.stress_mean[i][j][X] = values.at<Vector6>(stress_keys_[i][j][X]);
-            solution.stress_cov[i][j][X] = marginals.marginalCovariance(stress_keys_[i][j][X]);
+            state.stress[X].mean = values.at<Vector6>(stress_keys_[i][j][X]);
+            state.stress[X].cov = marginals.marginalCovariance(stress_keys_[i][j][X]);
 
-            solution.stress_mean[i][j][Y] = values.at<Vector6>(stress_keys_[i][j][Y]);
-            solution.stress_cov[i][j][Y] = marginals.marginalCovariance(stress_keys_[i][j][Y]);
+            state.stress[Y].mean = values.at<Vector6>(stress_keys_[i][j][Y]);
+            state.stress[Y].cov = marginals.marginalCovariance(stress_keys_[i][j][Y]);
         }
     }
     

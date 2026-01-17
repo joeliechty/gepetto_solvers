@@ -6,6 +6,8 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/inference/Symbol.h>
     
+#include "utils/Gaussians.h"
+
 
 enum StressDir {
     X, Y,
@@ -13,12 +15,15 @@ enum StressDir {
 };
 
 
-struct CosseratShellMarginals {
-    std::vector<std::vector<gtsam::Matrix4>> pose_mean;
-    std::vector<std::vector<gtsam::Matrix6>> pose_cov;
+struct CosseratShellState {
+    Pose3Gaussian pose;
+    std::array<Vector6Gaussian, NUM_DIR> stress;
+};
 
-    std::vector<std::vector<std::array<gtsam::Vector6, NUM_DIR>>> stress_mean;
-    std::vector<std::vector<std::array<gtsam::Matrix6, NUM_DIR>>> stress_cov;
+
+struct CosseratShellMarginals {
+    std::vector<std::vector<CosseratShellState>> states;
+    // Could add other things here later
 };
 
 
@@ -33,8 +38,7 @@ public:
         gtsam::SharedDiagonal stress_noise);
 
     gtsam::NonlinearFactorGraph build_graph(
-        const gtsam::Matrix4& displacement_mean,
-        const gtsam::Matrix6& displacement_cov) const;
+        const Pose3Gaussian& displacement) const;
 
     gtsam::Values get_initial_values() const;
 

@@ -1,6 +1,7 @@
 #include "CosseratShellSolver.h"
 
 #include "cosserat_shell/CosseratShellModel.h"
+#include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
 
 using namespace gtsam;
@@ -36,16 +37,14 @@ void CosseratShellSolver::extract_solution() {
 
 
 void CosseratShellSolver::build_graph() {
-    graph_ = shell_->build_graph(displacement_mean_, displacement_cov_);
+    graph_ = shell_->build_graph(displacement_);
 }
 
 
 Solution<CosseratShellMarginals> CosseratShellSolver::solve(
-    const Matrix4& displacement_mean,
-    const Matrix6& displacement_cov) 
+    const Pose3Gaussian& displacement) 
 {
-    displacement_mean_ = displacement_mean; 
-    displacement_cov_ = displacement_cov;
+    displacement_ = displacement;
 
     Solution<CosseratShellMarginals> solution;
     solution.meta = optimize();

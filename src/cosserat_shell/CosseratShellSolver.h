@@ -4,6 +4,7 @@
 
 #include "CosseratShellModel.h"
 #include "utils/SolverBase.h"
+#include "utils/Gaussians.h"
 
 
 struct CosseratShellSolverConfig {
@@ -26,8 +27,7 @@ public:
     CosseratShellSolver(const CosseratShellSolverConfig& config);
 
     Solution<CosseratShellMarginals> solve(
-        const gtsam::Matrix4& displacement_mean,
-        const gtsam::Matrix6& displacement_cov);
+        const Pose3Gaussian& displacement);
 
 private:
     void build_graph() override;
@@ -38,8 +38,6 @@ private:
 
     std::unique_ptr<CosseratShellModel> shell_;
 
-    gtsam::Matrix4 displacement_mean_;
-    gtsam::Matrix6 displacement_cov_;
-
+    Pose3Gaussian displacement_;
     CosseratShellMarginals extracted_;
 };

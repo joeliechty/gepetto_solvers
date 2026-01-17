@@ -66,12 +66,12 @@ class ParallelRobotPlotter:
             self.platform_ellipsoid_transform = vtk.vtkTransform()
             actor.SetUserTransform(self.platform_ellipsoid_transform)
 
-        pose = solution.platform_pose_mean
+        pose = solution.platform_pose.mean
         self.platform_transform.SetMatrix(pose.flatten().tolist())
         
         p = pose[:3,3]
         R = pose[:3,:3]
-        cov = solution.platform_pose_cov
+        cov = solution.platform_pose.cov
         cov = R @ (cov[3:, 3:] @ R.T)
         T = utils.get_ellipsoid_transform(p, cov)
         self.platform_ellipsoid_transform.SetMatrix(T.flatten().tolist())
@@ -99,9 +99,9 @@ class ParallelRobotPlotter:
             actor.SetUserTransform(self.platform_force_ellipsoid_transform)
 
         # Update vtkTransforms for each actor
-        p = solution.platform_pose_mean[:3,3]
-        wrench = solution.platform_wrench_mean
-        cov = solution.platform_wrench_cov
+        p = solution.platform_pose.mean[:3,3]
+        wrench = solution.platform_wrench.mean
+        cov = solution.platform_wrench.cov
 
         moment_mean, force_mean = wrench[:3], wrench[3:]
         moment_cov, force_cov = cov[:3, :3], cov[3:, 3:]

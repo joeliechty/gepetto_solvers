@@ -6,6 +6,7 @@
 #include "PlatformWrenchBalanceFactor.h"
 #include "cosserat_rod/BoundaryStressFactor.h"
 #include "cosserat_rod/CosseratRodModel.h"
+#include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
 
 using namespace gtsam;
@@ -47,8 +48,7 @@ Key platform_wrench_key() { return Symbol('W', 424242424242); }
 NonlinearFactorGraph ParallelRobot::build_graph(
     const std::array<double, NUM_RODS>& rod_lengths,
     double sigma_rod_lengths,
-    const Vector6& wrench_mean,
-    const Matrix6& wrench_cov) 
+    const Vector6Gaussian& wrench_)
 {
     NonlinearFactorGraph graph;
 
@@ -95,8 +95,8 @@ NonlinearFactorGraph ParallelRobot::build_graph(
     // Put prior on tip wrench based on user input
     graph.add(PriorFactor<Vector6>(
         platform_wrench_key(), 
-        wrench_mean, 
-        noiseModel::Gaussian::Covariance(wrench_cov)));
+        wrench_.mean, 
+        noiseModel::Gaussian::Covariance(wrench_.cov)));
 
     // Sum of all transformed tip stresses equals zero (for now)
     graph.add(PlatformWrenchBalanceFactor(
@@ -147,12 +147,12 @@ ParallelRobotMarginals ParallelRobot::get_marginals(
         solution.rods[i] = rods_[i]->get_marginals(values, marginals);
     }
 
-    solution.platform_pose_mean = values.at<Pose3>(platform_pose_key()).matrix();
-    solution.platform_pose_cov = marginals.marginalCovariance(platform_pose_key());
+    solution.platform_pose.mean = values.at<Pose3>(platform_pose_key()).matrix();
+    solution.platform_pose.cov = marginals.marginalCovariance(platform_pose_key());
 
-    solution.platform_wrench_mean = values.at<Vector6>(platform_wrench_key()).matrix();
-    solution.platform_wrench_cov = marginals.marginalCovariance(platform_wrench_key());
-
+    solution.platform_wrench.mean = values.at<Vector6>(platform_wrench_key()).matrix();
+    solution.platform_wrench.cov = marginals.marginalCovariance(platform_wrench_key());
+    
     return solution;
 }
 

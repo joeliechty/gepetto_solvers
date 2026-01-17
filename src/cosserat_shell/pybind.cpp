@@ -8,12 +8,14 @@ namespace py = pybind11;
     
 
 void bind_cosserat_shell(py::module& m) {
+    py::class_<CosseratShellState>(m, "CosseratShellState")
+        .def(py::init<>())
+        .def_readwrite("pose", &CosseratShellState::pose)
+        .def_readwrite("stress", &CosseratShellState::stress);
+
     py::class_<CosseratShellMarginals>(m, "CosseratShellMarginals")
         .def(py::init<>())
-        .def_readwrite("pose_mean", &CosseratShellMarginals::pose_mean)
-        .def_readwrite("pose_cov", &CosseratShellMarginals::pose_cov)
-        .def_readwrite("stress_mean", &CosseratShellMarginals::stress_mean)
-        .def_readwrite("stress_cov", &CosseratShellMarginals::stress_cov);
+        .def_readwrite("states", &CosseratShellMarginals::states);
 
     py::class_<Solution<CosseratShellMarginals>>(m, "CosseratShellSolution")
         .def(py::init<>())
@@ -34,7 +36,6 @@ void bind_cosserat_shell(py::module& m) {
     py::class_<CosseratShellSolver>(m, "CosseratShellSolver")
         .def(py::init<const CosseratShellSolverConfig&>())
         .def("solve", &CosseratShellSolver::solve,
-            py::arg("displacement_mean"),
-            py::arg("displacement_cov"),
+            py::arg("displacement"),
             py::call_guard<py::gil_scoped_release>());
 }

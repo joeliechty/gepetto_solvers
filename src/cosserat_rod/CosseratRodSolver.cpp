@@ -4,6 +4,7 @@
 #include <gtsam/slam/BetweenFactor.h>
 
 #include "cosserat_rod/CosseratRodModel.h"
+#include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
 
 using namespace gtsam;
@@ -44,16 +45,12 @@ void CosseratRodSolver::get_initial_values() {
 
 
 Solution<CosseratRodMarginals> CosseratRodSolver::solve(
-    const std::optional<Vector6>& tip_wrench_mean, 
-    const std::optional<Matrix6>& tip_wrench_cov,
-    const std::optional<Matrix4>& tip_pose_mean,
-    const std::optional<Matrix6>& tip_pose_cov,
+    const std::optional<Vector6Gaussian>& tip_wrench, 
+    const std::optional<Pose3Gaussian>& tip_pose,
     const std::optional<Vector6>& nominal_strain) 
 {
-    tip_wrench_mean_ = tip_wrench_mean; 
-    tip_wrench_cov_ = tip_wrench_cov;
-    tip_pose_mean_ = tip_pose_mean;
-    tip_pose_cov_ = tip_pose_cov;
+    tip_wrench_ = tip_wrench; 
+    tip_pose_ = tip_pose;
     nominal_strain_ = nominal_strain;
 
     Solution<CosseratRodMarginals> solution;
@@ -86,17 +83,17 @@ void CosseratRodSolver::build_graph() {
     }
 
     // Set prior on tip wrench/pose based on user input
-    if (tip_wrench_mean_) {
+    if (tip_wrench_) {
         graph_.add(PriorFactor<Vector6>(
             wrench_keys.back(),
-            *tip_wrench_mean_,
-            noiseModel::Gaussian::Covariance(*tip_wrench_cov_)));
+            (*tip_wrench_).mean,
+            noiseModel::Gaussian::Covariance((*tip_wrench_).cov)));
     }
 
-    if (tip_pose_mean_) {
+    if (tip_pose_) {
         graph_.add(PriorFactor<Pose3>(
             rod_->get_pose_key(-1),
-            Pose3(*tip_pose_mean_),
-            noiseModel::Gaussian::Covariance(*tip_pose_cov_)));
+            Pose3((*tip_pose_).mean),
+            noiseModel::Gaussian::Covariance((*tip_pose_).cov)));
     }
 }
