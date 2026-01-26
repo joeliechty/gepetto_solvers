@@ -9,6 +9,7 @@ struct CosseratDynamicsConfig {
     CosseratRodSolverConfig rod_config;
 
     int num_time_steps;
+    double delta_initial;
     double dt;
     double linear_damping;
     double rotational_damping;

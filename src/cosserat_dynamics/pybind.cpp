@@ -21,6 +21,7 @@ void bind_cosserat_dynamics(py::module& m) {
         .def(py::init<>())  // default constructor
         .def_readwrite("rod_config", &CosseratDynamicsConfig::rod_config)
         .def_readwrite("num_time_steps", &CosseratDynamicsConfig::num_time_steps)
+        .def_readwrite("delta_initial", &CosseratDynamicsConfig::delta_initial)
         .def_readwrite("dt", &CosseratDynamicsConfig::dt)
         .def_readwrite("linear_damping", &CosseratDynamicsConfig::linear_damping)
         .def_readwrite("rotational_damping", &CosseratDynamicsConfig::rotational_damping)

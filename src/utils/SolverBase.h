@@ -40,4 +40,7 @@ protected:
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
     gtsam::Marginals marginals_;
+
+    // Dogleg intitial trust radius, child classes can edit
+    double delta_initial_ = 1.0;
 };

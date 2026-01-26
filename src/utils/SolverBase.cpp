@@ -31,7 +31,7 @@ SolutionMetadata SolverBase::optimize() {
 
     DoglegParams params;
     params.setLinearSolverType("MULTIFRONTAL_QR");
-    params.deltaInitial = 1.0;
+    params.deltaInitial = delta_initial_;
     DoglegOptimizer optimizer(graph_, values_, params);
 
     // LevenbergMarquardtParams params;

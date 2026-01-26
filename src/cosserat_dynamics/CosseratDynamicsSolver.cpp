@@ -24,6 +24,9 @@ CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& con
     linear_inertia_(config.linear_inertia),
     rotational_inertia_(config.rotational_inertia)
 {
+    // The dynamcis problem is hard to initialize and this helps
+    delta_initial_ = config.delta_initial;
+
     auto static_solver = CosseratRodSolver(config.rod_config);
 
     std::optional<Vector6Gaussian> tip_wrench = Vector6Gaussian{
