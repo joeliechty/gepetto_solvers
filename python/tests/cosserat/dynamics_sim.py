@@ -1,11 +1,13 @@
 import time
 import numpy as np
+from matplotlib import pyplot as plt 
+from mpl_toolkits.mplot3d import Axes3D
 
 import crest_sparse
 from .._plotting.cosserat_rod_plotter import CosseratRodPlotter
 
 
-def get_K_inv(rod_diameter=0.003, youngs_modulus=45.0e9, shear_modulus=18.0e9):
+def get_K_inv(rod_diameter, youngs_modulus=40.0e9, shear_modulus=15.0e9):
     radius = rod_diameter / 2.0
     area = np.pi * radius**2
     moment = np.pi * radius**4 / 4.0
@@ -17,10 +19,10 @@ def get_K_inv(rod_diameter=0.003, youngs_modulus=45.0e9, shear_modulus=18.0e9):
     k_extension = youngs_modulus * area
 
     # shear_scale = 0.03
-    # ext_scale = 0.03
+    # extension_scale = 0.03
 
     # k_shear *= shear_scale
-    # k_extension *= ext_scale
+    # k_extension *= extension_scale
 
     return np.diag(
         1.0 / np.array([
@@ -34,12 +36,15 @@ def get_K_inv(rod_diameter=0.003, youngs_modulus=45.0e9, shear_modulus=18.0e9):
     )
 
 
-def main():
+def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
     config = crest_sparse.CosseratRodDynamicsConfig()
-    config.rod_config.rod_length = 0.3
-    config.rod_config.num_nodes = 12
-    config.delta_initial = 1.0e-3
-    config.rod_config.K_inv = get_K_inv()
+
+    config.rod_config.rod_length = rod_length
+    config.rod_config.num_nodes = num_nodes
+    config.delta_initial = 1.0e0
+
+    config.rod_config.K_inv = get_K_inv(rod_diameter)
+
     config.rod_config.sigma_twist_pos = 1.0e-5
     config.rod_config.sigma_twist_rot = 1.0e-3
     config.rod_config.sigma_small_force = 1.0e-3
@@ -47,13 +52,30 @@ def main():
     config.rod_config.sigma_base_pose_pos = 1.0e-5
     config.rod_config.sigma_base_pose_rot = 1.0e-3
 
-    config.num_time_steps = 100
-    config.dt = 0.1
-    config.linear_damping = 0.5
-    config.rotational_damping = 1e-2
-    config.linear_inertia = 1
-    config.rotational_inertia = 1e-2
-    config.initial_tip_wrench = np.array([0, 0.0, 0, -0.1, 0, 0])
+    config.num_time_steps = 200
+    config.dt = 0.01
+
+    config.linear_damping = 1e-2
+    config.rotational_damping = 1e-4
+
+    segment_radius = rod_diameter / 2
+    segment_area = np.pi * segment_radius**2
+    segment_length = rod_length / num_nodes
+    segment_mass = density * segment_area * segment_length
+
+    config.linear_inertia = segment_mass
+    config.rotational_inertia = 1.0 / 12.0 * config.linear_inertia * (3 * segment_radius ** 2 + segment_length ** 2)
+
+    config.initial_tip_wrench = np.array([0, 0.1, 0, -0.5, 0, 0])
+
+    return config
+
+
+def main():
+    rod_diameter = 0.003
+    rod_length = 0.7
+    num_nodes = 12
+    config = get_config(rod_diameter, rod_length, num_nodes)
 
     solver = crest_sparse.CosseratRodDynamicsSolver(config)
     solution = solver.solve()
@@ -63,18 +85,55 @@ def main():
         plot_backbone_frames=True,
         plot_internal_wrenches=True,
         camera_azimuth=60, 
-        camera_distance=1.5, 
-        camera_focal_point=np.array([0, 0, 0.25]))
+        camera_distance=1.7, 
+        camera_focal_point=np.array([0, 0, 0.35]))
 
-    print(f"iter:  {solution.meta.iterations}\n"
-          f"err:   {solution.meta.error:.3e}\n"
-          f"build: {solution.meta.build_time_ms:.2f}\n"
-          f"opt:   {solution.meta.optimize_time_ms:.2f}\n"
-          f"total: {solution.meta.total_time_ms:.2f}\n")
+    print(f"iter:    {solution.meta.iterations}\n"
+          f"err:     {solution.meta.error:.3e}\n"
+          f"build:   {solution.meta.build_time_ms:.2f}\n"
+          f"opt:     {solution.meta.optimize_time_ms:.2f}\n"
+          f"extract: {solution.meta.extract_time_ms:.2f}\n"
+          f"total:   {solution.meta.total_time_ms:.2f}\n")
+
+    x = []
+    x_sigma = []
 
     for rod_t in solution.marginals.rods_t:
-        plotter.update(rod_t)
-        time.sleep(0.1)
+        # plotter.update(rod_t)
+        # time.sleep(config.dt)
+        
+        x_s = [state.pose.mean[0,3] for state in rod_t.marginals.states]
+        x_s_sigma = [np.sqrt(state.pose.cov[3,3]) for state in rod_t.marginals.states]
+        
+        x.append(x_s)
+        x_sigma.append(x_s_sigma)
+        
+    x = np.array(x)
+    x_sigma = np.array(x_sigma)
+
+    num_t, num_s = x.shape
+    s = np.linspace(0, rod_length, num_s)
+    t = np.linspace(0, num_t * config.dt, num_t)
+
+    T, S = np.meshgrid(t, s, indexing="xy")
+
+    fig = plt.figure(figsize=(8, 5))
+    ax = fig.add_subplot(111, projection="3d")
+
+    surf = ax.plot_surface(
+        T, S, x.T,
+        facecolors=plt.cm.viridis(x_sigma.T / np.max(x_sigma)),
+        linewidth=0,
+        antialiased=True
+    )
+
+    ax.set_xlabel("time (sec)")
+    ax.set_ylabel("arc length (m)")
+    ax.set_zlabel("x (m)")
+
+    plt.tight_layout()
+    plt.savefig("cosserat_dynamics.png", dpi=300, bbox_inches="tight")
+    plt.close()
 
 if __name__ == "__main__":
     main()
