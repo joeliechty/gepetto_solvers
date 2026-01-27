@@ -3,12 +3,14 @@
 #include <gtsam/base/Vector.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/nonlinear/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/linear/NoiseModel.h>
 
+#include "cosserat_dynamics/CosseratAccelerationFactor.h"
+#include "cosserat_dynamics/CosseratVelocityFactor.h"
 #include "cosserat_rod/CosseratRodSolver.h"
 #include "cosserat_rod/CosseratRodModel.h"
-#include "CosseratDynamicsFactor.h"
 #include "utils/MiscInline.h"
 
 using namespace gtsam;
@@ -16,58 +18,49 @@ using namespace gtsam;
 
 CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& config) 
 :   
-    num_nodes_(config.rod_config.num_nodes),
+    num_nodes_(config.rod.num_nodes),
     dt_(config.dt),
-    rod_length_(config.rod_config.rod_length),
+    rod_length_(config.rod.rod_length),
     linear_damping_(config.linear_damping),
     rotational_damping_(config.rotational_damping),
     linear_inertia_(config.linear_inertia),
     rotational_inertia_(config.rotational_inertia)
 {
-    auto static_solver = CosseratRodSolver(config.rod_config);
+    auto static_solver = CosseratRodSolver(config.rod);
 
     std::optional<Vector6Gaussian> tip_wrench = Vector6Gaussian{
         config.initial_tip_wrench,
         1e-6 * Matrix6::Identity()
     };
 
-    static_solution_ = static_solver.solve(
-        tip_wrench,
-        std::nullopt,
-        std::nullopt);
+    static_solution_ = static_solver.solve(tip_wrench, std::nullopt, std::nullopt);
 
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
-        config.rod_config.sigma_twist_rot, config.rod_config.sigma_twist_pos); 
+        config.rod.sigma_twist_rot, config.rod.sigma_twist_pos); 
     
     SharedDiagonal small_wrench_noise = get_noise_model_rot_pos(
-        config.rod_config.sigma_small_moment, config.rod_config.sigma_small_force); 
+        config.rod.sigma_small_moment, config.rod.sigma_small_force); 
     
     base_pose_noise_ = get_noise_model_rot_pos(
-        config.rod_config.sigma_base_pose_rot, config.rod_config.sigma_base_pose_pos);
+        config.rod.sigma_base_pose_rot, config.rod.sigma_base_pose_pos);
     
-    dynamics_noise_ = noiseModel::Isotropic::Sigma(12, config.dynamics_noise_sigma);
+    acceleration_noise_ = noiseModel::Isotropic::Sigma(6, config.acceleration_noise_sigma);
     
     rod_ = std::make_unique<CosseratRodModel>(
-        config.rod_config.num_nodes, config.rod_config.K_inv, twist_noise, small_wrench_noise);
+        config.rod.num_nodes, config.rod.K_inv, twist_noise, small_wrench_noise);
 
     get_initial_values();
     init_prev_marginals();
 }
 
 
-Key get_v_prev_key(int node_idx) {
-    return Symbol('v', node_idx);
-}
+Key get_v_prev_key(int node_idx) { return Symbol('v', node_idx); }
 
 
-Key get_v_key(int node_idx) {
-    return Symbol('u', node_idx);
-}
+Key get_v_key(int node_idx) { return Symbol('u', node_idx); }
 
 
-Key get_pose_prev_key(int node_idx) {
-    return Symbol('g', node_idx);
-}
+Key get_pose_prev_key(int node_idx) { return Symbol('g', node_idx); }
 
 
 void CosseratDynamicsSolver::get_initial_values() {
@@ -91,7 +84,8 @@ void CosseratDynamicsSolver::get_initial_values() {
 void CosseratDynamicsSolver::init_prev_marginals() {
     rod_marginals_.rod = static_solution_.marginals;
 
-    for (int i = 0; i < num_nodes_; i++) {
+    // Start at 1 since base pose is essentially fixed
+    for (int i = 1; i < num_nodes_; i++) {
         Vector6Gaussian v_gaussian;
         v_gaussian.mean = Vector6::Zero();
         v_gaussian.cov = 1e-6 * Matrix6::Identity();
@@ -101,43 +95,50 @@ void CosseratDynamicsSolver::init_prev_marginals() {
 
 
 void CosseratDynamicsSolver::build_graph() {
-    graph_.resize(0);
-
     // First add all twist/stress factors for the current time step.
-    // Note we don't do this for the first two rods in time since they are marginalized.
-    auto rod_graph = rod_->build_graph(rod_length_);
-    graph_.push_back(rod_graph.begin(), rod_graph.end());
+    graph_ = rod_->build_graph(rod_length_);
 
-    // Base pose prior
+    // Constrain base pose to identity 
     graph_.add(PriorFactor<Pose3>(rod_->get_pose_key(0), Pose3::Identity(), base_pose_noise_));
 
-    // Initial conditions on pose, velocity priors
-    for (int i = 0; i < num_nodes_; i++){
-        graph_.add(PriorFactor<Pose3>(
-            get_pose_prev_key(i),
-            Pose3(rod_marginals_.rod.states[i].pose.mean),
-            rod_marginals_.rod.states[i].pose.cov));
-
-        graph_.add(PriorFactor<Vector6>(
-            get_v_prev_key(i),
-            rod_marginals_.velocities[i].mean,
-            rod_marginals_.velocities[i].cov));
-    }
-
-    // Now add the finite difference dynamics factors for each node along the rod
-    for (int i = 0; i < num_nodes_; i++) {
-        graph_.add(CosseratDynamicsFactor(
-            get_pose_prev_key(i),
+    // Dynamics factors for each node constrain current pose/velocity/accel to previous pose/velocity
+    // Skip the base node, since we need a reaction force at the rod base 
+    for (int i = 1; i < num_nodes_; i++) {
+        graph_.add(CosseratAccelerationFactor(
             get_v_prev_key(i),
             rod_->get_pose_key(i),
             get_v_key(i),
             rod_->get_wrench_key(i),
-            dynamics_noise_,
+            acceleration_noise_,
             dt_,
             linear_damping_,
             rotational_damping_,
             linear_inertia_,
             rotational_inertia_));
+        
+        graph_.add(CosseratVelocityFactor(
+            get_pose_prev_key(i),
+            get_v_prev_key(i),
+            rod_->get_pose_key(i),
+            get_v_key(i),
+            rod_->get_wrench_key(i),
+            base_pose_noise_,
+            dt_));
+    }
+
+    // Prior factors for previous poses and velocities from last time step
+    // Skip the base node, since its pose is essentially fixed
+    for (int i = 1; i < num_nodes_; i++){
+        graph_.add(PriorFactor<Pose3>(
+            get_pose_prev_key(i),
+            Pose3(rod_marginals_.rod.states[i].pose.mean),
+            rod_marginals_.rod.states[i].pose.cov));
+        
+        // Velocity uses i - 1 since velocities start from node 1
+        graph_.add(PriorFactor<Vector6>(
+            get_v_prev_key(i),
+            rod_marginals_.velocities[i - 1].mean,
+            rod_marginals_.velocities[i - 1].cov));
     }
 }
 
@@ -145,11 +146,11 @@ void CosseratDynamicsSolver::build_graph() {
 void CosseratDynamicsSolver::extract_solution() {
     rod_marginals_.rod = rod_->get_marginals(values_, marginals_);
 
-    for (int i = 0; i < num_nodes_; i++) {
-        Vector6Gaussian v_gaussian;
-        v_gaussian.mean = values_.at<Vector6>(get_v_key(i));
-        v_gaussian.cov = marginals_.marginalCovariance(get_v_key(i));
-        rod_marginals_.velocities[i] = v_gaussian;
+    // Again, skip base node
+    for (int i = 1; i < num_nodes_; i++) {
+        // i - 1 because velocities start from node 1. TRICKY
+        rod_marginals_.velocities[i - 1].mean = values_.at<Vector6>(get_v_key(i));
+        rod_marginals_.velocities[i - 1].cov = marginals_.marginalCovariance(get_v_key(i));
     }
 }
 

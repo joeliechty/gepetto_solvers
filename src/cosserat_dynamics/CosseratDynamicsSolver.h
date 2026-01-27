@@ -8,15 +8,15 @@
 
 
 struct CosseratDynamicsConfig {
-    CosseratRodSolverConfig rod_config;
+    CosseratRodSolverConfig rod;
 
     double dt;
     double linear_damping;
     double rotational_damping;
     double linear_inertia;
     double rotational_inertia;
-    double dynamics_noise_sigma;
-    
+    double acceleration_noise_sigma;
+
     gtsam::Vector6 initial_tip_wrench;
 };
 
@@ -50,7 +50,7 @@ private:
     const double linear_inertia_;
     const double rotational_inertia_;
 
-    gtsam::SharedDiagonal dynamics_noise_;
+    gtsam::SharedDiagonal acceleration_noise_;
     gtsam::SharedDiagonal base_pose_noise_;
 
     Solution<CosseratRodMarginals> static_solution_;

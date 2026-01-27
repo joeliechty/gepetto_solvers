@@ -33,20 +33,20 @@ def get_K_inv(rod_diameter, youngs_modulus=40.0e9, shear_modulus=15.0e9):
 def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
     config = crest_sparse.CosseratRodDynamicsConfig()
 
-    config.rod_config.rod_length = rod_length
-    config.rod_config.num_nodes = num_nodes
+    config.rod.rod_length = rod_length
+    config.rod.num_nodes = num_nodes
 
-    config.rod_config.K_inv = get_K_inv(rod_diameter)
+    config.rod.K_inv = get_K_inv(rod_diameter)
 
-    config.rod_config.sigma_twist_pos = 1.0e-5
-    config.rod_config.sigma_twist_rot = 1.0e-4
-    config.rod_config.sigma_small_force = 1.0e-4
-    config.rod_config.sigma_small_moment = 1.0e-5
-    config.rod_config.sigma_base_pose_pos = 1.0e-5
-    config.rod_config.sigma_base_pose_rot = 1.0e-4
-    
-    config.dynamics_noise_sigma = 1.0e-6
-    config.dt = 0.05
+    config.rod.sigma_twist_pos = 1.0e-4
+    config.rod.sigma_twist_rot = 1.0e-3
+    config.rod.sigma_small_force = 1.0e-3
+    config.rod.sigma_small_moment = 1.0e-4
+    config.rod.sigma_base_pose_pos = 1.0e-4
+    config.rod.sigma_base_pose_rot = 1.0e-3
+
+    config.acceleration_noise_sigma = 1.0e3
+    config.dt = 0.01
     config.linear_damping = 0.0
     config.rotational_damping = 0.0
 
@@ -58,15 +58,15 @@ def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
     config.linear_inertia = segment_mass
     config.rotational_inertia = 1.0 / 12.0 * config.linear_inertia * (3 * segment_radius ** 2 + segment_length ** 2)
 
-    config.initial_tip_wrench = np.array([0, 0.0, 0, -0.4, 0, 0])
+    config.initial_tip_wrench = np.array([0, 0.2, 0, -0.6, 0, 0])
 
     return config
 
 
 def main():
     rod_diameter = 0.003
-    rod_length = 0.8
-    num_nodes = 15
+    rod_length = 0.7
+    num_nodes = 10
     config = get_config(rod_diameter, rod_length, num_nodes)
 
     solver = crest_sparse.CosseratRodDynamicsSolver(config)

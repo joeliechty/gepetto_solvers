@@ -1,44 +1,24 @@
-#include "CosseratDynamicsFactor.h"
+#include "CosseratVelocityFactor.h"
 
 #include <gtsam/base/Lie.h>
 #include <gtsam/base/Vector.h>
 #include <gtsam/base/numericalDerivative.h>
 
-#include "utils/WrenchTransforms.h"
-
 using namespace gtsam;
 
 
-CosseratDynamicsFactor::CosseratDynamicsFactor(
+CosseratVelocityFactor::CosseratVelocityFactor(
     Key pose_prev_key,
     Key v_prev_key,
     Key pose_key,
     Key v_key,
     Key wrench_key,
     const SharedNoiseModel& model,
-    double dt,
-    double linear_damping,
-    double rotational_damping,
-    double linear_inertia,
-    double rotational_inertia)
+    double dt)
 :
     NoiseModelFactorN(model, pose_prev_key, v_prev_key, pose_key, v_key, wrench_key), 
     dt_(dt)
-{
-    Vector6 damping;
-    damping << 
-        rotational_damping, rotational_damping, rotational_damping,
-        linear_damping, linear_damping, linear_damping;
-    
-    damping_ = damping.asDiagonal();
-
-    Vector6 inertia;
-    inertia <<
-        rotational_inertia, rotational_inertia, rotational_inertia,
-        linear_inertia, linear_inertia, linear_inertia;
-
-    inertia_ = inertia.asDiagonal();
-}
+{}
 
 
 Vector6 get_velocity_from_poses(
@@ -66,24 +46,7 @@ Vector6 get_velocity_from_poses(
 }
 
 
-Matrix6 ad(const Vector6& xi) {
-    Matrix6 ad_xi = Matrix6::Zero();
-
-    // xi = [omega; v]
-    Vector3 omega = xi.head<3>();
-    Vector3 v = xi.tail<3>();
-
-    // Adjoint operator for se(3)
-    ad_xi.block<3,3>(0,0) = skewSymmetric(omega);
-    ad_xi.block<3,3>(0,3) = Matrix3::Zero();
-    ad_xi.block<3,3>(3,0) = skewSymmetric(v);
-    ad_xi.block<3,3>(3,3) = skewSymmetric(omega);
-
-    return ad_xi;
-}
-
-
-Vector CosseratDynamicsFactor::evaluateError(
+Vector CosseratVelocityFactor::evaluateError(
     const Pose3& p0, 
     const Vector6& v0,
     const Pose3& p1,
@@ -95,70 +58,70 @@ Vector CosseratDynamicsFactor::evaluateError(
     OptionalMatrixType H4,
     OptionalMatrixType H5) const
 {
-    Matrix6 d_wrench_body_d_wrench, d_wrench_body_d_p2;
-    Vector6 wrench_body = spatial_to_body_wrench(wrench, p1, d_wrench_body_d_wrench, d_wrench_body_d_p2);
+    Vector6 a = (v1 - v0) / dt_;
     
-    // Vector6 coriolis = ad(v0).transpose() * (inertia_ * v0);
+    // Matrix6 d_v_d_p0, d_v_d_p1;
+    // Vector6 v0_pred = get_velocity_from_poses(p0, p1, dt_, d_v_d_p0, d_v_d_p1);
+    // Vector6 v1_pred = v0_pred + a * dt_;
+    // Vector6 error = v1 - v1_pred;
 
-    Vector6 v1_pred = v0 + inertia_.inverse() * (wrench_body - damping_ * v0) * dt_;
+    Vector6 v_mid = 0.5 * (v0 + v1);
+    Vector6 xi = v_mid * dt_ + 0.5 * a * dt_ * dt_;
 
-    Pose3 p1_pred = p0.expmap(v1_pred * dt_);
+    Pose3 p1_pred = p0.expmap(xi);
+    Pose3 p1_error = p1.between(p1_pred);
+    Vector6 error = Pose3::Logmap(p1_error);
 
-    Vector6 v_error = v1 - v1_pred;
-    Pose3 p_error = p1.between(p1_pred);
-
-    Vector12 error;
-    error.head<6>() = Pose3::Logmap(p_error);
-    error.tail<6>() = v_error;
+    double fd_step = 1e-5;
 
     if (H1) {
-        auto f = [&](const Pose3& p0_var) -> Vector12 {
+        auto f = [&](const Pose3& p0_var) -> Vector6 {
         return evaluateError(
             p0_var, v0, p1, v1, wrench,
             nullptr, nullptr, nullptr, nullptr, nullptr);
         };
 
-        *H1 = numericalDerivative11<Vector12, Pose3>(f, p0, 1e-3);
+        *H1 = numericalDerivative11<Vector6, Pose3>(f, p0, fd_step);
     }
 
     if (H2) {
-        auto f = [&](const Vector6& v0_var) -> Vector12 {
+        auto f = [&](const Vector6& v0_var) -> Vector6 {
         return evaluateError(
             p0, v0_var, p1, v1, wrench,
             nullptr, nullptr, nullptr, nullptr, nullptr);
         };
 
-        *H2 = numericalDerivative11<Vector12, Vector6>(f, v0, 1e-3);
+        *H2 = numericalDerivative11<Vector6, Vector6>(f, v0, fd_step);
     }
 
     if (H3) {
-        auto f = [&](const Pose3& p1_var) -> Vector12 {
+        auto f = [&](const Pose3& p1_var) -> Vector6 {
         return evaluateError(
             p0, v0, p1_var, v1, wrench,
             nullptr, nullptr, nullptr, nullptr, nullptr);
         };
 
-        *H3 = numericalDerivative11<Vector12, Pose3>(f, p1, 1e-3);
+        *H3 = numericalDerivative11<Vector6, Pose3>(f, p1, fd_step);
     }
 
     if (H4) {
-        auto f = [&](const Vector6& v1_var) -> Vector12 {
+        auto f = [&](const Vector6& v1_var) -> Vector6 {
         return evaluateError(
             p0, v0, p1, v1_var, wrench,
             nullptr, nullptr, nullptr, nullptr, nullptr);
         };
 
-        *H4 = numericalDerivative11<Vector12, Vector6>(f, v1, 1e-3);
+        *H4 = numericalDerivative11<Vector6, Vector6>(f, v1, fd_step);
     }
 
     if (H5) {
-        auto f = [&](const Vector6& wrench_var) -> Vector12 {
+        auto f = [&](const Vector6& wrench_var) -> Vector6 {
         return evaluateError(
             p0, v0, p1, v1, wrench_var,
             nullptr, nullptr, nullptr, nullptr, nullptr);
         };
 
-        *H5 = numericalDerivative11<Vector12, Vector6>(f, wrench, 1e-3);
+        *H5 = numericalDerivative11<Vector6, Vector6>(f, wrench, fd_step);
     }
 
     return error;

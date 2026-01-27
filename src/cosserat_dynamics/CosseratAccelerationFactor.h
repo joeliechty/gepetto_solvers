@@ -4,15 +4,14 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 
 
-using CosseratDynamicsBase = gtsam::NoiseModelFactorN<
-    gtsam::Pose3, gtsam::Vector6, gtsam::Pose3, gtsam::Vector6,gtsam::Vector6>;
+using CosseratAccelBase = gtsam::NoiseModelFactorN<
+    gtsam::Vector6, gtsam::Pose3, gtsam::Vector6,gtsam::Vector6>;
 
-class CosseratDynamicsFactor: public CosseratDynamicsBase {
-    using CosseratDynamicsBase::evaluateError;
+class CosseratAccelerationFactor: public CosseratAccelBase {
+    using CosseratAccelBase::evaluateError;
 
 public:
-    CosseratDynamicsFactor(
-        gtsam::Key pose_prev_key,
+    CosseratAccelerationFactor(
         gtsam::Key v_prev_key,
         gtsam::Key pose_key,
         gtsam::Key v_key,
@@ -25,7 +24,6 @@ public:
         double rotational_inertia);
 
     gtsam::Vector evaluateError(
-        const gtsam::Pose3& pose_prev, 
         const gtsam::Vector6& v_prev,
         const gtsam::Pose3& pose, 
         const gtsam::Vector6& v,
@@ -33,11 +31,11 @@ public:
         gtsam::OptionalMatrixType H1, 
         gtsam::OptionalMatrixType H2, 
         gtsam::OptionalMatrixType H3, 
-        gtsam::OptionalMatrixType H4,
-        gtsam::OptionalMatrixType H5) const override;
+        gtsam::OptionalMatrixType H4) const override;
 
     private:
         const double dt_;
         gtsam::Matrix6 damping_;
         gtsam::Matrix6 inertia_;
+        gtsam::Matrix6 inertia_inverse_;
 };

@@ -18,13 +18,13 @@ void bind_cosserat_dynamics(py::module& m) {
     
     py::class_<CosseratDynamicsConfig>(m, "CosseratRodDynamicsConfig")
         .def(py::init<>())  // default constructor
-        .def_readwrite("rod_config", &CosseratDynamicsConfig::rod_config)
+        .def_readwrite("rod", &CosseratDynamicsConfig::rod)
         .def_readwrite("dt", &CosseratDynamicsConfig::dt)
         .def_readwrite("linear_damping", &CosseratDynamicsConfig::linear_damping)
         .def_readwrite("rotational_damping", &CosseratDynamicsConfig::rotational_damping)
         .def_readwrite("linear_inertia", &CosseratDynamicsConfig::linear_inertia)
         .def_readwrite("rotational_inertia", &CosseratDynamicsConfig::rotational_inertia)
-        .def_readwrite("dynamics_noise_sigma", &CosseratDynamicsConfig::dynamics_noise_sigma)
+        .def_readwrite("acceleration_noise_sigma", &CosseratDynamicsConfig::acceleration_noise_sigma)
         .def_readwrite("initial_tip_wrench", &CosseratDynamicsConfig::initial_tip_wrench);
 
     py::class_<CosseratDynamicsSolver>(m, "CosseratRodDynamicsSolver")
