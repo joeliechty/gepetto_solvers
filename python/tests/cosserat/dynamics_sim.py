@@ -38,17 +38,18 @@ def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
 
     config.rod.K_inv = get_K_inv(rod_diameter)
 
-    config.rod.sigma_twist_pos = 1.0e-4
-    config.rod.sigma_twist_rot = 1.0e-3
-    config.rod.sigma_small_force = 1.0e-2
+    config.rod.sigma_twist_pos = 1.0e-3
+    config.rod.sigma_twist_rot = 1.0e-2
+    config.rod.sigma_small_force = 1.0e-3
     config.rod.sigma_small_moment = 1.0e-3
-    config.rod.sigma_base_pose_pos = 1.0e-4
-    config.rod.sigma_base_pose_rot = 1.0e-3
+    config.rod.sigma_base_pose_pos = 1.0e-3
+    config.rod.sigma_base_pose_rot = 1.0e-2
     
     config.num_time_steps = 100
     config.dt = 0.01
-    config.linear_damping = 0.001
-    config.rotational_damping = 0.0001
+    config.linear_damping = 0.0
+    config.rotational_damping = 0.0
+    config.dynamics_noise_sigma = 1e-3
 
     segment_radius = rod_diameter / 2
     segment_area = np.pi * segment_radius**2
@@ -66,7 +67,7 @@ def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
 def main():
     rod_diameter = 0.003
     rod_length = 0.7
-    num_nodes = 10
+    num_nodes = 15
     config = get_config(rod_diameter, rod_length, num_nodes)
 
     solver = crest_sparse.CosseratRodDynamicsSolver(config)
@@ -81,18 +82,20 @@ def main():
 
     solution = solver.solve()
 
+    print(f"iter:    {solution.meta.iterations}\n"
+          f"err:     {solution.meta.error:.3e}\n"
+          f"build:   {solution.meta.build_time_ms:.2f}\n"
+          f"opt:     {solution.meta.optimize_time_ms:.2f}\n"
+          f"extract: {solution.meta.extract_time_ms:.2f}\n"
+          f"total:   {solution.meta.total_time_ms:.2f}\n")
+
     for s in solution.marginals.rods_t:
         s.meta = solution.meta
         plotter.update(s)
         time.sleep(config.dt)
 
 
-    # print(f"iter:    {solution.meta.iterations}\n"
-    #       f"err:     {solution.meta.error:.3e}\n"
-    #       f"build:   {solution.meta.build_time_ms:.2f}\n"
-    #       f"opt:     {solution.meta.optimize_time_ms:.2f}\n"
-    #       f"extract: {solution.meta.extract_time_ms:.2f}\n"
-    #       f"total:   {solution.meta.total_time_ms:.2f}\n")
+    
 
     # x = []
     # x_sigma = []

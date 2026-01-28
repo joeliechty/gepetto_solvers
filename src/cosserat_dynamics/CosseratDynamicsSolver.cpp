@@ -47,6 +47,8 @@ CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& con
     
     base_pose_noise_ = get_noise_model_rot_pos(
         config.rod.sigma_base_pose_rot, config.rod.sigma_base_pose_pos);
+    
+    dynamics_noise_ = noiseModel::Isotropic::Sigma(6, config.dynamics_noise_sigma);
 
     rods_t_.resize(num_time_steps_);
 
@@ -114,7 +116,7 @@ void CosseratDynamicsSolver::build_graph() {
                 rods_t_[t + 0]->get_pose_key(i),
                 rods_t_[t + 1]->get_pose_key(i),
                 rods_t_[t + 0]->get_wrench_key(i),
-                small_wrench_noise_,
+                dynamics_noise_,
                 dt_,
                 linear_damping_,
                 rotational_damping_,
@@ -136,6 +138,7 @@ void CosseratDynamicsSolver::extract_solution() {
 
 Solution<CosseratDynamicsMarginals> CosseratDynamicsSolver::solve() {
     Solution<CosseratDynamicsMarginals> solution;
+    // delta_initial_ = 1e-2;
     solution.meta = optimize();
     solution.marginals = extracted_;
 

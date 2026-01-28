@@ -37,5 +37,4 @@ public:
         const double dt_;
         gtsam::Matrix6 damping_;
         gtsam::Matrix6 inertia_;
-        gtsam::Matrix6 inertia_inverse_;
 };
