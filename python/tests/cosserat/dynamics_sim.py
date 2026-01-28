@@ -40,15 +40,15 @@ def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
 
     config.rod.sigma_twist_pos = 1.0e-4
     config.rod.sigma_twist_rot = 1.0e-3
-    config.rod.sigma_small_force = 1.0e-3
-    config.rod.sigma_small_moment = 1.0e-4
+    config.rod.sigma_small_force = 1.0e-2
+    config.rod.sigma_small_moment = 1.0e-3
     config.rod.sigma_base_pose_pos = 1.0e-4
     config.rod.sigma_base_pose_rot = 1.0e-3
-
-    config.acceleration_noise_sigma = 1.0e3
+    
+    config.num_time_steps = 100
     config.dt = 0.01
-    config.linear_damping = 0.0
-    config.rotational_damping = 0.0
+    config.linear_damping = 0.001
+    config.rotational_damping = 0.0001
 
     segment_radius = rod_diameter / 2
     segment_area = np.pi * segment_radius**2
@@ -58,7 +58,7 @@ def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
     config.linear_inertia = segment_mass
     config.rotational_inertia = 1.0 / 12.0 * config.linear_inertia * (3 * segment_radius ** 2 + segment_length ** 2)
 
-    config.initial_tip_wrench = np.array([0, 0.2, 0, -0.6, 0, 0])
+    config.initial_tip_wrench = np.array([0, 0.3, 0, -0.9, 0, 0])
 
     return config
 
@@ -74,17 +74,17 @@ def main():
     plotter = CosseratRodPlotter(
         plot_wrenches=False,
         plot_backbone_frames=True,
-        plot_internal_wrenches=True,
+        plot_internal_wrenches=False,
         camera_azimuth=60, 
         camera_distance=1.7, 
         camera_focal_point=np.array([0, 0, 0.35]))
 
-    for _ in range(100):
-        dynamics_solution = solver.solve()
-        plot_solution = crest_sparse.CosseratRodSolution()
-        plot_solution.meta = dynamics_solution.meta
-        plot_solution.marginals = dynamics_solution.marginals.rod
-        plotter.update(plot_solution)
+    solution = solver.solve()
+
+    for s in solution.marginals.rods_t:
+        s.meta = solution.meta
+        plotter.update(s)
+        time.sleep(config.dt)
 
 
     # print(f"iter:    {solution.meta.iterations}\n"

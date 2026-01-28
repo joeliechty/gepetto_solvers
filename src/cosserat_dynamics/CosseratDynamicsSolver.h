@@ -1,29 +1,26 @@
 #pragma once
 
-#include "utils/Gaussians.h"
 #include "utils/SolverBase.h"
 #include "cosserat_rod/CosseratRodModel.h"
 #include "cosserat_rod/CosseratRodSolver.h"
-#include <gtsam/base/Vector.h>
 
 
 struct CosseratDynamicsConfig {
     CosseratRodSolverConfig rod;
 
+    int num_time_steps;
     double dt;
     double linear_damping;
     double rotational_damping;
     double linear_inertia;
     double rotational_inertia;
-    double acceleration_noise_sigma;
-
+    
     gtsam::Vector6 initial_tip_wrench;
 };
 
 
 struct CosseratDynamicsMarginals {
-    CosseratRodMarginals rod;
-    std::vector<Vector6Gaussian> velocities;
+    std::vector<Solution<CosseratRodMarginals>> rods_t;
 };
 
 
@@ -39,9 +36,8 @@ private:
     void extract_solution() override;
 
     void get_initial_values() override;
-    
-    void init_prev_marginals();
 
+    const int num_time_steps_;
     const int num_nodes_;
     const double dt_;
     const double rod_length_;
@@ -50,11 +46,10 @@ private:
     const double linear_inertia_;
     const double rotational_inertia_;
 
-    gtsam::SharedDiagonal acceleration_noise_;
+    gtsam::SharedDiagonal small_wrench_noise_;
     gtsam::SharedDiagonal base_pose_noise_;
 
     Solution<CosseratRodMarginals> static_solution_;
-
-    std::unique_ptr<CosseratRodModel> rod_;
-    CosseratDynamicsMarginals rod_marginals_;
+    std::vector<std::unique_ptr<CosseratRodModel>> rods_t_;
+    CosseratDynamicsMarginals extracted_;
 };
