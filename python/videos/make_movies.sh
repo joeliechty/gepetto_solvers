@@ -14,10 +14,11 @@ make_vid () {
     #     -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le "${output_base}.mov"
 
     ffmpeg -framerate 30 -i "$input_dir/%d.png" \
-    -c:v libx264 -crf 20 -preset medium \
-    "${output_base}.mp4"
+        -c:v libx264 -crf 20 -preset medium \
+        "${output_base}.mp4"
 
 }
 
 # make_vid frames/both_ends_clamped
-make_vid frames/cosserat_shell
+# make_vid frames/cosserat_shell
+make_vid frames/cosserat_dynamics
