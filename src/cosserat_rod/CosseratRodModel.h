@@ -35,7 +35,7 @@ public:
         double rod_length,
         const std::optional<gtsam::Vector6>& nominal_strain = std::nullopt) const;
 
-    gtsam::Values get_initial_values() const;
+    gtsam::Values get_initial_values(double rod_length = 0) const;
 
     CosseratRodMarginals get_marginals(
         const gtsam::Values& values, 

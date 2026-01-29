@@ -8,53 +8,33 @@
 #include <gtsam/linear/NoiseModel.h>
 
 #include "cosserat_dynamics/CosseratDynamicsFactor.h"
-#include "cosserat_rod/CosseratRodSolver.h"
 #include "cosserat_rod/CosseratRodModel.h"
-#include "utils/MiscInline.h"
 
 using namespace gtsam;
-
 
 
 CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& config) 
 :   
     num_time_steps_(config.num_time_steps),
-    num_nodes_(config.rod.num_nodes),
+    num_nodes_(config.num_nodes),
     dt_(config.dt),
-    rod_length_(config.rod.rod_length),
+    rod_length_(config.rod_length),
     linear_damping_(config.linear_damping),
     rotational_damping_(config.rotational_damping),
     linear_inertia_(config.linear_inertia),
-    rotational_inertia_(config.rotational_inertia)
+    rotational_inertia_(config.rotational_inertia),
+    initial_tip_wrench_(config.initial_tip_wrench)
 {
-    auto static_solver = CosseratRodSolver(config.rod);
+    wrench_noise_ = noiseModel::Isotropic::Sigma(6, config.sigma_wrench_noise);
+    twist_noise_ = noiseModel::Isotropic::Sigma(6, config.sigma_twist_noise);
+    dynamics_noise_ = noiseModel::Isotropic::Sigma(6, config.sigma_dynamics_noise);
+    init_tip_wrench_noise_ = noiseModel::Isotropic::Sigma(6, config.sigma_init_tip_wrench);
+    init_velocity_noise_ = noiseModel::Isotropic::Sigma(6, config.sigma_init_velocity);
 
-    small_wrench_noise_ = get_noise_model_rot_pos(
-        config.rod.sigma_small_moment, config.rod.sigma_small_force); 
-
-    std::optional<Vector6Gaussian> tip_wrench = Vector6Gaussian{
-        config.initial_tip_wrench,
-        small_wrench_noise_->covariance()
-    };
-
-    static_solution_ = static_solver.solve(
-        tip_wrench,
-        std::nullopt,
-        std::nullopt);
-
-    SharedDiagonal twist_noise = get_noise_model_rot_pos(
-        config.rod.sigma_twist_rot, config.rod.sigma_twist_pos); 
-    
-    base_pose_noise_ = get_noise_model_rot_pos(
-        config.rod.sigma_base_pose_rot, config.rod.sigma_base_pose_pos);
-    
-    dynamics_noise_ = noiseModel::Isotropic::Sigma(6, config.dynamics_noise_sigma);
-
-    rods_t_.resize(num_time_steps_);
-
-    for (auto& rod_t : rods_t_) {
-        rod_t = std::make_unique<CosseratRodModel>(
-            config.rod.num_nodes, config.rod.K_inv, twist_noise, small_wrench_noise_);
+    // Init rod model graph for each time step
+    for (int t = 0; t < num_time_steps_; t++) {
+        rods_t_.push_back(std::make_unique<CosseratRodModel>(
+            num_nodes_, config.K_inv, twist_noise_, wrench_noise_));
     }
 
     get_initial_values();
@@ -65,14 +45,7 @@ void CosseratDynamicsSolver::get_initial_values() {
     values_.clear();
 
     for (auto& rod_t : rods_t_) {
-        values_.insert(rod_t->get_initial_values());
-
-        for (int i = 0; i < num_nodes_; i++) {
-            auto& state = static_solution_.marginals.states[i];
-            values_.update(rod_t->get_pose_key(i), Pose3(state.pose.mean));
-            values_.update(rod_t->get_stress_key(i), state.stress.mean);
-            values_.update(rod_t->get_wrench_key(i), state.wrench.mean);
-        }
+        values_.insert(rod_t->get_initial_values(rod_length_));
     }
 }
 
@@ -85,37 +58,53 @@ void CosseratDynamicsSolver::build_graph() {
         graph_.add(rods_t_[t]->build_graph(rod_length_));
 
         // Base pose prior
-        graph_.add(PriorFactor<Pose3>(rods_t_[t]->get_pose_key(0), Pose3::Identity(), base_pose_noise_));
+        graph_.add(PriorFactor<Pose3>(rods_t_[t]->get_pose_key(0), Pose3::Identity(), twist_noise_));
     }
 
-    // Initial conditions: first two rods in time known from static config
-    for (int t = 0; t < 2; t++) {
-        // Skip base pose, already taken care of above
-        for (int i = 1; i < num_nodes_; i++){
-            graph_.add(PriorFactor<Pose3>(
-                rods_t_[t]->get_pose_key(i),
-                Pose3(static_solution_.marginals.states[i].pose.mean), 
-                base_pose_noise_));
+    // Set static conditions for first rod enforces pose initial conditions
+    // Skip base 0 since we do need a reaction force
+    for (int i = 1; i < num_nodes_; i++) {
+        Vector6 wrench_mean = i == num_nodes_ - 1 ?  initial_tip_wrench_ : Vector6::Zero();
+        SharedDiagonal wrench_noise = i == num_nodes_ - 1 ? init_tip_wrench_noise_ : wrench_noise_;
+        graph_.add(PriorFactor<Vector6>(
+            rods_t_[0]->get_wrench_key(i),
+            wrench_mean,
+            wrench_noise));
+    }
+
+    // Initial velocity constraints
+    for (int i = 1; i < num_nodes_; i++) {
+        graph_.add(BetweenFactor<Pose3>(
+            rods_t_[0]->get_pose_key(i),
+            rods_t_[1]->get_pose_key(i),
+            Pose3::Identity(),
+            init_velocity_noise_));
+    }
+
+    // Now add all the center finite difference dynamics factors at each time step
+    // Skip 0 since that is the static config, already handled above
+    for (int t = 1; t < num_time_steps_; t++) {
+        // Default is central differences here
+        int pose_idx_0 = t - 1;
+        int pose_idx_1 = t;
+        int pose_idx_2 = t + 1;
+        int wrench_idx = t;
+
+        // If we're at the endpoint, then backward differences
+        if (t == num_time_steps_ - 1) {
+            pose_idx_0 = num_time_steps_ - 3;
+            pose_idx_1 = num_time_steps_ - 2;
+            pose_idx_2 = num_time_steps_ - 1;
+            wrench_idx = num_time_steps_ - 1;
         }
-    }
 
-    // Need to constrain last wrenches in time: approx equal to second to last
-    for (int i = 0; i < num_nodes_; i++) {
-        graph_.add(BetweenFactor<Vector6>(
-            rods_t_[num_time_steps_ - 1]->get_wrench_key(i),
-            rods_t_[num_time_steps_ - 2]->get_wrench_key(i),
-            Vector6::Zero(),
-            small_wrench_noise_));
-    }
-
-    // Now add all the finite difference dynamics factors at each time step
-    for (int t = 1; t + 1 < num_time_steps_; t++) {
+        // Skip 0 since we need a base reaction force
         for (int i = 1; i < num_nodes_; i++) {
             graph_.add(CosseratDynamicsFactor(
-                rods_t_[t - 1]->get_pose_key(i),
-                rods_t_[t + 0]->get_pose_key(i),
-                rods_t_[t + 1]->get_pose_key(i),
-                rods_t_[t + 0]->get_wrench_key(i),
+                rods_t_[pose_idx_0]->get_pose_key(i),
+                rods_t_[pose_idx_1]->get_pose_key(i),
+                rods_t_[pose_idx_2]->get_pose_key(i),
+                rods_t_[wrench_idx]->get_wrench_key(i),
                 dynamics_noise_,
                 dt_,
                 linear_damping_,

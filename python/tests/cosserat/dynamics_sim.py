@@ -30,111 +30,151 @@ def get_K_inv(rod_diameter, youngs_modulus=40.0e9, shear_modulus=15.0e9):
     )
 
 
-def get_config(rod_diameter, rod_length, num_nodes, density=6500.0):
+def get_base_config():
     config = crest_sparse.CosseratRodDynamicsConfig()
 
-    config.rod.rod_length = rod_length
-    config.rod.num_nodes = num_nodes
+    rod_diameter = 0.003
+    density = 6500.0
+    total_time = 2.5
+    frame_rate = 100
 
-    config.rod.K_inv = get_K_inv(rod_diameter)
+    config.rod_length = 1.0
+    config.num_nodes = 15
+    config.K_inv = get_K_inv(rod_diameter)
 
-    config.rod.sigma_twist_pos = 1.0e-3
-    config.rod.sigma_twist_rot = 1.0e-2
-    config.rod.sigma_small_force = 1.0e-3
-    config.rod.sigma_small_moment = 1.0e-3
-    config.rod.sigma_base_pose_pos = 1.0e-3
-    config.rod.sigma_base_pose_rot = 1.0e-2
-    
-    config.num_time_steps = 100
-    config.dt = 0.01
-    config.linear_damping = 0.0
-    config.rotational_damping = 0.0
-    config.dynamics_noise_sigma = 1e-3
+    config.sigma_dynamics_noise = 1e-4
+    config.sigma_init_tip_wrench = 1e-4
+    config.sigma_twist_noise = 1e-4
+    config.sigma_wrench_noise = 1e-4
+    config.sigma_init_velocity = 1e-1
+
+    config.num_time_steps = int(frame_rate * total_time)
+    config.dt = 1.0 / frame_rate
+
+    config.linear_damping = 0.005
+    config.rotational_damping = 1e-5
 
     segment_radius = rod_diameter / 2
     segment_area = np.pi * segment_radius**2
-    segment_length = rod_length / num_nodes
+    segment_length = config.rod_length / config.num_nodes
     segment_mass = density * segment_area * segment_length
 
     config.linear_inertia = segment_mass
     config.rotational_inertia = 1.0 / 12.0 * config.linear_inertia * (3 * segment_radius ** 2 + segment_length ** 2)
 
-    config.initial_tip_wrench = np.array([0, 0.3, 0, -0.9, 0, 0])
-
     return config
 
 
-def main():
-    rod_diameter = 0.003
-    rod_length = 0.7
-    num_nodes = 15
-    config = get_config(rod_diameter, rod_length, num_nodes)
+def solve(initial_tip_wrench):
+    config = get_base_config()
+    config.initial_tip_wrench = initial_tip_wrench
 
-    solver = crest_sparse.CosseratRodDynamicsSolver(config)
+    solution = crest_sparse.CosseratRodDynamicsSolver(config).solve()
 
+    return solution, config
+
+
+def render_movie(solution, save=False):
     plotter = CosseratRodPlotter(
+        save_frames_dir_name="cosserat_dynamics" if save else None,
         plot_wrenches=False,
         plot_backbone_frames=True,
         plot_internal_wrenches=False,
+        backbone_radius=0.005,
         camera_azimuth=60, 
-        camera_distance=1.7, 
-        camera_focal_point=np.array([0, 0, 0.35]))
-
-    solution = solver.solve()
-
-    print(f"iter:    {solution.meta.iterations}\n"
-          f"err:     {solution.meta.error:.3e}\n"
-          f"build:   {solution.meta.build_time_ms:.2f}\n"
-          f"opt:     {solution.meta.optimize_time_ms:.2f}\n"
-          f"extract: {solution.meta.extract_time_ms:.2f}\n"
-          f"total:   {solution.meta.total_time_ms:.2f}\n")
+        camera_distance=2.5, 
+        camera_focal_point=np.array([0, 0, 0.5]))
 
     for s in solution.marginals.rods_t:
         s.meta = solution.meta
         plotter.update(s)
-        time.sleep(config.dt)
-
-
     
 
-    # x = []
-    # x_sigma = []
+def make_pde_heatmaps(t, s, x_mean, x_sigma):
+    fig, axes = plt.subplots(2, 1, figsize=(10, 4), sharey=True, sharex=True)
 
-    # for rod_t in solution.marginals.rods_t:
+    im0 = axes[0].imshow(
+        x_mean.T,
+        extent=[t[0], t[-1], s[0], s[-1]],
+        origin="lower",
+        aspect="auto",
+        cmap="bwr",
+    )
+
+    axes[0].set_ylabel("arc length (m)")
+
+    plt.colorbar(im0, ax=axes[0])
+
+    im1 = axes[1].imshow(
+        x_sigma.T,
+        extent=[t[0], t[-1], s[0], s[-1]],
+        origin="lower",
+        aspect="auto",
+        cmap="binary",
+    )
+
+    axes[1].set_xlabel("time (sec)")
+    axes[1].set_ylabel("arc length (m)")
+
+    plt.colorbar(im1, ax=axes[1])
+
+    plt.tight_layout()
+    plt.savefig("pde_heatmaps.png", dpi=300)
+    plt.close()
+
+
+def make_tip_response_plot(t, x_tip_mean, x_tip_sigma):
+    plt.figure(figsize=(5, 3))
+
+    plt.plot(t, x_tip_mean, label="mean")
+
+    plt.fill_between(
+        t, 
+        x_tip_mean - 2.0 * x_tip_sigma,
+        x_tip_mean + 2.0 * x_tip_sigma,
+        alpha=0.3,
+        label="2-σ"
+    )
+    
+    plt.xlabel("time (sec)")
+    plt.ylabel("tip x position (m)")
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig("tip_response.png", dpi=300)
+    plt.close()
+
+
+def plot_solution(solution, config):
+    x_mean = []
+    x_sigma = []
+
+    for rod_t in solution.marginals.rods_t:
+        x_s_mean = [state.pose.mean[0,3] for state in rod_t.marginals.states]
+        x_s_sigma = [np.sqrt(state.pose.cov[3,3]) for state in rod_t.marginals.states]
         
+        x_mean.append(x_s_mean)
+        x_sigma.append(x_s_sigma)
         
-    #     x_s = [state.pose.mean[0,3] for state in rod_t.marginals.states]
-    #     x_s_sigma = [np.sqrt(state.pose.cov[3,3]) for state in rod_t.marginals.states]
-        
-    #     x.append(x_s)
-    #     x_sigma.append(x_s_sigma)
-        
-    # x = np.array(x)
-    # x_sigma = np.array(x_sigma)
+    x_mean = np.array(x_mean)
+    x_sigma = np.array(x_sigma)
 
-    # num_t, num_s = x.shape
-    # s = np.linspace(0, rod_length, num_s)
-    # t = np.linspace(0, num_t * config.dt, num_t)
+    num_t, num_s = x_mean.shape
+    s = np.linspace(0, config.rod_length, num_s)
+    t = np.linspace(0, config.dt * config.num_time_steps, num_t)
 
-    # T, S = np.meshgrid(t, s, indexing="xy")
+    make_pde_heatmaps(t, s, x_mean, x_sigma)
+    make_tip_response_plot(t, x_mean[:,-1], x_sigma[:,-1])
 
-    # fig = plt.figure(figsize=(8, 5))
-    # ax = fig.add_subplot(111, projection="3d")
 
-    # surf = ax.plot_surface(
-    #     T, S, x.T,
-    #     facecolors=plt.cm.viridis(x_sigma.T / np.max(x_sigma)),
-    #     linewidth=0,
-    #     antialiased=True
-    # )
+def main():
+    # solution, config = solve([0, 0, 0, -1, 0, 0])  # one mode of oscillation
+    solution, config = solve([0, 0.4, 0, -0.7, 0, 0])  # two modes of oscillation
+    # solution = solve([0.3, 0.3, 0.8, 0, 0, 0])  # weird initial z moment
 
-    # ax.set_xlabel("time (sec)")
-    # ax.set_ylabel("arc length (m)")
-    # ax.set_zlabel("x (m)")
+    render_movie(solution, save=True)
+    plot_solution(solution, config)
 
-    # plt.tight_layout()
-    # plt.savefig("cosserat_dynamics.png", dpi=300, bbox_inches="tight")
-    # plt.close()
-
+    
 if __name__ == "__main__":
     main()
