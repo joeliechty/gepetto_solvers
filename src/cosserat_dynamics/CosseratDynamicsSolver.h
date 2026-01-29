@@ -10,11 +10,13 @@ struct CosseratDynamicsConfig {
     int num_nodes;
     gtsam::Matrix6 K_inv;
 
-    double sigma_dynamics_noise;
-    double sigma_twist_noise;
-    double sigma_wrench_noise;
-    double sigma_init_tip_wrench;
-    double sigma_init_velocity;
+    double dynamics_noise_sigma;
+    double twist_noise_sigma;
+    double wrench_noise_sigma;
+
+    double init_velocity_sigma;
+    double init_velocity_mean;
+    int init_velocity_idx;
 
     int num_time_steps;
     double dt;
@@ -24,8 +26,6 @@ struct CosseratDynamicsConfig {
 
     double linear_inertia;
     double rotational_inertia;
-
-    gtsam::Vector6 initial_tip_wrench;
 };
 
 
@@ -41,7 +41,7 @@ public:
     Solution<CosseratDynamicsMarginals> solve();
 
 private:
-    void solve_static_rod(const CosseratDynamicsConfig& config);
+    void add_initial_conditions_factors();
 
     void build_graph() override;
 
@@ -59,12 +59,12 @@ private:
     const double linear_inertia_;
     const double rotational_inertia_;
 
-    const gtsam::Vector6 initial_tip_wrench_;
+    const double init_velocity_mean_;
+    const int init_velocity_idx_;
 
     gtsam::SharedDiagonal wrench_noise_;
     gtsam::SharedDiagonal twist_noise_;
     gtsam::SharedDiagonal dynamics_noise_;
-    gtsam::SharedDiagonal init_tip_wrench_noise_;
     gtsam::SharedDiagonal init_velocity_noise_;
     
     std::vector<std::unique_ptr<CosseratRodModel>> rods_t_;

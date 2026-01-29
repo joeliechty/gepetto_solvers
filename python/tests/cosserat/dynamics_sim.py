@@ -35,18 +35,20 @@ def get_base_config():
 
     rod_diameter = 0.003
     density = 6500.0
-    total_time = 2.5
+    total_time = 1.0
     frame_rate = 100
 
     config.rod_length = 1.0
-    config.num_nodes = 15
+    config.num_nodes = 20
     config.K_inv = get_K_inv(rod_diameter)
 
-    config.sigma_dynamics_noise = 1e-4
-    config.sigma_init_tip_wrench = 1e-4
-    config.sigma_twist_noise = 1e-4
-    config.sigma_wrench_noise = 1e-4
-    config.sigma_init_velocity = 1e-1
+    config.dynamics_noise_sigma = 1e-4
+    config.twist_noise_sigma = 1e-4
+    config.wrench_noise_sigma = 1e-4
+
+    config.init_velocity_mean = 10.0
+    config.init_velocity_sigma = 1e-4
+    config.init_velocity_idx = 5
 
     config.num_time_steps = int(frame_rate * total_time)
     config.dt = 1.0 / frame_rate
@@ -65,10 +67,8 @@ def get_base_config():
     return config
 
 
-def solve(initial_tip_wrench):
+def solve():
     config = get_base_config()
-    config.initial_tip_wrench = initial_tip_wrench
-
     solution = crest_sparse.CosseratRodDynamicsSolver(config).solve()
 
     return solution, config
@@ -169,10 +169,10 @@ def plot_solution(solution, config):
 
 def main():
     # solution, config = solve([0, 0, 0, -1, 0, 0])  # one mode of oscillation
-    solution, config = solve([0, 0.4, 0, -0.7, 0, 0])  # two modes of oscillation
+    solution, config = solve()  # two modes of oscillation
     # solution = solve([0.3, 0.3, 0.8, 0, 0, 0])  # weird initial z moment
 
-    render_movie(solution, save=True)
+    render_movie(solution, save=False)
     plot_solution(solution, config)
 
     
