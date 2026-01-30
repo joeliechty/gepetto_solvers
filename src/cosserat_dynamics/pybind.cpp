@@ -25,13 +25,12 @@ void bind_cosserat_dynamics(py::module& m) {
         .def_readwrite("dynamics_noise_sigma", &CosseratDynamicsConfig::dynamics_noise_sigma)
         .def_readwrite("twist_noise_sigma", &CosseratDynamicsConfig::twist_noise_sigma)
         .def_readwrite("wrench_noise_sigma", &CosseratDynamicsConfig::wrench_noise_sigma)
-        .def_readwrite("init_velocity_sigma", &CosseratDynamicsConfig::init_velocity_sigma)
-        .def_readwrite("init_velocity_mean", &CosseratDynamicsConfig::init_velocity_mean)
-        .def_readwrite("init_velocity_idx", &CosseratDynamicsConfig::init_velocity_idx)
         .def_readwrite("num_time_steps", &CosseratDynamicsConfig::num_time_steps)
         .def_readwrite("dt", &CosseratDynamicsConfig::dt)
         .def_readwrite("linear_damping", &CosseratDynamicsConfig::linear_damping)
         .def_readwrite("rotational_damping", &CosseratDynamicsConfig::rotational_damping)
+        .def_readwrite("init_wrench_mean", &CosseratDynamicsConfig::init_wrench_mean)
+        .def_readwrite("init_wrench_sigma", &CosseratDynamicsConfig::init_wrench_sigma)
         .def_readwrite("linear_inertia", &CosseratDynamicsConfig::linear_inertia)
         .def_readwrite("rotational_inertia", &CosseratDynamicsConfig::rotational_inertia);
 

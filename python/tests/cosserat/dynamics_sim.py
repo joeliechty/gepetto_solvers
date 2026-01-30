@@ -35,27 +35,26 @@ def get_base_config():
 
     rod_diameter = 0.003
     density = 6500.0
-    total_time = 1.0
+    total_time = 5.0
     frame_rate = 100
 
     config.rod_length = 1.0
-    config.num_nodes = 20
+    config.num_nodes = 15
     config.K_inv = get_K_inv(rod_diameter)
 
-    config.dynamics_noise_sigma = 1e-4
+    config.dynamics_noise_sigma = 1e-2
     config.twist_noise_sigma = 1e-4
     config.wrench_noise_sigma = 1e-4
-
-    config.init_velocity_mean = 10.0
-    config.init_velocity_sigma = 1e-4
-    config.init_velocity_idx = 5
 
     config.num_time_steps = int(frame_rate * total_time)
     config.dt = 1.0 / frame_rate
 
-    config.linear_damping = 0.005
-    config.rotational_damping = 1e-5
+    config.linear_damping = 3e-3
+    config.rotational_damping = 1e-4
 
+    config.init_wrench_mean = [0, 0.35, 0, -0.6, 0, 0]
+    config.init_wrench_sigma = 1e-4
+    
     segment_radius = rod_diameter / 2
     segment_area = np.pi * segment_radius**2
     segment_length = config.rod_length / config.num_nodes

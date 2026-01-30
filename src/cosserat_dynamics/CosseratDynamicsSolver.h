@@ -14,15 +14,14 @@ struct CosseratDynamicsConfig {
     double twist_noise_sigma;
     double wrench_noise_sigma;
 
-    double init_velocity_sigma;
-    double init_velocity_mean;
-    int init_velocity_idx;
-
     int num_time_steps;
     double dt;
 
     double linear_damping;
     double rotational_damping;
+
+    gtsam::Vector6 init_wrench_mean;
+    double init_wrench_sigma;
 
     double linear_inertia;
     double rotational_inertia;
@@ -41,8 +40,6 @@ public:
     Solution<CosseratDynamicsMarginals> solve();
 
 private:
-    void add_initial_conditions_factors();
-
     void build_graph() override;
 
     void extract_solution() override;
@@ -59,13 +56,12 @@ private:
     const double linear_inertia_;
     const double rotational_inertia_;
 
-    const double init_velocity_mean_;
-    const int init_velocity_idx_;
+    const gtsam::Vector6 init_wrench_mean_;
 
     gtsam::SharedDiagonal wrench_noise_;
     gtsam::SharedDiagonal twist_noise_;
     gtsam::SharedDiagonal dynamics_noise_;
-    gtsam::SharedDiagonal init_velocity_noise_;
+    gtsam::SharedDiagonal init_wrench_noise_;
     
     std::vector<std::unique_ptr<CosseratRodModel>> rods_t_;
     CosseratDynamicsMarginals extracted_;
