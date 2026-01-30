@@ -30,7 +30,7 @@ void bind_cosserat_dynamics(py::module& m) {
         .def_readwrite("linear_damping", &CosseratDynamicsConfig::linear_damping)
         .def_readwrite("rotational_damping", &CosseratDynamicsConfig::rotational_damping)
         .def_readwrite("init_wrench_mean", &CosseratDynamicsConfig::init_wrench_mean)
-        .def_readwrite("init_wrench_sigma", &CosseratDynamicsConfig::init_wrench_sigma)
+        .def_readwrite("init_velocity_sigma", &CosseratDynamicsConfig::init_velocity_sigma)
         .def_readwrite("linear_inertia", &CosseratDynamicsConfig::linear_inertia)
         .def_readwrite("rotational_inertia", &CosseratDynamicsConfig::rotational_inertia);
 

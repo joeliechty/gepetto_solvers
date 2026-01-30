@@ -6,8 +6,6 @@
 #include <gtsam/nonlinear/PriorFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/linear/NoiseModel.h>
-#include <ios>
-#include <memory>
 
 #include "cosserat_dynamics/CosseratDynamicsFactor.h"
 #include "cosserat_rod/CosseratRodModel.h"
@@ -30,7 +28,7 @@ CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& con
     wrench_noise_ = noiseModel::Isotropic::Sigma(6, config.wrench_noise_sigma);
     twist_noise_ = noiseModel::Isotropic::Sigma(6, config.twist_noise_sigma);
     dynamics_noise_ = noiseModel::Isotropic::Sigma(6, config.dynamics_noise_sigma);
-    init_wrench_noise_ = noiseModel::Isotropic::Sigma(6, config.init_wrench_sigma);
+    init_velocity_noise_ = noiseModel::Isotropic::Sigma(6, config.init_velocity_sigma);
 
     // Init rod model graph for each time step
     for (int t = 0; t < num_time_steps_; t++) {
@@ -62,48 +60,34 @@ void CosseratDynamicsSolver::build_graph() {
         graph_.add(PriorFactor<Pose3>(rods_t_[t]->get_pose_key(0), Pose3::Identity(), twist_noise_));
     }
 
-    // Enforce static conditions at t = 0
+    // Set initial conditions at t = 0 and t = 1
     for (size_t i = 1; i < num_nodes_; ++i) {
+        // Enforce static conditions at t = 0
         graph_.add(PriorFactor<Vector6>(
             rods_t_[0]->get_wrench_key(i),
             i == num_nodes_ - 1 ? init_wrench_mean_ : Vector6::Zero(),
-            i == num_nodes_ - 1 ? init_wrench_noise_ : wrench_noise_));
-    }
-
-    // Set velocity between factors for t = 1
-    for (size_t i = 1; i < num_nodes_; ++i) {
+            wrench_noise_));
+        
+        // Set velocity between factors for t = 1
         graph_.add(BetweenFactor<Pose3>(
             rods_t_[0]->get_pose_key(i),
             rods_t_[1]->get_pose_key(i),
             Pose3::Identity(),
-            twist_noise_));
+            init_velocity_noise_));
     }
 
-    // Set wrench priors for t = 1
-    for (size_t i = 1; i + 1 < num_nodes_; ++i) {
-        graph_.add(PriorFactor<Vector6>(
-            rods_t_[1]->get_wrench_key(i),
-            Vector6::Zero(),
-            wrench_noise_));
-    }
-
-
-    // Now add all the finite difference dynamics factors at each time step
-    // Skip 0 since that is the static config, already handled above
+    // Finite difference dynamics factors at each time step > 0
     for (int t = 1; t < num_time_steps_; t++) {
+        // Default is central differences
         int p0_idx = t - 1;
         int p1_idx = t;
         int p2_idx = t + 1;
-        int w_idx = t;
 
+        // Use forward differences the the right endpoint
         if (t == num_time_steps_ - 1) {
             p0_idx = t - 2;
             p1_idx = t - 1;
             p2_idx = t;
-        }
-
-        if (t == 1) {
-            w_idx = 2;
         }
 
         for (int i = 1; i < num_nodes_; i++) {
@@ -111,7 +95,7 @@ void CosseratDynamicsSolver::build_graph() {
                 rods_t_[p0_idx]->get_pose_key(i),
                 rods_t_[p1_idx]->get_pose_key(i),
                 rods_t_[p2_idx]->get_pose_key(i),
-                rods_t_[w_idx]->get_wrench_key(i),
+                rods_t_[t]->get_wrench_key(i),
                 dynamics_noise_,
                 dt_,
                 linear_damping_,

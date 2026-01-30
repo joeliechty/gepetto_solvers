@@ -35,7 +35,7 @@ def get_base_config():
 
     rod_diameter = 0.003
     density = 6500.0
-    total_time = 5.0
+    total_time = 3.0
     frame_rate = 100
 
     config.rod_length = 1.0
@@ -45,6 +45,7 @@ def get_base_config():
     config.dynamics_noise_sigma = 1e-2
     config.twist_noise_sigma = 1e-4
     config.wrench_noise_sigma = 1e-4
+    config.init_velocity_sigma = 2e-2
 
     config.num_time_steps = int(frame_rate * total_time)
     config.dt = 1.0 / frame_rate
@@ -53,7 +54,6 @@ def get_base_config():
     config.rotational_damping = 1e-4
 
     config.init_wrench_mean = [0, 0.35, 0, -0.6, 0, 0]
-    config.init_wrench_sigma = 1e-4
     
     segment_radius = rod_diameter / 2
     segment_area = np.pi * segment_radius**2
@@ -167,9 +167,7 @@ def plot_solution(solution, config):
 
 
 def main():
-    # solution, config = solve([0, 0, 0, -1, 0, 0])  # one mode of oscillation
-    solution, config = solve()  # two modes of oscillation
-    # solution = solve([0.3, 0.3, 0.8, 0, 0, 0])  # weird initial z moment
+    solution, config = solve()
 
     render_movie(solution, save=False)
     plot_solution(solution, config)

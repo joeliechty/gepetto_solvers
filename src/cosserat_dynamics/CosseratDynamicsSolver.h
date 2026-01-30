@@ -21,7 +21,7 @@ struct CosseratDynamicsConfig {
     double rotational_damping;
 
     gtsam::Vector6 init_wrench_mean;
-    double init_wrench_sigma;
+    double init_velocity_sigma;
 
     double linear_inertia;
     double rotational_inertia;
@@ -61,7 +61,7 @@ private:
     gtsam::SharedDiagonal wrench_noise_;
     gtsam::SharedDiagonal twist_noise_;
     gtsam::SharedDiagonal dynamics_noise_;
-    gtsam::SharedDiagonal init_wrench_noise_;
+    gtsam::SharedDiagonal init_velocity_noise_;
     
     std::vector<std::unique_ptr<CosseratRodModel>> rods_t_;
     CosseratDynamicsMarginals extracted_;
