@@ -25,10 +25,6 @@ class ParallelRobotSolver:
 
         self.start_conditions_guess = np.zeros(6 * 6)
 
-        def p(angle_deg, r=0.087):
-            a = np.deg2rad(angle_deg)
-            return np.array([r*np.cos(a), r*np.sin(a), 0.0])
-
         self.p_init = np.array([p[:3,3] for p in config.base_end_poses])
         self.p_final = np.array([p[:3,3] for p in config.tip_end_poses])
 

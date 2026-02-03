@@ -1,9 +1,11 @@
 #include "ParallelRobotModel.h"
 
+#include <cmath>
 #include <gtsam/base/Vector.h>
 #include <gtsam/slam/BetweenFactor.h>
 
 #include "PlatformWrenchBalanceFactor.h"
+#include "SingleRodBaseFactor.h"
 #include "cosserat_rod/BoundaryStressFactor.h"
 #include "cosserat_rod/CosseratRodModel.h"
 #include "utils/Gaussians.h"
@@ -56,10 +58,10 @@ NonlinearFactorGraph ParallelRobot::build_graph(
     SharedDiagonal tip_pose_noise = get_noise_model_rot_pos(sigma_end_pose_rot_, sigma_end_pose_pos_);
 
     // Base of rods relative to world is certain, except for z extension, which is uncertain
-    double sigma_z_rot = 10; // We don't care if the base rod pose rotatioons in the z direction
-    gtsam::SharedDiagonal base_pose_noise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
-        sigma_end_pose_rot_, sigma_end_pose_rot_, sigma_z_rot,
-        sigma_end_pose_pos_, sigma_end_pose_pos_, sigma_rod_lengths).finished());
+    gtsam::SharedDiagonal base_noise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
+        sigma_end_pose_rot_, sigma_end_pose_rot_,
+        sigma_end_pose_pos_, sigma_end_pose_pos_, sigma_rod_lengths,
+        1.0e-4).finished());
 
     // Build each rod
     for (int i = 0; i < NUM_RODS; i++) {
@@ -74,7 +76,11 @@ NonlinearFactorGraph ParallelRobot::build_graph(
         }
 
         // Base pose prior
-        graph.add(PriorFactor<Pose3>(rods_[i]->get_pose_key(0), Pose3(base_end_poses_[i]), base_pose_noise));
+        graph.add(SingleRodBaseFactor(
+            rods_[i]->get_pose_key(0), 
+            rods_[i]->get_stress_key(0),
+            Pose3(base_end_poses_[i]), 
+            base_noise));
 
         // Tip pose relative to platform
         graph.add(BetweenFactor<Pose3>(
@@ -126,11 +132,11 @@ Values ParallelRobot::get_initial_values() const {
 
     // Values for each rod
     for (int i = 0; i < NUM_RODS; i++) {
-        values.insert(rods_[i]->get_initial_values());
+        values.insert(rods_[i]->get_initial_values(0.3, Pose3(base_end_poses_[i])));
     }
 
     // Values for moving platform variables
-    values.insert(platform_pose_key(), Pose3::Identity());
+    values.insert(platform_pose_key(), Pose3(Rot3::Rz(M_PI), Point3(0, 0, 0.6)));
     values.insert(platform_stress_key(), Vector6(Vector6::Zero()));
     values.insert(platform_wrench_key(), Vector6(Vector6::Zero()));
 

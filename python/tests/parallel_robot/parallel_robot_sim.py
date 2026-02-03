@@ -9,7 +9,7 @@ from .baseline_model import ParallelRobotSolver
 def get_base_poses():
     angles = np.array(np.deg2rad([10, 110, 130, 230, 250, 350]))
 
-    radius = 0.3
+    radius = 0.1
     xs = radius * np.cos(angles)
     ys = radius * np.sin(angles)
 
@@ -27,7 +27,7 @@ platform_z_offset = -0.2
 def get_tip_poses():
     angles = np.array(np.deg2rad([50, 70, 170, 190, 290, 310]))
 
-    radius = 0.15
+    radius = 0.07
     xs = radius * np.cos(angles)
     ys = radius * np.sin(angles)
     z = platform_z_offset
@@ -85,22 +85,23 @@ def main():
 
     phase = np.radians(10)
 
-    config.nodes_per_rod = 20
+    config.nodes_per_rod = 10
     config.K_inv = K_inv
     config.sigma_twist_pos = 1.0e-5
-    config.sigma_twist_rot = 1.0e-3
+    config.sigma_twist_rot = 1.0e-4
     config.sigma_small_force = 1.0e-4
     config.sigma_small_moment = 1.0e-4
     config.base_end_poses = get_base_poses()
     config.tip_end_poses = get_tip_poses()
-    config.sigma_end_pose_pos= 1.0e-4
-    config.sigma_end_pose_rot= 1.0e-3
+    config.sigma_end_pose_pos= 1.0e-5
+    config.sigma_end_pose_rot= 1.0e-5
 
     solver = crest_sparse.ParallelRobotSolver(config)
     baseline = ParallelRobotSolver(config, plot=False)
 
     plotter = ParallelRobotPlotter(
         plot_rod_wrenches=False,
+        single_plot_mode=False,
         platform_z_offset=platform_z_offset,
         camera_azimuth=60, 
         camera_distance=4, 
@@ -112,14 +113,27 @@ def main():
     t_final = 1200.0
     num_steps = int(t_final / dt)
 
-    rod_lengths = 0.7 * np.ones(6)
-    rod_lengths_sigma = 1e-4
+    # rod_lengths = 0.7 * np.ones(6)
+    rod_lengths_sigma = 1e-2
 
     p_error = []
     for step in range(num_steps + 1):
         t = step * dt
 
         wrench = get_wrench_prior(t)
+
+        L0 = 0.001 * (24 * 25.4 - 13 - 33 - 400 + 240)
+        a = 5e-2
+        phi = np.radians(10)
+        wt = step / 100 * 2 * np.pi
+        L1= L0 + a * np.sin(wt - phi)
+        L2= L0 + a * np.sin(wt + phi)
+        L3= L0 + a * np.sin(wt + np.radians(120) - phi)
+        L4= L0 + a * np.sin(wt + np.radians(120) + phi)
+        L5= L0 + a * np.sin(wt + np.radians(240) - phi)
+        L6= L0 + a * np.sin(wt + np.radians(240) + phi)
+
+        rod_lengths = np.array([L1, L2, L3, L4, L5, L6])
         solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
         comparison = baseline.solve(rod_lengths)
 
@@ -131,25 +145,28 @@ def main():
         print("baseline")
         print(p_comparison)
 
-        J = solution.marginals.rod_lengths_jacobian
+        print("error:")
+        print(np.linalg.norm(p_solution - p_comparison))
 
-        p = solution.marginals.platform_pose.mean[:3, 3]
-        R = solution.marginals.platform_pose.mean[:3,:3]
+        # J = solution.marginals.rod_lengths_jacobian
 
-        p_goal, R_goal = get_goal_pose(t)
+        # p = solution.marginals.platform_pose.mean[:3, 3]
+        # R = solution.marginals.platform_pose.mean[:3,:3]
 
-        p_error = R.T @ (p_goal - p)
-        r_error = Rotation.from_matrix(R.T @ R_goal).as_rotvec()
+        # p_goal, R_goal = get_goal_pose(t)
+
+        # p_error = R.T @ (p_goal - p)
+        # r_error = Rotation.from_matrix(R.T @ R_goal).as_rotvec()
         
-        twist_error = np.hstack((r_error, p_error))
+        # twist_error = np.hstack((r_error, p_error))
 
-        max_step = 0.05
-        d_twist = twist_error
-        if np.linalg.norm(d_twist) > max_step:
-            d_twist = d_twist / np.linalg.norm(d_twist) * max_step
+        # max_step = 0.05
+        # d_twist = twist_error
+        # if np.linalg.norm(d_twist) > max_step:
+        #     d_twist = d_twist / np.linalg.norm(d_twist) * max_step
 
-        d_rod_lengths = np.linalg.pinv(J) @ d_twist
-        rod_lengths += d_rod_lengths
+        # d_rod_lengths = np.linalg.pinv(J) @ d_twist
+        # rod_lengths += d_rod_lengths
 
         plotter.update(solution)
 

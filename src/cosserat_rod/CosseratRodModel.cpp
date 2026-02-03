@@ -61,7 +61,10 @@ const std::vector<Key>& CosseratRodModel::get_wrench_keys() const {return wrench
 const std::vector<Key>& CosseratRodModel::get_pose_keys() const { return pose_keys_; }
 
 
-Values CosseratRodModel::get_initial_values(double rod_length) const {
+Values CosseratRodModel::get_initial_values(
+    double rod_length,
+    const Pose3& base_pose_init) const 
+{
     Values values;
     
     // TODO having optional base pose as well would be good here
@@ -69,7 +72,8 @@ Values CosseratRodModel::get_initial_values(double rod_length) const {
 
     for (int i = 0; i < num_nodes_; ++i) {
         Vector3 p = Vector3(0, 0, ds * i);
-        values.insert(pose_keys_[i], Pose3(Rot3::Identity(), p));
+        Pose3 pose = base_pose_init * Pose3(Rot3::Identity(), p);
+        values.insert(pose_keys_[i], pose);
         values.insert(stress_keys_[i], Vector6(Vector6::Zero()));
         values.insert(wrench_keys_[i], Vector6(Vector6::Zero()));
     }
