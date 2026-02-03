@@ -56,8 +56,9 @@ NonlinearFactorGraph ParallelRobot::build_graph(
     SharedDiagonal tip_pose_noise = get_noise_model_rot_pos(sigma_end_pose_rot_, sigma_end_pose_pos_);
 
     // Base of rods relative to world is certain, except for z extension, which is uncertain
+    double sigma_z_rot = 10; // We don't care if the base rod pose rotatioons in the z direction
     gtsam::SharedDiagonal base_pose_noise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
-        sigma_end_pose_rot_, sigma_end_pose_rot_, sigma_end_pose_rot_, 
+        sigma_end_pose_rot_, sigma_end_pose_rot_, sigma_z_rot,
         sigma_end_pose_pos_, sigma_end_pose_pos_, sigma_rod_lengths).finished());
 
     // Build each rod

@@ -30,6 +30,7 @@ void bind_parallel_robot(py::module& m) {
         .def_readwrite("rod_lengths_jacobian", &ParallelRobotMarginals::rod_lengths_jacobian);
         
     py::class_<Solution<ParallelRobotMarginals>>(m, "ParallelRobotSolution")
+        .def(py::init<>())
         .def_readwrite("meta", &Solution<ParallelRobotMarginals>::meta)
         .def_readwrite("marginals", &Solution<ParallelRobotMarginals>::marginals);
 
