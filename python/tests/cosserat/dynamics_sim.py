@@ -33,9 +33,11 @@ def get_K_inv(rod_diameter, youngs_modulus=40.0e9, shear_modulus=15.0e9):
 def get_base_config():
     config = crest_sparse.CosseratRodDynamicsConfig()
 
+    config.base.use_dense = False
+
     rod_diameter = 0.003
     density = 6500.0
-    total_time = 3.0
+    total_time = 0.2
     frame_rate = 100
 
     config.rod_length = 1.0

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Marginals.h>
 
@@ -23,13 +24,23 @@ struct Solution {
 };
 
 
+struct SolverBaseConfig {
+    std::string linear_solver_type = "MULTIFRONTAL_QR";
+    bool use_dense = false;
+    double delta_initial = 1.0;
+};
+
+
 class SolverBase {
 public:
-    SolverBase();
+    SolverBase(const SolverBaseConfig& params);
 
     SolutionMetadata optimize();
 
 private:
+    void optimize_dense_benchmark(
+        const gtsam::DoglegParams& params, SolutionMetadata& meta);
+
     virtual void build_graph() = 0;
 
     virtual void extract_solution() = 0;
@@ -41,6 +52,5 @@ protected:
     gtsam::Values values_;
     gtsam::Marginals marginals_;
 
-    // Dogleg intitial trust radius, child classes can edit
-    double delta_initial_ = 1.0;
+    const SolverBaseConfig config_;
 };

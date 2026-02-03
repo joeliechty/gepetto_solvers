@@ -19,6 +19,7 @@ void bind_cosserat_dynamics(py::module& m) {
     
     py::class_<CosseratDynamicsConfig>(m, "CosseratRodDynamicsConfig")
         .def(py::init<>())  // default constructor
+        .def_readwrite("base", &CosseratDynamicsConfig::base)
         .def_readwrite("rod_length", &CosseratDynamicsConfig::rod_length)
         .def_readwrite("num_nodes", &CosseratDynamicsConfig::num_nodes)
         .def_readwrite("K_inv", &CosseratDynamicsConfig::K_inv)

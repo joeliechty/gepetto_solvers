@@ -7,6 +7,8 @@
 
 
 struct TendonRobotSolverConfig{
+    SolverBaseConfig base;
+    
     double rod_length;
     int num_discs;
     int num_between_nodes;

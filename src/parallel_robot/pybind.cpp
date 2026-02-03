@@ -11,6 +11,7 @@ namespace py = pybind11;
 void bind_parallel_robot(py::module& m) {
     py::class_<ParallelRobotSolverConfig>(m, "ParallelRobotSolverConfig")
         .def(py::init<>())
+        .def_readwrite("base", &ParallelRobotSolverConfig::base)
         .def_readwrite("nodes_per_rod", &ParallelRobotSolverConfig::nodes_per_rod)
         .def_readwrite("K_inv", &ParallelRobotSolverConfig::K_inv)
         .def_readwrite("sigma_twist_pos", &ParallelRobotSolverConfig::sigma_twist_pos)

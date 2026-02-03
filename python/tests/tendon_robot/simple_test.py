@@ -10,6 +10,8 @@ from .config import get_base_config
 
 def main():
     config = get_base_config()
+    config.base.use_dense = True
+    config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY"
     solver = crest_sparse.TendonRobotSolver(config)
     plotter = TendonRobotPlotter(single_plot_mode=False)
 

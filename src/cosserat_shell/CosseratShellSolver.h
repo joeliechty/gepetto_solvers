@@ -8,6 +8,8 @@
 
 
 struct CosseratShellSolverConfig {
+    SolverBaseConfig base;
+
     double num_nodes_x;
     double num_nodes_y;
     double element_size;

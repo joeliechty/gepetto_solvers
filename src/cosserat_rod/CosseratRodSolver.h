@@ -8,6 +8,8 @@
 
 
 struct CosseratRodSolverConfig {
+    SolverBaseConfig base;
+    
     double rod_length;
     int num_nodes;
 

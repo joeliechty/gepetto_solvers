@@ -6,6 +6,8 @@
 
 
 struct CosseratDynamicsConfig {
+    SolverBaseConfig base;
+    
     double rod_length;
     int num_nodes;
     gtsam::Matrix6 K_inv;

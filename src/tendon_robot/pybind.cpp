@@ -36,6 +36,7 @@ void bind_tendon_robot(py::module& m) {
     
     py::class_<TendonRobotSolverConfig>(m, "TendonRobotSolverConfig")
         .def(py::init<>())
+        .def_readwrite("base", &TendonRobotSolverConfig::base)
         .def_readwrite("rod_length", &TendonRobotSolverConfig::rod_length)
         .def_readwrite("num_discs", &TendonRobotSolverConfig::num_discs)
         .def_readwrite("num_between_nodes", &TendonRobotSolverConfig::num_between_nodes)

@@ -6,12 +6,14 @@
 #include "cosserat_rod/CosseratRodModel.h"
 #include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
+#include "utils/SolverBase.h"
 
 using namespace gtsam;
 
 
-CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config) 
-:
+CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config)
+:   
+    SolverBase(config.base),
     rod_length_(config.rod_length)
 {
     SharedDiagonal twist_noise = get_noise_model_rot_pos(

@@ -6,11 +6,15 @@
 
 #include "parallel_robot/ParallelRobotModel.h"
 #include "utils/MiscInline.h"
+#include "utils/SolverBase.h"
 
 using namespace gtsam;
 
 
-ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config) {
+ParallelRobotSolver::ParallelRobotSolver(const ParallelRobotSolverConfig& config) 
+:
+    SolverBase(config.base)
+{
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos); 
     

@@ -8,6 +8,8 @@
 
 
 struct ParallelRobotSolverConfig {
+    SolverBaseConfig base;
+    
     int nodes_per_rod;
 
     gtsam::Matrix6 K_inv;

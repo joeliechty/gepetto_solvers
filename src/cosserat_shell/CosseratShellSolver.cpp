@@ -3,11 +3,15 @@
 #include "cosserat_shell/CosseratShellModel.h"
 #include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
+#include "utils/SolverBase.h"
 
 using namespace gtsam;
 
 
-CosseratShellSolver::CosseratShellSolver(const CosseratShellSolverConfig& config) {
+CosseratShellSolver::CosseratShellSolver(const CosseratShellSolverConfig& config) 
+:
+    SolverBase(config.base)
+{
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos); 
     

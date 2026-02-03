@@ -60,9 +60,9 @@ def get_tip_pose_prior(t):
 
 
 def main():
-    # prior_getter = get_tip_force_prior
+    prior_getter = get_tip_force_prior
     # prior_getter = get_tip_wrench_prior
-    prior_getter = get_tip_pose_prior
+    # prior_getter = get_tip_pose_prior
 
     k_bending = 0.1
     k_torsion = 0.1
@@ -78,6 +78,10 @@ def main():
     K_inv[5,5] = 1 / k_extension
 
     config = crest_sparse.CosseratRodSolverConfig()
+    config.base.linear_solver_type = "MULTIFRONTAL_QR"
+    config.base.use_dense = True
+    config.base.delta_initial = 10000.0
+
     config.rod_length = 0.5
     config.num_nodes = 15
     config.K_inv = K_inv

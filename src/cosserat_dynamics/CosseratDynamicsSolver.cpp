@@ -9,12 +9,14 @@
 
 #include "cosserat_dynamics/CosseratDynamicsFactor.h"
 #include "cosserat_rod/CosseratRodModel.h"
+#include "utils/SolverBase.h"
 
 using namespace gtsam;
 
 
-CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& config) 
+CosseratDynamicsSolver::CosseratDynamicsSolver(const CosseratDynamicsConfig& config)
 :   
+    SolverBase(config.base),
     num_time_steps_(config.num_time_steps),
     num_nodes_(config.num_nodes),
     dt_(config.dt),

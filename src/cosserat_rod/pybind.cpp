@@ -26,6 +26,7 @@ void bind_cosserat_rod(py::module& m) {
 
     py::class_<CosseratRodSolverConfig>(m, "CosseratRodSolverConfig")
         .def(py::init<>())  // default constructor
+        .def_readwrite("base", &CosseratRodSolverConfig::base)
         .def_readwrite("rod_length", &CosseratRodSolverConfig::rod_length)
         .def_readwrite("num_nodes", &CosseratRodSolverConfig::num_nodes)
         .def_readwrite("K_inv", &CosseratRodSolverConfig::K_inv)

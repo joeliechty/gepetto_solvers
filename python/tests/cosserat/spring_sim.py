@@ -40,6 +40,7 @@ def main():
     K_inv[5,5] = 1 / k_extension
 
     config = crest_sparse.CosseratRodSolverConfig()
+    config.base.use_dense = False
     config.rod_length = 2
     config.num_nodes = 50
     config.K_inv = K_inv

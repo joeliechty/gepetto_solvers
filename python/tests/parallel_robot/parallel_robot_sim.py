@@ -83,21 +83,20 @@ def main():
 
     config = crest_sparse.ParallelRobotSolverConfig()
 
-    phase = np.radians(10)
-
+    config.base.use_dense = False
     config.nodes_per_rod = 10
     config.K_inv = K_inv
-    config.sigma_twist_pos = 1.0e-5
-    config.sigma_twist_rot = 1.0e-4
+    config.sigma_twist_pos = 1.0e-4
+    config.sigma_twist_rot = 1.0e-3
     config.sigma_small_force = 1.0e-4
     config.sigma_small_moment = 1.0e-4
     config.base_end_poses = get_base_poses()
     config.tip_end_poses = get_tip_poses()
-    config.sigma_end_pose_pos= 1.0e-5
-    config.sigma_end_pose_rot= 1.0e-5
+    config.sigma_end_pose_pos= 1.0e-4
+    config.sigma_end_pose_rot= 1.0e-3
 
     solver = crest_sparse.ParallelRobotSolver(config)
-    baseline = ParallelRobotSolver(config, plot=False)
+    # baseline = ParallelRobotSolver(config, plot=False)
 
     plotter = ParallelRobotPlotter(
         plot_rod_wrenches=False,
@@ -114,7 +113,7 @@ def main():
     num_steps = int(t_final / dt)
 
     # rod_lengths = 0.7 * np.ones(6)
-    rod_lengths_sigma = 1e-2
+    rod_lengths_sigma = 1e-3
 
     p_error = []
     for step in range(num_steps + 1):
@@ -135,18 +134,18 @@ def main():
 
         rod_lengths = np.array([L1, L2, L3, L4, L5, L6])
         solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
-        comparison = baseline.solve(rod_lengths)
+        # comparison = baseline.solve(rod_lengths)
 
-        p_solution = solution.marginals.rods[0].states[-1].pose.mean[:3,3]
-        p_comparison = comparison[0]['pose'][-1][:3,3]
+        # p_solution = solution.marginals.rods[0].states[-1].pose.mean[:3,3]
+        # p_comparison = comparison[0]['pose'][-1][:3,3]
 
-        print("solution:")
-        print(p_solution)
-        print("baseline")
-        print(p_comparison)
+        # print("solution:")
+        # print(p_solution)
+        # print("baseline")
+        # print(p_comparison)
 
-        print("error:")
-        print(np.linalg.norm(p_solution - p_comparison))
+        # print("error:")
+        # print(np.linalg.norm(p_solution - p_comparison))
 
         # J = solution.marginals.rod_lengths_jacobian
 
