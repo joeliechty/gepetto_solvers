@@ -84,19 +84,19 @@ def main():
     config = crest_sparse.ParallelRobotSolverConfig()
 
     config.base.use_dense = False
-    config.nodes_per_rod = 10
+    config.nodes_per_rod = 15
     config.K_inv = K_inv
     config.sigma_twist_pos = 1.0e-4
     config.sigma_twist_rot = 1.0e-3
-    config.sigma_small_force = 1.0e-4
-    config.sigma_small_moment = 1.0e-4
+    config.sigma_small_force = 1.0e-2
+    config.sigma_small_moment = 1.0e-2
     config.base_end_poses = get_base_poses()
     config.tip_end_poses = get_tip_poses()
     config.sigma_end_pose_pos= 1.0e-4
     config.sigma_end_pose_rot= 1.0e-3
 
     solver = crest_sparse.ParallelRobotSolver(config)
-    # baseline = ParallelRobotSolver(config, plot=False)
+    baseline = ParallelRobotSolver(config, plot=False)
 
     plotter = ParallelRobotPlotter(
         plot_rod_wrenches=False,
@@ -112,17 +112,21 @@ def main():
     t_final = 1200.0
     num_steps = int(t_final / dt)
 
-    # rod_lengths = 0.7 * np.ones(6)
-    rod_lengths_sigma = 1e-3
+    rod_lengths_sigma = 3e-3
 
-    p_error = []
+    L0 = 0.001 * (24 * 25.4 - 13 - 33 - 400 + 240)
+    a = 0
+    a_max = 5e-2
+
     for step in range(num_steps + 1):
         t = step * dt
 
+        if a < a_max:
+            a += 0.001
+        
         wrench = get_wrench_prior(t)
 
-        L0 = 0.001 * (24 * 25.4 - 13 - 33 - 400 + 240)
-        a = 5e-2
+        
         phi = np.radians(10)
         wt = step / 100 * 2 * np.pi
         L1= L0 + a * np.sin(wt - phi)

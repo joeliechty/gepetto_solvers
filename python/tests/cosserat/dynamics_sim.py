@@ -37,7 +37,7 @@ def get_base_config():
 
     rod_diameter = 0.003
     density = 6500.0
-    total_time = 0.2
+    total_time = 1.0
     frame_rate = 100
 
     config.rod_length = 1.0
