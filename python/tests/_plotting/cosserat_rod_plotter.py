@@ -124,7 +124,9 @@ class CosseratRodMeshManager:
     def update_wrenches(self, solution, plotter):
         if not self.plot_wrenches:
             return 
-    
+
+        states = solution.states if self.plot_base_wrench else solution.states[1:]
+
         if plotter.frame == 0:
             self.moment_arrow_transforms = []
             self.moment_ellipsoid_transforms = []
@@ -133,7 +135,7 @@ class CosseratRodMeshManager:
 
             shaft_scale=0.05
             
-            for _ in range(len(solution.states)):
+            for _ in range(len(states)):
                 mesh = utils.get_arrow(shaft_scale=shaft_scale)
                 transform = vtk.vtkTransform()
                 actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
@@ -159,9 +161,11 @@ class CosseratRodMeshManager:
                 self.force_ellipsoid_transforms.append(transform)
 
         # Update vtkTransforms for each actor
-        poses = [state.pose.mean for state in solution.states]
-        wrenches = [state.wrench.mean for state in solution.states]
-        covs = [state.wrench.cov for state in solution.states]
+        
+
+        poses = [state.pose.mean for state in states]
+        wrenches = [state.wrench.mean for state in states]
+        covs = [state.wrench.cov for state in states]
 
         for ii in range(len(poses)):
             p, w, cov = poses[ii][:3, 3], wrenches[ii], covs[ii]

@@ -7,8 +7,8 @@ from .config import get_base_config
 from .baseline_model import CosseratRodBaseline
 
 def get_tip_wrench(t):
-    f_xy = 0.5 * np.array([np.cos(0.1 * t), np.sin(0.1 * t)])
-    f_z = 2 * np.sin(0.3 * t)
+    f_xy = 1 * np.array([np.cos(0.1 * t), np.sin(0.1 * t)])
+    f_z = 1.5 * np.sin(0.3 * t)
 
     m_xy = 0.5 * np.array([np.cos(0.3 * t), np.sin(0.3 * t)])
     m_z = 2 * np.sin(0.2 * t)
@@ -16,7 +16,8 @@ def get_tip_wrench(t):
     return np.hstack((m_xy, m_z, f_xy, f_z))
 
 
-def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False, plot=False):
+def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False):
+    # Coose solver
     config = get_base_config()
     config.use_midpoint = use_midpoint
     config.num_nodes = num_nodes
@@ -26,9 +27,14 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False, plot=F
     else:
         solver = crest_sparse.CosseratRodSolver(config)
 
+    # Only plot one of the cases to see what the robot did
+    plot = use_midpoint and num_nodes == 15
+
     if plot:
         plotter = CosseratRodPlotter(
             plot_wrenches=True,
+            plot_base_wrench=False,
+            save_frames_dir_name='midpoint_vs_euler',
             plot_backbone_frames=True, 
             camera_azimuth=60, 
             camera_distance=1.5, 
@@ -36,7 +42,7 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False, plot=F
     
     frame_rate = 1.0
     dt = 1.0 / frame_rate
-    t_final = 60.0
+    t_final = 120.0
     num_steps = int(t_final / dt)
     tip_wrench_cov = 1e-6 * np.eye(6)
 
@@ -53,12 +59,12 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False, plot=F
         else:
             wrench = crest_sparse.Vector6Gaussian(tip_wrench, tip_wrench_cov)
             solution = solver.solve(wrench, None, None)
-            if plot:
-                plotter.update(solution) 
-            
             pose = solution.marginals.states[-1].pose.mean
 
         tip_poses.append(pose)
+
+        if plot:
+            plotter.update(solution) 
 
         progress = 100.0 * step / num_steps
         print(f"Progress: {progress:5.1f}%", end="\r")
@@ -79,8 +85,8 @@ def run_sims(num_nodes):
     
     midpoint_rms, euler_rms = [], []
     for n in num_nodes:
-        midpoint = simulate_trajectory(n, use_midpoint=True, plot=False)    
-        euler = simulate_trajectory(n, use_midpoint=False, plot=False)    
+        midpoint = simulate_trajectory(n, use_midpoint=True)    
+        euler = simulate_trajectory(n, use_midpoint=False)    
 
         midpoint_rms.append(rms_error(midpoint['p']))
         euler_rms.append(rms_error(euler['p']))
