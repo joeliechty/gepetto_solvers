@@ -29,6 +29,7 @@ void bind_cosserat_rod(py::module& m) {
         .def_readwrite("base", &CosseratRodSolverConfig::base)
         .def_readwrite("rod_length", &CosseratRodSolverConfig::rod_length)
         .def_readwrite("num_nodes", &CosseratRodSolverConfig::num_nodes)
+        .def_readwrite("use_midpoint", &CosseratRodSolverConfig::use_midpoint)
         .def_readwrite("K_inv", &CosseratRodSolverConfig::K_inv)
         .def_readwrite("sigma_twist_pos", &CosseratRodSolverConfig::sigma_twist_pos)
         .def_readwrite("sigma_twist_rot", &CosseratRodSolverConfig::sigma_twist_rot)

@@ -42,7 +42,7 @@ Vector CosseratStressFactor::evaluateError(
         &d_stress_pred_d_pose_1,
         &d_stress_pred_d_pose_0) + wrench_body;
     
-    Vector6 stress_error = stress_pred - stress_0; // Result should equal stress_0
+    Vector6 stress_error = stress_pred - stress_0;
 
     if (H1) { *H1 = d_stress_pred_d_pose_0 + d_wrench_body_d_pose_0; }
 

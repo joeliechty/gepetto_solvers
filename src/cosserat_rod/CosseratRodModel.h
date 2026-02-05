@@ -29,7 +29,8 @@ public:
         int num_nodes, 
         const gtsam::Matrix6& K_inv, 
         gtsam::SharedDiagonal twist_noise,
-        gtsam::SharedDiagonal stress_noise);
+        gtsam::SharedDiagonal stress_noise,
+        bool use_midpoint = true);
 
     gtsam::NonlinearFactorGraph build_graph(
         double rod_length,
@@ -62,6 +63,7 @@ private:
 
     const int num_nodes_;
     std::vector<gtsam::Matrix6> K_inv_;
+    const bool use_midpoint_;
 
     gtsam::SharedDiagonal twist_noise_;
     gtsam::SharedDiagonal stress_noise_;

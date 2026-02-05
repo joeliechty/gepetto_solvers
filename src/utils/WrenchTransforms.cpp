@@ -32,6 +32,7 @@ Vector6 transform_wrench_adjoint(
 }
 
 
+// TODO, remove this and use the above maybe? This might be just a special case where translation is zero
 Vector6 spatial_to_body_wrench(
     const Vector6& wrench_spatial, 
     const Pose3& pose, 
@@ -66,4 +67,41 @@ Vector6 spatial_to_body_wrench(
     }
     
     return wrench_body;
+}
+
+
+Vector6 body_to_spatial_wrench(
+    const Vector6& wrench_body, 
+    const Pose3& pose, 
+    OptionalJacobian<6, 6> H_wrench,
+    OptionalJacobian<6, 6> H_pose)
+{
+    Matrix3 d_moment_d_rotation, d_force_d_rotation, d_moment_d_moment, d_force_d_force;
+    Matrix36 d_rotation_d_pose;
+
+    Vector6 wrench_spatial;
+
+    Rot3 rot = pose.rotation(d_rotation_d_pose);
+    
+    wrench_spatial.head<3>() = rot.rotate(wrench_body.head<3>(),
+        H_pose ? &d_moment_d_rotation : 0,
+        H_wrench ? &d_moment_d_moment : 0);
+    
+    wrench_spatial.tail<3>() = rot.rotate(wrench_body.tail<3>(),
+        H_pose ? &d_force_d_rotation : 0,
+        H_wrench ? &d_force_d_force : 0);
+    
+    if (H_pose) {
+        H_pose->setZero();
+        H_pose->block<3,3>(0,0) = d_moment_d_rotation;
+        H_pose->block<3,3>(3,0) = d_force_d_rotation;
+    }
+
+    if (H_wrench) {
+        H_wrench->setZero();
+        H_wrench->block<3,3>(0,0) = d_moment_d_moment;
+        H_wrench->block<3,3>(3,3) = d_force_d_force;
+    }
+    
+    return wrench_spatial;
 }

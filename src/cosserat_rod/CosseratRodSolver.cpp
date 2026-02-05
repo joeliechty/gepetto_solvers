@@ -29,7 +29,8 @@ CosseratRodSolver::CosseratRodSolver(const CosseratRodSolverConfig& config)
         config.num_nodes, 
         config.K_inv, 
         twist_noise, 
-        small_wrench_noise_);
+        small_wrench_noise_,
+        config.use_midpoint);
 
     get_initial_values();
 }

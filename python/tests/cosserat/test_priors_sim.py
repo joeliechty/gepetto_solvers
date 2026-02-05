@@ -4,6 +4,7 @@ from scipy.spatial.transform import Rotation
 
 import crest_sparse
 from .._plotting.cosserat_rod_plotter import CosseratRodPlotter
+from .config import get_base_config
 
 
 def get_tip_force_prior(t):
@@ -64,34 +65,8 @@ def main():
     # prior_getter = get_tip_wrench_prior
     prior_getter = get_tip_pose_prior
 
-    k_bending = 0.1
-    k_torsion = 0.1
-    k_shear = 1e2
-    k_extension = 1e2
-
-    K_inv = np.eye(6)
-    K_inv[0,0] = 1 / k_bending
-    K_inv[1,1] = 1 / k_bending
-    K_inv[2,2] = 1 / k_torsion
-    K_inv[3,3] = 1 / k_shear
-    K_inv[4,4] = 1 / k_shear
-    K_inv[5,5] = 1 / k_extension
-
-    config = crest_sparse.CosseratRodSolverConfig()
-    config.base.linear_solver_type = "MULTIFRONTAL_QR"
-    config.base.use_dense = False
-    config.base.delta_initial = 1.0
-
-    config.rod_length = 0.5
-    config.num_nodes = 15
-    config.K_inv = K_inv
-    config.sigma_twist_pos = 1.0e-3
-    config.sigma_twist_rot = 1.0e-3
-    config.sigma_small_force = 1.0e-3
-    config.sigma_small_moment = 1.0e-3
-    config.sigma_base_pose_pos = 1.0e-3
-    config.sigma_base_pose_rot = 1.0e-3
-
+    config = get_base_config()
+    
     solver = crest_sparse.CosseratRodSolver(config)
     plotter = CosseratRodPlotter(
         plot_wrenches=True,

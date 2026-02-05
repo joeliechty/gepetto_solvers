@@ -12,12 +12,14 @@ CosseratRodModel::CosseratRodModel (
     int num_nodes,
     const Matrix6& K_inv,
     SharedDiagonal twist_noise,
-    SharedDiagonal stress_noise) 
+    SharedDiagonal stress_noise,
+    bool use_midpoint) 
 : 
     id_(next_id_++),
     num_nodes_(num_nodes),
     twist_noise_(twist_noise), 
-    stress_noise_(stress_noise)
+    stress_noise_(stress_noise),
+    use_midpoint_(use_midpoint)
 {
     K_inv_ = std::vector<Matrix6>(num_nodes - 1, K_inv);
 
@@ -105,7 +107,8 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
             ds[i], 
             nominal_strain ? *nominal_strain : straight_rod_strain,
             K_inv_[i], 
-            twist_noise_));
+            twist_noise_,
+            use_midpoint_));
     }
         
     // Cosserat stress factors

@@ -12,7 +12,8 @@ struct CosseratRodSolverConfig {
     
     double rod_length;
     int num_nodes;
-
+    bool use_midpoint;
+    
     gtsam::Matrix6 K_inv;
 
     double sigma_twist_pos;

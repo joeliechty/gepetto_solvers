@@ -2,6 +2,9 @@
 
 #include <gtsam/base/Matrix.h>
 
+#include "utils/WrenchTransforms.h"
+
+
 using namespace gtsam;
 
 
@@ -119,64 +122,58 @@ Vector6 TendonDiscWrenchFactor::get_single_tendon_wrench(
     OptionalJacobian<6, 6> H_p0,
     OptionalJacobian<6, 6> H_p1) const
 {
-    Matrix36 d_h1_world_d_p1;
-    Point3 h1_world = p1.transformFrom(h1, &d_h1_world_d_p1);
+    // TF body hole 1 location to frame 0 for differencing
+    Matrix36 d_h1w_d_p1;
+    Point3 h1w = p1.transformFrom(h1, d_h1w_d_p1);
+
+    Matrix36 d_h10_d_p0;
+    Matrix3 d_h10_d_h1w;
+    Point3 h10 = p0.transformTo(h1w, d_h10_d_p0, d_h10_d_h1w);
+
+    // Difference between two holes is direction of force
+    Vector3 diff = h10 - h0;
+    Matrix3 d_diff_d_h10 = Matrix3::Identity();
+
+    Matrix3 d_dir_d_diff;
+    Vector3 dir = normalize(diff, &d_dir_d_diff);
+
+    // Force is tension in that direction
+    Vector3 force = tension * dir;
+    Matrix31 d_force_d_tension = dir;
+    Matrix33 d_force_d_dir = tension * Matrix3::Identity();
+
+    // Compute moment about frame 0 origin and combine to wrench
+    Matrix3 d_moment_d_force;
+    Vector3 moment = cross(h0, force, std::nullopt, d_moment_d_force);
     
-    Matrix36 d_h0_world_d_p0;
-    Point3 h0_world = p0.transformFrom(h0, &d_h0_world_d_p0);
-
-    Matrix3 d_hole_diff_d_h1_world = Matrix3::Identity();
-    Matrix3 d_hole_diff_d_h0_world = -Matrix3::Identity();
-    Vector3 hole_diff = h1_world - h0_world;
-
-    Vector3 force_dir;
-    Matrix3 d_force_dir_d_hole_diff;
-
-    bool valid = hole_diff.allFinite() && hole_diff.norm() > 1e-3;
-    if (valid) {
-        force_dir = normalize(hole_diff, &d_force_dir_d_hole_diff);
-    } else {
-        force_dir = Vector3::Zero();
-        d_force_dir_d_hole_diff.setZero();
-    }
-
-    Vector3 force = tension * force_dir;
-    Matrix31 d_force_d_tension = force_dir;
-    Matrix33 d_force_d_force_dir = tension * Matrix3::Identity();
-
-    Matrix36 d_r0_d_p0;
-    Rot3 r0 = p0.rotation(d_r0_d_p0);
-
-    Matrix3 d_rho_d_r0;
-    Vector3 rho = r0.rotate(h0, d_rho_d_r0);
-
-    Matrix33 d_moment_d_rho, d_moment_d_force;
-    Vector3 moment = cross(rho, force, d_moment_d_rho, d_moment_d_force);
-
-    Vector6 wrench;
-    wrench << moment, force;
+    Vector6 body;
+    body << moment, force;
+    Matrix63 d_body_d_moment = Matrix63::Zero();
+    d_body_d_moment.topRows(3) = Matrix3::Identity();
+    Matrix63 d_body_d_force = Matrix63::Zero();
+    d_body_d_force.bottomRows(3) = Matrix3::Identity();
+    
+    // Our wrenches are all defined in spatial coordinates, so rotate
+    Matrix6 d_spatial_d_body, d_spatial_d_p0;
+    Vector6 spatial = body_to_spatial_wrench(body, p0, d_spatial_d_body, d_spatial_d_p0);
 
     if (H_tension) {
-        H_tension->head<3>() = d_moment_d_force * d_force_d_tension;
-        H_tension->tail<3>() = d_force_d_tension;
+        *H_tension = d_spatial_d_body * d_body_d_force * d_force_d_tension + 
+            d_spatial_d_body * d_body_d_moment * d_moment_d_force * d_force_d_tension;
     }
 
     if (H_p0) {
-        Matrix36 d_force_d_p0 = d_force_d_force_dir * d_force_dir_d_hole_diff * d_hole_diff_d_h0_world * d_h0_world_d_p0;
-        Matrix36 d_moment_d_p0 = d_moment_d_rho * d_rho_d_r0 * d_r0_d_p0 
-            + d_moment_d_force * d_force_d_p0;
-
-        H_p0->block<3,6>(0,0) = d_moment_d_p0;
-        H_p0->block<3,6>(3,0) = d_force_d_p0;
+        Matrix36 d_force_d_p0 = d_force_d_dir * d_dir_d_diff * d_diff_d_h10 * d_h10_d_p0;
+        *H_p0 = d_spatial_d_p0 + 
+            d_spatial_d_body * d_body_d_force * d_force_d_p0 + 
+            d_spatial_d_body * d_body_d_moment * d_moment_d_force * d_force_d_p0;
     }
 
     if (H_p1) {
-        Matrix36 d_force_d_p1 = d_force_d_force_dir * d_force_dir_d_hole_diff * d_hole_diff_d_h1_world * d_h1_world_d_p1;
-        Matrix36 d_moment_d_p1 = d_moment_d_force * d_force_d_p1;
-
-        H_p1->block<3,6>(0,0) = d_moment_d_p1;
-        H_p1->block<3,6>(3,0) = d_force_d_p1;
+        Matrix36 d_force_d_p1 = d_force_d_dir * d_dir_d_diff * d_diff_d_h10 * d_h10_d_h1w * d_h1w_d_p1;
+        *H_p1 = d_spatial_d_body * d_body_d_force * d_force_d_p1 + 
+            d_spatial_d_body * d_body_d_moment * d_moment_d_force * d_force_d_p1;
     }
 
-    return wrench;
+    return spatial;
 }

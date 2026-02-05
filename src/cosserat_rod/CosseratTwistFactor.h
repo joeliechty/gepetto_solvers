@@ -18,7 +18,8 @@ public:
         double ds,
         const gtsam::Vector6& nominal_strain,
         const gtsam::Matrix6& K_inv,
-        const gtsam::SharedNoiseModel& model);
+        const gtsam::SharedNoiseModel& model,
+        bool use_midpoint = true);
 
     gtsam::Vector evaluateError(
         const gtsam::Pose3& pose_0, 
@@ -32,6 +33,7 @@ public:
 
 private:
     const double ds_;
+    const bool use_midpoint_;
     const gtsam::Vector6 nominal_strain_;
     const gtsam::Matrix6 K_inv_;
 };

@@ -136,7 +136,7 @@ Key TendonRobotModel::get_external_wrench_key(int node_idx) const {
 Values TendonRobotModel::get_initial_values() const {
     Values values;
 
-    values.insert(rod_->get_initial_values());
+    values.insert(rod_->get_initial_values(rod_length_));
     
     Eigen::Vector<double, NUM_TENDONS> zero = Eigen::Vector<double, NUM_TENDONS>::Zero();
     values.insert(get_tensions_key(), zero);

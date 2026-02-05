@@ -1,4 +1,5 @@
 #include "CosseratTwistFactor.h"
+#include <gtsam/base/Matrix.h>
 
 using namespace gtsam;
 
@@ -12,43 +13,51 @@ CosseratTwistFactor::CosseratTwistFactor(
     double ds,
     const Vector6& nominal_strain,
     const Matrix6& K_inv,
-    const SharedNoiseModel& model)
+    const SharedNoiseModel& model,
+    bool use_midpoint)
 :
     NoiseModelFactorN(model, pose_0_key, pose_1_key, stress_0_key, stress_1_key),
     ds_(ds),
     nominal_strain_(nominal_strain),
-    K_inv_(K_inv) {}
+    use_midpoint_(use_midpoint),
+    K_inv_(K_inv) 
+{}
 
 
 Vector CosseratTwistFactor::evaluateError(
-    const Pose3& pose_0, 
-    const Pose3& pose_1, 
-    const Vector6& stress_0, 
-    const Vector6& stress_1, 
+    const Pose3& p0, 
+    const Pose3& p1, 
+    const Vector6& s0, 
+    const Vector6& s1, 
     OptionalMatrixType H1, 
     OptionalMatrixType H2, 
     OptionalMatrixType H3, 
     OptionalMatrixType H4) const 
 {
-    Matrix66 d_delta_d_pose_0, d_delta_d_pose_1;
-    Pose3 delta = pose_0.between(pose_1, &d_delta_d_pose_0, &d_delta_d_pose_1);
+    Matrix6 d_delta_d_p0, d_delta_d_p1;
+    Pose3 delta = p0.between(p1, &d_delta_d_p0, &d_delta_d_p1);
 
-    Matrix66 d_twist_d_delta;
+    Matrix6 d_twist_d_delta;
     Vector6 twist = Pose3::Logmap(delta, &d_twist_d_delta);
     
-    Vector6 stress_mid = 0.5 * (stress_0 + stress_1);
+    Vector6 s = use_midpoint_ ?  0.5 * (s0 + s1) : s0;
 
-    Vector6 twist_p = ds_ * (K_inv_ * stress_mid + nominal_strain_);
+    Vector6 twist_pred = ds_ * (K_inv_ * s + nominal_strain_);
     
-    Vector6 twist_error = twist_p - twist;
+    Vector6 twist_error = twist_pred - twist;
 
-    if (H1) { *H1 = -d_twist_d_delta * d_delta_d_pose_0; }
+    if (H1) { *H1 = -d_twist_d_delta * d_delta_d_p0; }
 
-    if (H2) { *H2 = -d_twist_d_delta * d_delta_d_pose_1; }
+    if (H2) { *H2 = -d_twist_d_delta * d_delta_d_p1; }
 
-    if (H3) { *H3 = 0.5 * ds_ * K_inv_; }
+    if (H3) { 
+        *H3 = use_midpoint_ ? 0.5 * ds_ * K_inv_ : ds_ * K_inv_;
+     }
     
-    if (H4) { *H4 = 0.5 * ds_ * K_inv_; }
+    if (H4) {
+        Matrix6 zero = Matrix6::Zero();
+        *H4 = use_midpoint_ ? 0.5 * ds_ * K_inv_ : zero;
+    }
 
     return twist_error;
 }
