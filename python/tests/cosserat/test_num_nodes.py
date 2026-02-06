@@ -6,18 +6,18 @@ from .._plotting.cosserat_rod_plotter import CosseratRodPlotter
 from .config import get_base_config
 from .baseline_model import CosseratRodBaseline
 
+
 def get_tip_wrench(t):
     f_xy = 1 * np.array([np.cos(0.1 * t), np.sin(0.1 * t)])
-    f_z = 1.5 * np.sin(0.3 * t)
+    f_z = 0.5 * np.sin(0.3 * t)
 
-    m_xy = 0.5 * np.array([np.cos(0.3 * t), np.sin(0.3 * t)])
-    m_z = 2 * np.sin(0.2 * t)
+    m_xy = 1 * np.array([np.cos(0.2 * t), np.sin(0.2 * t)])
+    m_z = 2 * np.sin(0.4 * t)
 
     return np.hstack((m_xy, m_z, f_xy, f_z))
 
 
-def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False):
-    # Coose solver
+def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False, sim_time=180.0, frame_rate=3.0):
     config = get_base_config()
     config.use_midpoint = use_midpoint
     config.num_nodes = num_nodes
@@ -34,23 +34,23 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False):
         plotter = CosseratRodPlotter(
             plot_wrenches=True,
             plot_base_wrench=False,
+            plot_backbone_ellipsoids=False,
+            moment_scale=0.07,
             save_frames_dir_name='midpoint_vs_euler',
             plot_backbone_frames=True, 
             camera_azimuth=60, 
             camera_distance=1.5, 
             camera_focal_point=np.array([0, 0, 0.25]))
     
-    frame_rate = 1.0
     dt = 1.0 / frame_rate
-    t_final = 120.0
-    num_steps = int(t_final / dt)
-    tip_wrench_cov = 1e-6 * np.eye(6)
+    num_steps = int(sim_time * frame_rate)
+
+    tip_wrench_cov = np.diag(np.hstack((1e-4 * np.ones(3), 1e-3 * np.ones(3))))**2
 
     tip_poses = []
     
     for step in range(num_steps + 1):
         t = step * dt
-
         tip_wrench = get_tip_wrench(t)
 
         if use_baseline:
@@ -59,7 +59,7 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False):
         else:
             wrench = crest_sparse.Vector6Gaussian(tip_wrench, tip_wrench_cov)
             solution = solver.solve(wrench, None, None)
-            pose = solution.marginals.states[-1].pose.mean
+            pose = solution.marginals .states[-1].pose.mean
 
         tip_poses.append(pose)
 
@@ -67,7 +67,7 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False):
             plotter.update(solution) 
 
         progress = 100.0 * step / num_steps
-        print(f"Progress: {progress:5.1f}%", end="\r")
+        print(f"num_nodes: {num_nodes}, Progress: {progress:5.1f}%", end="\r")
 
     tip_poses = np.array(tip_poses)
     p = tip_poses[:,:3,3]
@@ -77,7 +77,7 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False):
 
 
 def run_sims(num_nodes):
-    baseline = simulate_trajectory(10, use_baseline=True)     
+    baseline = simulate_trajectory(0, use_baseline=True)     
 
     def rms_error(p):
         E = p - baseline['p']
@@ -95,7 +95,7 @@ def run_sims(num_nodes):
 
 
 def main():
-    num_nodes = np.arange(5, 50, step=1)
+    num_nodes = np.arange(5, 75, step=1)
     midpoint_rms, euler_rms = run_sims(num_nodes)
     
     # Convert to percent rod length

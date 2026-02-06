@@ -73,7 +73,7 @@ class CosseratRodMeshManager:
         
         if plotter.frame == 0:
             self.backbone_tube_mesh = tube
-            plotter.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.5)
+            plotter.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.3)
             return
         
         # Not really a lightweight way to update this?

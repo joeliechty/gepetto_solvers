@@ -40,13 +40,13 @@ def get_base_config():
     config.K_inv = get_K_inv()
     config.use_midpoint = True
 
-    config.sigma_twist_pos = 1.0e-3
+    config.sigma_twist_pos = 1.0e-4
     config.sigma_twist_rot = 1.0e-3
 
     config.sigma_small_force = 1.0e-3
-    config.sigma_small_moment = 1.0e-3
+    config.sigma_small_moment = 1.0e-4
 
-    config.sigma_base_pose_pos = 1.0e-3
+    config.sigma_base_pose_pos = 1.0e-4
     config.sigma_base_pose_rot = 1.0e-3
 
     return config
