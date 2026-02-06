@@ -4,104 +4,95 @@ using namespace gtsam;
 
 
 Vector6 transform_wrench_adjoint(
-    const Vector6& wrench_0,
-    const Pose3& pose_0,
-    const Pose3& pose,
-    OptionalJacobian<6, 6> H_wrench_0,
-    OptionalJacobian<6, 6> H_pose_0,
-    OptionalJacobian<6, 6> H_pose) 
+    const Vector6& w0,
+    const Pose3& p0,
+    const Pose3& p,
+    OptionalJacobian<6, 6> H_w0,
+    OptionalJacobian<6, 6> H_p0,
+    OptionalJacobian<6, 6> H_p) 
 {   
-    Matrix6 d_pose_0_inv_d_pose_0;
-    Pose3 pose_0_inv = pose_0.inverse(&d_pose_0_inv_d_pose_0);
+    Matrix6 d_delta_d_p0, d_delta_d_p;
+    Pose3 delta = p0.between(p, d_delta_d_p0, d_delta_d_p);
     
-    Matrix6 d_delta_d_pose_0_inv, d_delta_d_pose;
-    Pose3 delta = pose_0_inv.compose(pose, &d_delta_d_pose_0_inv, &d_delta_d_pose);
-    
-    Matrix6 d_wrench_d_delta, d_wrench_d_wrench_0;
-    Vector6 wrench = delta.AdjointTranspose(wrench_0, &d_wrench_d_delta, &d_wrench_d_wrench_0);
+    Matrix6 d_w_d_delta, d_w_d_w0;
+    Vector6 w = delta.AdjointTranspose(w0, d_w_d_delta, d_w_d_w0);
 
-    if (H_wrench_0) { *H_wrench_0 = d_wrench_d_wrench_0; }
+    if (H_w0) { *H_w0 = d_w_d_w0; }
 
-    if (H_pose_0) {
-        *H_pose_0 = d_wrench_d_delta * d_delta_d_pose_0_inv * d_pose_0_inv_d_pose_0;
+    if (H_p0) {
+        *H_p0 = d_w_d_delta * d_delta_d_p0;
     }
 
-    if (H_pose) { *H_pose = d_wrench_d_delta * d_delta_d_pose; }
+    if (H_p) { *H_p = d_w_d_delta * d_delta_d_p; }
     
-    return wrench;
+    return w;
 }
 
 
-// TODO, remove this and use the above maybe? This might be just a special case where translation is zero
 Vector6 spatial_to_body_wrench(
-    const Vector6& wrench_spatial, 
+    const Vector6& spatial, 
     const Pose3& pose, 
-    OptionalJacobian<6, 6> H_wrench,
+    OptionalJacobian<6, 6> H_spatial,
     OptionalJacobian<6, 6> H_pose)
 {
-    Matrix3 d_moment_d_rotation, d_force_d_rotation, d_moment_d_moment, d_force_d_force;
-    Matrix36 d_rotation_d_pose;
+    Matrix36 d_rot_d_pose;
+    Rot3 rot = pose.rotation(d_rot_d_pose);
+    
+    Matrix3 d_m_d_rot, d_m_d_m;
+    Vector6 body;
+    body.head<3>() = rot.unrotate(spatial.head<3>(), d_m_d_rot, d_m_d_m);
+    
+    Matrix3 d_f_d_rot, d_f_d_f;
+    body.tail<3>() = rot.unrotate(spatial.tail<3>(), d_f_d_rot, d_f_d_f);
 
-    Vector6 wrench_body;
-
-    Rot3 rot = pose.rotation(d_rotation_d_pose);
-    
-    wrench_body.head<3>() = rot.unrotate(wrench_spatial.head<3>(),
-        H_pose ? &d_moment_d_rotation : 0,
-        H_wrench ? &d_moment_d_moment : 0);
-    
-    wrench_body.tail<3>() = rot.unrotate(wrench_spatial.tail<3>(),
-        H_pose ? &d_force_d_rotation : 0,
-        H_wrench ? &d_force_d_force : 0);
-    
     if (H_pose) {
-        H_pose->setZero();
-        H_pose->block<3,3>(0,0) = d_moment_d_rotation;
-        H_pose->block<3,3>(3,0) = d_force_d_rotation;
+        Matrix63 d_body_d_rot = Matrix63::Zero();
+        d_body_d_rot.block<3,3>(0,0) = d_m_d_rot;
+        d_body_d_rot.block<3,3>(3,0) = d_f_d_rot;
+
+        *H_pose = d_body_d_rot * d_rot_d_pose;
     }
 
-    if (H_wrench) {
-        H_wrench->setZero();
-        H_wrench->block<3,3>(0,0) = d_moment_d_moment;
-        H_wrench->block<3,3>(3,3) = d_force_d_force;
+    if (H_spatial) {
+        H_spatial->setZero();
+        H_spatial->block<3,3>(0,0) = d_m_d_m;
+        H_spatial->block<3,3>(3,3) = d_f_d_f;
     }
     
-    return wrench_body;
+    return body;
 }
 
 
 Vector6 body_to_spatial_wrench(
-    const Vector6& wrench_body, 
+    const Vector6& body, 
     const Pose3& pose, 
-    OptionalJacobian<6, 6> H_wrench,
+    OptionalJacobian<6, 6> H_body,
     OptionalJacobian<6, 6> H_pose)
 {
-    Matrix3 d_moment_d_rotation, d_force_d_rotation, d_moment_d_moment, d_force_d_force;
-    Matrix36 d_rotation_d_pose;
+    Matrix36 d_rot_d_pose;
+    Rot3 rot = pose.rotation(d_rot_d_pose);
+    
+    Matrix3 d_m_d_rot, d_m_d_m;
+    Vector6 spatial;
+    spatial.head<3>() = rot.rotate(body.head<3>(), d_m_d_rot, d_m_d_m);
+    
+    Matrix3 d_f_d_rot, d_f_d_f;
+    spatial.tail<3>() = rot.rotate(body.tail<3>(), d_f_d_rot, d_f_d_f);
 
-    Vector6 wrench_spatial;
-
-    Rot3 rot = pose.rotation(d_rotation_d_pose);
-    
-    wrench_spatial.head<3>() = rot.rotate(wrench_body.head<3>(),
-        H_pose ? &d_moment_d_rotation : 0,
-        H_wrench ? &d_moment_d_moment : 0);
-    
-    wrench_spatial.tail<3>() = rot.rotate(wrench_body.tail<3>(),
-        H_pose ? &d_force_d_rotation : 0,
-        H_wrench ? &d_force_d_force : 0);
-    
     if (H_pose) {
-        H_pose->setZero();
-        H_pose->block<3,3>(0,0) = d_moment_d_rotation;
-        H_pose->block<3,3>(3,0) = d_force_d_rotation;
+        Matrix63 d_spatial_d_rot = Matrix63::Zero();
+        d_spatial_d_rot.block<3,3>(0,0) = d_m_d_rot;
+        d_spatial_d_rot.block<3,3>(3,0) = d_f_d_rot;
+
+        *H_pose = d_spatial_d_rot * d_rot_d_pose;
     }
 
-    if (H_wrench) {
-        H_wrench->setZero();
-        H_wrench->block<3,3>(0,0) = d_moment_d_moment;
-        H_wrench->block<3,3>(3,3) = d_force_d_force;
+    if (H_body) {
+        H_body->setZero();
+        H_body->block<3,3>(0,0) = d_m_d_m;
+        H_body->block<3,3>(3,3) = d_f_d_f;
     }
     
-    return wrench_spatial;
+    return spatial;
 }
+

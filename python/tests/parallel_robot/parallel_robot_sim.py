@@ -44,21 +44,21 @@ def get_tip_poses():
 
 def get_wrench_prior(t):
     wrench_mean = np.zeros(6)
-    # f = 5 * np.array([np.cos(0.1 * t), np.sin(0.1 * t), np.sin(0.15 * t)])
-    # wrench_mean[3:] = f
+    f = 5 * np.array([np.cos(0.1 * t), np.sin(0.1 * t), np.sin(0.15 * t)])
+    wrench_mean[3:] = f
 
     wrench_cov = 1e-6 * np.eye(6)
-    # wrench_cov[3:,3:] = 1e-1 * np.eye(3)
+    wrench_cov[3:,3:] = 1e-1 * np.eye(3)
 
     return crest_sparse.Vector6Gaussian(wrench_mean, wrench_cov)
 
 
 def get_goal_pose(t):
-    xy = 0.1 * np.array([np.cos(0.5 * t), np.sin(0.5 * t)])
-    z = 0.4 + 0.05 * np.sin(0.3 * t)
+    xy = 0.05 * np.array([np.cos(0.5 * t), np.sin(0.5 * t)])
+    z = 0.7 + 0.05 * np.sin(0.3 * t)
     p = np.hstack([xy, z])
 
-    r = 0.1 * np.array([np.cos(0.5 * t), np.sin(0.5 * t), 0])
+    r = 0.0 * np.array([np.cos(0.5 * t), np.sin(0.5 * t), 0])
     R = Rotation.from_rotvec(r).as_matrix()
 
     return p, R
@@ -114,10 +114,11 @@ def main():
 
     rod_lengths_sigma = 3e-3
 
-    L0 = 0.001 * (24 * 25.4 - 13 - 33 - 400 + 240)
+    L0 = 0.4
     a = 0
     a_max = 5e-2
 
+    rod_lengths = L0 * np.ones(6)
     for step in range(num_steps + 1):
         t = step * dt
 
@@ -126,19 +127,18 @@ def main():
         
         wrench = get_wrench_prior(t)
 
-        
-        phi = np.radians(10)
-        wt = step / 100 * 2 * np.pi
-        L1= L0 + a * np.sin(wt - phi)
-        L2= L0 + a * np.sin(wt + phi)
-        L3= L0 + a * np.sin(wt + np.radians(120) - phi)
-        L4= L0 + a * np.sin(wt + np.radians(120) + phi)
-        L5= L0 + a * np.sin(wt + np.radians(240) - phi)
-        L6= L0 + a * np.sin(wt + np.radians(240) + phi)
+        # phi = np.radians(10)
+        # wt = step / 100 * 2 * np.pi
+        # L1= L0 + a * np.sin(wt - phi)
+        # L2= L0 + a * np.sin(wt + phi)
+        # L3= L0 + a * np.sin(wt + np.radians(120) - phi)
+        # L4= L0 + a * np.sin(wt + np.radians(120) + phi)
+        # L5= L0 + a * np.sin(wt + np.radians(240) - phi)
+        # L6= L0 + a * np.sin(wt + np.radians(240) + phi)
 
-        rod_lengths = np.array([L1, L2, L3, L4, L5, L6])
+        # rod_lengths = np.array([L1, L2, L3, L4, L5, L6])
         solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
-        # comparison = baseline.solve(rod_lengths)
+        # comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
 
         # p_solution = solution.marginals.rods[0].states[-1].pose.mean[:3,3]
         # p_comparison = comparison[0]['pose'][-1][:3,3]
@@ -151,25 +151,25 @@ def main():
         # print("error:")
         # print(np.linalg.norm(p_solution - p_comparison))
 
-        # J = solution.marginals.rod_lengths_jacobian
+        J = solution.marginals.rod_lengths_jacobian
 
-        # p = solution.marginals.platform_pose.mean[:3, 3]
-        # R = solution.marginals.platform_pose.mean[:3,:3]
+        p = solution.marginals.platform_pose.mean[:3, 3]
+        R = solution.marginals.platform_pose.mean[:3,:3]
 
-        # p_goal, R_goal = get_goal_pose(t)
+        p_goal, R_goal = get_goal_pose(t)
 
-        # p_error = R.T @ (p_goal - p)
-        # r_error = Rotation.from_matrix(R.T @ R_goal).as_rotvec()
+        p_error = R.T @ (p_goal - p)
+        r_error = Rotation.from_matrix(R.T @ R_goal).as_rotvec()
         
-        # twist_error = np.hstack((r_error, p_error))
+        twist_error = np.hstack((r_error, p_error))
 
-        # max_step = 0.05
-        # d_twist = twist_error
-        # if np.linalg.norm(d_twist) > max_step:
-        #     d_twist = d_twist / np.linalg.norm(d_twist) * max_step
+        max_step = 0.05
+        d_twist = twist_error
+        if np.linalg.norm(d_twist) > max_step:
+            d_twist = d_twist / np.linalg.norm(d_twist) * max_step
 
-        # d_rod_lengths = np.linalg.pinv(J) @ d_twist
-        # rod_lengths += d_rod_lengths
+        d_rod_lengths = np.linalg.pinv(J) @ d_twist
+        rod_lengths += d_rod_lengths
 
         plotter.update(solution)
 

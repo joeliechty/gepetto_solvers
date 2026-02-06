@@ -4,7 +4,6 @@
 using namespace gtsam;
 
 
-
 CosseratTwistFactor::CosseratTwistFactor(
     Key pose_0_key,
     Key pose_1_key,
