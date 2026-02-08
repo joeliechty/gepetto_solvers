@@ -6,7 +6,6 @@
 
 #include "PlatformWrenchBalanceFactor.h"
 #include "SingleRodBaseFactor.h"
-#include "cosserat_rod/BoundaryStressFactor.h"
 #include "cosserat_rod/CosseratRodModel.h"
 #include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
@@ -41,9 +40,6 @@ ParallelRobot::ParallelRobot(
 Key platform_pose_key() { return Symbol('P', 424242424242); }
 
 
-Key platform_stress_key() { return Symbol('S', 424242424242); }
-
-
 Key platform_wrench_key() { return Symbol('W', 424242424242); }
 
 
@@ -66,8 +62,7 @@ NonlinearFactorGraph ParallelRobot::build_graph(
     // Build each rod
     for (int i = 0; i < NUM_RODS; i++) {
         // Build base cosserat rod graph
-        auto rod_graph = rods_[i]->build_graph(rod_lengths[i]);
-        graph.push_back(rod_graph.begin(), rod_graph.end());
+        graph.add(rods_[i]->build_graph(rod_lengths[i]));
 
         // Constrain interior wrenches to zero (skip base and tip)
         std::vector<Key> wrench_keys = rods_[i]->get_wrench_keys();
@@ -89,15 +84,6 @@ NonlinearFactorGraph ParallelRobot::build_graph(
             Pose3(tip_end_poses_[i]),
             tip_pose_noise));
     }
-
-    // Constrain platform stress to be equal to platform wrench
-    bool is_base = false;
-    graph.add(BoundaryStressFactor(
-        platform_stress_key(), 
-        platform_wrench_key(),
-        platform_pose_key(),
-        small_wrench_noise_,
-        is_base));
     
     // Put prior on tip wrench based on user input
     graph.add(PriorFactor<Vector6>(
@@ -107,19 +93,19 @@ NonlinearFactorGraph ParallelRobot::build_graph(
 
     // Sum of all transformed tip stresses equals zero (for now)
     graph.add(PlatformWrenchBalanceFactor(
-        rods_[0]->get_stress_key(-1),
+        rods_[0]->get_wrench_key(-1),
         rods_[0]->get_pose_key(-1),
-        rods_[1]->get_stress_key(-1),
+        rods_[1]->get_wrench_key(-1),
         rods_[1]->get_pose_key(-1),
-        rods_[2]->get_stress_key(-1),
+        rods_[2]->get_wrench_key(-1),
         rods_[2]->get_pose_key(-1),
-        rods_[3]->get_stress_key(-1),
+        rods_[3]->get_wrench_key(-1),
         rods_[3]->get_pose_key(-1),
-        rods_[4]->get_stress_key(-1),
+        rods_[4]->get_wrench_key(-1),
         rods_[4]->get_pose_key(-1),
-        rods_[5]->get_stress_key(-1),
+        rods_[5]->get_wrench_key(-1),
         rods_[5]->get_pose_key(-1),
-        platform_stress_key(),
+        platform_wrench_key(),
         platform_pose_key(),
         small_wrench_noise_));
     
@@ -137,7 +123,6 @@ Values ParallelRobot::get_initial_values() const {
 
     // Values for moving platform variables
     values.insert(platform_pose_key(), Pose3(Rot3::Rz(M_PI), Point3(0, 0, 0.6)));
-    values.insert(platform_stress_key(), Vector6(Vector6::Zero()));
     values.insert(platform_wrench_key(), Vector6(Vector6::Zero()));
 
     return values;

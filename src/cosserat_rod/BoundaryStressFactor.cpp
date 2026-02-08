@@ -12,8 +12,8 @@ BoundaryStressFactor::BoundaryStressFactor(
     const SharedNoiseModel& model,
     bool is_base)
 :
-    NoiseModelFactorN(model, stress_key, wrench_key, pose_key),
-    is_base_(is_base) {}
+    is_base_(is_base),
+    NoiseModelFactorN(model, stress_key, wrench_key, pose_key) {}
 
 
 Vector BoundaryStressFactor::evaluateError(

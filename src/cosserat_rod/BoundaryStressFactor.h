@@ -26,5 +26,5 @@ public:
         gtsam::OptionalMatrixType H3) const override;
 
 private:
-    const bool is_base_;
+    bool is_base_;
 };

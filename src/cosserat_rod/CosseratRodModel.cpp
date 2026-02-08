@@ -21,6 +21,7 @@ CosseratRodModel::CosseratRodModel (
     stress_noise_(stress_noise),
     use_midpoint_(use_midpoint)
 {
+    // K_inv_ is node dependent if we want to add a constructor for this
     K_inv_ = std::vector<Matrix6>(num_nodes - 1, K_inv);
 
     pose_keys_.reserve(num_nodes_);
@@ -32,7 +33,7 @@ CosseratRodModel::CosseratRodModel (
         stress_keys_.push_back(Symbol('S', 1000 * id_ + i)); 
         wrench_keys_.push_back(Symbol('F', 1000 * id_ + i)); 
     }
-
+    
     dummy_wrench_key_ = Symbol('F', 1000 * id_ + 999); 
 }
 
@@ -68,8 +69,6 @@ Values CosseratRodModel::get_initial_values(
     const Pose3& base_pose_init) const 
 {
     Values values;
-    
-    // TODO having optional base pose as well would be good here
     double ds = rod_length / (num_nodes_ - 1);
 
     for (int i = 0; i < num_nodes_; ++i) {
@@ -81,6 +80,7 @@ Values CosseratRodModel::get_initial_values(
     }
 
     values.insert(dummy_wrench_key_, Vector6(Vector6::Zero()));
+
     return values;
 }
 
@@ -94,11 +94,13 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
     // We can overload build_graph later to support different ds per node
     std::vector<double> ds(num_nodes_ - 1, rod_length / (num_nodes_ - 1));
     
+    // Nominally only strain "velocity" in the linear z direction
     Vector6 straight_rod_strain = Vector6::Zero();
     straight_rod_strain[5] = 1.0;
 
-    // Cosserat twist factors
+    // Cosserat kinematics and mechanics factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
+        // Poses integrate due to stresses in rod
         graph.add(CosseratTwistFactor(
             pose_keys_[i], 
             pose_keys_[i + 1], 
@@ -109,12 +111,9 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
             K_inv_[i], 
             twist_noise_,
             use_midpoint_));
-    }
         
-    // Cosserat stress factors
-    for (int i = 0; i + 1 < num_nodes_; ++i) {
-        Key wrench_key = (i == 0) ? dummy_wrench_key_ : wrench_keys_[i];
-
+        // Stresses integrate due to wrenches on the rod
+        Key wrench_key = (i == num_nodes_ - 2) ? dummy_wrench_key_ : wrench_keys_[i + 1];
         graph.add(CosseratStressFactor(
             pose_keys_[i], 
             pose_keys_[i + 1], 
@@ -123,7 +122,10 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
             wrench_key,
             stress_noise_));
     }
-
+    
+    // Make dummy wrench zero
+    graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_noise_));
+    
     // Constrain tip stress to be equal to tip force
     bool is_base = false;
     graph.add(BoundaryStressFactor(
@@ -133,9 +135,7 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
         stress_noise_,
         is_base));
     
-    // Makey dummy wrench zero
-    graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_noise_));
-    
+    // Constrain base stress to equal base force
     is_base = true;
     graph.add(BoundaryStressFactor(
         stress_keys_.front(), 

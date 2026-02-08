@@ -1,74 +1,119 @@
 #include "PlatformWrenchBalanceFactor.h"
 
-#include "utils/WrenchTransforms.h"
+#include <gtsam/base/Matrix.h>
+#include <gtsam/nonlinear/NonlinearFactor.h>
 
 using namespace gtsam;
 
 
 PlatformWrenchBalanceFactor::PlatformWrenchBalanceFactor(
-    Key stress_key_0, Key pose_key_0,
-    Key stress_key_1, Key pose_key_1,
-    Key stress_key_2, Key pose_key_2,
-    Key stress_key_3, Key pose_key_3,
-    Key stress_key_4, Key pose_key_4,
-    Key stress_key_5, Key pose_key_5,
-    Key platform_stress_key, Key platform_pose_key,
+    Key w0_key, Key p0_key,
+    Key w1_key, Key p1_key,
+    Key w2_key, Key p2_key,
+    Key w3_key, Key p3_key,
+    Key w4_key, Key p4_key,
+    Key w5_key, Key p5_key,
+    Key w_platform_key,
+    Key p_platform_key,
     const SharedNoiseModel& model)
 :
     NoiseModelFactorN(model, 
-        stress_key_0, pose_key_0,
-        stress_key_1, pose_key_1,
-        stress_key_2, pose_key_2,
-        stress_key_3, pose_key_3,
-        stress_key_4, pose_key_4,
-        stress_key_5, pose_key_5,
-        platform_stress_key, platform_pose_key) {}
+        w0_key, p0_key,
+        w1_key, p1_key,
+        w2_key, p2_key,
+        w3_key, p3_key,
+        w4_key, p4_key,
+        w5_key, p5_key,
+        w_platform_key, p_platform_key) {}
+
+
 
 Vector PlatformWrenchBalanceFactor::evaluateError(
-    const Vector6& stress_0, const Pose3& pose_0,
-    const Vector6& stress_1, const Pose3& pose_1,
-    const Vector6& stress_2, const Pose3& pose_2,
-    const Vector6& stress_3, const Pose3& pose_3,
-    const Vector6& stress_4, const Pose3& pose_4,
-    const Vector6& stress_5, const Pose3& pose_5,
-    const Vector6& platform_stress, const Pose3& platform_pose,
+    const Vector6& w0, const Pose3& p0,
+    const Vector6& w1, const Pose3& p1,
+    const Vector6& w2, const Pose3& p2,
+    const Vector6& w3, const Pose3& p3,
+    const Vector6& w4, const Pose3& p4,
+    const Vector6& w5, const Pose3& p5,
+    const Vector6& w_platform, const Pose3& p_platform,
     OptionalMatrixType H1, OptionalMatrixType H2,
-    OptionalMatrixType H3, OptionalMatrixType H4, 
+    OptionalMatrixType H3, OptionalMatrixType H4,
     OptionalMatrixType H5, OptionalMatrixType H6,
     OptionalMatrixType H7, OptionalMatrixType H8,
-    OptionalMatrixType H9, OptionalMatrixType H10, 
+    OptionalMatrixType H9, OptionalMatrixType H10,
     OptionalMatrixType H11, OptionalMatrixType H12,
-    OptionalMatrixType H13, OptionalMatrixType H14) const 
+    OptionalMatrixType H13, OptionalMatrixType H14) const
 {
-    // Transform all stresses to the platform pose frame
-    Matrix6 d_s0_p_d_pp, d_s1_p_d_pp, d_s2_p_d_pp, d_s3_p_d_pp, d_s4_p_d_pp, d_s5_p_d_pp;
-    Vector6 s0_p = transform_wrench_adjoint(stress_0, pose_0, platform_pose,
-        H1 ? H1 : nullptr, H2 ? H2 : nullptr, d_s0_p_d_pp);
+    Matrix36 d_tp_d_p_platform;
+    const Vector3 tp = p_platform.translation(d_tp_d_p_platform);
+
+    const Vector6* ws[6] = {&w0,&w1,&w2,&w3,&w4,&w5};
+    const Pose3* ps[6]   = {&p0,&p1,&p2,&p3,&p4,&p5};
     
-    Vector6 s1_p = transform_wrench_adjoint(stress_1, pose_1, platform_pose,
-        H3 ? H3 : nullptr, H4 ? H4 : nullptr, d_s1_p_d_pp);
+    OptionalMatrixType Hw[6] = {H1,H3,H5,H7,H9,H11};
+    OptionalMatrixType Hp[6] = {H2,H4,H6,H8,H10,H12};
 
-    Vector6 s2_p = transform_wrench_adjoint(stress_2, pose_2, platform_pose,
-        H5 ? H5 : nullptr, H6 ? H6 : nullptr, d_s2_p_d_pp);
+    Vector3 e_force = Vector3::Zero();
+    Vector3 e_moment = Vector3::Zero();
+    Matrix36 d_moment_d_platform_pose = Matrix36::Zero();
 
-    Vector6 s3_p = transform_wrench_adjoint(stress_3, pose_3, platform_pose,
-        H7 ? H7 : nullptr, H8 ? H8 : nullptr, d_s3_p_d_pp);
+    for(int i=0;i<6;i++)
+    {
+        const Vector6& w = *ws[i];
+        const Vector3 f = w.tail<3>();
+        const Vector3 m = w.head<3>();
 
-    Vector6 s4_p = transform_wrench_adjoint(stress_4, pose_4, platform_pose,
-        H9 ? H9 : nullptr, H10 ? H10 : nullptr, d_s4_p_d_pp);
+        Matrix36 d_f_d_w = Matrix36::Zero();
+        d_f_d_w.rightCols(3) = Matrix3::Identity();
 
-    Vector6 s5_p = transform_wrench_adjoint(stress_5, pose_5, platform_pose,
-        H11 ? H11 : nullptr, H12 ? H12 : nullptr, d_s5_p_d_pp);
-    
-    // All stresses added up should equal platform stress
-    Vector6 stress_error = s0_p + s1_p + s2_p + s3_p + s4_p + s5_p - platform_stress;
+        Matrix36 d_m_d_w = Matrix36::Zero();
+        d_m_d_w.leftCols(3) = Matrix3::Identity();
 
-    if (H13) { *H13 = -Matrix6::Identity(); }
+        Matrix36 d_ti_d_pi;
+        const Vector3 ti = ps[i]->translation(d_ti_d_pi);
+        Vector3 r = ti - tp;
 
-    if (H14) { 
-        *H14 = d_s0_p_d_pp + d_s1_p_d_pp + d_s2_p_d_pp + d_s3_p_d_pp + d_s4_p_d_pp + d_s5_p_d_pp;
+        Matrix3 d_m_d_r, d_m_d_f;
+        Vector3 rxf = cross(r, f, d_m_d_r, d_m_d_f);
+
+        e_force  += f;
+        e_moment += m + rxf;
+
+        if(Hw[i])
+        {
+            Matrix6 H = Matrix6::Zero();
+            H.topRows<3>() = d_m_d_w + d_m_d_f * d_f_d_w;
+            H.bottomRows<3>() = d_f_d_w;
+
+            *Hw[i] = H;
+        }
+
+        if(Hp[i])
+        {
+            Matrix6 H = Matrix6::Zero();
+            H.topRows<3>() = d_m_d_r * d_ti_d_pi;
+
+            *Hp[i] = H;
+        }
+
+        d_moment_d_platform_pose += d_m_d_r * (-d_tp_d_p_platform);
     }
 
+    e_force  -= w_platform.tail<3>();
+    e_moment -= w_platform.head<3>();
 
-    return stress_error;
+    Vector6 error;
+    error << e_moment, e_force;
+
+    if(H13)
+        *H13 = -Matrix6::Identity();
+
+    if(H14)
+    {
+        Matrix6 H = Matrix6::Zero();
+        H.topRows<3>() = d_moment_d_platform_pose;
+        *H14 = H;
+    }
+
+    return error;
 }

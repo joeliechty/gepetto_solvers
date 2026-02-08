@@ -43,7 +43,7 @@ void CosseratRodSolver::extract_solution() {
 
 
 void CosseratRodSolver::get_initial_values() {
-    values_ = rod_->get_initial_values();
+    values_ = rod_->get_initial_values(rod_length_);
 }
 
 

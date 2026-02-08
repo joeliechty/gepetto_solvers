@@ -41,7 +41,7 @@ def get_tip_wrench_prior(t):
 
 def get_tip_pose_prior(t):
     x = 0.15
-    yz = 0.15 * np.array([np.cos(0.2 * t), np.sin(0.2 * t)])
+    yz = 0.15 * np.array([np.sin(0.2 * t), np.cos(0.2 * t)])
     yz[1] += 0.25
     p = np.hstack((x, yz))
 

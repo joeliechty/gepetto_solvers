@@ -17,42 +17,42 @@ CosseratStressFactor::CosseratStressFactor(
 
 
 Vector CosseratStressFactor::evaluateError(
-    const Pose3& pose_0, 
-    const Pose3& pose_1, 
-    const Vector6& stress_0, 
-    const Vector6& stress_1, 
-    const Vector6& wrench,
+    const Pose3& p0, 
+    const Pose3& p1, 
+    const Vector6& s0, 
+    const Vector6& s1, 
+    const Vector6& w1,
     OptionalMatrixType H1, 
     OptionalMatrixType H2, 
     OptionalMatrixType H3, 
     OptionalMatrixType H4,
     OptionalMatrixType H5) const 
 {
-    // This factor assumes wrench is in spatial frame, must convert coordinates to body (pose_0) frame
-    Matrix6 d_wrench_body_d_pose_0, d_wrench_body_d_wrench;
-    Vector6 wrench_body = spatial_to_body_wrench(wrench, pose_0, d_wrench_body_d_wrench, d_wrench_body_d_pose_0);
+    // This factor assumes wrench is in spatial frame, must convert coordinates to body (pose_1) frame
+    Matrix6 d_body_d_p1, d_body_d_w1;
+    Vector6 body = spatial_to_body_wrench(w1, p1, d_body_d_w1, d_body_d_p1);
 
-    // We transform stress_1 to pose_0 frame for summation with wrench_body
-    Matrix6 d_stress_pred_d_pose_0, d_stress_pred_d_pose_1, d_stress_pred_d_stress_1;
-    Vector6 stress_pred = transform_wrench_adjoint(
-        stress_1, 
-        pose_1, 
-        pose_0, 
-        &d_stress_pred_d_stress_1,
-        &d_stress_pred_d_pose_1,
-        &d_stress_pred_d_pose_0) + wrench_body;
+    // We transform stress_0 to pose_1 frame for summation with wrench_body
+    Matrix6 d_s1_pred_d_p0, d_s1_pred_d_p1, d_s1_pred_d_s0;
+    Vector6 s1_pred = transform_wrench_adjoint(
+        s0, 
+        p0, 
+        p1, 
+        d_s1_pred_d_s0,
+        d_s1_pred_d_p0,
+        d_s1_pred_d_p1) - body;
     
-    Vector6 stress_error = stress_pred - stress_0;
+    Vector6 stress_error = s1_pred - s1;
 
-    if (H1) { *H1 = d_stress_pred_d_pose_0 + d_wrench_body_d_pose_0; }
+    if (H1) { *H1 = d_s1_pred_d_p0; }
 
-    if (H2) { *H2 = d_stress_pred_d_pose_1; }
+    if (H2) { *H2 = d_s1_pred_d_p1 - d_body_d_p1; }
 
-    if (H3) { *H3 = -Matrix6::Identity(); }
+    if (H3) { *H3 = d_s1_pred_d_s0; }
     
-    if (H4) { *H4 = d_stress_pred_d_stress_1; }
+    if (H4) { *H4 = -Matrix6::Identity(); }
 
-    if (H5) { *H5 = d_wrench_body_d_wrench; }
+    if (H5) { *H5 = -d_body_d_w1; }
 
     return stress_error;
 }
