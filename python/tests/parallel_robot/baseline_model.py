@@ -28,6 +28,8 @@ class ParallelRobotSolver:
         self.p_init = np.array([p[:3,3] for p in config.base_end_poses])
         self.p_final = np.array([p[:3,3] for p in config.tip_end_poses])
 
+        self.platform_z_offset = self.p_final[0,2]
+
     def single_rod_deriv(self, s, y):
         R = y[3:12].reshape(3, 3)
         n = y[12:15]
@@ -129,7 +131,8 @@ class ParallelRobotSolver:
 
         e_force = np.sum(n_ends, axis=0) - tip_force
         
-        sum_point = np.mean(p_ends, axis=0)
+        z_offset = R_ends[:,:3,2] * self.platform_z_offset
+        sum_point = np.mean(p_ends - z_offset, axis=0)
         moments = np.sum([hat(pi - sum_point) @ ni for pi, ni in zip(p_ends, n_ends)], axis=0)
         e_moment = moments + m_ends.sum(axis=0) - tip_moment
 

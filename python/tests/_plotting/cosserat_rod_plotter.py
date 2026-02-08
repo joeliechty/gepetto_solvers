@@ -17,7 +17,9 @@ class CosseratRodMeshManager:
                  moment_scale = 0.2, 
                  force_scale=0.1, 
                  base_plate_size=0.1, 
-                 cartesian_frame_scale=0.01):
+                 cartesian_frame_scale=0.01,
+                 rod_color='ultramarine',
+                 rod_opacity=0.3):
         
         self.plot_base_plate = plot_base_plate
         self.plot_tip_plate = plot_tip_plate
@@ -27,6 +29,8 @@ class CosseratRodMeshManager:
         self.plot_backbone_frames = plot_backbone_frames
         self.plot_backbone_ellipsoids = plot_backbone_ellipsoids
 
+        self.rod_color=rod_color
+        self.rod_opacity=rod_opacity
         self.backbone_radius = backbone_radius
         self.moment_scale = moment_scale
         self.force_scale = force_scale
@@ -73,7 +77,7 @@ class CosseratRodMeshManager:
         
         if plotter.frame == 0:
             self.backbone_tube_mesh = tube
-            plotter.plotter.add_mesh(self.backbone_tube_mesh, color='ultramarine', opacity = 0.3)
+            plotter.plotter.add_mesh(self.backbone_tube_mesh, color=self.rod_color, opacity=self.rod_opacity)
             return
         
         # Not really a lightweight way to update this?

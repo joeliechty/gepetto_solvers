@@ -10,6 +10,7 @@ class ParallelRobotPlotter:
     def __init__(self,
                  platform_z_offset=0.0,
                  plot_rod_wrenches=True,
+                 plot_platform_wrench=True,
                  plot_base_wrenches=False,
                  plot_backbone_frames=False,
                  plot_backbone_ellipsoids=True,
@@ -22,8 +23,10 @@ class ParallelRobotPlotter:
         self.moment_scale = 0.2
         self.force_scale = 0.1
         self.platform_z_offset = platform_z_offset
+        self.plot_platform_wrench = plot_platform_wrench
 
-        for _ in range(6):
+        rod_colors = ['deepcadmiumred', 'cadmiumorange', 'lightcadmiumyellow', 'seagreen', 'royalblue', 'rebeccapurple']
+        for i in range(6):
             self.rod_managers.append(CosseratRodMeshManager(
                 plot_base_plate=False,
                 plot_wrenches=plot_rod_wrenches,
@@ -33,8 +36,9 @@ class ParallelRobotPlotter:
                 backbone_radius=0.005,
                 moment_scale=self.moment_scale, 
                 force_scale=self.force_scale, 
-                base_plate_size=0.1, 
-                cartesian_frame_scale=0.03
+                cartesian_frame_scale=0.025,
+                rod_opacity=0.5,
+                rod_color=rod_colors[i]
                 )
             )
 
@@ -45,7 +49,7 @@ class ParallelRobotPlotter:
     def update_platform(self, solution, plotter):
 
         if plotter.frame == 0:
-            mesh = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.01)
+            mesh = pv.Cylinder(direction=(0,0,1), radius=0.15, height=0.01)
             mesh.points = mesh.points + np.array([0, 0, self.platform_z_offset])
             actor = plotter.plotter.add_mesh(mesh, color="silver", show_edges=True, line_width=2, opacity=0.3)
             self.platform_transform = vtk.vtkTransform()
@@ -77,6 +81,9 @@ class ParallelRobotPlotter:
         self.platform_ellipsoid_transform.SetMatrix(T.flatten().tolist())
 
     def update_platform_wrench(self, solution, plotter):
+        if not self.plot_platform_wrench:
+            return
+        
         if plotter.frame == 0:
             mesh = utils.get_arrow(shaft_scale=0.2)
             actor = plotter.plotter.add_mesh(mesh, color='deeppink', lighting=False)
