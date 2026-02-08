@@ -18,23 +18,23 @@ class PlatformWrenchBalanceFactor: public PlatformWrenchBase {
 
 public:
     PlatformWrenchBalanceFactor(
-        gtsam::Key w0_key, gtsam::Key p0_key,
-        gtsam::Key w1_key, gtsam::Key p1_key,
-        gtsam::Key w2_key, gtsam::Key p2_key,
-        gtsam::Key w3_key, gtsam::Key p3_key,
-        gtsam::Key w4_key, gtsam::Key p4_key,
-        gtsam::Key w5_key, gtsam::Key p5_key,
-        gtsam::Key w_platform_key, gtsam::Key p_platform_key,
+        gtsam::Key stress_key_0, gtsam::Key pose_key_0,
+        gtsam::Key stress_key_1, gtsam::Key pose_key_1,
+        gtsam::Key stress_key_2, gtsam::Key pose_key_2,
+        gtsam::Key stress_key_3, gtsam::Key pose_key_3,
+        gtsam::Key stress_key_4, gtsam::Key pose_key_4,
+        gtsam::Key stress_key_5, gtsam::Key pose_key_5,
+        gtsam::Key platform_wrench_key, gtsam::Key platform_pose_key,
         const gtsam::SharedNoiseModel& model);
         
     gtsam::Vector evaluateError(
-        const gtsam::Vector6& w0, const gtsam::Pose3& p0,
-        const gtsam::Vector6& w1, const gtsam::Pose3& p1,
-        const gtsam::Vector6& w2, const gtsam::Pose3& p2,
-        const gtsam::Vector6& w3, const gtsam::Pose3& p3,
-        const gtsam::Vector6& w4, const gtsam::Pose3& p4,
-        const gtsam::Vector6& w5, const gtsam::Pose3& p5,
-        const gtsam::Vector6& w_platform, const gtsam::Pose3& p_platform,
+        const gtsam::Vector6& stress_0, const gtsam::Pose3& pose_0,
+        const gtsam::Vector6& stress_1, const gtsam::Pose3& pose_1,
+        const gtsam::Vector6& stress_2, const gtsam::Pose3& pose_2,
+        const gtsam::Vector6& stress_3, const gtsam::Pose3& pose_3,
+        const gtsam::Vector6& stress_4, const gtsam::Pose3& pose_4,
+        const gtsam::Vector6& stress_5, const gtsam::Pose3& pose_5,
+        const gtsam::Vector6& platform_wrench, const gtsam::Pose3& platform_pose,
         gtsam::OptionalMatrixType H1, gtsam::OptionalMatrixType H2,
         gtsam::OptionalMatrixType H3, gtsam::OptionalMatrixType H4, 
         gtsam::OptionalMatrixType H5, gtsam::OptionalMatrixType H6,

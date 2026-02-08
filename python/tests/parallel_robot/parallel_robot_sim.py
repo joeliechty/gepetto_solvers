@@ -44,8 +44,8 @@ def get_tip_poses():
 
 def get_wrench_prior(t):
     wrench_mean = np.zeros(6)
-    # f = 10 * np.array([np.cos(0.1 * t), np.sin(0.1 * t), np.sin(0.15 * t)])
-    # wrench_mean[3:] = f
+    f = 10 * np.array([np.cos(0.1 * t), np.sin(0.1 * t), np.sin(0.15 * t)])
+    wrench_mean[3:] = f
 
     wrench_cov = 1e-6 * np.eye(6)
     # wrench_cov[3:,3:] = 1e-1 * np.eye(3)

@@ -93,17 +93,17 @@ NonlinearFactorGraph ParallelRobot::build_graph(
 
     // Sum of all transformed tip stresses equals zero (for now)
     graph.add(PlatformWrenchBalanceFactor(
-        rods_[0]->get_wrench_key(-1),
+        rods_[0]->get_stress_key(-1),
         rods_[0]->get_pose_key(-1),
-        rods_[1]->get_wrench_key(-1),
+        rods_[1]->get_stress_key(-1),
         rods_[1]->get_pose_key(-1),
-        rods_[2]->get_wrench_key(-1),
+        rods_[2]->get_stress_key(-1),
         rods_[2]->get_pose_key(-1),
-        rods_[3]->get_wrench_key(-1),
+        rods_[3]->get_stress_key(-1),
         rods_[3]->get_pose_key(-1),
-        rods_[4]->get_wrench_key(-1),
+        rods_[4]->get_stress_key(-1),
         rods_[4]->get_pose_key(-1),
-        rods_[5]->get_wrench_key(-1),
+        rods_[5]->get_stress_key(-1),
         rods_[5]->get_pose_key(-1),
         platform_wrench_key(),
         platform_pose_key(),
