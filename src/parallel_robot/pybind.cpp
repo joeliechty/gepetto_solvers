@@ -28,7 +28,8 @@ void bind_parallel_robot(py::module& m) {
         .def_readwrite("rods", &ParallelRobotMarginals::rods)
         .def_readwrite("platform_pose", &ParallelRobotMarginals::platform_pose)
         .def_readwrite("platform_wrench", &ParallelRobotMarginals::platform_wrench)
-        .def_readwrite("rod_lengths_jacobian", &ParallelRobotMarginals::rod_lengths_jacobian);
+        .def_readwrite("rod_lengths_jacobian", &ParallelRobotMarginals::rod_lengths_jacobian)
+        .def_readwrite("tip_wrench_jacobian", &ParallelRobotMarginals::tip_wrench_jacobian);
         
     py::class_<Solution<ParallelRobotMarginals>>(m, "ParallelRobotSolution")
         .def(py::init<>())

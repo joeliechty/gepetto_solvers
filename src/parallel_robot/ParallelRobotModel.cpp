@@ -186,3 +186,23 @@ Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) cons
     Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
     return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
 }
+
+
+Matrix6 ParallelRobot::get_tip_wrench_jacobian(const Marginals& marginals) const {
+    // Get joint marginal between tip wrench and tip pose
+    Key W = platform_wrench_key();
+    Key T = platform_pose_key();
+
+    KeyVector keys;
+    keys.push_back(W);
+    keys.push_back(T);
+    JointMarginal joint = marginals.jointMarginalCovariance(keys);
+
+    // Get individual blocks
+    Matrix6 sigma_WW = joint(W, W);
+    Matrix6 sigma_TW = joint(T, W);
+
+    // Compute J_pose_tensions = sigma_TQ * inv(sigma_QQ)
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_WW);
+    return sigma_TW * ldlt.solve(Matrix6::Identity());
+}

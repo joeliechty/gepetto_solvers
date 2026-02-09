@@ -48,6 +48,7 @@ void ParallelRobotSolver::build_graph() {
 void ParallelRobotSolver::extract_solution() {
     extracted_ = robot_->get_marginals(values_, marginals_);
     extracted_.rod_lengths_jacobian = robot_->get_rod_lengths_jacobian(marginals_);
+    extracted_.tip_wrench_jacobian = robot_->get_tip_wrench_jacobian(marginals_);
 }
 
     

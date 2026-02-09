@@ -25,7 +25,7 @@ class ParallelRobotPlotter:
         self.platform_z_offset = platform_z_offset
         self.plot_platform_wrench = plot_platform_wrench
 
-        rod_colors = ['deepcadmiumred', 'cadmiumorange', 'lightcadmiumyellow', 'seagreen', 'royalblue', 'rebeccapurple']
+        rod_colors = ['rebeccapurple', 'deepcadmiumred', 'cadmiumorange', 'lightcadmiumyellow', 'seagreen', 'royalblue']
         for i in range(6):
             self.rod_managers.append(CosseratRodMeshManager(
                 plot_base_plate=False,
