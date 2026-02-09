@@ -41,10 +41,10 @@ def get_tip_poses():
 def get_goal_pose(t):
     wt = 2 * np.pi * (0.105) * t
 
-    p_xy = 0.7 / 20.0 * t * np.array([np.cos(wt), np.sin(wt)])
+    p_xy = 0.5 / 20.0 * t * np.array([np.cos(wt), np.sin(wt)])
     p = np.hstack([p_xy, 0.7])
 
-    r_xy = np.radians(80) / 20.0 * t * np.array([-np.sin(wt), np.cos(wt)])
+    r_xy = np.radians(60) / 20.0 * t * np.array([-np.sin(wt), np.cos(wt)])
     r = np.hstack([r_xy, 0])
     R = Rotation.from_rotvec(r).as_matrix()
 
@@ -52,7 +52,7 @@ def get_goal_pose(t):
 
 
 def get_config():
-    r = 0.002 / 2
+    r = 0.0015 / 2
     I = 0.25 * np.pi * r ** 4
     A = np.pi * r ** 2
     J = 2 * I
@@ -107,8 +107,8 @@ def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_
         single_plot_mode=False,
         save_frames_dir_name=save_frames_dir_name,
         platform_z_offset=platform_z_offset,
-        camera_azimuth=120, 
-        camera_distance=3, 
+        camera_azimuth=-60, 
+        camera_distance=2.7, 
         camera_focal_point=np.array([0, 0, 0.5])
     )
     
@@ -129,7 +129,9 @@ def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_
         # Compare to baseline model if requested
         if do_baseline:
             comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
-            p_baseline.append(get_tip_position_baseline(comparison))
+            p_comparison = get_tip_position_baseline(comparison)
+            print(f"baseline error: {np.linalg.norm(p_comparison - p)}")
+            p_baseline.append(p_comparison)
 
         # Compare to current goal pose
         p_goal, R_goal = get_goal_pose(ti)
@@ -158,7 +160,8 @@ def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_
 
 if __name__ == "__main__":
     do_baseline = True
-    t, p_solution, p_baseline, p_command, p_rms = run_sim(do_baseline=do_baseline, save_frames_dir_name="parallel_robot_sim", plot=True)
+    dir_name = "parallel_robot_sim"
+    t, p_solution, p_baseline, p_command, p_rms = run_sim(do_baseline=do_baseline, save_frames_dir_name=dir_name, plot=True)
 
     fig, axs = plt.subplots(
         2, 1,

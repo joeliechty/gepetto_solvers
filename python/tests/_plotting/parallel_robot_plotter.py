@@ -42,7 +42,7 @@ class ParallelRobotPlotter:
                 )
             )
 
-        base_plate = pv.Cylinder(direction=(0,0,1), radius=0.35, height=0.02)
+        base_plate = pv.Cylinder(direction=(0,0,1), radius=0.2, height=0.02)
         self.plotter.plotter.add_mesh(base_plate, color="silver", show_edges=True, line_width=2, opacity=0.3)
         
   
