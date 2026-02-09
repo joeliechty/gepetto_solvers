@@ -6,79 +6,56 @@ import crest_sparse
 from .._plotting.parallel_robot_plotter import ParallelRobotPlotter
 from .baseline_model import ParallelRobotSolver
 
-ang = 10
-def get_base_poses():
-    angles = np.array(np.deg2rad([ang, 120 - ang, 120 + ang, 240 - ang, 240 + ang, -ang]))
 
-    radius = 0.1
+def get_end_poses(angles, radius, z_offset):
     xs = radius * np.cos(angles)
     ys = radius * np.sin(angles)
-
     poses = []
     for xi, yi in zip(xs, ys):
         pose = np.eye(4)
         pose[0, 3] = xi
         pose[1, 3] = yi
+        pose[2, 3] = z_offset
         poses.append(pose)
 
     return poses
+
+
+def get_base_poses():
+    ang = 10
+    angles = np.array(np.deg2rad([ang, 120 - ang, 120 + ang, 240 - ang, 240 + ang, -ang]))
+
+    return get_end_poses(angles, radius=0.1, z_offset=0.0)
+
 
 platform_z_offset = -0.1
 
+
 def get_tip_poses():
+    ang = 10
     angles = np.array(np.deg2rad([60 - ang, 60 + ang, 180 - ang, 180 + ang, 300 - ang, 300 + ang]))
 
-    radius = 0.1
-    xs = radius * np.cos(angles)
-    ys = radius * np.sin(angles)
-    z = platform_z_offset
-    poses = []
-    for xi, yi in zip(xs, ys):
-        pose = np.eye(4)
-        pose[0, 3] = xi
-        pose[1, 3] = yi
-        pose[2, 3] = z
-        poses.append(pose)
-
-    return poses
+    return get_end_poses(angles, radius=0.1, z_offset=platform_z_offset)
 
 
-def get_goal_position(t):
+def get_goal_pose(t):
     wt = 2 * np.pi * (0.1) * t
-    xy_dir = np.array([np.cos(wt), np.sin(wt)])
-    xy_dist = np.clip(0.04 * t, 0, 0.4)
-    return np.hstack([xy_dist * xy_dir, 0.8])
+    p_xy = 0.04 * t * np.array([np.cos(wt), np.sin(wt)])
+    p = np.hstack([p_xy, 0.8])
+
+    r_xy = 0.04 * t * np.array([-np.sin(wt), np.cos(wt)])
+    r = np.hstack([r_xy, 0])
+
+    pose = np.eye(4)
+    pose[:3,:3] = Rotation.from_rotvec(r).as_matrix()
+    pose[:3,3] = p
+
+    return pose
 
 
 def get_rms_position_error(solution):
     cov = solution.marginals.platform_pose.cov[3:,3:]  # position covariance
-    cost = np.sqrt(np.linalg.trace(cov))
-
-    # for rod in solution.marginals.rods:
-    #     for state in rod.states:
-    #         cov = state.pose.cov[3:,3:]
-    #         cost += np.sqrt(np.linalg.trace(cov))
-
-    return cost
-
-
-def get_cost_grad(solver, rod_lengths, rod_lengths_sigma, wrench, alpha):
-    def cost(rod_lengths):
-        s = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
-        p_error = get_rms_position_error(s)
-        return alpha * p_error + 0.1 * sum(rod_lengths)
-
-    h0 = cost(rod_lengths)
-    grad_h = np.zeros(6)
-    fd_step = 1e-5
-
-    for i in range(6):
-        dl = np.zeros(6)
-        dl[i] = fd_step
-        hi = cost(rod_lengths + dl)
-        grad_h[i] = (hi - h0) / fd_step
-
-    return h0, grad_h
+    return np.sqrt(np.linalg.trace(cov))
 
 
 def get_config():
@@ -115,7 +92,7 @@ def get_config():
     return config
 
 
-def run_sim(alpha, save_frames_dir_name=None, plot=False, do_baseline=False):
+def run_sim(rod_lengths_sigma, save_frames_dir_name=None, plot=False, do_baseline=False):
     config = get_config()
 
     solver = crest_sparse.ParallelRobotSolver(config)
@@ -137,34 +114,28 @@ def run_sim(alpha, save_frames_dir_name=None, plot=False, do_baseline=False):
     t_final = 15
     t = np.arange(0, t_final, dt)
 
-    rod_lengths_sigma = 1e-4
     rod_lengths = 0.5 * np.ones(6)
 
     max_velocity = 0.15
     max_step = max_velocity * dt
 
-    wrench_mean = np.zeros(6)
-    wrench_cov = 1e-6 * np.eye(6)
-    wrench_cov[3:,3:] = 1e-1 * np.eye(3)
-    wrench = crest_sparse.Vector6Gaussian(wrench_mean, wrench_cov)
+    wrench = crest_sparse.Vector6Gaussian(np.zeros(6), 1e-6 * np.eye(6))
 
     p_solution, p_baseline, p_uncertainty = [], [], []
 
     for ti in t:
         solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
         p_solution.append(solution.marginals.rods[0].states[-1].pose.mean[:3,3])
+        p_uncertainty.append(get_rms_position_error(solution))
 
         if do_baseline:
             comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
             p_baseline.append(comparison[0]['pose'][-1][:3,3])
 
-        h, grad_h = get_cost_grad(solver, rod_lengths, rod_lengths_sigma, wrench, alpha)
-        p_uncertainty.append(h)
-
         p = solution.marginals.platform_pose.mean[:3, 3]
         R = solution.marginals.platform_pose.mean[:3,:3]
 
-        p_goal = get_goal_position(ti)
+        pose_goal = get_goal_pose(ti)
         dp = R.T @ (p_goal - p)
 
         if np.linalg.norm(dp) > max_step:
