@@ -16,7 +16,7 @@ def hat(v):
 
 
 class ParallelRobotSolver:
-    def __init__(self, config, num_eval_points=20, plot=False):
+    def __init__(self, config, num_eval_points=100, plot=False):
 
         self.K_se_inv = config.K_inv[3:,3:]
         self.K_bt_inv = config.K_inv[:3,:3]

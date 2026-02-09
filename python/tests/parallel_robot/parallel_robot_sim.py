@@ -39,23 +39,16 @@ def get_tip_poses():
 
 
 def get_goal_pose(t):
-    wt = 2 * np.pi * (0.1) * t
-    p_xy = 0.04 * t * np.array([np.cos(wt), np.sin(wt)])
-    p = np.hstack([p_xy, 0.8])
+    wt = 2 * np.pi * (0.105) * t
 
-    r_xy = 0.04 * t * np.array([-np.sin(wt), np.cos(wt)])
+    p_xy = 0.7 / 20.0 * t * np.array([np.cos(wt), np.sin(wt)])
+    p = np.hstack([p_xy, 0.7])
+
+    r_xy = np.radians(80) / 20.0 * t * np.array([-np.sin(wt), np.cos(wt)])
     r = np.hstack([r_xy, 0])
+    R = Rotation.from_rotvec(r).as_matrix()
 
-    pose = np.eye(4)
-    pose[:3,:3] = Rotation.from_rotvec(r).as_matrix()
-    pose[:3,3] = p
-
-    return pose
-
-
-def get_rms_position_error(solution):
-    cov = solution.marginals.platform_pose.cov[3:,3:]  # position covariance
-    return np.sqrt(np.linalg.trace(cov))
+    return p, R
 
 
 def get_config():
@@ -78,7 +71,7 @@ def get_config():
     config = crest_sparse.ParallelRobotSolverConfig()
 
     config.base.use_dense = False
-    config.nodes_per_rod = 20
+    config.nodes_per_rod = 15
     config.K_inv = K_inv
     config.sigma_twist_pos = 1.0e-4
     config.sigma_twist_rot = 1.0e-3
@@ -92,7 +85,17 @@ def get_config():
     return config
 
 
-def run_sim(rod_lengths_sigma, save_frames_dir_name=None, plot=False, do_baseline=False):
+def get_tip_position_baseline(solution):
+    pose_ends = np.array([rod['pose'][-1] for rod in solution])  # num_rods, 4, 4
+    p_ends = pose_ends[:,:3,3]
+    R_ends = pose_ends[:,:3,:3]
+        
+    z_offset = R_ends[:,:3,2] * platform_z_offset
+
+    return np.mean(p_ends - z_offset, axis=0)
+    
+
+def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_dir_name=None, plot=True, do_baseline=True):
     config = get_config()
 
     solver = crest_sparse.ParallelRobotSolver(config)
@@ -109,45 +112,40 @@ def run_sim(rod_lengths_sigma, save_frames_dir_name=None, plot=False, do_baselin
         camera_focal_point=np.array([0, 0, 0.5])
     )
     
-    frame_rate = 10.0
     dt = 1.0 / frame_rate
-    t_final = 15
     t = np.arange(0, t_final, dt)
-
-    rod_lengths = 0.5 * np.ones(6)
-
-    max_velocity = 0.15
-    max_step = max_velocity * dt
-
+    rod_lengths = 0.6 * np.ones(6)
     wrench = crest_sparse.Vector6Gaussian(np.zeros(6), 1e-6 * np.eye(6))
 
-    p_solution, p_baseline, p_uncertainty = [], [], []
+    p_solution, p_baseline, p_command, p_rms = [], [], [], []
 
     for ti in t:
+        # Solve using our method and capture uncertainty
         solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
-        p_solution.append(solution.marginals.rods[0].states[-1].pose.mean[:3,3])
-        p_uncertainty.append(get_rms_position_error(solution))
-
-        if do_baseline:
-            comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
-            p_baseline.append(comparison[0]['pose'][-1][:3,3])
-
         p = solution.marginals.platform_pose.mean[:3, 3]
         R = solution.marginals.platform_pose.mean[:3,:3]
+        p_cov = solution.marginals.platform_pose.cov[3:,3:]
 
-        pose_goal = get_goal_pose(ti)
-        dp = R.T @ (p_goal - p)
+        # Compare to baseline model if requested
+        if do_baseline:
+            comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
+            p_baseline.append(get_tip_position_baseline(comparison))
 
-        if np.linalg.norm(dp) > max_step:
-            dp = max_step * dp / np.linalg.norm(dp)
+        # Compare to current goal pose
+        p_goal, R_goal = get_goal_pose(ti)
+        p_error = R.T @ (p_goal - p)
+        r_error = Rotation.from_matrix(R.T @ R_goal).as_rotvec()
+        twist_error = np.hstack((r_error, p_error))
 
-        J = solution.marginals.rod_lengths_jacobian[3:,:]
-        J_pinv = np.linalg.pinv(J)
-        J_null = np.eye(J.shape[1]) - J_pinv @ J
-
-        d_rod_lengths = J_pinv @ dp - dt * (J_null @ grad_h)
-
+        # Jacobian to step toward the goal
+        J = solution.marginals.rod_lengths_jacobian
+        d_rod_lengths = np.linalg.pinv(J) @ twist_error
         rod_lengths += d_rod_lengths
+
+        # Collect data, plot, display
+        p_solution.append(p)
+        p_command.append(p_goal)
+        p_rms.append(np.sqrt(np.trace(p_cov)))
         
         if plot:
             plotter.update(solution)
@@ -155,31 +153,32 @@ def run_sim(rod_lengths_sigma, save_frames_dir_name=None, plot=False, do_baselin
         progress = 100.0 * ti / t[-1]
         print(f"Progress: {progress:5.1f}%", end="\r")
 
-    return t, np.array(p_solution), np.array(p_baseline), np.array(p_uncertainty)
+    return t, np.array(p_solution), np.array(p_baseline), np.array(p_command), np.array(p_rms)
 
 
 if __name__ == "__main__":
-    t, _, _, p_rms_nominal = run_sim(0.0, plot=True)
-    # _, _, _, p_rms_resolved = run_sim(1.5)
-    # p_solution, p_baseline, p_rms_resolved = run_sim(0.07, "parallel_robot_resolved")
+    do_baseline = True
+    t, p_solution, p_baseline, p_command, p_rms = run_sim(do_baseline=do_baseline, save_frames_dir_name="parallel_robot_sim", plot=True)
 
-    # baseline_error = p_solution - p_baseline
-    # baseline_rms = np.sqrt(np.mean(np.sum(baseline_error**2, axis=1)))
+    fig, axs = plt.subplots(
+        2, 1,
+        figsize=(7, 5),
+        sharex=True,
+        constrained_layout=True
+    )
 
-    # print("baseline_rms: ", baseline_rms)
-    # print("nominal_rms: ", p_rms_nominal[-1])
-    # print("resolved_rms: ", p_rms_resolved[-1])
+    axs[0].plot(t, 1000 * p_rms, linewidth=2.5)
+    axs[0].set_ylabel("RMS uncertainty (mm)")
+    axs[0].grid(True, alpha=0.25)
 
-    plt.figure(figsize=(6, 4))
+    if do_baseline:
+        baseline_err = 1000 * np.linalg.norm(p_solution - p_baseline, axis=1)
+        axs[1].plot(t, baseline_err, linewidth=2.5, label="baseline")
 
-    plt.plot(t, 1000 * p_rms_nominal, linewidth=2, label="nominal")
-    plt.plot(t, 1000 * p_rms_resolved, linewidth=2, label="resolved")
+    axs[1].set_ylabel("baseline error (mm)")
+    axs[1].set_xlabel("time (sec)")
+    axs[1].grid(True, alpha=0.25)
 
-    plt.xlabel("time (sec)")
-    plt.ylabel("Predicted RMS position error (mm)")
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig("parallel_robot_rms.png", dpi=300)
-    plt.close()
+    fig.align_ylabels(axs)
+    fig.savefig("parallel_robot_plot.png", dpi=300)
+    plt.close(fig)
