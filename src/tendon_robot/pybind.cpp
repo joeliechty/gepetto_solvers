@@ -52,9 +52,8 @@ void bind_tendon_robot(py::module& m) {
     py::class_<TendonRobotMarginals>(m, "TendonRobotMarginals")
         .def(py::init<>())
         .def_readwrite("rod", &TendonRobotMarginals::rod)
-        .def_readwrite("samples", &TendonRobotMarginals::samples)
         .def_readwrite("tendon_config", &TendonRobotMarginals::tendon_config)
-        .def_readwrite("external_wrench", &TendonRobotMarginals::external_wrench)
+        .def_readwrite("external_wrenches", &TendonRobotMarginals::external_wrenches)
         .def_readwrite("tensions", &TendonRobotMarginals::tensions)
         .def_readwrite("J_pose_tensions", &TendonRobotMarginals::J_pose_tensions);
 
@@ -67,7 +66,8 @@ void bind_tendon_robot(py::module& m) {
         .def(py::init<const TendonRobotSolverConfig&>())
         .def("solve", &TendonRobotSolver::solve,
              py::arg("tensions"),
-             py::arg("tip_force"));
+             py::arg("tip_force"),
+             py::arg("tip_meas"));
 }
 
 // OLD

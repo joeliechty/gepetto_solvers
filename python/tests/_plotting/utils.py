@@ -1,11 +1,38 @@
+import os
 from pathlib import Path
 import shutil
+
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pyvista as pv
 
 
 frame_arrow_colors = ["red", "green", "blue"]
+
+
+def setup_plt(width=3.5, height=5.0, grid=False):
+
+    os.makedirs("figures", exist_ok=True)
+
+    plt.rcParams.update({
+        "figure.figsize": (width, height),
+        "font.family": "STIXGeneral",
+        "font.size": 8,               
+        "xtick.labelsize": 7,        
+        "ytick.labelsize": 7,
+        "legend.fontsize": 7,
+        "lines.linewidth": 1.5,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": grid,
+        "grid.alpha": 0.3,
+        "pdf.fonttype": 42,  # embed fonts in PDF
+        "ps.fonttype": 42,
+        "mathtext.fontset": "stix",  # math text compatible with Times
+        "mathtext.rm": "stix",
+        "lines.markersize": 4
+    })
 
 
 def get_tube_from_points(points, radius):
@@ -133,7 +160,7 @@ class PlotterBase:
         self.plotter.camera.position = (x, y, z)
         self.plotter.camera.focal_point = self.camera_focal_point
 
-        self.plotter.add_axes()
+        # self.plotter.add_axes()
         # self.plotter.enable_depth_peeling(10)
         self.plotter.enable_anti_aliasing()
     

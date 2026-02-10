@@ -3,7 +3,7 @@ import numpy as np
 from crest_sparse import TendonRobotSolverConfig, TendonInput, RoutingAngleFunction, RoutingFunctionParams
 
 
-def get_sim_K_inv():
+def get_K_inv():
     rod_diameter = 0.0012
     youngs_modulus = 40.0e9
     shear_modulus = 15.0e9 
@@ -28,7 +28,7 @@ def get_sim_K_inv():
     return K_inv
 
 
-def get_sim_tendon_input():
+def get_tendon_input():
     tendon_input = TendonInput()
 
     tendon_input.routing_radius = 0.01
@@ -53,24 +53,24 @@ def get_sim_tendon_input():
 def get_base_config():
     config = TendonRobotSolverConfig()
 
+    config.base.use_dense = False
+    config.base.linear_solver_type = "MULTIFRONTAL_QR"
     config.rod_length = 0.25
     config.num_discs = 9
     config.num_between_nodes = 3
-    config.K_inv = get_sim_K_inv()
+    config.K_inv = get_K_inv()
     config.sigma_twist_rot = 1.0e-3
     config.sigma_twist_pos = 1.0e-4
     config.sigma_stress_force = 1.0e-4
     config.sigma_stress_moment = 1.0e-5
     config.sigma_base_pos = 1.0e-4
     config.sigma_base_rot = 1.0e-3
-    config.tendon_input = get_sim_tendon_input()
-    
-    # config.use_midpoint = True
-    # config.tip_force_prior_std = 1e-1
+    config.tendon_input = get_tendon_input()
+
+    # config.tip_position_meas_std = 1e-3
+
     # config.dist_load_prior_std = 2e-2
     # config.dist_load_smoothness_std = 1e-2
-    # config.tension_meas_std = 1e-2
-    # config.tip_position_meas_std = 1e-3
     # config.fbg_strain_meas_std = 3e-6
     # config.tension_drift_std = 1e-2
     # config.tip_force_drift_std = 1e-1
@@ -78,11 +78,3 @@ def get_base_config():
 
     return config
 
-
-def get_sim_config():
-    config = get_base_config()
-
-    config.tension_meas_std = 1e-4
-    config.cosserat_twist_r_std = 1e-4
-
-    return config

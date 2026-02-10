@@ -122,7 +122,7 @@ Key TendonRobotModel::get_disc_wrench_key(int disc_idx) const {
 
 Key TendonRobotModel::get_external_wrench_key(int node_idx) const {
     // If we are at a disc, use disc wrench key
-    for (size_t disc_idx = 0; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
+    for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
         if (tendon_config_.disc_pose_idx[disc_idx] == node_idx) {
             return get_disc_wrench_key(disc_idx);
         }
@@ -174,7 +174,7 @@ NonlinearFactorGraph TendonRobotModel::build_graph(const Vector4Gaussian& tensio
         // TODO change to: bool is_tip = (disc_idx == ...)
         if (disc_idx == (tendon_config_.disc_pose_idx.size() - 1)) {
             is_tip = true;
-            pose_idx_next = rod_->get_pose_key(0); // Dummy pose for tip factor, not used for tip disc
+            pose_idx_next = 0; // Dummy pose for tip factor, not used for tip disc
             holes_next = tendon_config_.hole_locations[0]; // Dummy holes, not used in factor
         } else {
             is_tip = false;
@@ -201,18 +201,6 @@ NonlinearFactorGraph TendonRobotModel::build_graph(const Vector4Gaussian& tensio
         get_tensions_key(), 
         tensions_.mean, 
         noiseModel::Gaussian::Covariance(tensions_.cov)));
-
-    // Now we need to constrain all disc wrenches AND all internal wrenches that are not at discs.
-    // These are collected into a set of external wrenches.
-    for (int i = 1; i < num_nodes_; ++i) {
-        Key key = get_external_wrench_key(i);
-
-        // For now, set to zero TODO
-        graph.add(PriorFactor<Vector6>(
-            key, 
-            Vector6::Zero(), 
-            stress_noise_));
-    }
 
     return graph;
 }
@@ -244,11 +232,19 @@ TendonRobotMarginals TendonRobotModel::get_marginals(
     TendonRobotMarginals m;
 
     m.rod = rod_->get_marginals(values, marginals);
-    // TODO samples, external wrenches
     m.tendon_config = tendon_config_;
     
     m.tensions.mean = values.at<Vector4>(get_tensions_key());
     m.tensions.cov = marginals.marginalCovariance(get_tensions_key());
+
+    m.external_wrenches.resize(num_nodes_);
+    for (int i = 0; i < num_nodes_; i++) {
+        Key key = get_external_wrench_key(i);
+        Vector6Gaussian wrench;
+        wrench.mean = values.at<Vector6>(key);
+        wrench.cov = marginals.marginalCovariance(key);
+        m.external_wrenches[i] = wrench;
+    }
 
     get_J_pose_tensions(marginals, m);
 

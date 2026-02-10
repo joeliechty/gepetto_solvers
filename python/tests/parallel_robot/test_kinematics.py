@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 
 import crest_sparse
 from .._plotting.parallel_robot_plotter import ParallelRobotPlotter
+from .._plotting.utils import setup_plt
+
 from .baseline_model import ParallelRobotSolver
 
 
@@ -160,28 +162,35 @@ def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_
 
 if __name__ == "__main__":
     do_baseline = True
+    plot = True
     dir_name = "parallel_robot_sim"
-    t, p_solution, p_baseline, p_command, p_rms = run_sim(do_baseline=do_baseline, save_frames_dir_name=dir_name, plot=True)
+    t, p_solution, p_baseline, p_command, p_rms = run_sim(do_baseline=do_baseline, save_frames_dir_name=dir_name, plot=plot)
 
-    fig, axs = plt.subplots(
-        2, 1,
-        figsize=(7, 5),
-        sharex=True,
-        constrained_layout=True
-    )
+    setup_plt(width=2.0, height=2.0)
+    plt.figure()
 
-    axs[0].plot(t, 1000 * p_rms, linewidth=2.5)
-    axs[0].set_ylabel("RMS uncertainty (mm)")
-    axs[0].grid(True, alpha=0.25)
+    plt.plot(t, 1000 * p_rms)
+    plt.xlabel("time (sec)")
+    plt.ylabel("RMS position uncertainty (mm)")
+    plt.grid(True, alpha=0.25)
+
+    plt.tight_layout()
+    plt.savefig("parallel_robot_uncertainty.pdf", dpi=300)
+    plt.close()
 
     if do_baseline:
+        setup_plt()
+        plt.figure()
         baseline_err = 1000 * np.linalg.norm(p_solution - p_baseline, axis=1)
-        axs[1].plot(t, baseline_err, linewidth=2.5, label="baseline")
+        plt.plot(t, baseline_err, label="baseline")
+        plt.xlabel("time (sec)")
+        plt.ylabel("baseline error (mm)")
+        plt.grid(True, alpha=0.25)
 
-    axs[1].set_ylabel("baseline error (mm)")
-    axs[1].set_xlabel("time (sec)")
-    axs[1].grid(True, alpha=0.25)
+        plt.tight_layout()
+        plt.savefig("parallel_robot_baseline.pdf", dpi=300)
+        plt.close()
 
-    fig.align_ylabels(axs)
-    fig.savefig("parallel_robot_plot.png", dpi=300)
-    plt.close(fig)
+        print(f"mean baseline error: {np.mean(baseline_err)} mm")
+
+    

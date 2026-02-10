@@ -3,6 +3,8 @@ import numpy as np
 
 import crest_sparse
 from .._plotting.cosserat_rod_plotter import CosseratRodPlotter
+from .._plotting.utils import setup_plt
+
 from .config import get_base_config
 from .baseline_model import CosseratRodBaseline
 
@@ -104,18 +106,19 @@ def main():
     midpoint_percent = 100 * midpoint_rms / L
     euler_percent = 100 * euler_rms / L
 
-    plt.figure(figsize=(6, 4))
+    setup_plt(width=2.0,height=2.0)
+    plt.figure()
 
-    plt.semilogy(num_nodes, midpoint_percent, linewidth=2, label="midpoint")
-    plt.semilogy(num_nodes, euler_percent, linewidth=2, label="euler")
+    plt.semilogy(num_nodes, midpoint_percent, label="midpoint")
+    plt.semilogy(num_nodes, euler_percent, label="euler")
 
-    plt.xlabel("number of nodes")
+    plt.xlabel("number of arclength nodes")
     plt.ylabel("RMS position error (% rod length)")
     plt.legend()
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("num_nodes.png", dpi=300)
+    plt.savefig("cosserat_num_nodes.pdf", dpi=300)
     plt.close()
 
 

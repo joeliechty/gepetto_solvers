@@ -8,13 +8,20 @@ from .cosserat_rod_plotter import CosseratRodMeshManager
 class TendonRobotPlotter:
     def __init__(self,
                  plot_rod_wrenches=False,
-                 plot_external_wrenches=True,
+                 plot_tip_force=True,
                  plot_base_wrenches=False,
                  plot_backbone_frames=False,
                  plot_backbone_ellipsoids=True,
                  **kwargs):
 
-        self.plotter = utils.PlotterBase(**kwargs)
+        self.plotter = utils.PlotterBase(
+            camera_focal_point=[0,0.1,0],
+            camera_azimuth=15,
+            camera_distance=0.6,
+            **kwargs
+        )
+        
+        self.plot_tip_force = plot_tip_force
 
         self.rod_manager = CosseratRodMeshManager(
             plot_backbone_ellipsoids=plot_backbone_ellipsoids,
@@ -86,11 +93,66 @@ class TendonRobotPlotter:
             T = solution.marginals.rod.states[disc_pose_idx[ii]].pose.mean
             self.disc_transforms[ii].SetMatrix(T.flatten().tolist())
 
-    def update(self, solution):
+    def update_tip_force(self, solution, tip_force_gt=None):
+        if not self.plot_tip_force:
+            return
+
+        if self.plotter.frame == 0:
+            shaft_scale=0.02
+
+            mesh = utils.get_arrow(shaft_scale=shaft_scale)
+            self.tip_force_arrow_transform = vtk.vtkTransform()
+            actor = self.plotter.plotter.add_mesh(mesh, color='darkorchid', lighting=False)
+            actor.SetUserTransform(self.tip_force_arrow_transform)
+
+            mesh = pv.Sphere(radius=1)
+            self.tip_force_ellipsoid_transform = vtk.vtkTransform()
+            actor = self.plotter.plotter.add_mesh(mesh, color="cadmiumlemon", lighting=False, opacity=0.4)
+            actor.SetUserTransform(self.tip_force_ellipsoid_transform)
+
+            if tip_force_gt is not None:
+                mesh = utils.get_arrow(shaft_scale=shaft_scale)
+                self.tip_force_gt_transform = vtk.vtkTransform()
+                actor = self.plotter.plotter.add_mesh(mesh, color='green', lighting=False)
+                actor.SetUserTransform(self.tip_force_gt_transform)
+
+
+        # Update vtkTransforms for each actor
+        p = solution.marginals.rod.states[-1].pose.mean[:3,3]
+        f = solution.marginals.external_wrenches[-1].mean[3:]
+        cov = solution.marginals.external_wrenches[-1].cov[3:,3:]
+
+        force_scale = 0.3
+        matrix = utils.get_arrow_transform(p, f, scale=force_scale)
+        self.tip_force_arrow_transform.SetMatrix(matrix.flatten().tolist())
+        
+        matrix = utils.get_ellipsoid_transform(p + f * force_scale, cov, scale=force_scale)
+        self.tip_force_ellipsoid_transform.SetMatrix(matrix.flatten().tolist())
+
+        if tip_force_gt is not None:
+            matrix = utils.get_arrow_transform(p, tip_force_gt, scale=force_scale)
+            self.tip_force_gt_transform.SetMatrix(matrix.flatten().tolist())
+        
+    def update_p_desired(self, p):
+        if self.plotter.frame == 0:
+            mesh = pv.Sphere(radius=0.002)
+            self.p_desired_transform = vtk.vtkTransform()
+            actor = self.plotter.plotter.add_mesh(mesh, color='red', lighting=False)
+            actor.SetUserTransform(self.p_desired_transform)
+
+        matrix = np.eye(4)
+        matrix[:3,3] = p
+        self.p_desired_transform.SetMatrix(matrix.flatten().tolist())
+
+    def update(self, solution, p_desired=None, tip_force_gt=None):
         self.rod_manager.update(solution.marginals.rod, self.plotter)
         self.update_tendons(solution)
         self.update_discs(solution)
-
+        self.update_tip_force(solution, tip_force_gt)
+        
+        if p_desired is not None:
+            self.update_p_desired(p_desired)
+        
         self.plotter.update(solution)
 
 
@@ -203,8 +265,7 @@ class TendonRobotPlotter:
 #         if self.plot_dist_load:
 #             dist_load_meshes = get_dist_load_meshes(solution)
 
-#         if p_desired is not None:
-#             p_desired_mesh = pv.Sphere(0.002, p_desired)
+
 
 #         if self.frame == 0:
 #             self.backbone_mesh = backbone
@@ -249,48 +310,15 @@ class TendonRobotPlotter:
 #                 for mesh in self.dist_load_meshes:
 #                     self.plotter.add_mesh(mesh, color="darkorchid", lighting=False)
 
-#             if p_desired is not None:
-#                 self.p_desired_mesh = p_desired_mesh
-#                 self.plotter.add_mesh(self.p_desired_mesh, color="red")
+
 
 #             self.init_scene(solution)
 #         else:
 #             self.backbone_mesh.shallow_copy(backbone)
 
-#             for i, (new_disc, disc) in enumerate(zip(discs, self.disc_meshes)):
-#                 if i == 0: continue
-#                 disc.shallow_copy(new_disc)
-            
-#             for new_tendon, tendon in zip(tendons, self.tendon_meshes):
-#                 tendon.shallow_copy(new_tendon)
 
-#             for new_hole, hole in zip(holes, self.hole_meshes):
-#                 hole.shallow_copy(new_hole)
 
-#             if self.plot_backbone_ellipsoids:
-#                 for mesh_self, mesh in zip(self.backbone_2_sigma_meshes, backbone_ellipsoids):
-#                     mesh_self.shallow_copy(mesh)
-
-#             if self.plot_tip_force:
-#                 self.tip_force_mean_mesh.shallow_copy(tip_force_mean_mesh)
-#                 self.tip_force_2_sigma_mesh.shallow_copy(tip_force_2_sigma_mesh)
-#                 if tip_force_gt is not None:
-#                     self.tip_force_gt_mesh.shallow_copy(tip_force_gt_mesh)
-            
 #             if self.plot_dist_load:
 #                 for (mesh_self, mesh) in zip(self.dist_load_meshes, dist_load_meshes):
 #                     mesh_self.shallow_copy(mesh)
-           
-#             if p_desired is not None:
-#                 self.p_desired_mesh.shallow_copy(p_desired_mesh)
-
-#         self.solve_time_ms_history.append(solution.total_time_ms)
-#         text = f"solve time: {solution.total_time_ms:.2f} ms, average: {np.mean(self.solve_time_ms_history):.2f} ms"
-#         self.plotter.add_text(text, position='upper_right', font_size=14, font="courier", name="solve_time")
-
-#         self.plotter.render()
-
-#         if self.save_frames_mode:
-#             self.plotter.screenshot(self.frames_path / f"{self.frame}.png", window_size=self.window_size)
         
-#         self.frame += 1

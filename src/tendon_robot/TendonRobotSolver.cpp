@@ -1,8 +1,10 @@
 #include "TendonRobotSolver.h"
 
+#include "measurement/PositionPriorFactor.h"
 #include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
 #include "utils/SolverBase.h"
+#include <gtsam/linear/NoiseModel.h>
 
 using namespace gtsam;
 
@@ -39,10 +41,12 @@ TendonRobotSolver::TendonRobotSolver(const TendonRobotSolverConfig& config)
 
 Solution<TendonRobotMarginals> TendonRobotSolver::solve(
     const Vector4Gaussian& tensions,
-    const std::optional<Vector3Gaussian>& tip_force)
+    const std::optional<Vector6Gaussian>& tip_wrench,
+    const std::optional<Vector3Gaussian>& tip_position_meas)
 {
     tensions_ = tensions;
-    tip_force_ = tip_force;
+    tip_wrench_ = tip_wrench;
+    tip_position_meas_ = tip_position_meas;
 
     Solution<TendonRobotMarginals> solution;
     solution.meta = optimize();
@@ -55,6 +59,37 @@ Solution<TendonRobotMarginals> TendonRobotSolver::solve(
 void TendonRobotSolver::build_graph() {
     // TODO add tip force constraint if provided
     graph_ = robot_->build_graph(tensions_);
+
+    // Constrain all external load wrenches (except base and tip)
+    int num_nodes = robot_->get_num_nodes();
+
+    for (int i = 1; i + 1 < num_nodes; ++i) {
+        graph_.add(PriorFactor<Vector6>(
+            robot_->get_external_wrench_key(i), 
+            Vector6::Zero(), 
+            small_wrench_noise_));
+    }
+
+    // If we have tip force input, use it, otherwise default to tight zero
+    Vector6 tip_wrench_mean = Vector6::Zero();
+    auto tip_wrench_noise = noiseModel::Gaussian::Covariance(small_wrench_noise_->covariance());
+    if (tip_wrench_) {
+        tip_wrench_mean = tip_wrench_->mean;
+        tip_wrench_noise = noiseModel::Gaussian::Covariance(tip_wrench_->cov);
+    }
+
+    graph_.add(PriorFactor<Vector6>(
+        robot_->get_external_wrench_key(num_nodes - 1),
+        tip_wrench_mean,
+        tip_wrench_noise));
+
+    // If we have a tip pose measurement, then use it
+    if (tip_position_meas_) {
+        graph_.add(PositionPriorFactor(
+            robot_->rod_->get_pose_key(-1),
+            tip_position_meas_->mean,
+            noiseModel::Gaussian::Covariance(tip_position_meas_->cov)));
+    }
 }
 
 

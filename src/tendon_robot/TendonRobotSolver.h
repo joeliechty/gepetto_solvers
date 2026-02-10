@@ -31,7 +31,8 @@ public:
 
     Solution<TendonRobotMarginals> solve(
         const Vector4Gaussian& tensions,
-        const std::optional<Vector3Gaussian>& tip_force);
+        const std::optional<Vector6Gaussian>& tip_wrench,
+        const std::optional<Vector3Gaussian>& tip_position_meas);
 
 private:
     void build_graph() override;
@@ -45,7 +46,8 @@ private:
     std::unique_ptr<TendonRobotModel> robot_;
     
     Vector4Gaussian tensions_;
-    std::optional<Vector3Gaussian> tip_force_;
+    std::optional<Vector6Gaussian> tip_wrench_;
+    std::optional<Vector3Gaussian> tip_position_meas_;
 
     TendonRobotMarginals extracted_;
 };

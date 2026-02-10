@@ -1,12 +1,15 @@
 #pragma once
 
-class PositionMeasurementFactor: public gtsam::NoiseModelFactorN<gtsam::Pose3> {
+#include <gtsam/geometry/Pose3.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+
+class PositionPriorFactor: public gtsam::NoiseModelFactorN<gtsam::Pose3> {
     gtsam::Vector3 position_meas_;
 
 public:
     using gtsam::NoiseModelFactorN<gtsam::Pose3>::evaluateError;
   
-    PositionMeasurementFactor(
+    PositionPriorFactor(
         gtsam::Key pose_key,
         gtsam::Vector3 position_meas,
         const gtsam::SharedNoiseModel& model);

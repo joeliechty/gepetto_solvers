@@ -4,8 +4,8 @@ from collections import deque
 import numpy as np
 import matplotlib.pyplot as plt
 
-from tendon_robot import TipForceSolver
-from config import get_base_config
+import crest_sparse
+from .config import get_base_config
 
 
 class GaussianProcessNoiseModel:
@@ -159,48 +159,33 @@ class moving_savgol:
         return last_val.reshape(original_shape)
 
 
-def setup_plt(width=3.5, height=5.0, grid=False):
-
-    os.makedirs("figures", exist_ok=True)
-
-    plt.rcParams.update({
-        "figure.figsize": (width, height),
-        "font.family": "STIXGeneral",
-        "font.size": 8,               
-        "xtick.labelsize": 7,        
-        "ytick.labelsize": 7,
-        "legend.fontsize": 7,
-        "lines.linewidth": 1.0,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": grid,
-        "grid.alpha": 0.3,
-        "pdf.fonttype": 42,  # embed fonts in PDF
-        "ps.fonttype": 42,
-        "mathtext.fontset": "stix",  # math text compatible with Times
-        "mathtext.rm": "stix",
-        "lines.markersize": 4
-    })
-
-
 def generate_trajectory(position_function, sim_time, damping=5e-2, frame_rate=30):
-    simulator = TipForceSolver(get_base_config())
+    config = get_base_config()
+    solver = crest_sparse.TendonRobotSolver(config)
 
-    num_steps = sim_time * frame_rate
-    tensions_min = np.array([0.1, 0.1, 0.1, 0.1])
-    tensions = tensions_min
+    num_steps = int(sim_time * frame_rate)
+    tensions_min = 0.1 * np.ones(4)
+    tensions_mean = tensions_min.copy()
 
     position_trajectory = []
     tensions_trajectory = []
     t = []
 
-    for i in range(num_steps):
-        t_i = i / frame_rate
+    tensions_cov = (1e-2) ** 2 * np.eye(4)
+    tip_wrench_cov = (1e-3) ** 2 * np.eye(6)
+    tip_wrench_mean = np.zeros(6)
 
-        solution = simulator.simulation_step(tensions, np.zeros(3))
-        J_position = solution.J_pose_tensions[3:]
-        p = solution.backbone_pose_mean[-1][:3, 3]
-        R = solution.backbone_pose_mean[-1][:3, :3]
+    for i in range(num_steps):
+        t_i = i / float(frame_rate)
+
+        tensions = crest_sparse.Vector4Gaussian(tensions_mean, tensions_cov)
+        tip_wrench = crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov)
+        solution = solver.solve(tensions, tip_wrench, None)
+
+        J_position = solution.marginals.J_pose_tensions[3:]
+        pose = solution.marginals.rod.states[-1].pose.mean
+        p = pose[:3, 3]
+        R = pose[:3,:3]
 
         p_desired = position_function(t_i)
         p_error = R.T @ (p_desired - p)
@@ -210,10 +195,10 @@ def generate_trajectory(position_function, sim_time, damping=5e-2, frame_rate=30
         b = J_position.T @ p_error
         d_tensions = np.linalg.solve(A, b)
 
-        tensions = np.maximum(tensions + d_tensions, tensions_min)
+        tensions_mean = np.maximum(tensions_mean + d_tensions, tensions_min)
 
         position_trajectory.append(p_desired)
-        tensions_trajectory.append(tensions)
+        tensions_trajectory.append(tensions_mean)
         t.append(t_i)
 
     return np.array(t), np.array(position_trajectory), np.array(tensions_trajectory)

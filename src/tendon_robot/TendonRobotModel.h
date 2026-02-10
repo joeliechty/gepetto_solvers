@@ -40,18 +40,11 @@ struct TendonConfig {
 };
 
 
-struct TendonRobotSamples {
-    std::vector<gtsam::Matrix4> tip_pose_samples;
-    std::vector<std::vector<gtsam::Vector3>> fbg_array_samples;
-};
-
-
 struct TendonRobotMarginals {
     CosseratRodMarginals rod;
-    TendonRobotSamples samples;
     TendonConfig tendon_config;
 
-    std::vector<Vector6Gaussian> external_wrench;
+    std::vector<Vector6Gaussian> external_wrenches;
     Vector4Gaussian tensions;
 
     Eigen::Matrix<double, 6, NUM_TENDONS> J_pose_tensions;
@@ -81,10 +74,14 @@ public:
 
     gtsam::Key get_disc_wrench_key(int disc_idx) const;
 
+    inline int get_num_nodes() const { return num_nodes_; }
+
     TendonRobotMarginals get_marginals(
         const gtsam::Values& values, 
         const gtsam::Marginals& marginals) const;
-
+    
+    std::unique_ptr<CosseratRodModel> rod_;
+    
 private:
     void init_tendon_disc_config(TendonInput tendon_input);
     
@@ -100,6 +97,5 @@ private:
     gtsam::Pose3 base_pose_mean_;
     gtsam::SharedDiagonal base_pose_noise_;
     
-    std::unique_ptr<CosseratRodModel> rod_;
     TendonConfig tendon_config_;
 };
