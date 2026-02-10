@@ -10,8 +10,8 @@ from .baseline_model import CosseratRodBaseline
 
 
 def get_tip_wrench(t):
-    f_xy = 1 * np.array([np.cos(0.1 * t), np.sin(0.1 * t)])
-    f_z = 0.5 * np.sin(0.3 * t)
+    f_xy = 1 * np.array([np.cos(0.3 * t), np.sin(0.3 * t)])
+    f_z = 0.5 * np.sin(0.5 * t)
 
     m_xy = 1 * np.array([np.cos(0.2 * t), np.sin(0.2 * t)])
     m_z = 2 * np.sin(0.4 * t)

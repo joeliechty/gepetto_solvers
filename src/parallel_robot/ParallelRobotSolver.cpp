@@ -5,6 +5,7 @@
 #include <gtsam/nonlinear/GaussNewtonOptimizer.h>
 
 #include "parallel_robot/ParallelRobotModel.h"
+#include "measurement/ActuationForceMeasFactor.h"
 #include "utils/MiscInline.h"
 #include "utils/SolverBase.h"
 
@@ -42,6 +43,17 @@ void ParallelRobotSolver::get_initial_values() {
 
 void ParallelRobotSolver::build_graph() {
     graph_ = robot_->build_graph(rod_lengths_, sigma_rod_lengths_, wrench_);
+
+    // If we have actuation force measurements, use them
+    if (f_meas_) {
+        auto noise = noiseModel::Isotropic::Sigma(1, f_meas_->sigma);
+        for (int i = 0; i < NUM_RODS; i++) {
+            graph_.add(ActuationForceMeasFactor(
+                robot_->rods_[i]->get_wrench_key(0),
+                f_meas_->meas[i],
+                noise));
+        }
+    }
 }
 
 
@@ -55,12 +67,14 @@ void ParallelRobotSolver::extract_solution() {
 Solution<ParallelRobotMarginals> ParallelRobotSolver::solve(
     const std::array<double, NUM_RODS>& rod_lengths, 
     double sigma_rod_lengths,
-    const Vector6Gaussian& wrench) 
+    const Vector6Gaussian& wrench,
+    const std::optional<ActuationForceMeas>& f_meas) 
 {
     rod_lengths_ = rod_lengths;
     sigma_rod_lengths_ = sigma_rod_lengths;
     wrench_ = wrench;
-    
+    f_meas_ = f_meas;
+
     Solution<ParallelRobotMarginals> solution;
     solution.meta = optimize();
     solution.marginals = extracted_;

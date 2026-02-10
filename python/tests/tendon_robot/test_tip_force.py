@@ -17,7 +17,7 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
     # A solver to simulate the nominal trajectory of the robot, given open loop tensions
     simulator_nominal = TendonRobotSolver(config)
     plotter_nominal = TendonRobotPlotter(
-        save_frames_dir_name='tip_force_nominal', 
+        save_frames_dir_name='tendon_robot_nominal', 
         plot_tip_force=True, 
         plot_backbone_ellipsoids=False
     )
@@ -28,14 +28,14 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
     # Solver that does the actual inference using tip pose data
     solver_tracking = TendonRobotSolver(config)
     plotter_tracking = TendonRobotPlotter(
-        save_frames_dir_name='tip_force_posterior', 
+        save_frames_dir_name='tendon_robot_posterior', 
         plot_tip_force=True
     )
 
     # Use a separate solver for these so it doesn't mess up our performance metrics
     solver_jacobian = TendonRobotSolver(config)
     solver_prior = TendonRobotSolver(config)
-    plotter_prior = TendonRobotPlotter(save_frames_dir_name='tip_force_prior', plot_tip_force=False)
+    plotter_prior = TendonRobotPlotter(save_frames_dir_name='tendon_robot_prior', plot_tip_force=False)
 
     # Setup Jacobian control
     damping = 6e-2
@@ -130,6 +130,7 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
             plotter_nominal.update(solution_nominal, p_desired=p_desired, tip_force_gt=f_gt)
             plotter_prior.update(solution_prior)
 
+        p_data['mean'].append()
         # tip_position_tracking_mean.append(p_tracking_mean)
         # tip_position_tracking_std.append(np.sqrt(np.diag(p_tracking_cov)))
         # tip_position_tracking_gt.append(p_tracking_gt)

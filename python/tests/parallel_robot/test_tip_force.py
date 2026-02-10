@@ -6,6 +6,7 @@ import crest_sparse
 from .._plotting.parallel_robot_plotter import ParallelRobotPlotter
 from .._plotting.utils import setup_plt
 
+from ..tendon_robot.utils import TipForceFunction
 from .baseline_model import ParallelRobotSolver
 
 
@@ -100,59 +101,114 @@ def get_tip_position_baseline(solution):
 def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_dir_name=None, plot=True, do_baseline=True):
     config = get_config()
 
-    solver = crest_sparse.ParallelRobotSolver(config)
-    baseline = ParallelRobotSolver(config, plot=False)
+    # Simulator to generate actuator forces on rods
+    solver_sim = crest_sparse.ParallelRobotSolver(config)
+    # baseline = ParallelRobotSolver(config, plot=False)
 
-    plotter = ParallelRobotPlotter(
+    # Prior solves the robot with no measurements but with big force prior
+    solver_prior = crest_sparse.ParallelRobotSolver(config)
+    plotter_prior = ParallelRobotPlotter(
         plot_rod_wrenches=False,
-        plot_platform_wrench=False,
+        plot_platform_wrench=True,
         single_plot_mode=False,
-        save_frames_dir_name=save_frames_dir_name,
+        save_frames_dir_name="parallel_robot_prior",
         platform_z_offset=platform_z_offset,
         camera_azimuth=-60, 
         camera_distance=2.7, 
         camera_focal_point=np.array([0, 0, 0.5])
     )
     
+    # The actual solver that solves given measurements
+    solver_post = crest_sparse.ParallelRobotSolver(config)
+    plotter_post = ParallelRobotPlotter(
+        plot_rod_wrenches=False,
+        plot_platform_wrench=True,
+        single_plot_mode=False,
+        save_frames_dir_name="parallel_robot_post",
+        platform_z_offset=platform_z_offset,
+        camera_azimuth=-60, 
+        camera_distance=2.7, 
+        camera_focal_point=np.array([0, 0, 0.5])
+    )
+
+    # Seperate solver just for getting jacobian, dont want to mess up warm starts
+    solver_jac = crest_sparse.ParallelRobotSolver(config)
+
+    tip_force_prior_sigma = 1.0
+    tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, seed=7)
+
     dt = 1.0 / frame_rate
     t = np.arange(0, t_final, dt)
-    rod_lengths = 0.6 * np.ones(6)
-    wrench = crest_sparse.Vector6Gaussian(np.zeros(6), 1e-6 * np.eye(6))
+    rod_lengths_cmd = 0.6 * np.ones(6)
+    
+    # p_solution, p_baseline, p_command, p_rms = [], [], [], []
 
-    p_solution, p_baseline, p_command, p_rms = [], [], [], []
+    small_wrench_cov = 1e-6 * np.eye(6)
+    wrench_prior_cov = 1e-6 * np.eye(6)
+    wrench_prior_cov[3:,3:] = tip_force_prior_sigma ** 2 * np.eye(3)
+    wrench_prior = crest_sparse.Vector6Gaussian(np.zeros(6), wrench_prior_cov)
 
     for ti in t:
         # Solve using our method and capture uncertainty
-        solution = solver.solve(rod_lengths, rod_lengths_sigma, wrench)
-        p = solution.marginals.platform_pose.mean[:3, 3]
-        R = solution.marginals.platform_pose.mean[:3,:3]
-        p_cov = solution.marginals.platform_pose.cov[3:,3:]
+        f_gt = tip_force_function(ti)
+        wrench_gt = np.zeros(6)
+        wrench_gt[3:] = f_gt
+        rod_lengths_gt = rod_lengths_cmd # + noise
+        solution_sim = solver_sim.solve(
+            rod_lengths_gt, 
+            rod_lengths_sigma, 
+            crest_sparse.Vector6Gaussian(wrench_gt, small_wrench_cov), 
+            None
+        )
+
+        f_meas = []
+        for rod in solution_sim.marginals.rods:
+            f_meas.append(rod.states[0].wrench.mean[5]) # z force on base of rod
+
+        solution_prior = solver_prior.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_prior, None)
+
+        force_meas_sigma = 0.1
+        solution_post = solver_post.solve(
+            rod_lengths_cmd, 
+            rod_lengths_sigma, 
+            wrench_prior, 
+            crest_sparse.ActuationForceMeas(np.array(f_meas), force_meas_sigma)
+        )
+        
+        wrench_post = solution_post.marginals.platform_wrench
+        solution_jac = solver_jac.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_post, None)
+        # solution_sim.marginals.rods[0].states[0].stress.mean
+        
+        # p_cov = solution.marginals.platform_pose.cov[3:,3:]
 
         # Compare to baseline model if requested
-        if do_baseline:
-            comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
-            p_comparison = get_tip_position_baseline(comparison)
-            print(f"baseline error: {np.linalg.norm(p_comparison - p)}")
-            p_baseline.append(p_comparison)
+        # if do_baseline:
+        #     comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
+        #     p_comparison = get_tip_position_baseline(comparison)
+        #     print(f"baseline error: {np.linalg.norm(p_comparison - p)}")
+        #     p_baseline.append(p_comparison)
 
         # Compare to current goal pose
+        p = solution_post.marginals.platform_pose.mean[:3, 3]
+        R = solution_post.marginals.platform_pose.mean[:3,:3]
         p_goal, R_goal = get_goal_pose(ti)
         p_error = R.T @ (p_goal - p)
         r_error = Rotation.from_matrix(R.T @ R_goal).as_rotvec()
         twist_error = np.hstack((r_error, p_error))
 
         # Jacobian to step toward the goal
-        J = solution.marginals.rod_lengths_jacobian
+        J = solution_jac.marginals.rod_lengths_jacobian
         d_rod_lengths = np.linalg.pinv(J) @ twist_error
-        rod_lengths += d_rod_lengths
+        rod_lengths_cmd += d_rod_lengths
 
         # Collect data, plot, display
-        p_solution.append(p)
-        p_command.append(p_goal)
-        p_rms.append(np.sqrt(np.trace(p_cov)))
+        # p_solution.append(p)
+        # p_command.append(p_goal)
+        # p_rms.append(np.sqrt(np.trace(p_cov)))
         
         if plot:
-            plotter.update(solution)
+            plotter_prior.update(solution_prior)
+            plotter_post.update(solution_post)
 
         progress = 100.0 * ti / t[-1]
         print(f"Progress: {progress:5.1f}%", end="\r")

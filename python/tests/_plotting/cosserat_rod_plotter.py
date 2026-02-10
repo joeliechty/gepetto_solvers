@@ -137,7 +137,7 @@ class CosseratRodMeshManager:
             self.force_arrow_transforms = []
             self.force_ellipsoid_transforms = []
 
-            shaft_scale=0.05
+            shaft_scale=0.03
             
             for _ in range(len(states)):
                 mesh = utils.get_arrow(shaft_scale=shaft_scale)

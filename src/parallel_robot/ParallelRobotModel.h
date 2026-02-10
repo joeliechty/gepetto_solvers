@@ -45,7 +45,9 @@ public:
     gtsam::Matrix6 get_rod_lengths_jacobian(const gtsam::Marginals& marginals) const;
     
     gtsam::Matrix6 get_tip_wrench_jacobian(const gtsam::Marginals& marginals) const;
-
+    
+    std::array<std::unique_ptr<CosseratRodModel>, NUM_RODS> rods_;
+    
 private:
     const std::array<gtsam::Matrix4, NUM_RODS> base_end_poses_;
     const std::array<gtsam::Matrix4, NUM_RODS> tip_end_poses_;
@@ -53,6 +55,4 @@ private:
     
     const double sigma_end_pose_pos_;
     const double sigma_end_pose_rot_;
-    
-    std::array<std::unique_ptr<CosseratRodModel>, NUM_RODS> rods_;
 };

@@ -36,11 +36,19 @@ void bind_parallel_robot(py::module& m) {
         .def_readwrite("meta", &Solution<ParallelRobotMarginals>::meta)
         .def_readwrite("marginals", &Solution<ParallelRobotMarginals>::marginals);
 
+    py::class_<ActuationForceMeas>(m, "ActuationForceMeas")
+        .def(py::init<>())
+        .def(py::init<const gtsam::Vector6&, double>(),
+            py::arg("meas"), py::arg("sigma"))
+        .def_readwrite("f_meas", &ActuationForceMeas::meas)
+        .def_readwrite("cov", &ActuationForceMeas::sigma);
+
     py::class_<ParallelRobotSolver>(m, "ParallelRobotSolver")
         .def(py::init<const ParallelRobotSolverConfig&>(), py::arg("config"))
         .def("solve", &ParallelRobotSolver::solve, 
             py::arg("rod_lengths"),
             py::arg("sigma_rod_lengths"),
             py::arg("wrench"),
+            py::arg("f_meas"),
             py::call_guard<py::gil_scoped_release>());
 }

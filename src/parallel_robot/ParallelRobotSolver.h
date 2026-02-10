@@ -7,6 +7,12 @@
 #include "utils/SolverBase.h"
 
 
+struct ActuationForceMeas {
+    gtsam::Vector6 meas;
+    double sigma;
+};
+
+
 struct ParallelRobotSolverConfig {
     SolverBaseConfig base;
     
@@ -35,7 +41,8 @@ public:
     Solution<ParallelRobotMarginals> solve(
         const std::array<double, NUM_RODS>& rod_lengths,
         double sigma_rod_lengths,
-        const Vector6Gaussian& wrench);
+        const Vector6Gaussian& wrench,
+        const std::optional<ActuationForceMeas>& f_meas);
 
 private:
     void build_graph() override;
@@ -52,6 +59,7 @@ private:
     std::array<double, NUM_RODS> rod_lengths_;
     double sigma_rod_lengths_;
     Vector6Gaussian wrench_;
+    std::optional<ActuationForceMeas> f_meas_;
 
     ParallelRobotMarginals extracted_;
 };
