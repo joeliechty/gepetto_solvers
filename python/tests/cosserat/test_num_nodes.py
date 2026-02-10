@@ -106,7 +106,7 @@ def main():
     midpoint_percent = 100 * midpoint_rms / L
     euler_percent = 100 * euler_rms / L
 
-    setup_plt(width=2.0,height=2.0)
+    setup_plt(width=2.5,height=1.5)
     plt.figure()
 
     plt.semilogy(num_nodes, midpoint_percent, label="midpoint")
@@ -118,7 +118,7 @@ def main():
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("cosserat_num_nodes.pdf", dpi=300)
+    plt.savefig("figures/cosserat_num_nodes.pdf", dpi=300)
     plt.close()
 
 

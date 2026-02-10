@@ -42,12 +42,13 @@ def get_tip_poses():
 
 
 def get_goal_pose(t):
-    wt = 2 * np.pi * (0.105) * t
+    wt = 2 * np.pi * (0.1) * t
 
-    p_xy = 0.5 / 20.0 * t * np.array([np.cos(wt), np.sin(wt)])
-    p = np.hstack([p_xy, 0.7])
+    p_xy = 0.2 / 30.0 * t * np.array([np.cos(wt), np.sin(wt)])
+    p_z = 0.55 + 0.15 * np.sin(2 * np.pi * (0.333) * t)
+    p = np.hstack([p_xy, p_z])
 
-    r_xy = np.radians(60) / 20.0 * t * np.array([-np.sin(wt), np.cos(wt)])
+    r_xy = np.radians(30) / 30.0 * t * np.array([-np.sin(wt), np.cos(wt)])
     r = np.hstack([r_xy, 0])
     R = Rotation.from_rotvec(r).as_matrix()
 
@@ -98,18 +99,29 @@ def get_tip_position_baseline(solution):
     return np.mean(p_ends - z_offset, axis=0)
     
 
-def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_dir_name=None, plot=True, do_baseline=True):
+def run_sim(
+        t_final=30.0, 
+        frame_rate=30.0, 
+        rod_lengths_sigma=0.001,
+        small_rod_lengths_sigma=1e-5,
+        small_wrench_sigma=1e-3,
+        actuator_f_meas_sigma=0.1,
+        tip_force_prior_sigma=0.9,
+        tip_force_drift_sigma=2.0,
+        plot=True, 
+        do_baseline=True):
+
     config = get_config()
 
     # Simulator to generate actuator forces on rods
     solver_sim = crest_sparse.ParallelRobotSolver(config)
-    # baseline = ParallelRobotSolver(config, plot=False)
+    baseline = ParallelRobotSolver(config, plot=False)
 
     # Prior solves the robot with no measurements but with big force prior
     solver_prior = crest_sparse.ParallelRobotSolver(config)
     plotter_prior = ParallelRobotPlotter(
         plot_rod_wrenches=False,
-        plot_platform_wrench=True,
+        plot_tip_force=False,
         single_plot_mode=False,
         save_frames_dir_name="parallel_robot_prior",
         platform_z_offset=platform_z_offset,
@@ -122,7 +134,7 @@ def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_
     solver_post = crest_sparse.ParallelRobotSolver(config)
     plotter_post = ParallelRobotPlotter(
         plot_rod_wrenches=False,
-        plot_platform_wrench=True,
+        plot_tip_force=True,
         single_plot_mode=False,
         save_frames_dir_name="parallel_robot_post",
         platform_z_offset=platform_z_offset,
@@ -134,59 +146,82 @@ def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_
     # Seperate solver just for getting jacobian, dont want to mess up warm starts
     solver_jac = crest_sparse.ParallelRobotSolver(config)
 
-    tip_force_prior_sigma = 1.0
-    tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, seed=7)
+    tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, framerate=frame_rate, seed=2)
 
     dt = 1.0 / frame_rate
     t = np.arange(0, t_final, dt)
     rod_lengths_cmd = 0.6 * np.ones(6)
     
     # p_solution, p_baseline, p_command, p_rms = [], [], [], []
-
-    small_wrench_cov = 1e-6 * np.eye(6)
-    wrench_prior_cov = 1e-6 * np.eye(6)
-    wrench_prior_cov[3:,3:] = tip_force_prior_sigma ** 2 * np.eye(3)
+    
+    small_wrench_cov = small_wrench_sigma ** 2 * np.eye(6)
+    wrench_prior_cov = small_wrench_cov.copy()
+    f_prior_cov = tip_force_prior_sigma ** 2 * np.eye(3)
+    wrench_prior_cov[3:,3:] = f_prior_cov
     wrench_prior = crest_sparse.Vector6Gaussian(np.zeros(6), wrench_prior_cov)
+    
+    f_drift_cov = tip_force_drift_sigma ** 2 * dt * np.eye(3)
+    f_prev_mean = np.zeros(3)
+    f_prev_cov = 10 * np.eye(3)
+
+    data = {
+        't': t, 
+        'f_gt': [], 'f_mean': [], 'f_std': [], 'f_std_prior': [], 
+        'p_goal': [], 'p_gt': [], 'p_mean': [], 'p_std': [], 'p_std_prior': [], 'p_baseline': []
+    }
 
     for ti in t:
         # Solve using our method and capture uncertainty
         f_gt = tip_force_function(ti)
         wrench_gt = np.zeros(6)
         wrench_gt[3:] = f_gt
-        rod_lengths_gt = rod_lengths_cmd # + noise
+        rod_lengths_gt = rod_lengths_cmd + rod_lengths_sigma * np.random.randn(6)
         solution_sim = solver_sim.solve(
             rod_lengths_gt, 
-            rod_lengths_sigma, 
+            small_rod_lengths_sigma, 
             crest_sparse.Vector6Gaussian(wrench_gt, small_wrench_cov), 
             None
         )
+        p_gt = solution_sim.marginals.platform_pose.mean[:3,3]
 
+        # Sample base actuator z forces
         f_meas = []
         for rod in solution_sim.marginals.rods:
             f_meas.append(rod.states[0].wrench.mean[5]) # z force on base of rod
+        f_meas = np.array(f_meas) + actuator_f_meas_sigma * np.random.randn(6)
 
+        # Solve prior with no measuremtns
         solution_prior = solver_prior.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_prior, None)
 
-        force_meas_sigma = 0.1
+        # Change wrench prior to use drift model
+        f_prev_drift_cov = f_prev_cov + f_drift_cov
+        f_fused_cov = np.linalg.inv(np.linalg.inv(f_prior_cov) + np.linalg.inv(f_prev_drift_cov))
+        f_fused_mean = f_fused_cov @ (np.linalg.inv(f_prev_drift_cov) @ f_prev_mean)
+        wrench_fused_mean = np.hstack((np.zeros(3), f_fused_mean))
+        wrench_fused_cov = wrench_prior_cov.copy()
+        wrench_fused_cov[3:,3:] = f_fused_cov
+
         solution_post = solver_post.solve(
             rod_lengths_cmd, 
             rod_lengths_sigma, 
-            wrench_prior, 
-            crest_sparse.ActuationForceMeas(np.array(f_meas), force_meas_sigma)
+            crest_sparse.Vector6Gaussian(wrench_fused_mean, wrench_fused_cov),
+            crest_sparse.ActuationForceMeas(np.array(f_meas), actuator_f_meas_sigma)
         )
         
         wrench_post = solution_post.marginals.platform_wrench
+        f_cov = wrench_post.cov[3:,3:]
+        f_mean = wrench_post.mean[3:]
+        f_prev_mean = f_mean
+        f_prev_cov = f_cov
+
         solution_jac = solver_jac.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_post, None)
-        # solution_sim.marginals.rods[0].states[0].stress.mean
-        
-        # p_cov = solution.marginals.platform_pose.cov[3:,3:]
 
         # Compare to baseline model if requested
-        # if do_baseline:
-        #     comparison = baseline.solve(rod_lengths, tip_force=wrench.mean[3:], tip_moment=wrench.mean[:3])
-        #     p_comparison = get_tip_position_baseline(comparison)
-        #     print(f"baseline error: {np.linalg.norm(p_comparison - p)}")
-        #     p_baseline.append(p_comparison)
+        if do_baseline:
+            comparison = baseline.solve(rod_lengths_gt, tip_force=wrench_gt[3:], tip_moment=wrench_gt[:3])
+            p_baseline = get_tip_position_baseline(comparison)
+            print(f"baseline error: {np.linalg.norm(p_baseline - p_gt)}")
+            data['p_baseline'].append(p_baseline)
 
         # Compare to current goal pose
         p = solution_post.marginals.platform_pose.mean[:3, 3]
@@ -202,49 +237,117 @@ def run_sim(t_final=20.0, frame_rate=30.0, rod_lengths_sigma=0.002, save_frames_
         rod_lengths_cmd += d_rod_lengths
 
         # Collect data, plot, display
-        # p_solution.append(p)
-        # p_command.append(p_goal)
-        # p_rms.append(np.sqrt(np.trace(p_cov)))
-        
+        data['f_gt'].append(f_gt)
+        data['f_mean'].append(f_mean)
+        data['f_std'].append(np.sqrt(np.diag(f_cov)))
+        data['f_std_prior'].append(np.sqrt(np.diag(solution_prior.marginals.platform_wrench.cov[3:,3:])))
+        data['p_goal'].append(p_goal)
+        data['p_gt'].append(p_gt)
+        data['p_mean'].append(solution_post.marginals.platform_pose.mean[:3,3])
+        data['p_std'].append(np.sqrt(np.diag(solution_post.marginals.platform_pose.cov[3:,3:])))
+        data['p_std_prior'].append(np.sqrt(np.diag(solution_prior.marginals.platform_pose.cov[3:,3:])))
+
         if plot:
             plotter_prior.update(solution_prior)
-            plotter_post.update(solution_post)
+            plotter_post.update(solution_post, tip_force_gt=f_gt)
 
         progress = 100.0 * ti / t[-1]
         print(f"Progress: {progress:5.1f}%", end="\r")
 
-    return t, np.array(p_solution), np.array(p_baseline), np.array(p_command), np.array(p_rms)
+    return {k: np.asarray(v) for k, v in data.items()}
 
 
 if __name__ == "__main__":
     do_baseline = True
     plot = True
-    dir_name = "parallel_robot_sim"
-    t, p_solution, p_baseline, p_command, p_rms = run_sim(do_baseline=do_baseline, save_frames_dir_name=dir_name, plot=plot)
+    data = run_sim(do_baseline=do_baseline, plot=plot)
 
-    setup_plt(width=2.0, height=2.0)
-    plt.figure()
 
-    plt.plot(t, 1000 * p_rms)
-    plt.xlabel("time (sec)")
-    plt.ylabel("RMS position uncertainty (mm)")
-    plt.grid(True, alpha=0.25)
+    color_cycle = ['r', 'g', 'b', 'c']
 
+    setup_plt(height=4.0, grid=True)
+
+    fig, axes = plt.subplots(3, 1, sharex=True)
+
+    position_labels = [r'position-$x$ (mm)',
+                       r'position-$y$ (mm)',
+                       r'position-$z$ (mm)']
+    
+    for ii, ax in enumerate(axes):
+        ax.plot(data['t'], 1000 * data['p_mean'][:, ii], linestyle='-', color=color_cycle[ii], label='mean')
+        ax.plot(data['t'], 1000 * data['p_gt'][:, ii], linestyle='--', color=color_cycle[ii], label='truth')
+        ax.fill_between(data['t'], 
+            1000 * data['p_mean'][:,ii] - 2000 * data['p_std'][:,ii],
+            1000 * data['p_mean'][:,ii] + 2000 * data['p_std'][:,ii], 
+            alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
+
+        ax.set_ylabel(position_labels[ii])
+        if ii == 1:
+            ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
+
+    fig.align_ylabels()
     plt.tight_layout()
-    plt.savefig("parallel_robot_uncertainty.pdf", dpi=300)
-    plt.close()
+    
+    plt.savefig("figures/parallel_robot_position.pdf", bbox_inches="tight")
+
+
+
+    setup_plt(width=6, height=2, grid=True)
+
+    fig, axes = plt.subplots(1, 3, sharex=True)
+
+    for ii, ax in enumerate(axes):
+        ax.plot(data['t'], data['f_gt'][:,ii], 'k--', label='truth')
+        ax.plot(data['t'], data['f_mean'][:,ii], color=color_cycle[ii], label='mean')
+        ax.fill_between(data['t'], 
+            data['f_mean'][:,ii] - 2 * data['f_std'][:,ii],
+            data['f_mean'][:,ii] + 2 * data['f_std'][:,ii], 
+            alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
+        ax.set_xlabel("time (sec)")
+        ax.set_xlim([data['t'][0], data['t'][-1]+1e-1])
+        if ii == 0:
+            ax.set_ylabel("tip force (N)")
+            ax.legend(ncol=3, loc="upper left", bbox_to_anchor=(0, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
+
+    fig.align_ylabels()
+    plt.tight_layout()
+    plt.subplots_adjust(wspace=0.35, hspace=0.2)
+
+    plt.savefig("figures/parallel_robot_force.pdf", bbox_inches="tight")
+
+
+
+
+    setup_plt(height=2, grid=True)
+
+    fig = plt.figure()
+
+    plt.plot(data['t'], np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='post')
+    plt.plot(data['t'], np.sqrt(np.sum(data['p_std_prior']**2, axis=1)), 'k--', label='prior')
+    plt.xlabel('time (sec)')
+    plt.ylabel('position uncertainty (mm)')
+
+    fig.align_ylabels()
+    plt.tight_layout()
+    plt.subplots_adjust(wspace=0.35, hspace=0.2)
+
+    plt.savefig("figures/parallel_robot_uncertainty.pdf", bbox_inches="tight")
+
+
+
+
 
     if do_baseline:
         setup_plt()
         plt.figure()
-        baseline_err = 1000 * np.linalg.norm(p_solution - p_baseline, axis=1)
-        plt.plot(t, baseline_err, label="baseline")
+        baseline_err = 1000 * np.linalg.norm(data['p_gt'] - data['p_baseline'], axis=1)
+        plt.plot(data['t'], baseline_err, label="baseline")
         plt.xlabel("time (sec)")
         plt.ylabel("baseline error (mm)")
         plt.grid(True, alpha=0.25)
 
         plt.tight_layout()
-        plt.savefig("parallel_robot_baseline.pdf", dpi=300)
+        plt.savefig("figures/parallel_robot_baseline.pdf", dpi=300)
         plt.close()
 
         print(f"mean baseline error: {np.mean(baseline_err)} mm")
