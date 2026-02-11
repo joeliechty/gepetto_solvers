@@ -107,7 +107,7 @@ def run_sim(
         small_wrench_sigma=1e-3,
         actuator_f_meas_sigma=0.1,
         tip_force_prior_sigma=0.9,
-        tip_force_drift_sigma=1.0,
+        tip_force_drift_sigma=0.5,
         plot=True, 
         do_baseline=True):
 
@@ -163,7 +163,6 @@ def run_sim(
     f_prev_cov = 10 * np.eye(3)
 
     rod_lengths_noise_model = GaussianProcessNoiseModel(6, len(t), seed=42)
-    f_meas_noise_model = GaussianProcessNoiseModel(6, len(t), seed=43)
     
     data = {
         'f_gt': [], 'f_mean': [], 'f_std': [], 'f_std_prior': [], 
@@ -188,23 +187,20 @@ def run_sim(
         f_meas = []
         for rod in solution_sim.marginals.rods:
             f_meas.append(rod.states[0].wrench.mean[5]) # z force on base of rod
-        f_meas = np.array(f_meas) + f_meas_noise_model.step(actuator_f_meas_sigma ** 2 * np.eye(6))
+        f_meas = np.array(f_meas) + actuator_f_meas_sigma * np.random.randn(6)
 
         # Solve prior with no measuremtns
         solution_prior = solver_prior.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_prior, None)
 
         # Change wrench prior to use drift model
-        f_prev_drift_cov = f_prev_cov + f_drift_cov
-        f_fused_cov = np.linalg.inv(np.linalg.inv(f_prior_cov) + np.linalg.inv(f_prev_drift_cov))
-        f_fused_mean = f_fused_cov @ (np.linalg.inv(f_prev_drift_cov) @ f_prev_mean)
-        wrench_fused_mean = np.hstack((np.zeros(3), f_fused_mean))
-        wrench_fused_cov = wrench_prior_cov.copy()
-        wrench_fused_cov[3:,3:] = f_fused_cov
+        wrench_prev_mean = np.hstack((np.zeros(3), f_prev_mean))
+        wrench_prev_cov = small_wrench_cov.copy()
+        wrench_prev_cov[3:,3:] = f_prev_cov + f_drift_cov
 
         solution_post = solver_post.solve(
             rod_lengths_cmd, 
             rod_lengths_sigma, 
-            crest_sparse.Vector6Gaussian(wrench_fused_mean, wrench_fused_cov),
+            crest_sparse.Vector6Gaussian(wrench_prev_mean, wrench_prev_cov),
             crest_sparse.ActuationForceMeas(np.array(f_meas), actuator_f_meas_sigma)
         )
         
@@ -302,7 +298,7 @@ if __name__ == "__main__":
     
     for ii, ax in enumerate(axes[:3]):
         ax.plot(t, data['f_gt'][:,ii], 'k--', label='truth')
-        ax.plot(t, data['f_mean'][:,ii], color=color_cycle[ii], label='mean')
+        ax.plot(t, data['f_mean'][:,ii], color=color_cycle[ii], linewidth=0.7, label='mean')
         ax.fill_between(t, 
             data['f_mean'][:,ii] - 2 * data['f_std'][:,ii],
             data['f_mean'][:,ii] + 2 * data['f_std'][:,ii], 
@@ -312,8 +308,8 @@ if __name__ == "__main__":
         if ii == 0:
             ax.legend(ncol=3, columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
 
-    axes[3].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='posterior')
     axes[3].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std_prior']**2, axis=1)), 'k--', label='prior')
+    axes[3].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='posterior')
     axes[3].set_xlabel('time (sec)')
     axes[3].set_ylabel('position uncertainty (mm)')
     axes[3].legend()

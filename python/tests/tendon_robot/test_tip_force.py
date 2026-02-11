@@ -11,10 +11,11 @@ from .benchmark import solve_kinematics_bvp
 
 
 def run_sim(
-        sim_time=0.5, 
+        sim_time=30.0, 
         plot=True,
         do_baseline=True,
-        tip_force_prior_sigma=0.1, 
+        tip_force_prior_sigma=0.1,
+        tip_force_drift_sigma=0.05,
         tensions_meas_sigma=0.01, 
         tip_position_meas_sigma=0.001):
     
@@ -22,6 +23,7 @@ def run_sim(
 
     t, positions, tensions_nominal, waypoints = generate_waypoint_trajectory(sim_time, seed=7)
     tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, seed=7)
+    dt = np.diff(t)[0]
 
     # A solver to simulate the nominal trajectory of the robot, given open loop tensions
     simulator_nominal = TendonRobotSolver(config)
@@ -71,6 +73,10 @@ def run_sim(
     wrench_prior_cov[3:,3:] = tip_force_prior_sigma ** 2 * np.eye(3)
     position_meas_cov = tip_position_meas_sigma ** 2 * np.eye(3)
     
+    f_drift_cov = tip_force_drift_sigma ** 2 * dt * np.eye(3)
+    f_prev_mean = np.zeros(3)
+    f_prev_cov = 10 * np.eye(3)
+
     x_guess = None
 
     for ti, p_goal, tensions_nominal_i in zip(t, positions, tensions_nominal):
@@ -120,15 +126,23 @@ def run_sim(
             data['p_baseline'].append(p_baseline[-1])
             data['p_sim'].append(p_sim_mean)
 
+        # Force drift 
+        wrench_prev_mean = np.hstack((np.zeros(3), f_prev_mean))
+        wrench_prev_cov = small_wrench_cov.copy()
+        wrench_prev_cov[3:,3:] = f_prev_cov + f_drift_cov
+
         # Use the sampled position as a prior on tip pose
         solution_post = solver_tracking.solve(
             Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
-            Vector6Gaussian(np.zeros(6), wrench_prior_cov), 
+            Vector6Gaussian(wrench_prev_mean, wrench_prev_cov), 
             Vector3Gaussian(p_meas, position_meas_cov)
         )
         
         # Evaluate the Jacobian for control using the estimated tip wrench
         wrench_post = solution_post.marginals.external_wrenches[-1]
+        f_prev_mean = wrench_post.mean[3:]
+        f_prev_cov = wrench_post.cov[3:,3:]
+
         solution_jacobian = solver_jacobian.solve(
             Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
             wrench_post,
@@ -167,8 +181,8 @@ def run_sim(
 
 
 if __name__ == "__main__":
-    plot = False
-    do_baseline = False
+    plot = True
+    do_baseline = True
     t, data = run_sim(plot=plot, do_baseline=do_baseline)
 
     if do_baseline:
@@ -189,34 +203,41 @@ if __name__ == "__main__":
 
     color_cycle = ['r', 'g', 'b', 'c']
 
-    setup_plt(height=8, grid=True)
+    setup_plt(height=6, grid=True)
 
     fig, axes = plt.subplots(6, 1, sharex=True)
 
-    for ii, ax in enumerate(axes[0,:]):
+    position_labels = [r'position-$x$ (mm)',
+                       r'position-$y$ (mm)',
+                       r'position-$z$ (mm)']
+
+    for ii, ax in enumerate(axes[:3]):
         ax.plot(t, 1000 * data['p_goal'][:, ii], linestyle=':', color='k', label='desired')
-        ax.plot(t, 1000 * tip_position_tracking_gt[:, ii], linestyle='-', color=color_cycle[ii], label='tracking')
-        ax.plot(t, 1000 * tip_position_nominal_gt[:, ii], linestyle='--', color=color_cycle[ii], label='OL')
+        ax.plot(t, 1000 * data['p_gt'][:, ii], linestyle='-', color=color_cycle[ii], label='tracking')
+        ax.plot(t, 1000 * data['p_nominal'][:, ii], linestyle='--', color=color_cycle[ii], label='OL')
         ax.set_xlim([t[0], t[-1]+1e-1])
-        if ii == 0:
-            ax.set_ylabel("tip position (mm)")
+        ax.set_ylabel(position_labels[ii])
         if ii == 1:
             ax.legend(ncol=3, loc="upper right", bbox_to_anchor=(1, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
             
+    force_labels = [r'force-$x$ (mm)',
+                    r'force-$y$ (mm)',
+                    r'force-$z$ (mm)']
 
-    for ii, ax in enumerate(axes[1,:]):
-        ax.plot(t, tip_force_gt[:,ii], 'k--', label='truth')
-        ax.plot(t, tip_force_mean[:,ii], color=color_cycle[ii], label='mean')
+    for ii, ax in enumerate(axes[3:]):
+        ax.plot(t, data['f_gt'][:,ii], 'k--', label='truth')
+        ax.plot(t, data['f_mean'][:,ii], color=color_cycle[ii], label='mean')
         ax.fill_between(t, 
-            tip_force_mean[:,ii] - 2 * tip_force_std[:,ii],
-            tip_force_mean[:,ii] + 2 * tip_force_std[:,ii], 
+            data['f_mean'][:,ii] - 2 * data['f_std'][:,ii],
+            data['f_mean'][:,ii] + 2 * data['f_std'][:,ii], 
             alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
-        ax.set_xlabel("time (sec)")
+        
+        ax.set_ylabel(force_labels[ii])
         ax.set_xlim([t[0], t[-1]+1e-1])
         if ii == 0:
-            ax.set_ylabel("tip force (N)")
             ax.legend(ncol=3, loc="upper left", bbox_to_anchor=(0, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
-            
+    
+    axes[-1].set_xlabel("time (sec)")
     # lines_cmd = axes[6].plot(t, tensions_cmd, linestyle='-')
     # lines_gt  = axes[6].plot(t, tensions_gt, 'k:')
     # handles = [lines_cmd[0], lines_gt[0]]
@@ -232,16 +253,14 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.subplots_adjust(wspace=0.35, hspace=0.2)
 
-    plt.savefig("figures/tip_force_sim_results.pdf", bbox_inches="tight")
+    plt.savefig("figures/tendon_robot_results.pdf", bbox_inches="tight")
 
 
 
 
         # fig, axes = plt.subplots(3, 1, sharex=True)
 
-    # position_labels = [r'position-$x$ (mm)',
-    #                    r'position-$y$ (mm)',
-    #                    r'position-$z$ (mm)']
+    
     
     # for ii, ax in enumerate(axes):
     #     ax.plot(t, 1000 * tip_position_tracking_mean[:, ii], linestyle='-', color=color_cycle[ii], label='mean')
