@@ -127,17 +127,8 @@ def compute_backbone_loads(s, p, R, s_discs, tensions, tip_force, holes):
 
 
 def solve_kinematics_bvp(tensions, tip_force, config, holes, x0_guess=None):
-    rod_diameter = config.rod_diameter
-    cross_section_area = (np.pi * rod_diameter ** 2) / 4.0
-    cross_section_moment = (np.pi * rod_diameter ** 4) / 64.0
-
-    k_bending = config.youngs_modulus * cross_section_moment
-    k_torsion = 2.0 * config.shear_modulus * cross_section_moment
-    k_shear = config.shear_modulus * cross_section_area
-    k_extension = config.youngs_modulus * cross_section_area
-
-    K_se_inv = np.diag(1.0 / np.array([k_shear, k_shear, k_extension]))
-    K_bt_inv = np.diag(1.0 / np.array([k_bending, k_bending, k_torsion]))
+    K_se_inv = config.K_inv[3:,3:]
+    K_bt_inv = config.K_inv[:3,:3]
 
     robot_length = config.rod_length
     num_discs = config.num_discs

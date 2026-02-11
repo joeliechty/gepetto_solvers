@@ -5,7 +5,7 @@ import crest_sparse
 from .._plotting.tendon_robot_plotter import TendonRobotPlotter
 
 from .config import get_base_config
-
+from .benchmark import solve_kinematics_bvp
 
 def main():
     config = get_base_config()
@@ -15,6 +15,7 @@ def main():
 
     tensions_cov = (1e-2) ** 2 * np.eye(4)
     tip_wrench_cov = (1e-3) ** 2 * np.eye(6)
+    x_guess = None
 
     for i in range(100):
         tensions_mean = np.zeros(4)
@@ -28,6 +29,15 @@ def main():
 
         solution = solver.solve(tensions, tip_wrench, None)
         plotter.update(solution)
+
+        holes = solution.marginals.tendon_config.hole_locations
+        shape_baseline, x_guess = solve_kinematics_bvp(tensions_mean, tip_wrench_mean[3:], get_base_config(), holes, x_guess)
+        p_gt = solution.marginals.rod.states[-1].pose.mean[:3,3]
+        p_baseline = shape_baseline[-1]
+        print("p_gt: ", p_gt)
+        print("p_baseline: ", p_baseline)
+        print(f"baseline error: {np.linalg.norm(p_baseline - p_gt)}")
+
 
 
 if __name__ == "__main__":

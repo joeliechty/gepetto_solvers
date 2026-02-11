@@ -106,7 +106,7 @@ def main():
     midpoint_percent = 100 * midpoint_rms / L
     euler_percent = 100 * euler_rms / L
 
-    setup_plt(width=2.5,height=1.5)
+    setup_plt(width=2.5,height=1.8)
     plt.figure()
 
     plt.semilogy(num_nodes, midpoint_percent, label="midpoint")

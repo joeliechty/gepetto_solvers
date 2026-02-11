@@ -4,11 +4,20 @@ import matplotlib.pyplot as plt
 from crest_sparse import TendonRobotSolver, Vector6Gaussian, Vector4Gaussian, Vector3Gaussian
 
 from .._plotting.tendon_robot_plotter import TendonRobotPlotter
+from .._plotting.utils import setup_plt
 from .config import get_base_config
 from .utils import TipForceFunction, generate_waypoint_trajectory, GaussianProcessNoiseModel
+from .benchmark import solve_kinematics_bvp
 
 
-def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas_sigma=0.01, tip_position_meas_sigma=0.001):
+def run_sim(
+        sim_time=0.5, 
+        plot=True,
+        do_baseline=True,
+        tip_force_prior_sigma=0.1, 
+        tensions_meas_sigma=0.01, 
+        tip_position_meas_sigma=0.001):
+    
     config = get_base_config()
 
     t, positions, tensions_nominal, waypoints = generate_waypoint_trajectory(sim_time, seed=7)
@@ -28,7 +37,8 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
     # Solver that does the actual inference using tip pose data
     solver_tracking = TendonRobotSolver(config)
     plotter_tracking = TendonRobotPlotter(
-        save_frames_dir_name='tendon_robot_posterior', 
+        save_frames_dir_name='tendon_robot_posterior',
+        plot_rviz_coords=True,
         plot_tip_force=True
     )
 
@@ -49,8 +59,10 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
     p_tracking_noise_model = GaussianProcessNoiseModel(3, len(t), seed=42)
 
     # Setup data collection
-    p_data = {'mean': [], 'std': [], 'gt': [], 'nominal': [], 'desired': []}
-    f_data = {'mean': [], 'std': [], 'gt': []}
+    data = {
+        'p_mean': [], 'p_std': [], 'p_gt': [], 'p_sim': [], 'p_nominal': [], 'p_goal': [], 'p_baseline': [],
+        'f_mean': [], 'f_std': [], 'f_gt': []
+    }
 
     small_tensions_cov = 1e-6 * np.eye(4)
     small_wrench_cov = 1e-6 * np.eye(6)
@@ -59,8 +71,10 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
     wrench_prior_cov[3:,3:] = tip_force_prior_sigma ** 2 * np.eye(3)
     position_meas_cov = tip_position_meas_sigma ** 2 * np.eye(3)
     
-    for t_i, p_desired, tensions_nominal_i in zip(t, positions, tensions_nominal):
-        f_gt = tip_force_function(t_i)
+    x_guess = None
+
+    for ti, p_goal, tensions_nominal_i in zip(t, positions, tensions_nominal):
+        f_gt = tip_force_function(ti)
 
         # Nominal solution with no force correction, still need to add noise and re solve
         tensions_nominal_gt = tensions_nominal_i + tensions_nominal_noise_model.step(tensions_meas_sigma ** 2 * np.eye(4))
@@ -98,13 +112,20 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
         p_sim_gt = p_sim_mean + p_tracking_noise_model.step(p_sim_cov)
         p_meas = p_sim_gt + tip_position_meas_sigma * np.random.randn(3)
 
+        # Compare simulator solver to baseline solver if requested
+        if do_baseline:
+            holes = solution_sim.marginals.tendon_config.hole_locations
+            p_baseline, x_guess = solve_kinematics_bvp(tensions_tracking_gt, f_gt, get_base_config(), holes, x_guess)
+            print(f"baseline error: {np.linalg.norm(p_baseline[-1] - p_sim_mean)}")
+            data['p_baseline'].append(p_baseline[-1])
+            data['p_sim'].append(p_sim_mean)
+
         # Use the sampled position as a prior on tip pose
         solution_post = solver_tracking.solve(
             Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
             Vector6Gaussian(np.zeros(6), wrench_prior_cov), 
             Vector3Gaussian(p_meas, position_meas_cov)
         )
-        
         
         # Evaluate the Jacobian for control using the estimated tip wrench
         wrench_post = solution_post.marginals.external_wrenches[-1]
@@ -115,7 +136,7 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
         )
         
         J_position = solution_jacobian.marginals.J_pose_tensions[3:]
-        p_error = R_sim_mean.T @ (p_desired - p_meas)
+        p_error = R_sim_mean.T @ (p_goal - p_meas)
 
         JTJ = J_position.T @ J_position
         A = JTJ + (damping**2) * np.eye(JTJ.shape[0])
@@ -125,67 +146,55 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
         tensions_cmd_current = tensions_cmd_current + d_tensions
         tensions_cmd_current = np.maximum(tensions_cmd_current, tensions_min)
 
-        if do_plot:
-            plotter_tracking.update(solution_post, p_desired=p_desired, tip_force_gt=f_gt)
-            plotter_nominal.update(solution_nominal, p_desired=p_desired, tip_force_gt=f_gt)
+        data['p_mean'].append(solution_post.marginals.rod.states[-1].pose.mean[:3,3])
+        data['p_std'].append(np.sqrt(np.diag(solution_post.marginals.rod.states[-1].pose.cov[3:,3:])))
+        data['p_gt'].append(p_sim_gt)
+        data['p_goal'].append(p_goal)
+        data['p_nominal'].append(p_nominal_gt)
+        data['f_gt'].append(f_gt)
+        data['f_mean'].append(wrench_post.mean[3:])
+        data['f_std'].append(np.sqrt(np.diag(wrench_post.cov[3:,3:])))
+
+        if plot:
+            plotter_tracking.update(solution_post, p_desired=p_goal, tip_force_gt=f_gt)
+            plotter_nominal.update(solution_nominal, p_desired=p_goal, tip_force_gt=f_gt)
             plotter_prior.update(solution_prior)
 
-        p_data['mean'].append()
-        # tip_position_tracking_mean.append(p_tracking_mean)
-        # tip_position_tracking_std.append(np.sqrt(np.diag(p_tracking_cov)))
-        # tip_position_tracking_gt.append(p_tracking_gt)
-        # tip_position_nominal_gt.append(p_nominal_gt)
-        # tip_position_desired.append(p_desired)
-        # tip_force_gt.append(f_gt)
-        # tip_force_mean.append(f_mean)
-        # tip_force_std.append(np.sqrt(np.diag(f_cov)))
-        # tensions_cmd.append(tensions_cmd_current)
-        # tensions_gt.append(tensions_tracking_gt)
+        progress = 100.0 * ti / t[-1]
+        print(f"Progress: {progress:5.1f}%", end="\r")
 
-    # tip_position_tracking_mean = np.array(tip_position_tracking_mean)
-    # tip_position_tracking_std = np.array(tip_position_tracking_std)
-    # tip_position_tracking_gt = np.array(tip_position_tracking_gt)
-    # tip_position_nominal_gt = np.array(tip_position_nominal_gt)
-    # tip_position_desired = np.array(tip_position_desired)
-    # tip_force_gt = np.array(tip_force_gt)
-    # tip_force_mean = np.array(tip_force_mean)
-    # tip_force_std = np.array(tip_force_std)
-    # tensions_cmd = np.array(tensions_cmd)
-    # tensions_gt = np.array(tensions_gt)
+    return t, {k: np.asarray(v) for k, v in data.items()}
+
+
+if __name__ == "__main__":
+    plot = False
+    do_baseline = False
+    t, data = run_sim(plot=plot, do_baseline=do_baseline)
+
+    if do_baseline:
+        setup_plt()
+        plt.figure()
+        baseline_err = 1000 * np.linalg.norm(data['p_sim'] - data['p_baseline'], axis=1)
+        plt.plot(t, baseline_err, label=f"baseline (mean={np.mean(baseline_err):.3f} mm)")
+        plt.xlabel("time (sec)")
+        plt.ylabel("baseline error (mm)")
+        plt.grid(True, alpha=0.25)
+        plt.legend()
+
+        plt.tight_layout()
+        plt.savefig("figures/tendon_robot_baseline.pdf", dpi=300)
+        plt.close()
+
+    
 
     color_cycle = ['r', 'g', 'b', 'c']
 
-    setup_plt(height=4.0, grid=True)
+    setup_plt(height=8, grid=True)
 
-    fig, axes = plt.subplots(3, 1, sharex=True)
-
-    position_labels = [r'position-$x$ (mm)',
-                       r'position-$y$ (mm)',
-                       r'position-$z$ (mm)']
-    
-    for ii, ax in enumerate(axes):
-        ax.plot(t, 1000 * tip_position_tracking_mean[:, ii], linestyle='-', color=color_cycle[ii], label='mean')
-        ax.plot(t, 1000 * tip_position_tracking_gt[:, ii], linestyle='--', color=color_cycle[ii], label='truth')
-        ax.fill_between(t, 
-            1000 * tip_position_tracking_mean[:,ii] - 2000 * tip_position_tracking_std[:,ii],
-            1000 * tip_position_tracking_mean[:,ii] + 2000 * tip_position_tracking_std[:,ii], 
-            alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
-
-        ax.set_ylabel(position_labels[ii])
-        if ii == 1:
-            ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
-
-    fig.align_ylabels()
-    plt.tight_layout()
-    
-    plt.savefig("figures/position_noise_model.pdf", bbox_inches="tight")
-
-    setup_plt(width=6, height=2, grid=True)
-
-    fig, axes = plt.subplots(2, 3, sharex=True)
+    fig, axes = plt.subplots(6, 1, sharex=True)
 
     for ii, ax in enumerate(axes[0,:]):
-        ax.plot(t, 1000 * tip_position_desired[:, ii], linestyle=':', color='k', label='desired')
+        ax.plot(t, 1000 * data['p_goal'][:, ii], linestyle=':', color='k', label='desired')
         ax.plot(t, 1000 * tip_position_tracking_gt[:, ii], linestyle='-', color=color_cycle[ii], label='tracking')
         ax.plot(t, 1000 * tip_position_nominal_gt[:, ii], linestyle='--', color=color_cycle[ii], label='OL')
         ax.set_xlim([t[0], t[-1]+1e-1])
@@ -226,5 +235,27 @@ def run_sim(sim_time=3.0, do_plot=True, tip_force_prior_sigma=0.1, tensions_meas
     plt.savefig("figures/tip_force_sim_results.pdf", bbox_inches="tight")
 
 
-if __name__ == "__main__":
-    run_sim(do_plot=True)
+
+
+        # fig, axes = plt.subplots(3, 1, sharex=True)
+
+    # position_labels = [r'position-$x$ (mm)',
+    #                    r'position-$y$ (mm)',
+    #                    r'position-$z$ (mm)']
+    
+    # for ii, ax in enumerate(axes):
+    #     ax.plot(t, 1000 * tip_position_tracking_mean[:, ii], linestyle='-', color=color_cycle[ii], label='mean')
+    #     ax.plot(t, 1000 * tip_position_tracking_gt[:, ii], linestyle='--', color=color_cycle[ii], label='truth')
+    #     ax.fill_between(t, 
+    #         1000 * tip_position_tracking_mean[:,ii] - 2000 * tip_position_tracking_std[:,ii],
+    #         1000 * tip_position_tracking_mean[:,ii] + 2000 * tip_position_tracking_std[:,ii], 
+    #         alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
+
+    #     ax.set_ylabel(position_labels[ii])
+    #     if ii == 1:
+    #         ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
+
+    # fig.align_ylabels()
+    # plt.tight_layout()
+    
+    # plt.savefig("figures/position_noise_model.pdf", bbox_inches="tight")

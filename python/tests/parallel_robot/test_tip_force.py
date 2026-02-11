@@ -6,7 +6,7 @@ import crest_sparse
 from .._plotting.parallel_robot_plotter import ParallelRobotPlotter
 from .._plotting.utils import setup_plt
 
-from ..tendon_robot.utils import TipForceFunction
+from ..tendon_robot.utils import TipForceFunction, GaussianProcessNoiseModel
 from .baseline_model import ParallelRobotSolver
 
 
@@ -107,7 +107,7 @@ def run_sim(
         small_wrench_sigma=1e-3,
         actuator_f_meas_sigma=0.1,
         tip_force_prior_sigma=0.9,
-        tip_force_drift_sigma=2.0,
+        tip_force_drift_sigma=1.0,
         plot=True, 
         do_baseline=True):
 
@@ -152,8 +152,6 @@ def run_sim(
     t = np.arange(0, t_final, dt)
     rod_lengths_cmd = 0.6 * np.ones(6)
     
-    # p_solution, p_baseline, p_command, p_rms = [], [], [], []
-    
     small_wrench_cov = small_wrench_sigma ** 2 * np.eye(6)
     wrench_prior_cov = small_wrench_cov.copy()
     f_prior_cov = tip_force_prior_sigma ** 2 * np.eye(3)
@@ -164,8 +162,10 @@ def run_sim(
     f_prev_mean = np.zeros(3)
     f_prev_cov = 10 * np.eye(3)
 
+    rod_lengths_noise_model = GaussianProcessNoiseModel(6, len(t), seed=42)
+    f_meas_noise_model = GaussianProcessNoiseModel(6, len(t), seed=43)
+    
     data = {
-        't': t, 
         'f_gt': [], 'f_mean': [], 'f_std': [], 'f_std_prior': [], 
         'p_goal': [], 'p_gt': [], 'p_mean': [], 'p_std': [], 'p_std_prior': [], 'p_baseline': []
     }
@@ -175,7 +175,7 @@ def run_sim(
         f_gt = tip_force_function(ti)
         wrench_gt = np.zeros(6)
         wrench_gt[3:] = f_gt
-        rod_lengths_gt = rod_lengths_cmd + rod_lengths_sigma * np.random.randn(6)
+        rod_lengths_gt = rod_lengths_cmd + rod_lengths_noise_model.step(rod_lengths_sigma ** 2 * np.eye(6))
         solution_sim = solver_sim.solve(
             rod_lengths_gt, 
             small_rod_lengths_sigma, 
@@ -188,7 +188,7 @@ def run_sim(
         f_meas = []
         for rod in solution_sim.marginals.rods:
             f_meas.append(rod.states[0].wrench.mean[5]) # z force on base of rod
-        f_meas = np.array(f_meas) + actuator_f_meas_sigma * np.random.randn(6)
+        f_meas = np.array(f_meas) + f_meas_noise_model.step(actuator_f_meas_sigma ** 2 * np.eye(6))
 
         # Solve prior with no measuremtns
         solution_prior = solver_prior.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_prior, None)
@@ -254,18 +254,18 @@ def run_sim(
         progress = 100.0 * ti / t[-1]
         print(f"Progress: {progress:5.1f}%", end="\r")
 
-    return {k: np.asarray(v) for k, v in data.items()}
+    return t, {k: np.asarray(v) for k, v in data.items()}
 
 
 if __name__ == "__main__":
     do_baseline = True
     plot = True
-    data = run_sim(do_baseline=do_baseline, plot=plot)
+    t, data = run_sim(do_baseline=do_baseline, plot=plot)
 
 
     color_cycle = ['r', 'g', 'b', 'c']
 
-    setup_plt(height=4.0, grid=True)
+    setup_plt(height=5, grid=True)
 
     fig, axes = plt.subplots(3, 1, sharex=True)
 
@@ -274,16 +274,16 @@ if __name__ == "__main__":
                        r'position-$z$ (mm)']
     
     for ii, ax in enumerate(axes):
-        ax.plot(data['t'], 1000 * data['p_mean'][:, ii], linestyle='-', color=color_cycle[ii], label='mean')
-        ax.plot(data['t'], 1000 * data['p_gt'][:, ii], linestyle='--', color=color_cycle[ii], label='truth')
-        ax.fill_between(data['t'], 
+        ax.plot(t, 1000 * data['p_mean'][:, ii], linestyle='-', color=color_cycle[ii], label='mean')
+        ax.plot(t, 1000 * data['p_gt'][:, ii], linestyle='--', color=color_cycle[ii], label='truth')
+        ax.fill_between(t, 
             1000 * data['p_mean'][:,ii] - 2000 * data['p_std'][:,ii],
             1000 * data['p_mean'][:,ii] + 2000 * data['p_std'][:,ii], 
             alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
 
         ax.set_ylabel(position_labels[ii])
         if ii == 1:
-            ax.legend(ncol=3, columnspacing=0.5, handletextpad=0.5)
+            ax.legend(handletextpad=0.5)
 
     fig.align_ylabels()
     plt.tight_layout()
@@ -292,48 +292,37 @@ if __name__ == "__main__":
 
 
 
-    setup_plt(width=6, height=2, grid=True)
+    setup_plt(height=4.5, grid=True)
 
-    fig, axes = plt.subplots(1, 3, sharex=True)
+    fig, axes = plt.subplots(4, 1, sharex=True)
 
-    for ii, ax in enumerate(axes):
-        ax.plot(data['t'], data['f_gt'][:,ii], 'k--', label='truth')
-        ax.plot(data['t'], data['f_mean'][:,ii], color=color_cycle[ii], label='mean')
-        ax.fill_between(data['t'], 
+    force_labels = [r'force-$x$ (N)',
+                    r'force-$y$ (N)',
+                    r'force-$z$ (N)']
+    
+    for ii, ax in enumerate(axes[:3]):
+        ax.plot(t, data['f_gt'][:,ii], 'k--', label='truth')
+        ax.plot(t, data['f_mean'][:,ii], color=color_cycle[ii], label='mean')
+        ax.fill_between(t, 
             data['f_mean'][:,ii] - 2 * data['f_std'][:,ii],
             data['f_mean'][:,ii] + 2 * data['f_std'][:,ii], 
             alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
-        ax.set_xlabel("time (sec)")
-        ax.set_xlim([data['t'][0], data['t'][-1]+1e-1])
+        ax.set_xlim([t[0], t[-1]+1e-1])
+        ax.set_ylabel(force_labels[ii])
         if ii == 0:
-            ax.set_ylabel("tip force (N)")
-            ax.legend(ncol=3, loc="upper left", bbox_to_anchor=(0, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
+            ax.legend(ncol=3, columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
+
+    axes[3].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='posterior')
+    axes[3].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std_prior']**2, axis=1)), 'k--', label='prior')
+    axes[3].set_xlabel('time (sec)')
+    axes[3].set_ylabel('position uncertainty (mm)')
+    axes[3].legend()
 
     fig.align_ylabels()
     plt.tight_layout()
     plt.subplots_adjust(wspace=0.35, hspace=0.2)
 
-    plt.savefig("figures/parallel_robot_force.pdf", bbox_inches="tight")
-
-
-
-
-    setup_plt(height=2, grid=True)
-
-    fig = plt.figure()
-
-    plt.plot(data['t'], np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='post')
-    plt.plot(data['t'], np.sqrt(np.sum(data['p_std_prior']**2, axis=1)), 'k--', label='prior')
-    plt.xlabel('time (sec)')
-    plt.ylabel('position uncertainty (mm)')
-
-    fig.align_ylabels()
-    plt.tight_layout()
-    plt.subplots_adjust(wspace=0.35, hspace=0.2)
-
-    plt.savefig("figures/parallel_robot_uncertainty.pdf", bbox_inches="tight")
-
-
+    plt.savefig("figures/parallel_robot_results.pdf", bbox_inches="tight")
 
 
 
@@ -341,15 +330,14 @@ if __name__ == "__main__":
         setup_plt()
         plt.figure()
         baseline_err = 1000 * np.linalg.norm(data['p_gt'] - data['p_baseline'], axis=1)
-        plt.plot(data['t'], baseline_err, label="baseline")
+        plt.plot(t, baseline_err, label=f"baseline (mean={np.mean(baseline_err):.3f} mm)")
         plt.xlabel("time (sec)")
         plt.ylabel("baseline error (mm)")
         plt.grid(True, alpha=0.25)
+        plt.legend()
 
         plt.tight_layout()
         plt.savefig("figures/parallel_robot_baseline.pdf", dpi=300)
         plt.close()
-
-        print(f"mean baseline error: {np.mean(baseline_err)} mm")
 
     

@@ -11,7 +11,7 @@ import pyvista as pv
 frame_arrow_colors = ["red", "green", "blue"]
 
 
-def setup_plt(width=3.5, height=5.0, grid=False):
+def setup_plt(width=3.0, height=5.0, grid=False):
 
     os.makedirs("figures", exist_ok=True)
 
@@ -118,6 +118,7 @@ class PlotterBase:
     def __init__(self,
                  save_frames_dir_name=None, 
                  single_plot_mode=False,
+                 plot_rviz_coords=False,
                  camera_focal_point=None,
                  camera_azimuth=15,
                  camera_elevation=20,
@@ -125,6 +126,7 @@ class PlotterBase:
         
         self.save_frames_dir_name = save_frames_dir_name
         self.single_plot_mode = single_plot_mode
+        self.plot_rviz_coords = plot_rviz_coords
 
         if camera_focal_point is None:
             self.camera_focal_point = np.zeros(3)
@@ -160,7 +162,9 @@ class PlotterBase:
         self.plotter.camera.position = (x, y, z)
         self.plotter.camera.focal_point = self.camera_focal_point
 
-        # self.plotter.add_axes()
+        if self.plot_rviz_coords:
+            self.plotter.add_axes()
+        
         # self.plotter.enable_depth_peeling(10)
         self.plotter.enable_anti_aliasing()
     
