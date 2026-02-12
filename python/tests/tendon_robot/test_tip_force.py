@@ -11,18 +11,19 @@ from .benchmark import solve_kinematics_bvp
 
 
 def run_sim(
-        sim_time=30.0, 
+        sim_time=30.0,
+        frame_rate=30.0,
         plot=True,
         do_baseline=True,
         tip_force_prior_sigma=0.1,
-        tip_force_drift_sigma=0.05,
+        tip_force_drift_sigma=0.06,
         tensions_meas_sigma=0.01, 
         tip_position_meas_sigma=0.001):
     
     config = get_base_config()
 
-    t, positions, tensions_nominal, waypoints = generate_waypoint_trajectory(sim_time, seed=7)
-    tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, seed=7)
+    t, positions, tensions_nominal, waypoints = generate_waypoint_trajectory(sim_time, frame_rate=frame_rate, seed=7)
+    tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, framerate=frame_rate, seed=7)
     dt = np.diff(t)[0]
 
     # A solver to simulate the nominal trajectory of the robot, given open loop tensions
@@ -75,7 +76,7 @@ def run_sim(
     
     f_drift_cov = tip_force_drift_sigma ** 2 * dt * np.eye(3)
     f_prev_mean = np.zeros(3)
-    f_prev_cov = 10 * np.eye(3)
+    f_prev_cov = tip_force_prior_sigma ** 2 * np.eye(3)
 
     x_guess = None
 
@@ -134,6 +135,7 @@ def run_sim(
         # Use the sampled position as a prior on tip pose
         solution_post = solver_tracking.solve(
             Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
+            # Vector6Gaussian(np.zeros(6), wrench_prior_cov),
             Vector6Gaussian(wrench_prev_mean, wrench_prev_cov), 
             Vector3Gaussian(p_meas, position_meas_cov)
         )
@@ -203,58 +205,50 @@ if __name__ == "__main__":
 
     color_cycle = ['r', 'g', 'b', 'c']
 
-    setup_plt(height=6, grid=True)
+    setup_plt(width=3.7, height=3, grid=True)
 
-    fig, axes = plt.subplots(6, 1, sharex=True)
+    fig, axes = plt.subplots(3, 2, sharex=True)
+    axes = axes.flatten()  # flatten to 1D for easy indexing
 
-    position_labels = [r'position-$x$ (mm)',
-                       r'position-$y$ (mm)',
-                       r'position-$z$ (mm)']
-
-    for ii, ax in enumerate(axes[:3]):
-        ax.plot(t, 1000 * data['p_goal'][:, ii], linestyle=':', color='k', label='desired')
+    for ii in range(3):
+        ax = axes[ii*2]  # left column
+        ax.plot(t, 1000 * data['p_goal'][:, ii], 'k--', label='desired')
         ax.plot(t, 1000 * data['p_gt'][:, ii], linestyle='-', color=color_cycle[ii], label='tracking')
-        ax.plot(t, 1000 * data['p_nominal'][:, ii], linestyle='--', color=color_cycle[ii], label='OL')
+        ax.plot(t, 1000 * data['p_nominal'][:, ii], linestyle=':', color=color_cycle[ii], label='OL')
         ax.set_xlim([t[0], t[-1]+1e-1])
-        ax.set_ylabel(position_labels[ii])
         if ii == 1:
-            ax.legend(ncol=3, loc="upper right", bbox_to_anchor=(1, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
-            
-    force_labels = [r'force-$x$ (mm)',
-                    r'force-$y$ (mm)',
-                    r'force-$z$ (mm)']
+            ax.legend(ncol=3, columnspacing=0.2, borderpad=0.0, borderaxespad=0.2,
+                    handlelength=1.0, handletextpad=0.2)
 
-    for ii, ax in enumerate(axes[3:]):
-        ax.plot(t, data['f_gt'][:,ii], 'k--', label='truth')
-        ax.plot(t, data['f_mean'][:,ii], color=color_cycle[ii], label='mean')
+    # plot forces in second column (axes[1], axes[3], axes[5])
+    for ii in range(3):
+        ax = axes[ii*2+1]  # right column
+        ax.plot(t, data['f_gt'][:, ii], 'k--', label='truth')
+        ax.plot(t, data['f_mean'][:, ii], color=color_cycle[ii], label='mean')
         ax.fill_between(t, 
-            data['f_mean'][:,ii] - 2 * data['f_std'][:,ii],
-            data['f_mean'][:,ii] + 2 * data['f_std'][:,ii], 
+            data['f_mean'][:, ii] - 2 * data['f_std'][:, ii],
+            data['f_mean'][:, ii] + 2 * data['f_std'][:, ii], 
             alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
-        
-        ax.set_ylabel(force_labels[ii])
         ax.set_xlim([t[0], t[-1]+1e-1])
         if ii == 0:
-            ax.legend(ncol=3, loc="upper left", bbox_to_anchor=(0, 1.1), columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
-    
-    axes[-1].set_xlabel("time (sec)")
-    # lines_cmd = axes[6].plot(t, tensions_cmd, linestyle='-')
-    # lines_gt  = axes[6].plot(t, tensions_gt, 'k:')
-    # handles = [lines_cmd[0], lines_gt[0]]
-    # labels  = ['cmd', 'truth']
-    # axes[6].legend(handles, labels)
-    # axes[6].set_ylabel('tendon tensions (N)')
-    
-    # axes[7].plot(t, np.linalg.norm(tip_force_gt, axis=1), color='purple')
-    # axes[7].set_ylabel('force magnitude (N)')
-    # axes[7].set_xlabel('time (sec)')
+            ax.legend(ncol=3, columnspacing=0.2, borderpad=0.0, borderaxespad=0.2,
+                    handlelength=1.0, handletextpad=0.2)
 
-    fig.align_ylabels()
+    axes[-2].set_xlabel("time (sec)")  # bottom left
+    axes[-1].set_xlabel("time (sec)")  # bottom right
+
     plt.tight_layout()
-    plt.subplots_adjust(wspace=0.35, hspace=0.2)
+    plt.subplots_adjust(wspace=0.2, hspace=0.2)
+
+    # Get left and right column centers in figure coordinates
+    left_center = (axes[0].get_position().x0 + axes[0].get_position().x1)/2
+    right_center = (axes[1].get_position().x0 + axes[1].get_position().x1)/2
+
+    # Place column titles
+    fig.text(left_center, 0.97, 'position (mm)', ha='center', va='bottom', fontsize=10)
+    fig.text(right_center, 0.97, 'force (N)', ha='center', va='bottom', fontsize=10)
 
     plt.savefig("figures/tendon_robot_results.pdf", bbox_inches="tight")
-
 
 
 

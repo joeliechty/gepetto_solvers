@@ -146,7 +146,7 @@ def run_sim(
     # Seperate solver just for getting jacobian, dont want to mess up warm starts
     solver_jac = crest_sparse.ParallelRobotSolver(config)
 
-    tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, framerate=frame_rate, seed=2)
+    tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, framerate=frame_rate, seed=3)
 
     dt = 1.0 / frame_rate
     t = np.arange(0, t_final, dt)
@@ -160,7 +160,7 @@ def run_sim(
     
     f_drift_cov = tip_force_drift_sigma ** 2 * dt * np.eye(3)
     f_prev_mean = np.zeros(3)
-    f_prev_cov = 10 * np.eye(3)
+    f_prev_cov = tip_force_prior_sigma ** 2 * np.eye(3)
 
     rod_lengths_noise_model = GaussianProcessNoiseModel(6, len(t), seed=42)
     
@@ -261,64 +261,49 @@ if __name__ == "__main__":
 
     color_cycle = ['r', 'g', 'b', 'c']
 
-    setup_plt(height=5, grid=True)
 
+    setup_plt(width=2.0, height=3.5, grid=True)
     fig, axes = plt.subplots(3, 1, sharex=True)
-
-    position_labels = [r'position-$x$ (mm)',
-                       r'position-$y$ (mm)',
-                       r'position-$z$ (mm)']
-    
-    for ii, ax in enumerate(axes):
-        ax.plot(t, 1000 * data['p_mean'][:, ii], linestyle='-', color=color_cycle[ii], label='mean')
-        ax.plot(t, 1000 * data['p_gt'][:, ii], linestyle='--', color=color_cycle[ii], label='truth')
-        ax.fill_between(t, 
-            1000 * data['p_mean'][:,ii] - 2000 * data['p_std'][:,ii],
-            1000 * data['p_mean'][:,ii] + 2000 * data['p_std'][:,ii], 
-            alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
-
-        ax.set_ylabel(position_labels[ii])
-        if ii == 1:
-            ax.legend(handletextpad=0.5)
-
-    fig.align_ylabels()
-    plt.tight_layout()
-    
-    plt.savefig("figures/parallel_robot_position.pdf", bbox_inches="tight")
-
-
-
-    setup_plt(height=4.5, grid=True)
-
-    fig, axes = plt.subplots(4, 1, sharex=True)
-
-    force_labels = [r'force-$x$ (N)',
-                    r'force-$y$ (N)',
-                    r'force-$z$ (N)']
     
     for ii, ax in enumerate(axes[:3]):
         ax.plot(t, data['f_gt'][:,ii], 'k--', label='truth')
-        ax.plot(t, data['f_mean'][:,ii], color=color_cycle[ii], linewidth=0.7, label='mean')
+        ax.plot(t, data['f_mean'][:,ii], color=color_cycle[ii], label='mean')
         ax.fill_between(t, 
             data['f_mean'][:,ii] - 2 * data['f_std'][:,ii],
             data['f_mean'][:,ii] + 2 * data['f_std'][:,ii], 
             alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
         ax.set_xlim([t[0], t[-1]+1e-1])
-        ax.set_ylabel(force_labels[ii])
         if ii == 0:
             ax.legend(ncol=3, columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
+    axes[2].set_xlabel('time (sec)')
 
-    axes[3].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std_prior']**2, axis=1)), 'k--', label='prior')
-    axes[3].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='posterior')
-    axes[3].set_xlabel('time (sec)')
-    axes[3].set_ylabel('position uncertainty (mm)')
-    axes[3].legend()
+    plt.tight_layout()
+    plt.subplots_adjust(wspace=0.35, hspace=0.2)
+
+    center = (axes[0].get_position().x0 + axes[0].get_position().x1)/2
+    fig.text(center, 0.97, 'force (N)', ha='center', va='bottom', fontsize=10)
+
+    plt.savefig("figures/parallel_robot_force.pdf", bbox_inches="tight")
+
+
+    setup_plt(width=1.5, height=3.5, grid=True)
+    fig, axes = plt.subplots(2, 1, sharex=True)
+
+
+    axes[0].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std_prior']**2, axis=1)), 'k--', label='prior')
+    axes[0].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='posterior')
+    axes[0].set_ylabel('position uncertainty (mm)')
+
+    axes[1].plot(t, np.sqrt(np.sum(data['f_std_prior']**2, axis=1)), 'k--', label='prior')
+    axes[1].plot(t, np.sqrt(np.sum(data['f_std']**2, axis=1)), 'k-', label='posterior')
+    axes[1].set_ylabel('force uncertainty (N)')
+    axes[1].legend()
 
     fig.align_ylabels()
     plt.tight_layout()
     plt.subplots_adjust(wspace=0.35, hspace=0.2)
 
-    plt.savefig("figures/parallel_robot_results.pdf", bbox_inches="tight")
+    plt.savefig("figures/parallel_robot_uncertainty.pdf", bbox_inches="tight")
 
 
 
@@ -337,3 +322,29 @@ if __name__ == "__main__":
         plt.close()
 
     
+
+
+    #     setup_plt(height=5, grid=True)
+
+    # fig, axes = plt.subplots(3, 1, sharex=True)
+
+    # position_labels = [r'position-$x$ (mm)',
+    #                    r'position-$y$ (mm)',
+    #                    r'position-$z$ (mm)']
+    
+    # for ii, ax in enumerate(axes):
+    #     ax.plot(t, 1000 * data['p_mean'][:, ii], linestyle='-', color=color_cycle[ii], label='mean')
+    #     ax.plot(t, 1000 * data['p_gt'][:, ii], linestyle='--', color=color_cycle[ii], label='truth')
+    #     ax.fill_between(t, 
+    #         1000 * data['p_mean'][:,ii] - 2000 * data['p_std'][:,ii],
+    #         1000 * data['p_mean'][:,ii] + 2000 * data['p_std'][:,ii], 
+    #         alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
+
+    #     ax.set_ylabel(position_labels[ii])
+    #     if ii == 1:
+    #         ax.legend(handletextpad=0.5)
+
+    # fig.align_ylabels()
+    # plt.tight_layout()
+    
+    # plt.savefig("figures/parallel_robot_position.pdf", bbox_inches="tight")

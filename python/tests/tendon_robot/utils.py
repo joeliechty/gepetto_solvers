@@ -218,13 +218,13 @@ def generate_waypoints(num_waypoints, center=(0, 0.175, 0.0), radii=(0.1, 0.05, 
     return np.array(waypoints)
     
 
-def generate_waypoint_trajectory(sim_time, time_per_waypoint=3.0, waypoints=None, seed=None):
+def generate_waypoint_trajectory(sim_time, frame_rate=30.0, time_per_waypoint=3.0, waypoints=None, seed=None):
     if waypoints is None:
         num_waypoints = int(sim_time / time_per_waypoint) + 1
         waypoints = generate_waypoints(num_waypoints, seed=seed)
 
     position_function = lambda t: waypoint_trajectory(t, waypoints)
-    t, positions, tensions = generate_trajectory(position_function, sim_time)
+    t, positions, tensions = generate_trajectory(position_function, sim_time, frame_rate=frame_rate)
 
     return t, positions, tensions, waypoints
 

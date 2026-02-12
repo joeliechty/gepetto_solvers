@@ -56,7 +56,7 @@ def integrate_robot(x, s_discs, K_se_inv, K_bt_inv):
     for k in range(len(s_discs) - 1):
         a, b = s_discs[k], s_discs[k + 1]
 
-        sol = solve_ivp(segment_dynamics, [a, b], y0, args=(K_se_inv, K_bt_inv), method="DOP853")
+        sol = solve_ivp(segment_dynamics, [a, b], y0, args=(K_se_inv, K_bt_inv))
 
         if not sol.success:
             raise RuntimeError(f"Integration failed: {sol.message}")
@@ -139,7 +139,7 @@ def solve_kinematics_bvp(tensions, tip_force, config, holes, x0_guess=None):
     def get_res(x):
         return compute_residual(x, s_discs, K_se_inv, K_bt_inv, tensions, tip_force, holes)
 
-    sol = root(get_res, x0, tol=1e-6, method='hybr')
+    sol = root(get_res, x0)
 
     if not sol.success:
         raise RuntimeError(f"Root finding failed: {sol.message}")
