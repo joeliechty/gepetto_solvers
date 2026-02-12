@@ -1,4 +1,5 @@
 import numpy as np
+np.random.seed(42)
 import matplotlib.pyplot as plt
 
 from crest_sparse import TendonRobotSolver, Vector6Gaussian, Vector4Gaussian, Vector3Gaussian

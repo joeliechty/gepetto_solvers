@@ -1,4 +1,5 @@
 import numpy as np
+np.random.seed(42)
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 
