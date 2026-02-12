@@ -28,6 +28,7 @@ class TendonRobotPlotter:
             plot_wrenches=plot_rod_wrenches,
             plot_base_wrench=plot_base_wrenches,
             plot_backbone_frames=plot_backbone_frames,
+            skip_backbone_ellipsoids=4,
             backbone_radius=0.001,
             cartesian_frame_scale=0.01,
             force_scale=0.05,

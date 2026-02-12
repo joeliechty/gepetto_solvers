@@ -263,7 +263,7 @@ if __name__ == "__main__":
     color_cycle = ['r', 'g', 'b', 'c']
 
 
-    setup_plt(width=2.0, height=3.5, grid=True)
+    setup_plt(width=2.0, height=4, grid=True)
     fig, axes = plt.subplots(3, 1, sharex=True)
     
     for ii, ax in enumerate(axes[:3]):
@@ -274,7 +274,7 @@ if __name__ == "__main__":
             data['f_mean'][:,ii] + 2 * data['f_std'][:,ii], 
             alpha=0.2, color=color_cycle[ii], interpolate=True, label=r'2-$\sigma$')
         ax.set_xlim([t[0], t[-1]+1e-1])
-        if ii == 0:
+        if ii == 1:
             ax.legend(ncol=3, columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
     axes[2].set_xlabel('time (sec)')
 
@@ -282,27 +282,29 @@ if __name__ == "__main__":
     plt.subplots_adjust(wspace=0.35, hspace=0.2)
 
     center = (axes[0].get_position().x0 + axes[0].get_position().x1)/2
-    fig.text(center, 0.97, 'force (N)', ha='center', va='bottom', fontsize=10)
+    fig.text(center, 0.97, 'Force (N)', ha='center', va='bottom', fontsize=8)
 
     plt.savefig("figures/parallel_robot_force.pdf", bbox_inches="tight")
 
 
-    setup_plt(width=1.5, height=3.5, grid=True)
+    setup_plt(width=2, height=3.5, grid=True)
     fig, axes = plt.subplots(2, 1, sharex=True)
 
 
     axes[0].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std_prior']**2, axis=1)), 'k--', label='prior')
     axes[0].plot(t, 1000.0 * np.sqrt(np.sum(data['p_std']**2, axis=1)), 'k-', label='posterior')
-    axes[0].set_ylabel('position uncertainty (mm)')
+    axes[0].legend(title='position (mm)', frameon=False)
 
     axes[1].plot(t, np.sqrt(np.sum(data['f_std_prior']**2, axis=1)), 'k--', label='prior')
     axes[1].plot(t, np.sqrt(np.sum(data['f_std']**2, axis=1)), 'k-', label='posterior')
-    axes[1].set_ylabel('force uncertainty (N)')
-    axes[1].legend()
+    axes[1].legend(title='force (N)', frameon=False)
 
     fig.align_ylabels()
     plt.tight_layout()
     plt.subplots_adjust(wspace=0.35, hspace=0.2)
+    
+    center = (axes[0].get_position().x0 + axes[0].get_position().x1)/2
+    fig.text(center, 0.97, 'Uncertainty', ha='center', va='bottom', fontsize=8)
 
     plt.savefig("figures/parallel_robot_uncertainty.pdf", bbox_inches="tight")
 

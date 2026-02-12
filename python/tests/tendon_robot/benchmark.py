@@ -56,7 +56,7 @@ def integrate_robot(x, s_discs, K_se_inv, K_bt_inv):
     for k in range(len(s_discs) - 1):
         a, b = s_discs[k], s_discs[k + 1]
 
-        sol = solve_ivp(segment_dynamics, [a, b], y0, args=(K_se_inv, K_bt_inv))
+        sol = solve_ivp(segment_dynamics, [a, b], y0, args=(K_se_inv, K_bt_inv), method='DOP853', rtol=1e-10, atol=1e-12, dense_output=True)
 
         if not sol.success:
             raise RuntimeError(f"Integration failed: {sol.message}")
@@ -65,16 +65,11 @@ def integrate_robot(x, s_discs, K_se_inv, K_bt_inv):
             p_i, R_i, n_i, m_i = unpack_state(state)
             s.append(s_i); p.append(p_i); R.append(R_i); n.append(n_i); m.append(m_i)
 
-        y_end = sol.y[:, -1]
+        y_end = sol.sol(b)
         p_end, R_end, n_end, m_end = unpack_state(y_end)
         
-        U, _, Vt = np.linalg.svd(R_end)
-        R_orth = U @ Vt
-        if np.linalg.det(R_orth) < 0:
-            U[:, -1] *= -1
-            R_orth = U @ Vt
 
-        y0 = pack_state(p_end, R_orth, n_end - f[k], m_end - l[k])
+        y0 = pack_state(p_end, R_end, n_end - f[k], m_end - l[k])
 
     return np.array(s), np.array(p), np.array(R), np.array(n), np.array(m)
 
@@ -96,6 +91,12 @@ def compute_residual(x, s_discs, K_se_inv, K_bt_inv, tensions, tip_force, holes)
 
 
 def compute_backbone_loads(s, p, R, s_discs, tensions, tip_force, holes):
+    dists = np.min(np.abs(s[:, None] - s_discs[None, :]), axis=0)
+
+    tol = 1e-6
+    if np.any(dists > tol):
+        raise RuntimeError(f"Disc sampling too coarse. max miss = {dists.max():.3e} m")
+
     idxs = np.abs(s[:, None] - s_discs[None, :]).argmin(axis=0)
     p_discs, R_discs = p[idxs], R[idxs]
 
@@ -116,7 +117,7 @@ def compute_backbone_loads(s, p, R, s_discs, tensions, tip_force, holes):
                 hole_diff_next = hole_next - hole
                 f_j += tensions[j] * hole_diff_next / np.linalg.norm(hole_diff_next)
 
-            l_j = hat(hole - p_discs[i]) @ f_j
+            l_j = np.cross(hole - p_discs[i], f_j)
             f_i += f_j; l_i += l_j
 
         f.append(f_i); l.append(l_i)
@@ -139,7 +140,7 @@ def solve_kinematics_bvp(tensions, tip_force, config, holes, x0_guess=None):
     def get_res(x):
         return compute_residual(x, s_discs, K_se_inv, K_bt_inv, tensions, tip_force, holes)
 
-    sol = root(get_res, x0)
+    sol = root(get_res, x0, tol=1e-12)
 
     if not sol.success:
         raise RuntimeError(f"Root finding failed: {sol.message}")

@@ -17,7 +17,7 @@ def run_sim(
         plot=True,
         do_baseline=True,
         tip_force_prior_sigma=0.1,
-        tip_force_drift_sigma=0.06,
+        tip_force_drift_sigma=0.05,
         tensions_meas_sigma=0.01, 
         tip_position_meas_sigma=0.001):
     
@@ -57,14 +57,12 @@ def run_sim(
     tensions_cmd_current = tensions_min
     
     # Continuous time noise models for smoothness
-    tensions_nominal_noise_model = GaussianProcessNoiseModel(4, len(t), seed=42)
-    tensions_tracking_noise_model = GaussianProcessNoiseModel(4, len(t), seed=42)
-    p_nominal_noise_model = GaussianProcessNoiseModel(3, len(t), seed=42)
-    p_tracking_noise_model = GaussianProcessNoiseModel(3, len(t), seed=42)
+    tensions_noise_model = GaussianProcessNoiseModel(4, len(t), seed=42)
+    p_noise_model = GaussianProcessNoiseModel(3, len(t), seed=42)
 
     # Setup data collection
     data = {
-        'p_mean': [], 'p_std': [], 'p_gt': [], 'p_sim': [], 'p_nominal': [], 'p_goal': [], 'p_baseline': [],
+        'p_mean': [], 'p_std': [], 'p_gt': [], 'p_nominal': [], 'p_goal': [], 'p_baseline': [],
         'f_mean': [], 'f_std': [], 'f_gt': []
     }
 
@@ -85,18 +83,14 @@ def run_sim(
         f_gt = tip_force_function(ti)
 
         # Nominal solution with no force correction, still need to add noise and re solve
-        tensions_nominal_gt = tensions_nominal_i + tensions_nominal_noise_model.step(tensions_meas_sigma ** 2 * np.eye(4))
+        tensions_noise = tensions_noise_model.step(tensions_meas_sigma ** 2 * np.eye(4))
+        tensions_nominal_gt = tensions_nominal_i + tensions_noise
         solution_nominal = simulator_nominal.solve(
             Vector4Gaussian(tensions_nominal_gt, small_tensions_cov),
             Vector6Gaussian(np.hstack((np.zeros(3), f_gt)), small_wrench_cov),
             None
         )
-
-        p_nominal_mean = solution_nominal.marginals.rod.states[-1].pose.mean[:3,3]
-        R_nominal = solution_nominal.marginals.rod.states[-1].pose.mean[:3,:3]
-        p_nominal_cov = R_nominal @ solution_nominal.marginals.rod.states[-1].pose.cov[3:,3:] @ R_nominal.T
-        p_nominal_cov += tip_position_meas_sigma ** 2 * np.eye(3)
-        p_nominal_gt = p_nominal_mean + p_nominal_noise_model.step(p_nominal_cov)
+        p_nominal = solution_nominal.marginals.rod.states[-1].pose.mean[:3,3]
 
         # Prior solution, using only prior wrench, no measurement
         solution_prior = solver_prior.solve(
@@ -106,9 +100,9 @@ def run_sim(
         )
 
         # Simulated solution to sample position from, small covariances
-        tensions_tracking_gt = tensions_cmd_current + tensions_tracking_noise_model.step(tensions_meas_sigma ** 2 * np.eye(4))
+        tensions_gt = tensions_cmd_current + tensions_noise
         solution_sim = simulator_tracking.solve(
-            Vector4Gaussian(tensions_tracking_gt, small_tensions_cov),
+            Vector4Gaussian(tensions_gt, small_tensions_cov),
             Vector6Gaussian(np.hstack((np.zeros(3), f_gt)), small_wrench_cov),
             None
         )
@@ -117,16 +111,15 @@ def run_sim(
         p_sim_mean = solution_sim.marginals.rod.states[-1].pose.mean[:3,3]
         R_sim_mean = solution_sim.marginals.rod.states[-1].pose.mean[:3,:3]
         p_sim_cov = R_sim_mean @ solution_sim.marginals.rod.states[-1].pose.cov[3:,3:] @ R_sim_mean.T
-        p_sim_gt = p_sim_mean + p_tracking_noise_model.step(p_sim_cov)
+        p_sim_gt = p_sim_mean + p_noise_model.step(p_sim_cov)
         p_meas = p_sim_gt + tip_position_meas_sigma * np.random.randn(3)
 
         # Compare simulator solver to baseline solver if requested
         if do_baseline:
             holes = solution_sim.marginals.tendon_config.hole_locations
-            p_baseline, x_guess = solve_kinematics_bvp(tensions_tracking_gt, f_gt, get_base_config(), holes, x_guess)
-            print(f"baseline error: {np.linalg.norm(p_baseline[-1] - p_sim_mean)}")
+            p_baseline, x_guess = solve_kinematics_bvp(tensions_nominal_gt, f_gt, get_base_config(), holes, x_guess)
+            print(f"baseline error: {np.linalg.norm(p_baseline[-1] - p_nominal)}")
             data['p_baseline'].append(p_baseline[-1])
-            data['p_sim'].append(p_sim_mean)
 
         # Force drift 
         wrench_prev_mean = np.hstack((np.zeros(3), f_prev_mean))
@@ -167,7 +160,7 @@ def run_sim(
         data['p_std'].append(np.sqrt(np.diag(solution_post.marginals.rod.states[-1].pose.cov[3:,3:])))
         data['p_gt'].append(p_sim_gt)
         data['p_goal'].append(p_goal)
-        data['p_nominal'].append(p_nominal_gt)
+        data['p_nominal'].append(p_nominal)
         data['f_gt'].append(f_gt)
         data['f_mean'].append(wrench_post.mean[3:])
         data['f_std'].append(np.sqrt(np.diag(wrench_post.cov[3:,3:])))
@@ -191,7 +184,7 @@ if __name__ == "__main__":
     if do_baseline:
         setup_plt()
         plt.figure()
-        baseline_err = 1000 * np.linalg.norm(data['p_sim'] - data['p_baseline'], axis=1)
+        baseline_err = 1000 * np.linalg.norm(data['p_nominal'] - data['p_baseline'], axis=1)
         plt.plot(t, baseline_err, label=f"baseline (mean={np.mean(baseline_err):.3f} mm)")
         plt.xlabel("time (sec)")
         plt.ylabel("baseline error (mm)")
@@ -206,7 +199,7 @@ if __name__ == "__main__":
 
     color_cycle = ['r', 'g', 'b', 'c']
 
-    setup_plt(width=3.7, height=3, grid=True)
+    setup_plt(width=3.7, height=4, grid=True)
 
     fig, axes = plt.subplots(3, 2, sharex=True)
     axes = axes.flatten()  # flatten to 1D for easy indexing
@@ -246,8 +239,8 @@ if __name__ == "__main__":
     right_center = (axes[1].get_position().x0 + axes[1].get_position().x1)/2
 
     # Place column titles
-    fig.text(left_center, 0.97, 'position (mm)', ha='center', va='bottom', fontsize=10)
-    fig.text(right_center, 0.97, 'force (N)', ha='center', va='bottom', fontsize=10)
+    fig.text(left_center, 0.97, 'Position (mm)', ha='center', va='bottom', fontsize=8)
+    fig.text(right_center, 0.97, 'Force (N)', ha='center', va='bottom', fontsize=8)
 
     plt.savefig("figures/tendon_robot_results.pdf", bbox_inches="tight")
 

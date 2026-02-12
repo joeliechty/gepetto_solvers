@@ -13,6 +13,7 @@ class CosseratRodMeshManager:
                  plot_base_wrench=False,
                  plot_backbone_frames=False,
                  plot_backbone_ellipsoids=True,
+                 skip_backbone_ellipsoids=1,
                  backbone_radius=0.005, 
                  moment_scale = 0.2, 
                  force_scale=0.1, 
@@ -28,6 +29,7 @@ class CosseratRodMeshManager:
         self.plot_base_wrench = plot_base_wrench
         self.plot_backbone_frames = plot_backbone_frames
         self.plot_backbone_ellipsoids = plot_backbone_ellipsoids
+        self.skip_backbone_ellipsoids = skip_backbone_ellipsoids
 
         self.rod_color=rod_color
         self.rod_opacity=rod_opacity
@@ -87,16 +89,18 @@ class CosseratRodMeshManager:
         if not self.plot_backbone_ellipsoids:
             return
 
+        states = solution.states[::self.skip_backbone_ellipsoids]
+
         if plotter.frame == 0:
             self.backbone_ellipsoid_transforms = []
-            for _ in range(len(solution.states)):
+            for _ in range(len(states)):
                 transform = vtk.vtkTransform()
                 ellipsoid = pv.Sphere(radius=1)
                 actor = plotter.plotter.add_mesh(ellipsoid, color="deepcadmiumred", lighting=False, opacity=0.2)
                 actor.SetUserTransform(transform)
                 self.backbone_ellipsoid_transforms.append(transform)
 
-        for transform, state in zip(self.backbone_ellipsoid_transforms, solution.states):
+        for transform, state in zip(self.backbone_ellipsoid_transforms, states):
             pose = state.pose.mean
             cov = state.pose.cov
 

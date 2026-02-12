@@ -69,7 +69,7 @@ class ParallelRobotSolver:
         plotter.show()
 
     def solve(self, rod_lengths, tip_force=np.zeros(3), tip_moment=np.zeros(3)):
-        result = root(self.total_shooting_residual, self.start_conditions_guess, args=(rod_lengths, tip_force, tip_moment))
+        result = root(self.total_shooting_residual, self.start_conditions_guess, args=(rod_lengths, tip_force, tip_moment), tol=1e-10)
         self.start_conditions_guess = result.x
         
         solution = self.integrate_rods(result.x, rod_lengths)
@@ -112,7 +112,8 @@ class ParallelRobotSolver:
                 self.single_rod_deriv,
                 (0.0, rod_lengths[i]),
                 y0,
-                t_eval=np.linspace(0, rod_lengths[i], self.num_eval_points)
+                t_eval=np.linspace(0, rod_lengths[i], self.num_eval_points),
+                method='DOP853', rtol=1e-10, atol=1e-12
             )
             results.append(self.unpack_states(sol.y))
 
