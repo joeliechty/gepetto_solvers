@@ -55,6 +55,7 @@ Vector TendonDiscWrenchFactor::evaluateError(
         Vector6 d_wrench_prev_d_tension;
         Matrix6 d_wrench_prev_d_pose, d_wrench_prev_d_pose_prev;
 
+        // Get wrench from prev disc on current disc in spatial coords
         Vector6 wrench_prev = get_single_tendon_wrench(
             tensions[tendon_idx],
             pose,
@@ -94,6 +95,7 @@ Vector TendonDiscWrenchFactor::evaluateError(
         d_wrench_d_tensions.col(tendon_idx) = d_wrench_d_tension;
     }
 
+    // Error between total wrench and sum of applied, all in spatial coords
     Vector6 wrench_error = wrench - wrench_tendons - wrench_external;
 
     if (H1) { *H1 = -d_wrench_d_pose_prev; }
@@ -128,23 +130,23 @@ Vector6 TendonDiscWrenchFactor::get_single_tendon_wrench(
 
     Matrix36 d_h10_d_p0;
     Matrix3 d_h10_d_h1w;
-    Point3 h10 = p0.transformTo(h1w, d_h10_d_p0, d_h10_d_h1w);
+    Point3 h10 = p0.transformTo(h1w, d_h10_d_p0, d_h10_d_h1w); // Hole 1 in frame 0
 
     // Difference between two holes is direction of force
-    Vector3 diff = h10 - h0;
+    Vector3 diff = h10 - h0; // Both holes in frame 0
     Matrix3 d_diff_d_h10 = Matrix3::Identity();
 
     Matrix3 d_dir_d_diff;
-    Vector3 dir = normalize(diff, &d_dir_d_diff);
+    Vector3 dir = normalize(diff, &d_dir_d_diff); // Frame 0
 
     // Force is tension in that direction
-    Vector3 force = tension * dir;
+    Vector3 force = tension * dir;  // Frame 0
     Matrix31 d_force_d_tension = dir;
     Matrix33 d_force_d_dir = tension * Matrix3::Identity();
 
     // Compute moment about frame 0 origin and combine to wrench
     Matrix3 d_moment_d_force;
-    Vector3 moment = cross(h0, force, std::nullopt, d_moment_d_force);
+    Vector3 moment = cross(h0, force, std::nullopt, d_moment_d_force); // Frame 0
     
     Vector6 body;
     body << moment, force;

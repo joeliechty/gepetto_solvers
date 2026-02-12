@@ -59,7 +59,7 @@ def get_base_config():
     config.num_discs = 9
     config.num_between_nodes = 3
     config.K_inv = get_K_inv()
-    config.sigma_twist_rot = 1.0e-3
+    config.sigma_twist_rot = 1.0e-2
     config.sigma_twist_pos = 1.0e-4
     config.sigma_stress_force = 1.0e-4
     config.sigma_stress_moment = 1.0e-5

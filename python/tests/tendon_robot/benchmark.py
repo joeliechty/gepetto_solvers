@@ -10,141 +10,150 @@ def hat(v):
                      [-vy, vx,  0]])
 
 
-def pack_state(p, R, n, m):
-    return np.hstack([p, R.reshape(-1), n, m])
+def pack_state(x):
+    return np.hstack([
+        x['p'], 
+        x['R'].reshape(-1), 
+        x['n'], 
+        x['m']]
+    )
 
 
 def unpack_state(y):
-    p = y[0:3]
-    R = y[3:12].reshape(3,3)
-    n = y[12:15]
-    m = y[15:18]
-    return p, R, n, m
+    return {
+        'p': y[0:3], 
+        'R': y[3:12].reshape(3,3), 
+        'n': y[12:15], 
+        'm': y[15:18]
+    }
 
 
-def segment_dynamics(s, y, K_se_inv, K_bt_inv):
-    p, R, n, m = unpack_state(y)
+class TendonRobotSolver:
+    def __init__(self, config, holes):
+        self.K_se_inv = np.array(config.K_inv[3:,3:])
+        self.K_bt_inv = np.array(config.K_inv[:3,:3])
+        self.holes = np.array(holes)
 
-    u = K_bt_inv @ (R.T @ m)
-    v = K_se_inv @ (R.T @ n) + np.array([0, 0, 1])
+        self.num_discs = config.num_discs
+        self.s_discs = np.linspace(0, config.rod_length, config.num_discs)
 
-    p_dot = R @ v
-    R_dot = R @ hat(u)
+        # Solving for the external force at each disc, including tip force
+        self.x0 = np.zeros(6 * config.num_discs)
 
-    n_dot = np.zeros(3)
-    m_dot = -hat(p_dot) @ n
-
-    return pack_state(p_dot, R_dot, n_dot, m_dot)
-
-
-def integrate_robot(x, s_discs, K_se_inv, K_bt_inv):
-    nm0 = x[:6]
-    fl = x[6:].reshape(-1, 6)
-    f = fl[:, :3]
-    l = fl[:, 3:]
-
-    p0 = np.zeros(3)
-    R0 = np.array([[-1, 0, 0],
-                   [ 0, 0, 1],
-                   [ 0, 1, 0]])
-    n0 = nm0[:3]
-    m0 = nm0[3:]
-    y0 = pack_state(p0, R0, n0, m0)
-
-    s, p, R, n, m = [], [], [], [], []
-
-    for k in range(len(s_discs) - 1):
-        a, b = s_discs[k], s_discs[k + 1]
-
-        sol = solve_ivp(segment_dynamics, [a, b], y0, args=(K_se_inv, K_bt_inv), method='DOP853', rtol=1e-10, atol=1e-12, dense_output=True)
+    def solve(self, tensions, tip_force):
+        # Shooting method to get base states and disc forces/moment
+        sol = root(self.compute_residual, self.x0, args=(tensions, tip_force), tol=1e-12)
 
         if not sol.success:
-            raise RuntimeError(f"Integration failed: {sol.message}")
-        
-        for (s_i, state) in zip(sol.t, sol.y.T):
-            p_i, R_i, n_i, m_i = unpack_state(state)
-            s.append(s_i); p.append(p_i); R.append(R_i); n.append(n_i); m.append(m_i)
+            raise RuntimeError(f"Root finding failed: {sol.message}")
 
-        y_end = sol.sol(b)
-        p_end, R_end, n_end, m_end = unpack_state(y_end)
-        
+        # Given solution, integrate robot to get final backbone solution
+        states = self.integrate_robot(sol.x)
 
-        y0 = pack_state(p_end, R_end, n_end - f[k], m_end - l[k])
+        # Warm start next solve
+        self.x0 = sol.x
 
-    return np.array(s), np.array(p), np.array(R), np.array(n), np.array(m)
-
-
-def compute_residual(x, s_discs, K_se_inv, K_bt_inv, tensions, tip_force, holes):
-    s, p, R, n, m = integrate_robot(x, s_discs, K_se_inv, K_bt_inv)
-    f_pred, l_pred = compute_backbone_loads(s, p, R, s_discs, tensions, tip_force, holes)
-
-    fl = x[6:].reshape(-1, 6)
-    f  = fl[:, :3]
-    l  = fl[:, 3:]
-
-    e_n = n[-1] - f[-1]
-    e_m = m[-1] - l[-1]
-    e_f = (f - f_pred).reshape(-1)
-    e_l = (l - l_pred).reshape(-1)
-
-    return np.hstack([e_n, e_m, e_f, e_l])
-
-
-def compute_backbone_loads(s, p, R, s_discs, tensions, tip_force, holes):
-    dists = np.min(np.abs(s[:, None] - s_discs[None, :]), axis=0)
-
-    tol = 1e-6
-    if np.any(dists > tol):
-        raise RuntimeError(f"Disc sampling too coarse. max miss = {dists.max():.3e} m")
-
-    idxs = np.abs(s[:, None] - s_discs[None, :]).argmin(axis=0)
-    p_discs, R_discs = p[idxs], R[idxs]
-
-    f, l = [], []
-
-    for i in range(1, len(p_discs)):
-        f_i = np.zeros(3)
-        l_i = np.zeros(3)
-
-        for j in range(len(tensions)):
-            hole = R_discs[i] @ holes[i][j] + p_discs[i]
-            hole_prev = R_discs[i - 1] @ holes[i - 1][j] + p_discs[i - 1]
-            hole_diff_prev = hole_prev - hole
-            f_j = tensions[j] * hole_diff_prev / np.linalg.norm(hole_diff_prev)
+        return states
+    
+    def segment_dynamics(self, s, y):
+        state = unpack_state(y)
+        R = state['R']
+        m = state['m']
+        n = state['n']
             
-            if i + 1 < len(p_discs):
-                hole_next = R_discs[i + 1] @ holes[i + 1][j] + p_discs[i + 1]
-                hole_diff_next = hole_next - hole
-                f_j += tensions[j] * hole_diff_next / np.linalg.norm(hole_diff_next)
+        v = self.K_se_inv @ R.T @ n + np.array([0, 0, 1])
+        u = self.K_bt_inv @ R.T @ m
 
-            l_j = np.cross(hole - p_discs[i], f_j)
-            f_i += f_j; l_i += l_j
+        state_dot = {}
+        state_dot['p'] = R @ v
+        state_dot['R'] = R @ hat(u)
+        state_dot['n'] = np.zeros(3)
+        state_dot['m'] = -hat(state_dot['p']) @ n
 
-        f.append(f_i); l.append(l_i)
+        return pack_state(state_dot)
+
+    def integrate_robot(self, x):
+        # Unpack force/moment at each disc
+        fl = x.reshape(self.num_discs, 6)
+        f = fl[:, :3]
+        l = fl[:, 3:]
+
+        # Initial pose from gtsam code
+        p0 = np.zeros(3)
+        R0 = np.array([[-1, 0, 0],
+                       [ 0, 0, 1],
+                       [ 0, 1, 0]])
+        
+        # Initialize states for integration, initial stress is the base force
+        state0 = {'p': p0, 'R': R0, 'n': -f[0], 'm': -l[0]}
+        y0 = pack_state(state0)
+        disc_states = [state0]
+
+        for k in range(len(self.s_discs) - 1):
+            # Solve and get the solution only at endpoint b, the next disc
+            a, b = self.s_discs[k], self.s_discs[k + 1]
+            sol = solve_ivp(self.segment_dynamics, [a, b], y0, method='DOP853', t_eval=[b], rtol=1e-10, atol=1e-12, dense_output=True)
+
+            if not sol.success:
+                raise RuntimeError(f"Integration failed: {sol.message}")
+            
+            y_end = sol.y[:,-1]
+            state_end = unpack_state(y_end)
+
+            # Apply the disc wrench to this disc for next integration segment
+            state_end['n'] -= f[k + 1]
+            state_end['m'] -= l[k + 1]
+            
+            # Next segment gets the y for the end of this segment
+            y0 = pack_state(state_end)
+            disc_states.append(state_end)
+
+        return disc_states
     
-    f[-1] += tip_force
+    def compute_residual(self, x, tensions, tip_force):
+        # Given the force at each node x, determine poses at each node
+        disc_states = self.integrate_robot(x)
 
-    return f, l
+        # Compute the tendon wrenches for each disc given the poses (not including base disc)
+        f_pred, l_pred = self.compute_disc_wrenches(disc_states, tensions, tip_force)
 
+        fl = x.reshape(self.num_discs, 6)
+        f  = fl[:, :3]
+        l  = fl[:, 3:]
 
-def solve_kinematics_bvp(tensions, tip_force, config, holes, x0_guess=None):
-    K_se_inv = config.K_inv[3:,3:]
-    K_bt_inv = config.K_inv[:3,:3]
+        state_end = disc_states[-1]
+        
+        e_f = (f[1:] - f_pred).reshape(-1)
+        e_l = (l[1:] - l_pred).reshape(-1)
 
-    robot_length = config.rod_length
-    num_discs = config.num_discs
-    s_discs = np.linspace(0, robot_length, num_discs)
-
-    x0 = np.zeros(6 + 6*(config.num_discs - 1)) if x0_guess is None else x0_guess
-
-    def get_res(x):
-        return compute_residual(x, s_discs, K_se_inv, K_bt_inv, tensions, tip_force, holes)
-
-    sol = root(get_res, x0, tol=1e-12)
-
-    if not sol.success:
-        raise RuntimeError(f"Root finding failed: {sol.message}")
+        return np.hstack([state_end['n'], state_end['m'], e_f, e_l])
     
-    s, p, R, n, m = integrate_robot(sol.x, s_discs, K_se_inv, K_bt_inv)
-    
-    return p, sol.x
+    def compute_disc_wrenches(self, disc_states, tensions, tip_force):
+        f_discs, l_discs = [], []
+
+        for i in range(1, len(disc_states)):
+            f = np.zeros(3)
+            l = np.zeros(3)
+
+            for j in range(len(tensions)):
+                hole = disc_states[i]['R'] @ self.holes[i][j] + disc_states[i]['p']
+                hole_prev = disc_states[i - 1]['R'] @ self.holes[i - 1][j] + disc_states[i - 1]['p']
+                hole_diff_prev = hole_prev - hole
+                f_prev = tensions[j] * hole_diff_prev / np.linalg.norm(hole_diff_prev)
+                l_prev = np.cross(hole - disc_states[i]['p'], f_prev)
+                f += f_prev
+                l += l_prev
+
+                if i + 1 < len(disc_states):
+                    hole_next = disc_states[i + 1]['R'] @ self.holes[i + 1][j] + disc_states[i + 1]['p']
+                    hole_diff_next = hole_next - hole
+                    f_next = tensions[j] * hole_diff_next / np.linalg.norm(hole_diff_next)
+                    l_next = np.cross(hole - disc_states[i]['p'], f_next)
+                    f += f_next
+                    l += l_next
+
+            f_discs.append(f); l_discs.append(l)
+
+        f_discs[-1] += tip_force
+
+        return np.asarray(f_discs), np.asarray(l_discs)

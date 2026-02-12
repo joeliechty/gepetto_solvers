@@ -1,5 +1,4 @@
 import numpy as np
-np.random.seed(42)
 from scipy.spatial.transform import Rotation
 import matplotlib.pyplot as plt
 
@@ -7,39 +6,10 @@ import crest_sparse
 from .._plotting.parallel_robot_plotter import ParallelRobotPlotter
 from .._plotting.utils import setup_plt
 
+from .config import platform_z_offset, get_base_config
+
 from ..tendon_robot.utils import TipForceFunction, GaussianProcessNoiseModel
-from .baseline_model import ParallelRobotSolver
-
-
-def get_end_poses(angles, radius, z_offset):
-    xs = radius * np.cos(angles)
-    ys = radius * np.sin(angles)
-    poses = []
-    for xi, yi in zip(xs, ys):
-        pose = np.eye(4)
-        pose[0, 3] = xi
-        pose[1, 3] = yi
-        pose[2, 3] = z_offset
-        poses.append(pose)
-
-    return poses
-
-
-def get_base_poses():
-    ang = 10
-    angles = np.array(np.deg2rad([ang, 120 - ang, 120 + ang, 240 - ang, 240 + ang, -ang]))
-
-    return get_end_poses(angles, radius=0.1, z_offset=0.0)
-
-
-platform_z_offset = -0.1
-
-
-def get_tip_poses():
-    ang = 10
-    angles = np.array(np.deg2rad([60 - ang, 60 + ang, 180 - ang, 180 + ang, 300 - ang, 300 + ang]))
-
-    return get_end_poses(angles, radius=0.1, z_offset=platform_z_offset)
+from .benchmark import ParallelRobotSolver
 
 
 def get_goal_pose(t):
@@ -56,40 +26,6 @@ def get_goal_pose(t):
     return p, R
 
 
-def get_config():
-    r = 0.0015 / 2
-    I = 0.25 * np.pi * r ** 4
-    A = np.pi * r ** 2
-    J = 2 * I
-    E = 207.0e9
-    G = 79.3e9
-    
-    K_inv = np.diag([
-        1 / (E * I), 
-        1 / (E * I),
-        1 / (J * G),
-        1 / (G * A),
-        1 / (G * A),
-        1 / (E * A)
-    ])
-
-    config = crest_sparse.ParallelRobotSolverConfig()
-
-    config.base.use_dense = False
-    config.nodes_per_rod = 15
-    config.K_inv = K_inv
-    config.sigma_twist_pos = 1.0e-4
-    config.sigma_twist_rot = 1.0e-3
-    config.sigma_small_force = 1.0e-3
-    config.sigma_small_moment = 1.0e-3
-    config.base_end_poses = get_base_poses()
-    config.tip_end_poses = get_tip_poses()
-    config.sigma_end_pose_pos= 1.0e-4
-    config.sigma_end_pose_rot= 1.0e-3
-
-    return config
-
-
 def get_tip_position_baseline(solution):
     pose_ends = np.array([rod['pose'][-1] for rod in solution])  # num_rods, 4, 4
     p_ends = pose_ends[:,:3,3]
@@ -101,18 +37,17 @@ def get_tip_position_baseline(solution):
     
 
 def run_sim(
-        t_final=30.0, 
+        sim_time=30.0, 
         frame_rate=30.0, 
         rod_lengths_sigma=0.001,
         small_rod_lengths_sigma=1e-5,
         small_wrench_sigma=1e-3,
         actuator_f_meas_sigma=0.1,
         tip_force_prior_sigma=0.9,
-        tip_force_drift_sigma=0.5,
         plot=True, 
         do_baseline=True):
 
-    config = get_config()
+    config = get_base_config()
 
     # Simulator to generate actuator forces on rods
     solver_sim = crest_sparse.ParallelRobotSolver(config)
@@ -150,7 +85,7 @@ def run_sim(
     tip_force_function = TipForceFunction(max_magnitude=2 * tip_force_prior_sigma, framerate=frame_rate, seed=3)
 
     dt = 1.0 / frame_rate
-    t = np.arange(0, t_final, dt)
+    t = np.arange(0, sim_time, dt)
     rod_lengths_cmd = 0.6 * np.ones(6)
     
     small_wrench_cov = small_wrench_sigma ** 2 * np.eye(6)
@@ -158,12 +93,9 @@ def run_sim(
     f_prior_cov = tip_force_prior_sigma ** 2 * np.eye(3)
     wrench_prior_cov[3:,3:] = f_prior_cov
     wrench_prior = crest_sparse.Vector6Gaussian(np.zeros(6), wrench_prior_cov)
-    
-    f_drift_cov = tip_force_drift_sigma ** 2 * dt * np.eye(3)
-    f_prev_mean = np.zeros(3)
-    f_prev_cov = tip_force_prior_sigma ** 2 * np.eye(3)
 
-    rod_lengths_noise_model = GaussianProcessNoiseModel(6, len(t), seed=42)
+    rod_lengths_noise_model = GaussianProcessNoiseModel(6, frame_rate, sim_time, seed=0)
+    f_meas_noise_model = GaussianProcessNoiseModel(6, frame_rate, sim_time, seed=1)
     
     data = {
         'f_gt': [], 'f_mean': [], 'f_std': [], 'f_std_prior': [], 
@@ -188,29 +120,20 @@ def run_sim(
         f_meas = []
         for rod in solution_sim.marginals.rods:
             f_meas.append(rod.states[0].wrench.mean[5]) # z force on base of rod
-        f_meas = np.array(f_meas) + actuator_f_meas_sigma * np.random.randn(6)
+        f_meas = np.array(f_meas) + f_meas_noise_model.step(actuator_f_meas_sigma ** 2 * np.eye(6))
 
         # Solve prior with no measuremtns
         solution_prior = solver_prior.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_prior, None)
 
-        # Change wrench prior to use drift model
-        wrench_prev_mean = np.hstack((np.zeros(3), f_prev_mean))
-        wrench_prev_cov = small_wrench_cov.copy()
-        wrench_prev_cov[3:,3:] = f_prev_cov + f_drift_cov
-
         solution_post = solver_post.solve(
             rod_lengths_cmd, 
             rod_lengths_sigma, 
-            crest_sparse.Vector6Gaussian(wrench_prev_mean, wrench_prev_cov),
+            wrench_prior,
             crest_sparse.ActuationForceMeas(np.array(f_meas), actuator_f_meas_sigma)
         )
-        
-        wrench_post = solution_post.marginals.platform_wrench
-        f_cov = wrench_post.cov[3:,3:]
-        f_mean = wrench_post.mean[3:]
-        f_prev_mean = f_mean
-        f_prev_cov = f_cov
 
+        # Use best guess of wrench to solve the jacobian
+        wrench_post = solution_post.marginals.platform_wrench
         solution_jac = solver_jac.solve(rod_lengths_cmd, rod_lengths_sigma, wrench_post, None)
 
         # Compare to baseline model if requested
@@ -235,8 +158,8 @@ def run_sim(
 
         # Collect data, plot, display
         data['f_gt'].append(f_gt)
-        data['f_mean'].append(f_mean)
-        data['f_std'].append(np.sqrt(np.diag(f_cov)))
+        data['f_mean'].append(wrench_post.mean[3:])
+        data['f_std'].append(np.sqrt(np.diag(wrench_post.cov[3:,3:])))
         data['f_std_prior'].append(np.sqrt(np.diag(solution_prior.marginals.platform_wrench.cov[3:,3:])))
         data['p_goal'].append(p_goal)
         data['p_gt'].append(p_gt)

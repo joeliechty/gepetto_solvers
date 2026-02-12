@@ -85,6 +85,8 @@ SolutionMetadata SolverBase::optimize() {
     DoglegParams params;
     params.setLinearSolverType(config_.linear_solver_type);
     params.deltaInitial = config_.delta_initial;
+    // params.absoluteErrorTol = 1e-12;
+    // params.relativeErrorTol = 1e-12;
 
     SolutionMetadata meta;
     // If we want to use dense solver, e.g. for comparison 

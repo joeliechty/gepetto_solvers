@@ -9,29 +9,31 @@ from .config import get_base_config
 
 
 class GaussianProcessNoiseModel:
-    def __init__(self, dim, num_steps, tau=100.0, seed=None):
+    def __init__(self, dim, frame_rate, total_time, tau=0.3, seed=None):
         self.dim = dim
-        self.num_steps = num_steps
+        self.dt = 1.0 / frame_rate
+        self.num_steps = int(total_time / self.dt)
         self.tau = tau
         self.rng = np.random.default_rng(seed)
 
-        t = np.arange(num_steps)
-        t_i, t_j = np.meshgrid(t, t, indexing='ij')
-
-        K = np.exp(-0.5 * (t_i - t_j)**2 / (tau**2))
-        K += 1e-8 * np.eye(num_steps)
+        t = np.arange(self.num_steps) * self.dt
+        ti, tj = np.meshgrid(t, t, indexing='ij')
+        
+        K = np.exp(-0.5 * (ti - tj)**2 / tau**2)
+        K += 1e-8 * np.eye(self.num_steps)
 
         L = np.linalg.cholesky(K)
-        self.gp_samples = L @ self.rng.standard_normal((num_steps, dim))
 
-        self.current_step = 0
+        self.samples = L @ self.rng.standard_normal((self.num_steps, dim))
+        self.i = 0
 
     def step(self, cov):
-        sample = self.gp_samples[self.current_step]
-        L_cov = np.linalg.cholesky(cov)
-        self.current_step += 1
-        return L_cov @ sample
+        sample = self.samples[self.i]
+        self.i += 1
+        Lcov = np.linalg.cholesky(cov)
+        return Lcov @ sample
     
+
 
 def tensions_function(t):
     max_tensions = np.array([6.0, 2.0, 2.0, 2.0])

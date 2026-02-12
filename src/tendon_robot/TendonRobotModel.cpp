@@ -6,7 +6,6 @@
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <memory>
-#include <unordered_set>
 
 #include "TendonDiscWrenchFactor.h"
 #include "utils/Gaussians.h"
@@ -61,16 +60,7 @@ void TendonRobotModel::init_tendon_disc_config(TendonInput routing) {
         double s = disc_s[disc_idx];
 
         // Find closest pose index to this disc
-        int closest_pose_idx = 0;
-        double min_dist = std::abs(s - pose_s[0]);
-
-        for (int i = 1; i < num_nodes_; ++i) {
-            double dist = std::abs(s - pose_s[i]);
-            if (dist < min_dist) {
-                min_dist = dist;
-                closest_pose_idx = i;
-            }
-        }
+        int closest_pose_idx = static_cast<int>(std::round(s * (num_nodes_ - 1)));
 
         tendon_config_.disc_pose_idx.push_back(closest_pose_idx);
         std::array<Vector3, NUM_TENDONS> holes;
@@ -96,17 +86,15 @@ void TendonRobotModel::init_tendon_disc_config(TendonInput routing) {
         tendon_config_.hole_locations.push_back(holes);
     }
 
-    std::unordered_set<int> disc_pose_set(
-        tendon_config_.disc_pose_idx.begin(), 
-        tendon_config_.disc_pose_idx.end());
+    // Find all nodes that aren't associated with discs, useful later
+    std::vector<bool> is_disc(num_nodes_, false);
 
-    tendon_config_.no_disc_pose_idx.reserve(num_nodes_ - num_discs_);
+    for (int idx : tendon_config_.disc_pose_idx)
+        is_disc[idx] = true;
 
-    for (int i = 0; i < num_nodes_; ++i) {
-        if (disc_pose_set.find(i) == disc_pose_set.end()) {
+    for (int i = 0; i < num_nodes_; ++i)
+        if (!is_disc[i])
             tendon_config_.no_disc_pose_idx.push_back(i);
-        }
-    }
 }
 
 
@@ -115,7 +103,11 @@ Key TendonRobotModel::get_tensions_key() const {
 }
 
 
-Key TendonRobotModel::get_disc_wrench_key(int disc_idx) const { 
+Key TendonRobotModel::get_disc_wrench_key(int disc_idx) const {
+    // We dont ever want to include disc wrenches for base disc
+    if (disc_idx < 1)
+        throw std::out_of_range("TendonRobot: invalid disc wrench index");
+
     return Symbol('D', disc_idx); 
 }
 
@@ -166,29 +158,29 @@ NonlinearFactorGraph TendonRobotModel::build_graph(const Vector4Gaussian& tensio
         std::array<Vector3, NUM_TENDONS> holes_prev = tendon_config_.hole_locations[disc_idx - 1];
         std::array<Vector3, NUM_TENDONS> holes = tendon_config_.hole_locations[disc_idx];
 
-        // Some inputs change based on whether we are at the final disc
-        bool is_tip;
+        // Next disc variables
         int pose_idx_next; 
         std::array<Vector3, NUM_TENDONS> holes_next;
-
-        // TODO change to: bool is_tip = (disc_idx == ...)
+        
+        // They change whether or not we are at the tip (no next disc exists)
+        bool is_tip = false;
         if (disc_idx == (tendon_config_.disc_pose_idx.size() - 1)) {
             is_tip = true;
             pose_idx_next = 0; // Dummy pose for tip factor, not used for tip disc
             holes_next = tendon_config_.hole_locations[0]; // Dummy holes, not used in factor
         } else {
-            is_tip = false;
             pose_idx_next = tendon_config_.disc_pose_idx[disc_idx + 1];
             holes_next = tendon_config_.hole_locations[disc_idx + 1];
         }
-
+        
+        // Add the factor that relates poses, tensions, wrenches together for the disc
         graph.add(TendonDiscWrenchFactor(
             rod_->get_pose_key(pose_idx_prev), 
             rod_->get_pose_key(pose_idx), 
             rod_->get_pose_key(pose_idx_next), 
-            rod_->get_wrench_key(pose_idx),
+            rod_->get_wrench_key(pose_idx), // Spatial
             get_tensions_key(), 
-            get_disc_wrench_key(disc_idx),
+            get_disc_wrench_key(disc_idx), // Spatial
             is_tip, 
             holes_prev, 
             holes, 
