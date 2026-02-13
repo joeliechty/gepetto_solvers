@@ -134,7 +134,7 @@ class TendonRobotSolver:
         for i in range(1, len(disc_states)):
             f = np.zeros(3)
             l = np.zeros(3)
-
+            
             for j in range(len(tensions)):
                 hole = disc_states[i]['R'] @ self.holes[i][j] + disc_states[i]['p']
                 hole_prev = disc_states[i - 1]['R'] @ self.holes[i - 1][j] + disc_states[i - 1]['p']

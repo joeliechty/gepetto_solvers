@@ -221,6 +221,7 @@ if __name__ == "__main__":
     axes[1].plot(t, np.sqrt(np.sum(data['f_std_prior']**2, axis=1)), 'k--', label='prior')
     axes[1].plot(t, np.sqrt(np.sum(data['f_std']**2, axis=1)), 'k-', label='posterior')
     axes[1].legend(title='force (N)', frameon=False)
+    axes[1].set_xlabel('time (sec)')
 
     fig.align_ylabels()
     plt.tight_layout()
