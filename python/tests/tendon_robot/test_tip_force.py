@@ -117,16 +117,13 @@ def run_sim(
 
         # Use the sampled position as a prior on tip pose
         solution_post = solver_tracking.solve(
-            Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
+            Vector4Gaussian(tensions_cmd_current, small_tensions_cov),
             Vector6Gaussian(np.zeros(6), wrench_prior_cov),
             Vector3Gaussian(p_meas, position_meas_cov)
         )
         
         # Evaluate the Jacobian for control using the estimated tip wrench
         wrench_post = solution_post.marginals.external_wrenches[-1]
-        f_prev_mean = wrench_post.mean[3:]
-        f_prev_cov = wrench_post.cov[3:,3:]
-
         solution_jacobian = solver_jacobian.solve(
             Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
             wrench_post,

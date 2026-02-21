@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.18)
 project(crest_sparse LANGUAGES CXX)
 
+# Set release build flags for performance
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+
 set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
 find_package(GTSAM REQUIRED)

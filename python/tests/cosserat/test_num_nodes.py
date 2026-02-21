@@ -6,7 +6,7 @@ from .._plotting.cosserat_rod_plotter import CosseratRodPlotter
 from .._plotting.utils import setup_plt
 
 from .config import get_base_config
-from .baseline_model import CosseratRodBaseline
+from .benchmark import CosseratRodBaseline
 
 
 def get_tip_wrench(t):
@@ -81,40 +81,37 @@ def simulate_trajectory(num_nodes, use_midpoint=True, use_baseline=False, sim_ti
 def run_sims(num_nodes):
     baseline = simulate_trajectory(0, use_baseline=True)     
 
-    def rms_error(p):
-        E = p - baseline['p']
-        return np.sqrt(np.mean(np.sum(E**2, axis=1)))
-    
-    midpoint_rms, euler_rms = [], []
+    midpoint_error, euler_error = [], []
     for n in num_nodes:
         midpoint = simulate_trajectory(n, use_midpoint=True)    
         euler = simulate_trajectory(n, use_midpoint=False)    
 
-        midpoint_rms.append(rms_error(midpoint['p']))
-        euler_rms.append(rms_error(euler['p']))
+        midpoint_error.append(np.linalg.norm(midpoint['p'] - baseline['p'], axis=1).mean())
+        euler_error.append(np.linalg.norm(euler['p'] - baseline['p'], axis=1).mean())
     
-    return np.array(midpoint_rms), np.array(euler_rms)
+    return np.array(midpoint_error), np.array(euler_error)
 
 
 def main():
     num_nodes = np.arange(5, 75, step=1)
-    midpoint_rms, euler_rms = run_sims(num_nodes)
+    # num_nodes = np.arange(4, 74, step=10)
+    midpoint_error, euler_error = run_sims(num_nodes)
     
     # Convert to percent rod length
     config = get_base_config()
     L = config.rod_length
-    midpoint_percent = 100 * midpoint_rms / L
-    euler_percent = 100 * euler_rms / L
+    midpoint_percent = 100 * midpoint_error / L
+    euler_percent = 100 * euler_error / L
 
     setup_plt(width=2.7,height=1.8)
     plt.figure()
 
-    plt.semilogy(num_nodes, midpoint_percent, label="midpoint")
-    plt.semilogy(num_nodes, euler_percent, label="euler")
+    plt.semilogy(num_nodes, midpoint_percent, '-k', label="midpoint")
+    plt.semilogy(num_nodes, euler_percent, ':k', label="euler")
 
     plt.xlabel("number of arclength nodes")
-    plt.ylabel("RMS position error (% rod length)")
-    plt.legend()
+    plt.ylabel("tip position error (% length)")
+    plt.legend(ncol=2, columnspacing=0.2, borderpad=0.0, borderaxespad=0.2, handlelength=1.0, handletextpad=0.2)
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
