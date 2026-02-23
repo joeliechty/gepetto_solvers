@@ -10,7 +10,8 @@ struct MultiRobotMarginals {
     CosseratRodMarginals helper_rod;
     CosseratRodMarginals end_effector_rod;
 
-    // gtsam::Matrix6 tip_jacobian;
+    gtsam::Matrix6 main_base_jacobian;
+    gtsam::Matrix6 helper_base_jacobian;
 };
 
 

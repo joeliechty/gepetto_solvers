@@ -63,7 +63,7 @@ def main():
         helper_insertion = 0.5 + 0.05 * np.sin(1.2 * t)
 
         wrench = np.zeros(6)
-        wrench[3:] = tip_force_function(t)
+        # wrench[3:] = tip_force_function(t)
 
         solution = solver.solve(
             crest_sparse.Pose3Gaussian(main_base_pose_mean, base_pose_cov),

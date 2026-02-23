@@ -213,7 +213,7 @@ void TendonRobotModel::get_J_pose_tensions(const Marginals& marginals, TendonRob
 
     // Compute J_pose_tensions = sigma_TQ * inv(sigma_QQ)
     Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_QQ);
-    out.J_pose_tensions = sigma_TQ * ldlt.solve(Matrix4::Identity());
+    out.J_pose_tensions = sigma_TQ * ldlt.solve(Matrix4::Identity());  // TODO instead of computing inverse, use joint information matrices
 }
 
 

@@ -183,6 +183,7 @@ Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) cons
     Matrix6 sigma_lengths = rod_lengths_joint.block<6,6>(0,0);
     Matrix6 sigma_pose_lengths = rod_lengths_joint.block<6,6>(6,0);
 
+    // Instead of computing inverse here, we can probably get joint information
     Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
     return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
 }

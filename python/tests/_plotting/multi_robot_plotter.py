@@ -22,7 +22,7 @@ class MultiRobotPlotter:
         self.plot_tip_force = plot_tip_force
 
         rod_names = ['main', 'helper', 'end_effector']
-        rod_colors = ['royalblue', 'rebeccapurple', 'royalblue']
+        rod_colors = ['royalblue', 'seagreen', 'royalblue']
         plot_base_plate = [True, True, False]
 
         self.rod_managers = {}
