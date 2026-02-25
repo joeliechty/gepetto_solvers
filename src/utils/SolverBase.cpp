@@ -31,8 +31,7 @@ void SolverBase::optimize_dense_benchmark(const DoglegParams& params, SolutionMe
     double error;
     int iterations = 0;
 
-    // TODO a more fair comparison might include comparing SparseMatrix ldlt to gtsam elimination
-
+    // A more fair comparison might include comparing SparseMatrix ldlt to gtsam elimination
     for (int i = 0; i < params.maxIterations; i++) {
         // Linearize each factor
         auto linear = graph_.linearize(values_);

@@ -6,7 +6,8 @@
 #include "tendon_robot/TendonRobotModel.h"
 
 
-// TODO: this class uses Vector4, Matrix4, etc. in a lot of places, But should use the NUM_TENDONS variable.
+// This class uses Vector4, Matrix4, etc., so doesn't generalize to different NUM_TENDONS.
+// I'm not even sure if NoiseModels can have a general gtsam::Vector with unspecified length?
 using TendonWrenchBase = gtsam::NoiseModelFactorN<
     gtsam::Pose3, gtsam::Pose3, gtsam::Pose3, gtsam::Vector6, gtsam::Vector4, gtsam::Vector6>;
 

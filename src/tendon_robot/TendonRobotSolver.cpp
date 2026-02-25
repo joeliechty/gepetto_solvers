@@ -57,7 +57,7 @@ Solution<TendonRobotMarginals> TendonRobotSolver::solve(
 
 
 void TendonRobotSolver::build_graph() {
-    // TODO add tip force constraint if provided
+    // Build base robot graph
     graph_ = robot_->build_graph(tensions_);
 
     // Constrain all external load wrenches (except base and tip)
