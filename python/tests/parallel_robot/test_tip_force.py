@@ -178,9 +178,9 @@ def run_sim(
 
 
 if __name__ == "__main__":
-    do_baseline = True
-    plot = True
-    t, data = run_sim(do_baseline=do_baseline, plot=plot)
+    do_baseline = False
+    plot = False
+    t, data = run_sim(sim_time=10.0, do_baseline=do_baseline, plot=plot)
 
 
     color_cycle = ['r', 'g', 'b', 'c']

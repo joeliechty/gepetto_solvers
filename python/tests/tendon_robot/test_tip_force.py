@@ -162,9 +162,9 @@ def run_sim(
 
 
 if __name__ == "__main__":
-    plot = True
-    do_baseline = True
-    t, data = run_sim(plot=plot, do_baseline=do_baseline)
+    plot = False
+    do_baseline = False
+    t, data = run_sim(sim_time=30.0, plot=plot, do_baseline=do_baseline)
 
     if do_baseline:
         setup_plt()

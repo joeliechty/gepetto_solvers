@@ -150,42 +150,40 @@ ParallelRobotMarginals ParallelRobot::get_marginals(
 
 
 Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) const {
+    // Get key vector of all rod base poses
     KeyVector keys;
     for (const auto& rod : rods_) {
         keys.push_back(rod->get_pose_key(0));
     }
 
-    keys.push_back(platform_pose_key());
+    // Put the platform pose (the thing we care about) at the end
+    Key T = platform_pose_key();
+    keys.push_back(T);
+    
+    JointMarginal joint = marginals.jointMarginalCovariance(keys);
 
-    JointMarginal joint_marginal = marginals.jointMarginalCovariance(keys);
-
-    const int n = keys.size();
-    Eigen::MatrixXd rod_bases_joint = Eigen::MatrixXd::Zero(6 * n, 6 * n);
-
-    int i = 0;
-    for (Key& key_i : keys) {
-        int j = 0;
-        for (Key& key_j : keys) {
-            rod_bases_joint.block<6,6>(6 * i, 6 * j) = joint_marginal(key_i, key_j);
-            j++;
+    // How do the rod lengths vary together?
+    Matrix6 sigma_QQ = Matrix6::Zero();  
+    for (int i = 0; i < NUM_RODS; ++i) {
+        for (int j = 0; j < NUM_RODS; ++j) {
+            // Extract z translation component (index 5) from each 6×6 pose block
+            sigma_QQ(i, j) = joint(keys[i], keys[j])(5, 5);
         }
-        i++;
     }
 
-    Eigen::VectorXi indices(12);
-    indices << 5, 11, 17, 23, 29, 35, 36, 37, 38, 39, 40, 41;
+    // How is pose correllated with rod lengths?
+    Matrix6 sigma_TQ = Matrix6::Zero();
+    for (int j = 0; j < NUM_RODS; ++j) {
+        // 6×6 covariance between platform pose and rod base pose
+        Matrix6 block = joint(T, keys[j]);
 
-    Eigen::Matrix<double, 12, 12> rod_lengths_joint;
-    for (int r = 0; r < indices.size(); ++r)
-        for (int c = 0; c < indices.size(); ++c)
-            rod_lengths_joint(r, c) = rod_bases_joint(indices[r], indices[c]);
+        // Extract column corresponding to rod length (z component)
+        sigma_TQ.col(j) = block.col(5);
+    }
 
-    Matrix6 sigma_lengths = rod_lengths_joint.block<6,6>(0,0);
-    Matrix6 sigma_pose_lengths = rod_lengths_joint.block<6,6>(6,0);
-
-    // Instead of computing inverse here, we can probably get joint information
-    Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
-    return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
+    // Solve, see paper for why this works.
+    Eigen::LDLT<Matrix6> ldlt(sigma_QQ);
+    return sigma_TQ * ldlt.solve(Matrix6::Identity());
 }
 
 

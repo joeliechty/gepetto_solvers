@@ -201,19 +201,13 @@ NonlinearFactorGraph TendonRobotModel::build_graph(const Vector4Gaussian& tensio
 void TendonRobotModel::get_J_pose_tensions(const Marginals& marginals, TendonRobotMarginals& out) const{
     // Get joint marginal between tip pose and tensions
     Key Q = get_tensions_key();
-    Key T = rod_->get_pose_key(num_nodes_ - 1);
-    KeyVector keys;
-    keys.push_back(Q);
-    keys.push_back(T);
-    JointMarginal joint = marginals.jointMarginalCovariance(keys);
-
-    // Get individual blocks
-    Matrix4 sigma_QQ = joint(Q, Q);
+    Key T = rod_->get_pose_key(-1);
+    JointMarginal joint = marginals.jointMarginalCovariance({Q, T});
+    
     Matrix64 sigma_TQ = joint(T, Q);
-
-    // Compute J_pose_tensions = sigma_TQ * inv(sigma_QQ)
-    Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_QQ);
-    out.J_pose_tensions = sigma_TQ * ldlt.solve(Matrix4::Identity());  // TODO instead of computing inverse, use joint information matrices
+    Matrix4 sigma_QQ_inv = marginals.marginalInformation(Q);
+    
+    out.J_pose_tensions = sigma_TQ * sigma_QQ_inv;
 }
 
 
