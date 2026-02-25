@@ -10,8 +10,7 @@ struct MultiRobotMarginals {
     CosseratRodMarginals helper_rod;
     CosseratRodMarginals end_effector_rod;
 
-    gtsam::Matrix6 main_base_jacobian;
-    gtsam::Matrix6 helper_base_jacobian;
+    Eigen::Matrix<double, 6, 12> J_rod_bases;
 };
 
 
@@ -43,6 +42,10 @@ public:
     std::unique_ptr<CosseratRodModel> end_effector_rod_;
 
 private:
+    void get_rod_bases_jacobian(
+        const gtsam::Marginals& marginals, 
+        Eigen::Matrix<double, 6, 12>& J_rod_bases) const;
+
     const gtsam::SharedDiagonal small_wrench_noise_;
     const gtsam::SharedDiagonal snare_constraint_noise_;
     const double snare_distance_to_tip_;

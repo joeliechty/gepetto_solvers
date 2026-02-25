@@ -166,64 +166,33 @@ MultiRobotMarginals MultiRobotModel::get_marginals(
     solution.helper_rod = helper_rod_->get_marginals(values, marginals);
     solution.end_effector_rod = end_effector_rod_->get_marginals(values, marginals);
 
+    get_rod_bases_jacobian(marginals, solution.J_rod_bases);
+
     return solution;
 }
 
 
-// Matrix6 ParallelRobot::get_rod_lengths_jacobian(const Marginals& marginals) const {
-//     KeyVector keys;
-//     for (const auto& rod : rods_) {
-//         keys.push_back(rod->get_pose_key(0));
-//     }
+void MultiRobotModel::get_rod_bases_jacobian(
+    const Marginals& marginals,
+    Eigen::Matrix<double, 6, 12>& J_rod_bases) const
+{
+    Key TM = main_rod_->get_pose_key(0);
+    Key TH = helper_rod_->get_pose_key(0);
+    Key T = end_effector_rod_->get_pose_key(-1);
 
-//     keys.push_back(platform_pose_key());
+    JointMarginal joint = marginals.jointMarginalCovariance({TM, TH, T});
 
-//     JointMarginal joint_marginal = marginals.jointMarginalCovariance(keys);
+    Eigen::Matrix<double, 12, 12> sigma_QQ;
+    sigma_QQ.block<6,6>(0, 0) = joint(TM, TM);
+    sigma_QQ.block<6,6>(0, 6) = joint(TM, TH);
+    sigma_QQ.block<6,6>(6, 0) = joint(TH, TM);
+    sigma_QQ.block<6,6>(6, 6) = joint(TH, TH);
 
-//     const int n = keys.size();
-//     Eigen::MatrixXd rod_bases_joint = Eigen::MatrixXd::Zero(6 * n, 6 * n);
+    Eigen::Matrix<double, 6, 12> sigma_TQ;
+    sigma_TQ.block<6,6>(0, 0) = joint(T, TM);
+    sigma_TQ.block<6,6>(0, 6) = joint(T, TH);
 
-//     int i = 0;
-//     for (Key& key_i : keys) {
-//         int j = 0;
-//         for (Key& key_j : keys) {
-//             rod_bases_joint.block<6,6>(6 * i, 6 * j) = joint_marginal(key_i, key_j);
-//             j++;
-//         }
-//         i++;
-//     }
-
-//     Eigen::VectorXi indices(12);
-//     indices << 5, 11, 17, 23, 29, 35, 36, 37, 38, 39, 40, 41;
-
-//     Eigen::Matrix<double, 12, 12> rod_lengths_joint;
-//     for (int r = 0; r < indices.size(); ++r)
-//         for (int c = 0; c < indices.size(); ++c)
-//             rod_lengths_joint(r, c) = rod_bases_joint(indices[r], indices[c]);
-
-//     Matrix6 sigma_lengths = rod_lengths_joint.block<6,6>(0,0);
-//     Matrix6 sigma_pose_lengths = rod_lengths_joint.block<6,6>(6,0);
-
-//     Eigen::LDLT<Matrix6> ldlt(sigma_lengths);
-//     return sigma_pose_lengths * ldlt.solve(Matrix6::Identity());
-// }
-
-
-// Matrix6 ParallelRobot::get_tip_wrench_jacobian(const Marginals& marginals) const {
-//     // Get joint marginal between tip wrench and tip pose
-//     Key W = platform_wrench_key();
-//     Key T = platform_pose_key();
-
-//     KeyVector keys;
-//     keys.push_back(W);
-//     keys.push_back(T);
-//     JointMarginal joint = marginals.jointMarginalCovariance(keys);
-
-//     // Get individual blocks
-//     Matrix6 sigma_WW = joint(W, W);
-//     Matrix6 sigma_TW = joint(T, W);
-
-//     // Compute J_pose_tensions = sigma_TQ * inv(sigma_QQ)
-//     Eigen::LDLT<Eigen::MatrixXd> ldlt(sigma_WW);
-//     return sigma_TW * ldlt.solve(Matrix6::Identity());
-// }
+    Eigen::LDLT<Eigen::Matrix<double, 12, 12>> ldlt(sigma_QQ);
+    
+    J_rod_bases = sigma_TQ * ldlt.solve(Eigen::Matrix<double, 12, 12>::Identity());
+}
