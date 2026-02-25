@@ -24,7 +24,8 @@ void bind_multi_robot(py::module& m) {
         .def(py::init<>())
         .def_readwrite("main_rod", &MultiRobotMarginals::main_rod)
         .def_readwrite("helper_rod", &MultiRobotMarginals::helper_rod)
-        .def_readwrite("end_effector_rod", &MultiRobotMarginals::end_effector_rod);
+        .def_readwrite("end_effector_rod", &MultiRobotMarginals::end_effector_rod)
+        .def_readwrite("J_rod_bases", &MultiRobotMarginals::J_rod_bases);
         
     py::class_<Solution<MultiRobotMarginals>>(m, "MultiRobotSolution")
         .def(py::init<>())
