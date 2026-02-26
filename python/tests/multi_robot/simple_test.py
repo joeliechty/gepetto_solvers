@@ -22,15 +22,15 @@ def main():
     for t in np.linspace(0, 100, 1000):
         main_base_pose_mean = np.eye(4)
         main_base_pose_mean[:3,:3] = Rotation.from_rotvec([np.pi, 0, 0]).as_matrix() @ Rotation.from_rotvec([
-            0.1 * np.sin(1.1 * t), 0.1 * np.sin(1.1 * t), 0.1 * np.sin(1.1 * t)]).as_matrix()
+            0.0 * np.sin(1.1 * t), 0.0 * np.sin(1.1 * t), 1.0 * np.sin(1.1 * t)]).as_matrix()
         helper_base_pose_mean = np.eye(4)
-        helper_base_pose_mean[:3,:3] = Rotation.from_rotvec([np.pi, 0, 0]).as_matrix() @ Rotation.from_rotvec([
-            0.1 * np.sin(1.1 * t), 0.1 * np.sin(1.1 * t), 0.1 * np.sin(1.1 * t)]).as_matrix()
+        helper_base_pose_mean[:3,:3] = Rotation.from_rotvec([np.pi, 0, 0]).as_matrix() #@ Rotation.from_rotvec([
+            # 0.1 * np.sin(1.1 * t), 0.1 * np.sin(1.1 * t), 0.1 * np.sin(1.1 * t)]).as_matrix()
         
         helper_base_pose_mean[:3,3] = [0.5, 0, 0]
 
-        main_insertion = 1.0 + 0.05 * np.sin(1.1 * t)
-        helper_insertion = 0.5 + 0.05 * np.sin(1.2 * t)
+        main_insertion = 1.0 #+ 0.05 * np.sin(1.1 * t)
+        helper_insertion = 0.5 #+ 0.05 * np.sin(1.2 * t)
 
         wrench = np.zeros(6)
         # wrench[3:] = tip_force_function(t)

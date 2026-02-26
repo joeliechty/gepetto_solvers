@@ -17,6 +17,7 @@ MultiRobotSolver::MultiRobotSolver(const MultiRobotSolverConfig& config)
     SharedDiagonal small_wrench_noise = get_noise_model_rot_pos(
         config.sigma_small_moment, config.sigma_small_force); 
     
+    // TODO figure out what frame these are in
     SharedDiagonal snare_constraint_noise = noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
         1e-3, 1e-3, 1e-3, 
         1e-4, 1e-4, 1e-4).finished());

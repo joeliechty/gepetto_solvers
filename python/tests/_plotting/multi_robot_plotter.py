@@ -78,12 +78,26 @@ class MultiRobotPlotter:
             matrix = utils.get_arrow_transform(p, tip_force_gt, scale=self.force_scale)
             self.tip_force_gt_transform.SetMatrix(matrix.flatten().tolist())
 
-    def update(self, solution, tip_force_gt=None):
+    def update_p_desired(self, p):
+        if self.plotter.frame == 0:
+            mesh = pv.Sphere(radius=0.005)
+            self.p_desired_transform = vtk.vtkTransform()
+            actor = self.plotter.plotter.add_mesh(mesh, color='red', lighting=False)
+            actor.SetUserTransform(self.p_desired_transform)
+
+        matrix = np.eye(4)
+        matrix[:3,3] = p
+        self.p_desired_transform.SetMatrix(matrix.flatten().tolist())
+
+    def update(self, solution, tip_force_gt=None, p_desired=None):
         self.rod_managers['main'].update(solution.marginals.main_rod, self.plotter)
         self.rod_managers['helper'].update(solution.marginals.helper_rod, self.plotter)
         self.rod_managers['end_effector'].update(solution.marginals.end_effector_rod, self.plotter)
 
         self.update_tip_force(solution.marginals.end_effector_rod, self.plotter, tip_force_gt)
         
+        if p_desired is not None:
+            self.update_p_desired(p_desired)
+
         self.plotter.update(solution)
 

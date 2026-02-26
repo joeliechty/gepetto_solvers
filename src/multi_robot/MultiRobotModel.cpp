@@ -109,9 +109,9 @@ NonlinearFactorGraph MultiRobotModel::build_graph(
     
     // Constrain tip of helper rod to intersect perpendicularly with main rod tip 
     graph.add(BetweenFactor<Pose3>(
-        main_rod_->get_pose_key(-1),
         helper_rod_->get_pose_key(-1),
-        Pose3(Rot3::Ry(-M_PI / 2.0), Point3::Zero()),  // 90 rotation about x
+        main_rod_->get_pose_key(-1),
+        Pose3(Rot3::Ry(M_PI / 2.0), Point3::Zero()),  // 90 rotation about x
         snare_constraint_noise_));
 
     // Constrain base of EE rod to just continue on from main rod tip
