@@ -21,13 +21,14 @@ public:
         gtsam::Matrix6 K_inv,
         gtsam::SharedDiagonal twist_noise,
         gtsam::SharedDiagonal stress_noise, 
-        double snare_distance_to_tip,
-        gtsam::SharedDiagonal snare_constraint_noise);
+        gtsam::SharedDiagonal snare_constraint_noise,
+        gtsam::SharedDiagonal base_pose_noise,
+        double snare_distance_to_tip);
 
     gtsam::NonlinearFactorGraph build_graph(
-        const Pose3Gaussian& main_base_pose,
+        const gtsam::Pose3& main_base_pose,
         double main_insertion,
-        const Pose3Gaussian& helper_base_pose,
+        const gtsam::Pose3& helper_base_pose,
         double helper_insertion,
         const Vector6Gaussian& tip_wrench);
 
@@ -48,5 +49,8 @@ private:
 
     const gtsam::SharedDiagonal small_wrench_noise_;
     const gtsam::SharedDiagonal snare_constraint_noise_;
+    const gtsam::SharedDiagonal twist_noise_;
+    const gtsam::SharedDiagonal base_pose_noise_;
+    
     const double snare_distance_to_tip_;
 };

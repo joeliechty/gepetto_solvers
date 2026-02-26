@@ -9,9 +9,9 @@ from .config import get_base_config
 
 
 def get_goal_position(t):
-    A = 0.075
-    B = 0.1
-    C = 0.1
+    A = 0.1
+    B = 0.15
+    C = 0.15
     a, b, c = 0.1, 0.11, 0.12  # frequency in each axis
     delta = np.pi / 2          # phase offset
 
@@ -37,9 +37,8 @@ def main():
 
     config = get_base_config()
     solver = crest_sparse.MultiRobotSolver(config)
-    plotter = MultiRobotPlotter(plot_backbone_frames=True, camera_distance=1.7, camera_focal_point=[0.4, 0 , -0.3], camera_azimuth=-60, plot_rviz_coords=True)
+    plotter = MultiRobotPlotter(camera_distance=1.7, camera_focal_point=[0.4, 0 , -0.3], camera_azimuth=-60, plot_rviz_coords=True)
 
-    pose_cov = 1e-3 ** 2 * np.eye(6)
     wrench = crest_sparse.Vector6Gaussian(np.zeros(6), 1e-3 ** 2 * np.eye(6))
 
     p_main = np.zeros(3)
@@ -61,9 +60,9 @@ def main():
         pose_helper[:3,:3] = R_helper
 
         solution = solver.solve(
-            crest_sparse.Pose3Gaussian(pose_main, pose_cov),
+            pose_main,
             insertion_main,
-            crest_sparse.Pose3Gaussian(pose_helper, pose_cov), 
+            pose_helper, 
             insertion_helper,
             wrench
         )

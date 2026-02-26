@@ -14,11 +14,17 @@ void bind_multi_robot(py::module& m) {
         .def_readwrite("base", &MultiRobotSolverConfig::base)
         .def_readwrite("nodes_per_rod", &MultiRobotSolverConfig::nodes_per_rod)
         .def_readwrite("K_inv", &MultiRobotSolverConfig::K_inv)
-        .def_readwrite("snare_distance_to_tip", &MultiRobotSolverConfig::snare_distance_to_tip)
         .def_readwrite("sigma_twist_pos", &MultiRobotSolverConfig::sigma_twist_pos)
         .def_readwrite("sigma_twist_rot", &MultiRobotSolverConfig::sigma_twist_rot)
         .def_readwrite("sigma_small_force", &MultiRobotSolverConfig::sigma_small_force)
-        .def_readwrite("sigma_small_moment", &MultiRobotSolverConfig::sigma_small_moment);
+        .def_readwrite("sigma_small_moment", &MultiRobotSolverConfig::sigma_small_moment)
+        .def_readwrite("sigma_snare_rot_x", &MultiRobotSolverConfig::sigma_snare_rot_x)        
+        .def_readwrite("sigma_snare_rot_y", &MultiRobotSolverConfig::sigma_snare_rot_y)
+        .def_readwrite("sigma_snare_rot_z", &MultiRobotSolverConfig::sigma_snare_rot_z)
+        .def_readwrite("sigma_snare_location", &MultiRobotSolverConfig::sigma_snare_location)        
+        .def_readwrite("snare_distance_to_tip", &MultiRobotSolverConfig::snare_distance_to_tip)
+        .def_readwrite("sigma_rod_lengths", &MultiRobotSolverConfig::sigma_rod_lengths)
+        .def_readwrite("sigma_base_rot", &MultiRobotSolverConfig::sigma_base_rot);
     
     py::class_<MultiRobotMarginals>(m, "MultiRobotMarginals")
         .def(py::init<>())

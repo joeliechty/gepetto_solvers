@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <gtsam/base/Vector.h>
+#include <gtsam/linear/NoiseModel.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <memory>
@@ -47,28 +48,32 @@ public:
 };
 
 
-
 MultiRobotModel::MultiRobotModel(
     int nodes_per_rod, 
     Matrix6 K_inv,
     SharedDiagonal twist_noise,
     SharedDiagonal stress_noise,
-    double snare_distance_to_tip,
-    SharedDiagonal snare_constraint_noise)
+    SharedDiagonal snare_constraint_noise,
+    SharedDiagonal base_pose_noise,
+    double snare_distance_to_tip)
 :
     small_wrench_noise_(stress_noise),
     snare_constraint_noise_(snare_constraint_noise),
+    twist_noise_(twist_noise),
+    base_pose_noise_(base_pose_noise),
     snare_distance_to_tip_(snare_distance_to_tip)
 {
     main_rod_ = std::make_unique<CosseratRodModel>(nodes_per_rod, K_inv, twist_noise, stress_noise);
     helper_rod_ = std::make_unique<CosseratRodModel>(nodes_per_rod, K_inv, twist_noise, stress_noise);
-    end_effector_rod_ = std::make_unique<CosseratRodModel>(nodes_per_rod, K_inv, twist_noise, stress_noise);
+
+    // Note use half as many nodes for this one so it looks more even
+    end_effector_rod_ = std::make_unique<CosseratRodModel>(nodes_per_rod / 2, K_inv, twist_noise, stress_noise);
 }
 
 NonlinearFactorGraph MultiRobotModel::build_graph(
-    const Pose3Gaussian& main_base_pose,
+    const Pose3& main_base_pose,
     double main_insertion,
-    const Pose3Gaussian& helper_base_pose,
+    const Pose3& helper_base_pose,
     double helper_insertion,
     const Vector6Gaussian& tip_wrench)
 {
@@ -98,14 +103,14 @@ NonlinearFactorGraph MultiRobotModel::build_graph(
     // Main rod base pose prior
     graph.add(PriorFactor<Pose3>(
         main_rod_->get_pose_key(0),
-        Pose3(main_base_pose.mean),
-        main_base_pose.cov));
+        main_base_pose,
+        base_pose_noise_));  // could use this constructor elsewhere instead of using Gaussian
     
     // Helper rod base pose prior
     graph.add(PriorFactor<Pose3>(
         helper_rod_->get_pose_key(0),
-        Pose3(helper_base_pose.mean),
-        helper_base_pose.cov));
+        helper_base_pose,
+        base_pose_noise_));
     
     // Constrain tip of helper rod to intersect perpendicularly with main rod tip 
     graph.add(BetweenFactor<Pose3>(
@@ -115,15 +120,11 @@ NonlinearFactorGraph MultiRobotModel::build_graph(
         snare_constraint_noise_));
 
     // Constrain base of EE rod to just continue on from main rod tip
-    SharedDiagonal small_pose_noise = noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
-        1e-3, 1e-3, 1e-3, 
-        1e-4, 1e-4, 1e-4).finished());
-        
     graph.add(BetweenFactor<Pose3>(
         main_rod_->get_pose_key(-1),
         end_effector_rod_->get_pose_key(0),
         Pose3::Identity(),  // just keep going in the same direction, since its the same physical rod
-        small_pose_noise));  // TODO change noise to be small
+        twist_noise_));
     
     // Now the sum of all forces at the constraint needs to be zero
     graph.add(SnareConstraintWrenchFactor(
@@ -136,7 +137,7 @@ NonlinearFactorGraph MultiRobotModel::build_graph(
     graph.add(PriorFactor<Vector6>(
         end_effector_rod_->get_wrench_key(-1), 
         tip_wrench.mean, 
-        noiseModel::Gaussian::Covariance(tip_wrench.cov)));
+        tip_wrench.cov));
 
     return graph;
 }

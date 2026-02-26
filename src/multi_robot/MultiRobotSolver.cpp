@@ -17,18 +17,32 @@ MultiRobotSolver::MultiRobotSolver(const MultiRobotSolverConfig& config)
     SharedDiagonal small_wrench_noise = get_noise_model_rot_pos(
         config.sigma_small_moment, config.sigma_small_force); 
     
-    // TODO figure out what frame these are in
     SharedDiagonal snare_constraint_noise = noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
-        1e-3, 1e-3, 1e-3, 
-        1e-4, 1e-4, 1e-4).finished());
+        config.sigma_snare_rot_x, // In main tip frame
+        config.sigma_snare_rot_y,
+        config.sigma_snare_rot_z, 
+        config.sigma_twist_pos, // small
+        config.sigma_twist_pos, // small
+        config.sigma_snare_location
+    ).finished());
+
+    SharedDiagonal base_pose_noise = noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 
+        config.sigma_base_rot,
+        config.sigma_base_rot,
+        config.sigma_base_rot, 
+        config.sigma_twist_pos, // small
+        config.sigma_twist_pos, // small
+        config.sigma_rod_lengths
+    ).finished());
 
     robot_ = std::make_unique<MultiRobotModel>(
         config.nodes_per_rod, 
         config.K_inv,
         twist_noise,
         small_wrench_noise,
-        config.snare_distance_to_tip,
-        snare_constraint_noise);  // TODO config these
+        snare_constraint_noise,
+        base_pose_noise,
+        config.snare_distance_to_tip);  // TODO config these
 
     get_initial_values();
 }
@@ -51,15 +65,15 @@ void MultiRobotSolver::extract_solution() {
 
 
 Solution<MultiRobotMarginals> MultiRobotSolver::solve(
-    const Pose3Gaussian& main_base_pose,
+    const Matrix4& main_base_pose,
     double main_insertion,
-    const Pose3Gaussian& helper_base_pose,
+    const Matrix4& helper_base_pose,
     double helper_insertion,
     const Vector6Gaussian& tip_wrench)
 {
-    main_base_pose_ = main_base_pose;
+    main_base_pose_ = Pose3(main_base_pose);
     main_insertion_ = main_insertion;
-    helper_base_pose_ = helper_base_pose;
+    helper_base_pose_ = Pose3(helper_base_pose);
     helper_insertion_ = helper_insertion;
     tip_wrench_ = tip_wrench;
 

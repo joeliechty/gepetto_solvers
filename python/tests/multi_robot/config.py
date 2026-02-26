@@ -25,10 +25,19 @@ def get_base_config():
     config.base.use_dense = False
     config.nodes_per_rod = 15
     config.K_inv = K_inv
-    config.snare_distance_to_tip = 0.2
+
     config.sigma_twist_pos = 1.0e-4
     config.sigma_twist_rot = 1.0e-3
     config.sigma_small_force = 1.0e-3
     config.sigma_small_moment = 1.0e-3
+
+    config.sigma_snare_rot_x = 1e-1
+    config.sigma_snare_rot_y = 1e-1
+    config.sigma_snare_rot_z = 1e-1
+    config.sigma_snare_location = 1e-3
+    config.snare_distance_to_tip = 0.25
+    
+    config.sigma_rod_lengths = 1e-3
+    config.sigma_base_rot = 1e-2
 
     return config
