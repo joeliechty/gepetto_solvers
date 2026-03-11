@@ -37,7 +37,7 @@ def main():
 
     config = get_base_config()
     solver = crest_sparse.MultiRobotSolver(config)
-    plotter = MultiRobotPlotter(camera_distance=1.7, camera_focal_point=[0.4, 0 , -0.3], camera_azimuth=-60, plot_rviz_coords=True)
+    plotter = MultiRobotPlotter(save_frames_dir_name='multi_robot', camera_distance=2.25, camera_focal_point=[0.4, 0 , -0.3], camera_azimuth=-60, plot_rviz_coords=True)
 
     wrench = crest_sparse.Vector6Gaussian(np.zeros(6), 1e-3 ** 2 * np.eye(6))
 
@@ -49,7 +49,7 @@ def main():
     R_helper = R_initial.copy()
     insertion_helper = 0.5
 
-    for t in np.linspace(0, 100, 1000):
+    for t in np.linspace(0, 30, 300):
         # Assemble current poses and solve
         pose_main = np.eye(4)
         pose_main[:3,3] = p_main
