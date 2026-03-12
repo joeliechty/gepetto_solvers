@@ -104,6 +104,8 @@ private:
     const double rod_length_;
     const int num_discs_;
     const int num_nodes_;
+
+    std::vector<double> segment_lengths_;
     
     gtsam::SharedDiagonal twist_noise_;
     gtsam::SharedDiagonal stress_noise_;

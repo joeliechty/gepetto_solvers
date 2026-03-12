@@ -98,13 +98,26 @@ const std::vector<Key>& CosseratRodModel::get_pose_keys() const { return pose_ke
 
 Values CosseratRodModel::get_initial_values(
     double rod_length,
-    const Pose3& base_pose_init) const 
+    const Pose3& base_pose_init) const
 {
+    std::vector<double> ds(num_nodes_ - 1, rod_length / (num_nodes_ - 1));
+    return get_initial_values(ds, base_pose_init);
+}
+
+
+Values CosseratRodModel::get_initial_values(
+    const std::vector<double>& ds,
+    const Pose3& base_pose_init) const
+{
+    if (static_cast<int>(ds.size()) != num_nodes_ - 1)
+        throw std::runtime_error("CosseratRodModel: ds vector size mismatch");
+
     Values values;
-    double ds = rod_length / (num_nodes_ - 1);
+    double current_z = 0.0;
 
     for (int i = 0; i < num_nodes_; ++i) {
-        Vector3 p = Vector3(0, 0, ds * i);
+        if (i > 0) current_z += ds[i - 1];
+        Vector3 p = Vector3(0, 0, current_z);
         Pose3 pose = base_pose_init * Pose3(Rot3::Identity(), p);
         values.insert(pose_keys_[i], pose);
         values.insert(stress_keys_[i], Vector6(Vector6::Zero()));
@@ -119,13 +132,22 @@ Values CosseratRodModel::get_initial_values(
 
 NonlinearFactorGraph CosseratRodModel::build_graph(
     double rod_length,
-    const std::optional<Vector6>& nominal_strain) const 
+    const std::optional<Vector6>& nominal_strain) const
 {
+    std::vector<double> ds(num_nodes_ - 1, rod_length / (num_nodes_ - 1));
+    return build_graph(ds, nominal_strain);
+}
+
+
+NonlinearFactorGraph CosseratRodModel::build_graph(
+    const std::vector<double>& ds,
+    const std::optional<Vector6>& nominal_strain) const
+{
+    if (static_cast<int>(ds.size()) != num_nodes_ - 1)
+        throw std::runtime_error("CosseratRodModel: ds vector size mismatch");
+
     NonlinearFactorGraph graph;
 
-    // We can overload build_graph later to support different ds per node
-    std::vector<double> ds(num_nodes_ - 1, rod_length / (num_nodes_ - 1));
-    
     // Nominally only strain "velocity" in the linear z direction
     Vector6 straight_rod_strain = Vector6::Zero();
     straight_rod_strain[5] = 1.0;
@@ -134,43 +156,43 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
     for (int i = 0; i + 1 < num_nodes_; ++i) {
         // Poses integrate due to stresses in rod
         graph.add(CosseratTwistFactor(
-            pose_keys_[i], 
-            pose_keys_[i + 1], 
-            stress_keys_[i], 
-            stress_keys_[i + 1], 
-            ds[i], 
+            pose_keys_[i],
+            pose_keys_[i + 1],
+            stress_keys_[i],
+            stress_keys_[i + 1],
+            ds[i],
             nominal_strain ? *nominal_strain : straight_rod_strain,
-            K_inv_[i], 
+            K_inv_[i],
             twist_noise_,
             use_midpoint_));
-        
+
         // Stresses integrate due to wrenches on the rod
         Key wrench_key = (i == num_nodes_ - 2) ? dummy_wrench_key_ : wrench_keys_[i + 1];
         graph.add(CosseratStressFactor(
-            pose_keys_[i], 
-            pose_keys_[i + 1], 
-            stress_keys_[i], 
+            pose_keys_[i],
+            pose_keys_[i + 1],
+            stress_keys_[i],
             stress_keys_[i + 1],
             wrench_key,
             stress_noise_));
     }
-    
+
     // Make dummy wrench zero
     graph.add(PriorFactor<Vector6>(dummy_wrench_key_, Vector6::Zero(), stress_noise_));
-    
+
     // Constrain tip stress to be equal to tip force
     bool is_base = false;
     graph.add(BoundaryStressFactor(
-        stress_keys_.back(), 
+        stress_keys_.back(),
         wrench_keys_.back(),
         pose_keys_.back(),
         stress_noise_,
         is_base));
-    
+
     // Constrain base stress to equal base force
     is_base = true;
     graph.add(BoundaryStressFactor(
-        stress_keys_.front(), 
+        stress_keys_.front(),
         wrench_keys_.front(),
         pose_keys_.front(),
         stress_noise_,

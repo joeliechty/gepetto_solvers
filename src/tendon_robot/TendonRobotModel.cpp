@@ -91,12 +91,24 @@ void TendonRobotModel::init_tendon_disc_config(TendonInput routing, const std::v
             disc_s[i] = static_cast<double>(i) / (num_discs_ - 1);
     }
 
+    // Compute per-segment arc lengths from disc positions
+    int num_between_nodes = (num_discs_ > 1) ? (num_nodes_ - num_discs_) / (num_discs_ - 1) : 0;
+    segment_lengths_.clear();
+    segment_lengths_.reserve(num_nodes_ - 1);
+    for (int i = 0; i < num_discs_ - 1; ++i) {
+        double inter_disc_len = (disc_s[i + 1] - disc_s[i]) * rod_length_;
+        double ds_sub = inter_disc_len / (num_between_nodes + 1);
+        for (int k = 0; k < num_between_nodes + 1; ++k)
+            segment_lengths_.push_back(ds_sub);
+    }
+
     // For each disc, find the closest pose index
     for (int disc_idx = 0; disc_idx < num_discs_; ++disc_idx) {
         double s = disc_s[disc_idx];
 
-        // Find closest pose index to this disc
-        int closest_pose_idx = static_cast<int>(std::round(s * (num_nodes_ - 1)));
+        // Discs always sit at fixed structural node indices regardless of physical length.
+        // Node topology is: disc, num_between_nodes nodes, disc, ... so disc i -> node i*(num_between_nodes+1).
+        int closest_pose_idx = disc_idx * (num_between_nodes + 1);
 
         tendon_config_.disc_pose_idx.push_back(closest_pose_idx);
         std::array<Vector3, NUM_TENDONS> holes;
@@ -164,7 +176,7 @@ Key TendonRobotModel::get_external_wrench_key(int node_idx) const {
 Values TendonRobotModel::get_initial_values() const {
     Values values;
 
-    values.insert(rod_->get_initial_values(rod_length_));
+    values.insert(rod_->get_initial_values(segment_lengths_));
     
     Eigen::Vector<double, NUM_TENDONS> zero = Eigen::Vector<double, NUM_TENDONS>::Zero();
     values.insert(get_tensions_key(), zero);
@@ -182,7 +194,7 @@ NonlinearFactorGraph TendonRobotModel::build_graph(const Vector4Gaussian& tensio
     // To fully constrain a Cosserat rod graph, all we need to do is add:
     //   1. Base pose prior constraint
     //   2. All wrenches except base wrench need to be constrained somehow
-    NonlinearFactorGraph graph = rod_->build_graph(rod_length_);
+    NonlinearFactorGraph graph = rod_->build_graph(segment_lengths_);
     
     // Base frame prior constraint
     graph.add(PriorFactor<Pose3>(rod_->get_pose_key(0), base_pose_mean_, base_pose_noise_));

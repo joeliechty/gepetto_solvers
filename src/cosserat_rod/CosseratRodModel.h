@@ -46,8 +46,16 @@ public:
         double rod_length,
         const std::optional<gtsam::Vector6>& nominal_strain = std::nullopt) const;
 
+    gtsam::NonlinearFactorGraph build_graph(
+        const std::vector<double>& ds,
+        const std::optional<gtsam::Vector6>& nominal_strain = std::nullopt) const;
+
     gtsam::Values get_initial_values(
         double rod_length = 0, 
+        const gtsam::Pose3& base_pose_init = gtsam::Pose3::Identity()) const;
+
+    gtsam::Values get_initial_values(
+        const std::vector<double>& ds,
         const gtsam::Pose3& base_pose_init = gtsam::Pose3::Identity()) const;
 
     CosseratRodMarginals get_marginals(

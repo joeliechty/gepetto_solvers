@@ -13,13 +13,13 @@ def main():
     # Define finger structure with bone and joint lengths
     # Each bone gets discs at start/end, joints are sandwiched between discs
     bone_joint_spec = [
-        ("bone", 0.05),   # 3cm bone
-        ("joint", 0.01), # 2mm joint
-        ("bone", 0.05),   # 3cm bone
-        ("joint", 0.01), # 2mm joint
-        ("bone", 0.05),   # 2cm bone
-        ("joint", 0.01), # 2mm joint
-        ("bone", 0.05),   # 2cm bone
+        ("bone", 0.05),     # metacarpal
+        ("joint", 0.01),    # metacarpophalangeal (MCP) joint
+        ("bone", 0.05),     # proximal phalanx
+        ("joint", 0.01),    # proximal interphalangeal (PIP) joint
+        ("bone", 0.03),     # middle phalanx
+        ("joint", 0.01),    # distal interphalangeal (DIP) joint
+        ("bone", 0.02),     # distal phalanx
     ]
     
     # Build disc positions and get segment types
@@ -55,7 +55,7 @@ def main():
         # Tendon 0 (0°): constant background tension
         tensions_mean[0] = background_tension
         # Tendons 1 (90°): primary actuator - varies
-        tensions_mean[1] = background_tension + 5.0 * (np.pi/2. + np.cos(0.01 * i))
+        tensions_mean[1] = background_tension + 7.0 * (np.cos(0.01 * i - np.pi) + 1)
         # Tendons 2-3 (180°, 270°): constant background tension
         tensions_mean[2] = background_tension 
         tensions_mean[3] = background_tension 
