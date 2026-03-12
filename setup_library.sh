@@ -11,7 +11,7 @@ conda install -c conda-forge cmake eigen pybind11 boost numpy scipy matplotlib -
 cd ~/git_repos
 git clone https://github.com/borglab/gtsam.git
 cd gtsam
-git checkout 4.2  # match the version you need
+git checkout 4.3a1  # match the version you need
 mkdir build && cd build
 cmake .. \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
