@@ -34,7 +34,7 @@ def main():
         num_discs=config.num_discs,
         num_between_nodes=config.num_between_nodes,
         segment_types=segment_types,
-        bone_stiffness_scale=1e-4  # Relaxed from 1e-6 to avoid ill-conditioning
+        bone_stiffness_scale=1e-6  # Relaxed from 1e-6 to avoid ill-conditioning
     )
     
     solver = crest_sparse.TendonRobotSolver(config)
@@ -55,7 +55,7 @@ def main():
         # Tendon 0 (0°): constant background tension
         tensions_mean[0] = background_tension
         # Tendons 1 (90°): primary actuator - varies
-        tensions_mean[1] = background_tension + 7.0 * (np.cos(0.01 * i - np.pi) + 1)
+        tensions_mean[1] = background_tension + 5.0 * (np.cos(0.01 * i - np.pi) + 1)
         # Tendons 2-3 (180°, 270°): constant background tension
         tensions_mean[2] = background_tension 
         tensions_mean[3] = background_tension 

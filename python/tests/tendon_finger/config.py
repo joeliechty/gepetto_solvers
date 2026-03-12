@@ -4,7 +4,7 @@ from crest_sparse import TendonRobotSolverConfig, TendonInput, RoutingAngleFunct
 
 
 def get_K_inv():
-    rod_diameter = 0.0012
+    rod_diameter = 0.000512
     youngs_modulus = 40.0e9
     shear_modulus = 15.0e9 
     
