@@ -35,13 +35,13 @@ def main():
         solution = solver.solve(tensions, tip_wrench, None)
         plotter.update(solution)
 
-        solution_baseline = solver_baseline.solve(tensions_mean, tip_wrench_mean[3:])
-        p_baseline = solution_baseline[-1]['p']
-        p_gt = solution.marginals.rod.states[-1].pose.mean[:3,3]
+        # solution_baseline = solver_baseline.solve(tensions_mean, tip_wrench_mean[3:])
+        # p_baseline = solution_baseline[-1]['p']
+        # p_gt = solution.marginals.rod.states[-1].pose.mean[:3,3]
 
-        print("p_gt: ", p_gt)
-        print("p_baseline: ", p_baseline)
-        print(f"baseline error: {np.linalg.norm(p_baseline - p_gt)}")
+        # print("p_gt: ", p_gt)
+        # print("p_baseline: ", p_baseline)
+        # print(f"baseline error: {np.linalg.norm(p_baseline - p_gt)}")
 
 
 

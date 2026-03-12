@@ -20,4 +20,5 @@ make_vid () {
 
 # make_vid frames/both_ends_clamped
 # make_vid frames/cosserat_shell
-make_vid frames/cosserat_dynamics
+# make_vid frames/cosserat_dynamics
+make_vid frames/multi_robot
