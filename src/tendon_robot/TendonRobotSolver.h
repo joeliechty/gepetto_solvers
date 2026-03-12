@@ -14,6 +14,19 @@ struct TendonRobotSolverConfig{
     int num_between_nodes;
     gtsam::Matrix6 K_inv;
 
+    // Optional: per-segment compliance matrices (one per rod segment).
+    // If non-empty, overrides K_inv. Must have exactly
+    // (num_discs + (num_discs-1)*num_between_nodes - 1) entries.
+    // Set near-zero (e.g. 1e-12 * I) for rigid "bone" segments,
+    // and the normal K_inv value for flexible "joint" segments.
+    std::vector<gtsam::Matrix6> K_inv_per_segment;
+
+    // Optional: custom disc positions along the rod (normalized 0 to 1).
+    // If non-empty, must have exactly num_discs entries.
+    // First entry should be 0.0, last entry should be 1.0.
+    // If empty, discs are uniformly spaced.
+    std::vector<double> disc_positions_normalized;
+
     double sigma_twist_rot;
     double sigma_twist_pos;
     double sigma_stress_force;

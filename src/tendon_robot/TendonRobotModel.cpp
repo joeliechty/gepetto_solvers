@@ -22,7 +22,8 @@ TendonRobotModel::TendonRobotModel(
     SharedDiagonal twist_noise,
     SharedDiagonal stress_noise,
     Pose3 base_pose_mean,
-    SharedDiagonal base_pose_noise)
+    SharedDiagonal base_pose_noise,
+    const std::vector<double>& disc_positions_normalized)
 :
     rod_length_(rod_length),
     num_discs_(num_discs),
@@ -35,11 +36,38 @@ TendonRobotModel::TendonRobotModel(
     rod_ = std::make_unique<CosseratRodModel>(
         num_nodes_, K_inv, twist_noise, stress_noise);
 
-    init_tendon_disc_config(tendon_input);
+    init_tendon_disc_config(tendon_input, disc_positions_normalized);
 }
 
 
-void TendonRobotModel::init_tendon_disc_config(TendonInput routing) {
+TendonRobotModel::TendonRobotModel(
+    double rod_length,
+    int num_discs,
+    int num_between_nodes,
+    TendonInput tendon_input,
+    const std::vector<Matrix6>& K_inv_per_segment,
+    SharedDiagonal twist_noise,
+    SharedDiagonal stress_noise,
+    Pose3 base_pose_mean,
+    SharedDiagonal base_pose_noise,
+    const std::vector<double>& disc_positions_normalized)
+:
+    rod_length_(rod_length),
+    num_discs_(num_discs),
+    num_nodes_(num_discs + (num_discs - 1) * num_between_nodes),
+    twist_noise_(twist_noise),
+    stress_noise_(stress_noise),
+    base_pose_mean_(base_pose_mean),
+    base_pose_noise_(base_pose_noise)
+{
+    rod_ = std::make_unique<CosseratRodModel>(
+        num_nodes_, K_inv_per_segment, twist_noise, stress_noise);
+
+    init_tendon_disc_config(tendon_input, disc_positions_normalized);
+}
+
+
+void TendonRobotModel::init_tendon_disc_config(TendonInput routing, const std::vector<double>& disc_positions_normalized) {
     tendon_config_.num_discs = num_discs_;
     tendon_config_.disc_pose_idx.reserve(num_discs_);
     tendon_config_.routing_radius = routing.routing_radius;
@@ -52,8 +80,16 @@ void TendonRobotModel::init_tendon_disc_config(TendonInput routing) {
     for (int i = 0; i < num_nodes_; ++i)
         pose_s[i] = static_cast<double>(i) / (num_nodes_ - 1);
 
-    for (int i = 0; i < num_discs_; ++i)
-        disc_s[i] = static_cast<double>(i) / (num_discs_ - 1);
+    // Use custom disc positions if provided, otherwise uniform spacing
+    if (!disc_positions_normalized.empty()) {
+        if (static_cast<int>(disc_positions_normalized.size()) != num_discs_)
+            throw std::invalid_argument(
+                "TendonRobotModel: disc_positions_normalized must have exactly num_discs entries");
+        disc_s = disc_positions_normalized;
+    } else {
+        for (int i = 0; i < num_discs_; ++i)
+            disc_s[i] = static_cast<double>(i) / (num_discs_ - 1);
+    }
 
     // For each disc, find the closest pose index
     for (int disc_idx = 0; disc_idx < num_discs_; ++disc_idx) {

@@ -24,16 +24,31 @@ TendonRobotSolver::TendonRobotSolver(const TendonRobotSolverConfig& config)
     SharedDiagonal base_pose_noise = get_noise_model_rot_pos(
         config.sigma_base_rot, config.sigma_base_pos);
     
-    robot_ = std::make_unique<TendonRobotModel>(
-        config.rod_length,
-        config.num_discs,
-        config.num_between_nodes,
-        config.tendon_input,
-        config.K_inv, 
-        twist_noise,
-        small_wrench_noise_,
-        base_pose_mean,
-        base_pose_noise);
+    if (config.K_inv_per_segment.empty()) {
+        robot_ = std::make_unique<TendonRobotModel>(
+            config.rod_length,
+            config.num_discs,
+            config.num_between_nodes,
+            config.tendon_input,
+            config.K_inv,
+            twist_noise,
+            small_wrench_noise_,
+            base_pose_mean,
+            base_pose_noise,
+            config.disc_positions_normalized);
+    } else {
+        robot_ = std::make_unique<TendonRobotModel>(
+            config.rod_length,
+            config.num_discs,
+            config.num_between_nodes,
+            config.tendon_input,
+            config.K_inv_per_segment,
+            twist_noise,
+            small_wrench_noise_,
+            base_pose_mean,
+            base_pose_noise,
+            config.disc_positions_normalized);
+    }
 
     get_initial_values();
 }

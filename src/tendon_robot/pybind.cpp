@@ -41,6 +41,8 @@ void bind_tendon_robot(py::module& m) {
         .def_readwrite("num_discs", &TendonRobotSolverConfig::num_discs)
         .def_readwrite("num_between_nodes", &TendonRobotSolverConfig::num_between_nodes)
         .def_readwrite("K_inv", &TendonRobotSolverConfig::K_inv)
+        .def_readwrite("K_inv_per_segment", &TendonRobotSolverConfig::K_inv_per_segment)
+        .def_readwrite("disc_positions_normalized", &TendonRobotSolverConfig::disc_positions_normalized)
         .def_readwrite("sigma_twist_rot", &TendonRobotSolverConfig::sigma_twist_rot)
         .def_readwrite("sigma_twist_pos", &TendonRobotSolverConfig::sigma_twist_pos)
         .def_readwrite("sigma_stress_force", &TendonRobotSolverConfig::sigma_stress_force)

@@ -32,6 +32,16 @@ public:
         gtsam::SharedDiagonal stress_noise,
         bool use_midpoint = true);
 
+    // Per-segment stiffness: K_inv_per_segment must have exactly num_nodes - 1 entries.
+    // Use a near-zero matrix (e.g. 1e-12 * I) for effectively rigid "bone" segments
+    // and the normal K_inv for flexible "joint" segments.
+    CosseratRodModel(
+        int num_nodes,
+        const std::vector<gtsam::Matrix6>& K_inv_per_segment,
+        gtsam::SharedDiagonal twist_noise,
+        gtsam::SharedDiagonal stress_noise,
+        bool use_midpoint = true);
+
     gtsam::NonlinearFactorGraph build_graph(
         double rod_length,
         const std::optional<gtsam::Vector6>& nominal_strain = std::nullopt) const;

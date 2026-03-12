@@ -62,7 +62,21 @@ public:
         gtsam::SharedDiagonal twist_noise,
         gtsam::SharedDiagonal stress_noise,
         gtsam::Pose3 base_pose_mean,
-        gtsam::SharedDiagonal base_pose_noise);
+        gtsam::SharedDiagonal base_pose_noise,
+        const std::vector<double>& disc_positions_normalized = {});
+
+    // Per-segment compliance: K_inv_per_segment must have (num_discs + (num_discs-1)*num_between_nodes - 1) entries.
+    TendonRobotModel(
+        double rod_length,
+        int num_discs,
+        int num_between_nodes,
+        TendonInput tendon_input,
+        const std::vector<gtsam::Matrix6>& K_inv_per_segment,
+        gtsam::SharedDiagonal twist_noise,
+        gtsam::SharedDiagonal stress_noise,
+        gtsam::Pose3 base_pose_mean,
+        gtsam::SharedDiagonal base_pose_noise,
+        const std::vector<double>& disc_positions_normalized = {});
         
     gtsam::Values get_initial_values() const;
 
@@ -83,7 +97,7 @@ public:
     std::unique_ptr<CosseratRodModel> rod_;
     
 private:
-    void init_tendon_disc_config(TendonInput tendon_input);
+    void init_tendon_disc_config(TendonInput tendon_input, const std::vector<double>& disc_positions_normalized = {});
     
     void get_J_pose_tensions(const gtsam::Marginals& marginals, TendonRobotMarginals& out) const;
 

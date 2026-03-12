@@ -21,7 +21,6 @@ CosseratRodModel::CosseratRodModel (
     stress_noise_(stress_noise),
     use_midpoint_(use_midpoint)
 {
-    // K_inv_ is node dependent if we want to add a constructor for this
     K_inv_ = std::vector<Matrix6>(num_nodes - 1, K_inv);
 
     pose_keys_.reserve(num_nodes_);
@@ -35,6 +34,39 @@ CosseratRodModel::CosseratRodModel (
     }
     
     dummy_wrench_key_ = Symbol('F', 1000 * id_ + 999); 
+}
+
+
+CosseratRodModel::CosseratRodModel (
+    int num_nodes,
+    const std::vector<Matrix6>& K_inv_per_segment,
+    SharedDiagonal twist_noise,
+    SharedDiagonal stress_noise,
+    bool use_midpoint)
+:
+    id_(next_id_++),
+    num_nodes_(num_nodes),
+    twist_noise_(twist_noise),
+    stress_noise_(stress_noise),
+    use_midpoint_(use_midpoint)
+{
+    if (static_cast<int>(K_inv_per_segment.size()) != num_nodes - 1)
+        throw std::invalid_argument(
+            "CosseratRodModel: K_inv_per_segment must have exactly num_nodes - 1 entries");
+
+    K_inv_ = K_inv_per_segment;
+
+    pose_keys_.reserve(num_nodes_);
+    stress_keys_.reserve(num_nodes_);
+    wrench_keys_.reserve(num_nodes_);
+
+    for (int i = 0; i < num_nodes_; i++) {
+        pose_keys_.push_back(  Symbol('T', 1000 * id_ + i));
+        stress_keys_.push_back(Symbol('S', 1000 * id_ + i));
+        wrench_keys_.push_back(Symbol('F', 1000 * id_ + i));
+    }
+
+    dummy_wrench_key_ = Symbol('F', 1000 * id_ + 999);
 }
 
 
