@@ -40,7 +40,7 @@ def compute_tensions(finger_name, finger_idx, frame_idx, mode, num_tendons=6):
         phase += 0.5
 
     # Tendon 5 is the active flexor (at 180 deg), oscillates 0.5 to 2.5 N
-    tensions[5] = background_tension + 1.0 * (np.cos(phase) + 1)
+    tensions[5] = background_tension + 2.0 * (np.cos(phase) + 1)
 
     return tensions
 
@@ -72,6 +72,8 @@ def main(mode="wave", PLOT=False):
         camera_elevation=20,
         camera_focal_point=[0, 0.08, 0],
         camera_distance=0.6,
+        window_size=(1200, 1200),
+        plot_collision_spheres=True,
     )
 
     plotter2 = TendonHandPlotter(
@@ -82,6 +84,8 @@ def main(mode="wave", PLOT=False):
         camera_elevation=20,
         camera_focal_point=[0, 0.08, 0],
         camera_distance=0.6,
+        window_size=(1200, 1200),
+        plot_collision_spheres=True,
     )
 
     num_tendons = 6
@@ -95,7 +99,7 @@ def main(mode="wave", PLOT=False):
 
 
     for i in range(1000):
-        if i % 100 == 0:
+        if i % 50 == 0:
             print(f"Iteration {i}/1000")
 
         # Collect tensions and tip wrenches for all fingers
@@ -130,5 +134,9 @@ def main(mode="wave", PLOT=False):
     print(f"Completed 1000 iterations in {end_time - start_time:.2f} seconds.")
 
 if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "wave"
-    main(mode=mode)
+
+    main(
+        mode="sync",
+        # mode="wave",
+        PLOT=True
+        )

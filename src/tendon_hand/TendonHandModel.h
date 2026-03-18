@@ -23,7 +23,9 @@ public:
 
     gtsam::NonlinearFactorGraph build_graph(
         const std::vector<VectorXGaussian>& tensions,
-        const std::vector<Vector6Gaussian>& tip_wrenches);
+        const std::vector<Vector6Gaussian>& tip_wrenches,
+        const gtsam::Values& current_values
+    );
 
     gtsam::Values get_initial_values() const;
 

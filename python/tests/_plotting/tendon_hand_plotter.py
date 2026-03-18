@@ -12,6 +12,43 @@ TENDON_COLORS = [
 ]
 
 
+class CollisionSphereMeshManager:
+    """Manages collision sphere meshes for all fingers."""
+
+    def __init__(self, collision_radius=0.005, sphere_color="limegreen", sphere_opacity=0.3):
+        self.collision_radius = collision_radius
+        self.sphere_color = sphere_color
+        self.sphere_opacity = sphere_opacity
+        self.sphere_transforms = {}  # finger_name -> list of vtkTransform
+
+    def update(self, finger_name, solution, plotter):
+        """Update collision spheres for a single finger."""
+        num_nodes = len(solution.marginals.rod.states)
+
+        if plotter.frame == 0:
+            self.sphere_transforms[finger_name] = []
+            for _ in range(num_nodes):
+                transform = vtk.vtkTransform()
+                sphere = pv.Sphere(radius=self.collision_radius)
+                actor = plotter.plotter.add_mesh(
+                    sphere,
+                    color=self.sphere_color,
+                    opacity=self.sphere_opacity,
+                    lighting=True,
+                )
+                actor.SetUserTransform(transform)
+                self.sphere_transforms[finger_name].append(transform)
+
+        # Update transforms for each node
+        transforms = self.sphere_transforms[finger_name]
+        for i, state in enumerate(solution.marginals.rod.states):
+            pose = state.pose.mean
+            # Create a transform that positions the sphere at the node location
+            T = np.eye(4)
+            T[:3, 3] = pose[:3, 3]
+            transforms[i].SetMatrix(T.flatten().tolist())
+
+
 class TendonMeshManager:
     """Manages tendon line meshes and disc meshes for a single finger.
 
@@ -134,6 +171,10 @@ class TendonHandPlotter:
                  plot_backbone_ellipsoids=True,
                  plot_world_axes=True,
                  world_axes_scale=0.03,
+                 plot_collision_spheres=False,
+                 collision_sphere_radius=0.005,
+                 collision_sphere_color="limegreen",
+                 collision_sphere_opacity=0.3,
                  **kwargs):
 
         if camera_focal_point is None:
@@ -151,6 +192,13 @@ class TendonHandPlotter:
         self.plot_world_axes = plot_world_axes
         self.world_axes_scale = world_axes_scale
         self._world_axes_added = False
+
+        self.plot_collision_spheres = plot_collision_spheres
+        self.collision_sphere_manager = CollisionSphereMeshManager(
+            collision_radius=collision_sphere_radius,
+            sphere_color=collision_sphere_color,
+            sphere_opacity=collision_sphere_opacity,
+        ) if plot_collision_spheres else None
 
         self.rod_managers = {}
         self.tendon_managers = {}
@@ -203,6 +251,9 @@ class TendonHandPlotter:
             self.rod_managers[name].update(
                 solution.marginals.rod, self.plotter)
             self.tendon_managers[name].update(solution, self.plotter)
+
+            if self.collision_sphere_manager is not None:
+                self.collision_sphere_manager.update(name, solution, self.plotter)
 
         if self.plot_world_axes and not self._world_axes_added:
             self._add_world_axes()

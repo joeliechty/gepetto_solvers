@@ -137,6 +137,8 @@ public:
 
     inline int get_num_nodes() const { return num_nodes_; }
 
+    inline int get_num_between_nodes() const { return num_between_nodes_; }
+
     TendonRobotMarginals get_marginals(
         const gtsam::Values& values,
         const gtsam::Marginals& marginals) const;
@@ -158,6 +160,7 @@ private:
     const double rod_length_;
     const int num_discs_;
     const int num_nodes_;
+    const int num_between_nodes_;
 
     std::vector<double> segment_lengths_;
 

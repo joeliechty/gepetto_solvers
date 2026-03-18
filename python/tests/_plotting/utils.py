@@ -116,14 +116,15 @@ def get_arrow_transform(p, vec, scale=1.0):
 
 class PlotterBase:
     def __init__(self,
-                 save_frames_dir_name=None, 
+                 save_frames_dir_name=None,
                  single_plot_mode=False,
                  plot_rviz_coords=False,
                  camera_focal_point=None,
                  camera_azimuth=15,
                  camera_elevation=20,
-                 camera_distance=0.6):
-        
+                 camera_distance=0.6,
+                 window_size=(1200, 1200)):
+
         self.save_frames_dir_name = save_frames_dir_name
         self.single_plot_mode = single_plot_mode
         self.plot_rviz_coords = plot_rviz_coords
@@ -132,7 +133,7 @@ class PlotterBase:
             self.camera_focal_point = np.zeros(3)
         else:
             self.camera_focal_point = camera_focal_point
-        
+
         self.camera_azimuth = camera_azimuth
         self.camera_elevation = camera_elevation
         self.camera_distance = camera_distance
@@ -142,7 +143,7 @@ class PlotterBase:
             shutil.rmtree(self.frames_path, ignore_errors=True)
             self.frames_path.mkdir(parents=True, exist_ok=True)
 
-        self.window_size = (4000, 4000)
+        self.window_size = window_size
         self.plotter = pv.Plotter(window_size=self.window_size, off_screen=save_frames_dir_name)
         self.frame = 0
         self.solve_time_ms_history = []

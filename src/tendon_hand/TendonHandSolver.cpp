@@ -25,7 +25,7 @@ void TendonHandSolver::get_initial_values() {
 
 
 void TendonHandSolver::build_graph() {
-    graph_ = hand_->build_graph(tensions_, tip_wrenches_);
+    graph_ = hand_->build_graph(tensions_, tip_wrenches_, values_);
 }
 
 

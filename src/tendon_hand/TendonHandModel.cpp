@@ -1,6 +1,7 @@
 #include "TendonHandModel.h"
 #include "tendon_robot/TendonRobotSolver.h"
 #include "utils/MiscInline.h"
+#include "SphereContactFactor.h"
 
 #include <gtsam/slam/PriorFactor.h>
 
@@ -233,7 +234,8 @@ TendonHandModel::TendonHandModel(
 
 NonlinearFactorGraph TendonHandModel::build_graph(
     const std::vector<VectorXGaussian>& tensions,
-    const std::vector<Vector6Gaussian>& tip_wrenches)
+    const std::vector<Vector6Gaussian>& tip_wrenches,
+    const Values& current_values)
 {
     if (tensions.size() != fingers_.size())
         throw std::invalid_argument(
@@ -284,8 +286,90 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         }, fingers_[i]);
     }
 
-    // TODO: Add coupling constraints between fingers here in the future
-    // e.g., contact constraints, palm constraints, etc.
+    // ----- Collision avoidance factors -----
+    // want the contact to act like a very stiff spring so will use sigma of 1e-4
+    auto contact_noise = noiseModel::Isotropic::Sigma(1, 1e-4);
+    double radius = 0.005;      // TODO: 5mm radius for collision spheres, make this something that is passed in
+    double broad_phase_dist = 0.02;    // only add factor if we are within 2cm of the contact point
+
+    // helper lambdas to cleanly extract data from the std::variant finger array
+    auto get_num_nodes = [&](int f_idx) -> int {
+        int n = 0;
+        std::visit([&](const auto& ptr){n = ptr->get_num_nodes();}, fingers_[f_idx]);
+        return n;
+    };
+    auto get_pose_key = [&](int f_idx, int n_idx) -> Key {
+        Key k;
+        std::visit([&](const auto& ptr){k = ptr->rod_->get_pose_key(n_idx);}, fingers_[f_idx]);
+        return k;
+    };
+    auto get_num_between_nodes = [&](int f_idx) -> int {
+        int n = 0;
+        std::visit([&](const auto& ptr){n = ptr->get_num_between_nodes();}, fingers_[f_idx]);
+        return n;
+    };
+
+    // Check if a node is in a joint segment. Joints are rolling articulation points
+    // between bones with no physical material to collide. In the standard finger
+    // pattern (bone-joint-bone-joint-bone-joint-bone), joint segments are at odd
+    // disc gaps (1, 3, 5, ...).
+    auto is_in_joint_segment = [](int node_idx, int num_between_nodes) -> bool {
+        int nodes_per_segment = num_between_nodes + 1;
+        int segment_idx = node_idx / nodes_per_segment;
+        // Odd segments (1, 3, 5, ...) are joints
+        return (segment_idx % 2) == 1;
+    };
+
+    // iterate over all pairs of fingers (not including self collision)
+    for (size_t f1=0; f1 < fingers_.size(); ++f1){
+        for (size_t f2=f1+1; f2 < fingers_.size(); ++f2){
+
+            int nodes_f1 = get_num_nodes(f1);
+            int nodes_f2 = get_num_nodes(f2);
+            int between_nodes_f1 = get_num_between_nodes(f1);
+            int between_nodes_f2 = get_num_between_nodes(f2);
+
+            // The first bone segment (metacarpal) is rigidly attached to the base
+            // and cannot collide with other metacarpals. The number of nodes in the
+            // first segment is (num_between_nodes + 1).
+            int metacarpal_nodes_f1 = between_nodes_f1 + 1;
+            int metacarpal_nodes_f2 = between_nodes_f2 + 1;
+
+            for (int n1 = 0; n1 < nodes_f1; ++n1){
+
+                // Skip nodes in joint segments (no physical material to collide)
+                if (is_in_joint_segment(n1, between_nodes_f1)) {
+                    continue;
+                }
+
+                for (int n2 = 0; n2 < nodes_f2; ++n2){
+
+                    // Skip nodes in joint segments
+                    if (is_in_joint_segment(n2, between_nodes_f2)) {
+                        continue;
+                    }
+
+                    // Skip collision checks when BOTH nodes are in the metacarpal region
+                    // (these are fixed bones that cannot move relative to each other)
+                    if (n1 < metacarpal_nodes_f1 && n2 < metacarpal_nodes_f2) {
+                        continue;
+                    }
+
+                    Key k1 = get_pose_key(f1, n1);
+                    Key k2 = get_pose_key(f2, n2);
+
+                    if (current_values.exists(k1) && current_values.exists(k2)) {
+                        Pose3 p1 = current_values.at<Pose3>(k1);
+                        Pose3 p2 = current_values.at<Pose3>(k2);
+
+                        if (gtsam::distance3(p1.translation(), p2.translation()) < broad_phase_dist) {
+                            graph.add(crest_sparse::SphereContactFactor(k1, k2, radius, radius, contact_noise));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     return graph;
 }
