@@ -1,5 +1,6 @@
 import sys
 import numpy as np
+import time
 
 import crest_sparse
 from .._plotting.tendon_hand_plotter import TendonHandPlotter
@@ -44,11 +45,24 @@ def compute_tensions(finger_name, finger_idx, frame_idx, mode, num_tendons=6):
     return tensions
 
 
-def main(mode="wave"):
+def main(mode="wave", PLOT=False):
+
+    print(f"Running tendon hand test in '{mode}' mode. Press Ctrl+C to exit.")
+    start_time = time.time()
     configs = get_hand_config(num_fingers=4, thumb_side="left")
     finger_names = [name for name, _ in configs]
 
-    solvers = {name: crest_sparse.TendonRobotSolver(cfg) for name, cfg in configs}
+    end_time = time.time()
+    print(f"Loaded configs for {len(configs)} fingers in {end_time - start_time:.2f} seconds.")
+    start_time = end_time
+
+    # Create combined hand solver with all finger configurations
+    hand_solver_config = crest_sparse.TendonHandSolverConfig()
+    hand_solver = crest_sparse.TendonHandSolver(configs, hand_solver_config)
+
+    end_time = time.time()
+    print(f"Initialized hand solver with {hand_solver.num_fingers()} fingers in {end_time - start_time:.2f} seconds.")
+    start_time = end_time
 
     plotter1 = TendonHandPlotter(
         finger_names,
@@ -75,20 +89,45 @@ def main(mode="wave"):
     tip_wrench_mean = np.zeros(6)
     tip_wrench_cov = (1e-3) ** 2 * np.eye(6)
 
+    end_time = time.time()
+    print(f"Initialized plotters and covariance matrices in {end_time - start_time:.2f} seconds.")
+    start_time = end_time
+
+
     for i in range(1000):
-        solutions = {}
+        if i % 100 == 0:
+            print(f"Iteration {i}/1000")
+
+        # Collect tensions and tip wrenches for all fingers
+        all_tensions = []
+        all_tip_wrenches = []
 
         for finger_idx, name in enumerate(finger_names):
             tensions_mean = compute_tensions(name, finger_idx, i, mode)
-
             tensions = crest_sparse.VectorXGaussian(tensions_mean, tensions_cov)
             tip_wrench = crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov)
 
-            solutions[name] = solvers[name].solve(tensions, tip_wrench, None)
+            all_tensions.append(tensions)
+            all_tip_wrenches.append(tip_wrench)
 
-        plotter1.update(solutions)
-        plotter2.update(solutions)
+        # Single solve for all fingers at once
+        solution = hand_solver.solve(all_tensions, all_tip_wrenches)
 
+        # Convert solution to dict format for plotter
+        # Wrap each finger's marginals back into a Solution-like object
+        solutions = {}
+        for name, finger_marginals in zip(finger_names, solution.marginals.fingers):
+            finger_solution = crest_sparse.TendonRobotSolution()
+            finger_solution.marginals = finger_marginals
+            finger_solution.meta = solution.meta
+            solutions[name] = finger_solution
+
+        if PLOT:
+            plotter1.update(solutions)
+            plotter2.update(solutions)
+
+    end_time = time.time()
+    print(f"Completed 1000 iterations in {end_time - start_time:.2f} seconds.")
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "wave"

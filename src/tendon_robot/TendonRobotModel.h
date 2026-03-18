@@ -73,6 +73,8 @@ struct TendonRobotMarginals {
 template<int N>
 class TendonRobotModel {
 public:
+    static constexpr int NumTendons = N;
+
     TendonRobotModel(
         double rod_length,
         int num_discs,
@@ -148,6 +150,10 @@ private:
     void compute_disc_positions_and_segments(const std::vector<double>& disc_positions_normalized);
 
     void get_J_pose_tensions(const gtsam::Marginals& marginals, TendonRobotMarginals& out) const;
+
+    // Unique ID for key generation to avoid collisions when multiple TendonRobotModels are in the same graph
+    const int id_;
+    inline static int next_id_ = 0;
 
     const double rod_length_;
     const int num_discs_;

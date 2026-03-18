@@ -28,6 +28,7 @@ TendonRobotModel<N>::TendonRobotModel(
     SharedDiagonal base_pose_noise,
     const std::vector<double>& disc_positions_normalized)
 :
+    id_(next_id_++),
     rod_length_(rod_length),
     num_discs_(num_discs),
     num_nodes_(num_discs + (num_discs - 1) * num_between_nodes),
@@ -56,6 +57,7 @@ TendonRobotModel<N>::TendonRobotModel(
     SharedDiagonal base_pose_noise,
     const std::vector<double>& disc_positions_normalized)
 :
+    id_(next_id_++),
     rod_length_(rod_length),
     num_discs_(num_discs),
     num_nodes_(num_discs + (num_discs - 1) * num_between_nodes),
@@ -86,6 +88,7 @@ TendonRobotModel<N>::TendonRobotModel(
     SharedDiagonal base_pose_noise,
     const std::vector<double>& disc_positions_normalized)
 :
+    id_(next_id_++),
     rod_length_(rod_length),
     num_discs_(num_discs),
     num_nodes_(num_discs + (num_discs - 1) * num_between_nodes),
@@ -114,6 +117,7 @@ TendonRobotModel<N>::TendonRobotModel(
     SharedDiagonal base_pose_noise,
     const std::vector<double>& disc_positions_normalized)
 :
+    id_(next_id_++),
     rod_length_(rod_length),
     num_discs_(num_discs),
     num_nodes_(num_discs + (num_discs - 1) * num_between_nodes),
@@ -295,7 +299,7 @@ void TendonRobotModel<N>::init_tendon_disc_config_per_disc(PerDiscTendonInput in
 
 template<int N>
 Key TendonRobotModel<N>::get_tensions_key() const {
-    return Symbol('Q', 424242);
+    return Symbol('Q', 1000 * id_);
 }
 
 
@@ -305,7 +309,7 @@ Key TendonRobotModel<N>::get_disc_wrench_key(int disc_idx) const {
     if (disc_idx < 1)
         throw std::out_of_range("TendonRobot: invalid disc wrench index");
 
-    return Symbol('D', disc_idx);
+    return Symbol('D', 1000 * id_ + disc_idx);
 }
 
 

@@ -32,7 +32,11 @@ def main():
     # Background tension for passive tendons (Newtons)
     background_tension = 0.5
 
+    start_time = time.time()
+
     for i in range(1000):
+        if i % 100 == 0:
+            print(f"Iteration {i}/1000")
         tensions_mean = np.zeros(num_tendons)
         # Tendons 0-4 (passive): constant background tension
         tensions_mean[0] = background_tension
@@ -50,6 +54,9 @@ def main():
 
         solution = solver.solve(tensions, tip_wrench, None)
         plotter.update(solution)
+
+    end_time = time.time()
+    print(f"Completed 1000 iterations in {end_time - start_time:.2f} seconds.")
 
 
 
