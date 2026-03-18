@@ -9,53 +9,92 @@
 using namespace gtsam;
 
 
-TendonRobotSolver::TendonRobotSolver(const TendonRobotSolverConfig& config) 
+// --- Templated TendonRobotSolver<N> ---
+
+template<int N>
+TendonRobotSolver<N>::TendonRobotSolver(const TendonRobotSolverConfig& config)
 :
     SolverBase(config.base)
 {
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
-        config.sigma_twist_rot, config.sigma_twist_pos); 
-    
+        config.sigma_twist_rot, config.sigma_twist_pos);
+
     small_wrench_noise_ = get_noise_model_rot_pos(
-        config.sigma_stress_moment, config.sigma_stress_force); 
-    
-    Rot3 base_rot = Rot3::Rx(-M_PI / 2).compose(Rot3::Rz(M_PI));
-    Pose3 base_pose_mean = Pose3(base_rot, Point3::Zero());
+        config.sigma_stress_moment, config.sigma_stress_force);
+
+    Pose3 base_pose_mean;
+    if (config.base_pose.isZero()) {
+        Rot3 base_rot = Rot3::Rx(-M_PI / 2).compose(Rot3::Rz(M_PI));
+        base_pose_mean = Pose3(base_rot, Point3::Zero());
+    } else {
+        base_pose_mean = Pose3(config.base_pose);
+    }
     SharedDiagonal base_pose_noise = get_noise_model_rot_pos(
         config.sigma_base_rot, config.sigma_base_pos);
-    
-    if (config.K_inv_per_segment.empty()) {
-        robot_ = std::make_unique<TendonRobotModel>(
-            config.rod_length,
-            config.num_discs,
-            config.num_between_nodes,
-            config.tendon_input,
-            config.K_inv,
-            twist_noise,
-            small_wrench_noise_,
-            base_pose_mean,
-            base_pose_noise,
-            config.disc_positions_normalized);
+
+    if (config.per_disc_tendon_input.is_populated()) {
+        // Per-disc routing path
+        if (config.K_inv_per_segment.empty()) {
+            robot_ = std::make_unique<TendonRobotModel<N>>(
+                config.rod_length,
+                config.num_discs,
+                config.num_between_nodes,
+                config.per_disc_tendon_input,
+                config.K_inv,
+                twist_noise,
+                small_wrench_noise_,
+                base_pose_mean,
+                base_pose_noise,
+                config.disc_positions_normalized);
+        } else {
+            robot_ = std::make_unique<TendonRobotModel<N>>(
+                config.rod_length,
+                config.num_discs,
+                config.num_between_nodes,
+                config.per_disc_tendon_input,
+                config.K_inv_per_segment,
+                twist_noise,
+                small_wrench_noise_,
+                base_pose_mean,
+                base_pose_noise,
+                config.disc_positions_normalized);
+        }
     } else {
-        robot_ = std::make_unique<TendonRobotModel>(
-            config.rod_length,
-            config.num_discs,
-            config.num_between_nodes,
-            config.tendon_input,
-            config.K_inv_per_segment,
-            twist_noise,
-            small_wrench_noise_,
-            base_pose_mean,
-            base_pose_noise,
-            config.disc_positions_normalized);
+        // Simple TendonInput path (backward-compatible)
+        if (config.K_inv_per_segment.empty()) {
+            robot_ = std::make_unique<TendonRobotModel<N>>(
+                config.rod_length,
+                config.num_discs,
+                config.num_between_nodes,
+                config.tendon_input,
+                config.K_inv,
+                twist_noise,
+                small_wrench_noise_,
+                base_pose_mean,
+                base_pose_noise,
+                config.disc_positions_normalized);
+        } else {
+            robot_ = std::make_unique<TendonRobotModel<N>>(
+                config.rod_length,
+                config.num_discs,
+                config.num_between_nodes,
+                config.tendon_input,
+                config.K_inv_per_segment,
+                twist_noise,
+                small_wrench_noise_,
+                base_pose_mean,
+                base_pose_noise,
+                config.disc_positions_normalized);
+        }
     }
 
     get_initial_values();
 }
 
 
-Solution<TendonRobotMarginals> TendonRobotSolver::solve(
-    const Vector4Gaussian& tensions,
+template<int N>
+Solution<TendonRobotMarginals> TendonRobotSolver<N>::solve(
+    const VectorNGaussian<N>& tensions,
     const std::optional<Vector6Gaussian>& tip_wrench,
     const std::optional<Vector3Gaussian>& tip_position_meas)
 {
@@ -71,7 +110,8 @@ Solution<TendonRobotMarginals> TendonRobotSolver::solve(
 }
 
 
-void TendonRobotSolver::build_graph() {
+template<int N>
+void TendonRobotSolver<N>::build_graph() {
     // Build base robot graph
     graph_ = robot_->build_graph(tensions_);
 
@@ -80,8 +120,8 @@ void TendonRobotSolver::build_graph() {
 
     for (int i = 1; i + 1 < num_nodes; ++i) {
         graph_.add(PriorFactor<Vector6>(
-            robot_->get_external_wrench_key(i), 
-            Vector6::Zero(), 
+            robot_->get_external_wrench_key(i),
+            Vector6::Zero(),
             small_wrench_noise_));
     }
 
@@ -108,10 +148,69 @@ void TendonRobotSolver::build_graph() {
 }
 
 
-void TendonRobotSolver::extract_solution() {
+template<int N>
+void TendonRobotSolver<N>::extract_solution() {
     extracted_ = robot_->get_marginals(values_, marginals_);
 }
 
-void TendonRobotSolver::get_initial_values() {
+template<int N>
+void TendonRobotSolver<N>::get_initial_values() {
     values_ = robot_->get_initial_values();
+}
+
+
+// Explicit instantiations
+template class TendonRobotSolver<1>;
+template class TendonRobotSolver<2>;
+template class TendonRobotSolver<3>;
+template class TendonRobotSolver<4>;
+template class TendonRobotSolver<5>;
+template class TendonRobotSolver<6>;
+template class TendonRobotSolver<7>;
+template class TendonRobotSolver<8>;
+template class TendonRobotSolver<9>;
+template class TendonRobotSolver<10>;
+
+
+// --- TendonRobotSolverDispatch (runtime dispatch wrapper) ---
+
+TendonRobotSolverDispatch::TendonRobotSolverDispatch(const TendonRobotSolverConfig& config)
+    : num_tendons_(config.num_tendons)
+{
+    switch (config.num_tendons) {
+        case 1:  solver_ = std::make_unique<TendonRobotSolver<1>>(config); break;
+        case 2:  solver_ = std::make_unique<TendonRobotSolver<2>>(config); break;
+        case 3:  solver_ = std::make_unique<TendonRobotSolver<3>>(config); break;
+        case 4:  solver_ = std::make_unique<TendonRobotSolver<4>>(config); break;
+        case 5:  solver_ = std::make_unique<TendonRobotSolver<5>>(config); break;
+        case 6:  solver_ = std::make_unique<TendonRobotSolver<6>>(config); break;
+        case 7:  solver_ = std::make_unique<TendonRobotSolver<7>>(config); break;
+        case 8:  solver_ = std::make_unique<TendonRobotSolver<8>>(config); break;
+        case 9:  solver_ = std::make_unique<TendonRobotSolver<9>>(config); break;
+        case 10: solver_ = std::make_unique<TendonRobotSolver<10>>(config); break;
+        default: throw std::invalid_argument(
+            "num_tendons must be between 1 and 10, got " + std::to_string(config.num_tendons));
+    }
+}
+
+Solution<TendonRobotMarginals> TendonRobotSolverDispatch::solve(
+    const VectorXGaussian& tensions,
+    const std::optional<Vector6Gaussian>& tip_wrench,
+    const std::optional<Vector3Gaussian>& tip_position_meas)
+{
+    if (tensions.mean.size() != num_tendons_)
+        throw std::invalid_argument(
+            "tensions size (" + std::to_string(tensions.mean.size()) +
+            ") does not match num_tendons (" + std::to_string(num_tendons_) + ")");
+
+    return std::visit([&](auto& solver_ptr) -> Solution<TendonRobotMarginals> {
+        using SolverType = typename std::remove_reference_t<decltype(*solver_ptr)>;
+        constexpr int M = SolverType::NumTendons;
+
+        VectorNGaussian<M> t_fixed;
+        t_fixed.mean = tensions.mean;
+        t_fixed.cov = tensions.cov;
+
+        return solver_ptr->solve(t_fixed, tip_wrench, tip_position_meas);
+    }, solver_);
 }

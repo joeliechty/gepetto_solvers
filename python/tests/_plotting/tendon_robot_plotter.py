@@ -12,12 +12,20 @@ class TendonRobotPlotter:
                  plot_base_wrenches=False,
                  plot_backbone_frames=False,
                  plot_backbone_ellipsoids=True,
+                 camera_focal_point=None,
+                 camera_azimuth=15,
+                 camera_elevation=20,
+                 camera_distance=0.6,
                  **kwargs):
 
+        if camera_focal_point is None:
+            camera_focal_point = [0,0.1,0]
+
         self.plotter = utils.PlotterBase(
-            camera_focal_point=[0,0.1,0],
-            camera_azimuth=15,
-            camera_distance=0.6,
+            camera_focal_point=camera_focal_point,
+            camera_azimuth=camera_azimuth,
+            camera_elevation=camera_elevation,
+            camera_distance=camera_distance,
             **kwargs
         )
         
@@ -40,24 +48,41 @@ class TendonRobotPlotter:
         num_discs = solution.marginals.tendon_config.num_discs
 
         if self.plotter.frame == 0:
-            tendon_colors = ["crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod", "deeppink"]
+            tendon_colors = ["crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod", "deeppink",
+                             "darkorange", "teal", "sienna", "slategray"]
             self.tendon_meshes = []
+            # Count active discs per tendon for initial mesh allocation
             for i in range(num_tendons):
-                points = np.zeros((num_discs, 3))
-                mesh = pv.lines_from_points(points)
-                self.plotter.plotter.add_mesh(mesh, line_width=6, color=tendon_colors[i])
-                self.tendon_meshes.append(mesh)
+                active_count = 0
+                for ii in range(num_discs):
+                    hole = solution.marginals.tendon_config.hole_locations[ii][i]
+                    if hole is not None:
+                        active_count += 1
+                    else:
+                        break
+                if active_count >= 2:
+                    points = np.zeros((active_count, 3))
+                    mesh = pv.lines_from_points(points)
+                    self.plotter.plotter.add_mesh(mesh, line_width=6, color=tendon_colors[i % len(tendon_colors)])
+                    self.tendon_meshes.append((i, mesh, active_count))
+                else:
+                    self.tendon_meshes.append((i, None, 0))
 
-        for jj in range(num_tendons):
+        for tendon_idx, mesh, active_count in self.tendon_meshes:
+            if mesh is None:
+                continue
             points = []
             for ii in range(num_discs):
+                hole = solution.marginals.tendon_config.hole_locations[ii][tendon_idx]
+                if hole is None:
+                    break
                 disc_pose_idx = solution.marginals.tendon_config.disc_pose_idx[ii]
-                hole = solution.marginals.tendon_config.hole_locations[ii][jj]
                 T = solution.marginals.rod.states[disc_pose_idx].pose.mean
                 p_world = T[:3, :3] @ hole + T[:3, 3]
                 points.append(p_world)
-            
-            self.tendon_meshes[jj].points[:] = points
+
+            if len(points) == active_count:
+                mesh.points[:] = points
 
     def update_discs(self, solution):
         num_discs = solution.marginals.tendon_config.num_discs

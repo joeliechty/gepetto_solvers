@@ -180,7 +180,7 @@ def generate_trajectory(position_function, sim_time, damping=5e-2, frame_rate=30
     for i in range(num_steps):
         t_i = i / float(frame_rate)
 
-        tensions = crest_sparse.Vector4Gaussian(tensions_mean, tensions_cov)
+        tensions = crest_sparse.VectorXGaussian(tensions_mean, tensions_cov)
         tip_wrench = crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov)
         solution = solver.solve(tensions, tip_wrench, None)
 

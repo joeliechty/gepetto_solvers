@@ -12,7 +12,7 @@ def main():
     
     solver = crest_sparse.TendonRobotSolver(config)
     
-    dummy_solution = solver.solve(crest_sparse.Vector4Gaussian(np.zeros(4), np.eye(4)), crest_sparse.Vector6Gaussian(np.zeros(6), np.eye(6)), None)
+    dummy_solution = solver.solve(crest_sparse.VectorXGaussian(np.zeros(4), np.eye(4)), crest_sparse.Vector6Gaussian(np.zeros(6), np.eye(6)), None)
     solver_baseline = TendonRobotSolver(config, dummy_solution.marginals.tendon_config.hole_locations)
 
     plotter = TendonRobotPlotter(single_plot_mode=False)
@@ -29,7 +29,7 @@ def main():
         tip_wrench_mean[5] = 0.1 * np.sin(0.1 * i)
         # tip_wrench_mean[3] = 0.2
 
-        tensions = crest_sparse.Vector4Gaussian(tensions_mean, tensions_cov)
+        tensions = crest_sparse.VectorXGaussian(tensions_mean, tensions_cov)
         tip_wrench = crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov)
 
         solution = solver.solve(tensions, tip_wrench, None)

@@ -65,6 +65,7 @@ def get_base_config():
     config.sigma_stress_moment = 1.0e-5
     config.sigma_base_pos = 1.0e-4
     config.sigma_base_rot = 1.0e-3
+    config.num_tendons = 4
     config.tendon_input = get_tendon_input()
 
     # config.tip_position_meas_std = 1e-3

@@ -4,9 +4,18 @@
 #include <gtsam/base/Matrix.h>
 
 
-struct Vector4Gaussian {
-    gtsam::Vector4 mean;
-    gtsam::Matrix4 cov;
+template<int N>
+struct VectorNGaussian {
+    Eigen::Vector<double, N> mean;
+    Eigen::Matrix<double, N, N> cov;
+};
+
+using Vector4Gaussian = VectorNGaussian<4>;
+
+
+struct VectorXGaussian {
+    Eigen::VectorXd mean;
+    Eigen::MatrixXd cov;
 };
 
 
@@ -26,4 +35,3 @@ struct Pose3Gaussian {
     gtsam::Matrix4 mean;
     gtsam::Matrix6 cov;
 };
-

@@ -50,6 +50,17 @@ void bind_utils(py::module& m) {
             py::arg("mean"), py::arg("cov"))
         .def_readwrite("mean", &Vector4Gaussian::mean)
         .def_readwrite("cov", &Vector4Gaussian::cov);
+
+    py::class_<VectorXGaussian>(m, "VectorXGaussian")
+        .def(py::init<>())
+        .def(py::init([](const Eigen::VectorXd& mean, const Eigen::MatrixXd& cov) {
+            VectorXGaussian g;
+            g.mean = mean;
+            g.cov = cov;
+            return g;
+        }), py::arg("mean"), py::arg("cov"))
+        .def_readwrite("mean", &VectorXGaussian::mean)
+        .def_readwrite("cov", &VectorXGaussian::cov);
 }
 
 

@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from crest_sparse import TendonRobotSolver, Vector6Gaussian, Vector4Gaussian, Vector3Gaussian
+from crest_sparse import TendonRobotSolver, Vector6Gaussian, VectorXGaussian, Vector3Gaussian
 
 from .._plotting.tendon_robot_plotter import TendonRobotPlotter
 from .._plotting.utils import setup_plt
@@ -33,7 +33,7 @@ def run_sim(
     )
     
     # Setup baseline solver (get holes from dummy solution)
-    dummy_solution = simulator_nominal.solve(Vector4Gaussian(np.zeros(4), np.eye(4)), Vector6Gaussian(np.zeros(6), np.eye(6)), None)
+    dummy_solution = simulator_nominal.solve(VectorXGaussian(np.zeros(4), np.eye(4)), Vector6Gaussian(np.zeros(6), np.eye(6)), None)
     solver_baseline = Benchmark(config, dummy_solution.marginals.tendon_config.hole_locations)
 
     # Simulator to sample tip pose data
@@ -81,7 +81,7 @@ def run_sim(
         tensions_noise = tensions_noise_model.step(tensions_meas_sigma ** 2 * np.eye(4))
         tensions_nominal_gt = tensions_nominal_i + tensions_noise
         solution_nominal = simulator_nominal.solve(
-            Vector4Gaussian(tensions_nominal_gt, small_tensions_cov),
+            VectorXGaussian(tensions_nominal_gt, small_tensions_cov),
             Vector6Gaussian(np.hstack((np.zeros(3), f_gt)), small_wrench_cov),
             None
         )
@@ -89,7 +89,7 @@ def run_sim(
 
         # Prior solution, using only prior wrench, no measurement
         solution_prior = solver_prior.solve(
-            Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
+            VectorXGaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
             Vector6Gaussian(np.zeros(6), wrench_prior_cov),
             None 
         )
@@ -97,7 +97,7 @@ def run_sim(
         # Simulated solution to sample position from, small covariances
         tensions_gt = tensions_cmd_current + tensions_noise
         solution_sim = simulator_tracking.solve(
-            Vector4Gaussian(tensions_gt, small_tensions_cov),
+            VectorXGaussian(tensions_gt, small_tensions_cov),
             Vector6Gaussian(np.hstack((np.zeros(3), f_gt)), small_wrench_cov),
             None
         )
@@ -117,7 +117,7 @@ def run_sim(
 
         # Use the sampled position as a prior on tip pose
         solution_post = solver_tracking.solve(
-            Vector4Gaussian(tensions_cmd_current, small_tensions_cov),
+            VectorXGaussian(tensions_cmd_current, small_tensions_cov),
             Vector6Gaussian(np.zeros(6), wrench_prior_cov),
             Vector3Gaussian(p_meas, position_meas_cov)
         )
@@ -125,7 +125,7 @@ def run_sim(
         # Evaluate the Jacobian for control using the estimated tip wrench
         wrench_post = solution_post.marginals.external_wrenches[-1]
         solution_jacobian = solver_jacobian.solve(
-            Vector4Gaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
+            VectorXGaussian(tensions_cmd_current, tensions_meas_sigma ** 2 * np.eye(4)),
             wrench_post,
             None
         )
