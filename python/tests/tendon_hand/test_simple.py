@@ -25,11 +25,11 @@ def compute_tensions(finger_name, finger_idx, frame_idx, mode, num_tendons=6):
     num_tendons : int
         Number of tendons per finger (default 6).
     """
-    background_tension = 0.5
+    background_tension = 0.2
     tensions = np.full(num_tendons, background_tension)
 
     if mode == "sync":
-        phase = 0.01 * frame_idx - np.pi
+        phse = 0.01 * frame_idx - np.pi
     elif mode == "wave":
         phase = 0.01 * frame_idx - np.pi + 0.5 * finger_idx
     else:
@@ -40,7 +40,7 @@ def compute_tensions(finger_name, finger_idx, frame_idx, mode, num_tendons=6):
         phase += 0.5
 
     # Tendon 5 is the active flexor (at 180 deg), oscillates 0.5 to 2.5 N
-    tensions[5] = background_tension + 2.0 * (np.cos(phase) + 1)
+    tensions[5] = background_tension + 1.50 * (np.cos(phase) + 1)
 
     return tensions
 
@@ -136,7 +136,7 @@ def main(mode="wave", PLOT=False):
 if __name__ == "__main__":
 
     main(
-        mode="sync",
-        # mode="wave",
+        # mode="sync",
+        mode="wave",
         PLOT=True
         )

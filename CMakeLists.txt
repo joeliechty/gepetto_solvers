@@ -13,6 +13,14 @@ find_package(pybind11 CONFIG REQUIRED)
 find_package(GTSAM REQUIRED)
 find_package(Eigen3 REQUIRED)
 
+# OpenMP for parallel collision detection
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    message(STATUS "OpenMP found, enabling parallel collision detection")
+else()
+    message(WARNING "OpenMP not found, collision detection will be single-threaded")
+endif()
+
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 
 pybind11_add_module(crest_sparse ${SOURCES})
@@ -24,6 +32,11 @@ include_directories(
 )
 
 target_link_libraries(crest_sparse PRIVATE gtsam)
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(crest_sparse PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(crest_sparse PRIVATE CREST_USE_OPENMP)
+endif()
 
 install(TARGETS crest_sparse LIBRARY DESTINATION .)
 

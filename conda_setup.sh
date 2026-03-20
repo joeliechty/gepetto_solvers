@@ -2,19 +2,32 @@
 
 exec > >(tee -i setup_log.txt) 2>&1
 
+# get working directiry for where crest repo is located (assumes this script is run from the repo root)
+CREST_SPARSE_DIR=$(pwd)
+echo "Working directory: $CREST_SPARSE_DIR"
+# set root dir for git repos to be one level back from the crest repo
+GIT_REPOS_DIR="$CREST_SPARSE_DIR/.."
+echo "Git repos directory: $GIT_REPOS_DIR"
+
 # Create and activate conda environment (used instead of venv for isolation)
 echo "Creating and activating conda environment 'crest'..."
-conda create -n crest python=3.12 -y
+# check if the environment already exists
+if conda info --envs | grep -q "crest"; then
+    echo "Conda environment 'crest' already exists. Activating it..."
+else
+    echo "Conda environment 'crest' does not exist. Creating it..."
+    conda create -n crest python=3.12 -y
+fi
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate crest
 
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."
-conda install -c conda-forge cmake eigen pybind11 boost -y
+conda install -c conda-forge cmake eigen pybind11 boost libgomp -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."
-cd ~/git_repos
+cd $GIT_REPOS_DIR
 git clone https://github.com/borglab/gtsam.git
 cd gtsam
 git checkout 4.3a1  # Tested GTSAM version
@@ -32,7 +45,7 @@ echo 'export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH' > $CONDA_PREFIX
 
 # Build/Install CREST-sparse
 echo "Building and installing CREST-sparse..."
-cd ~/git_repos/crest-sparse
+cd $CREST_SPARSE_DIR
 pip install -r requirements.txt
 pip install . -v
 

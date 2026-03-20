@@ -5,6 +5,13 @@
 
 #include <gtsam/slam/PriorFactor.h>
 
+#ifdef CREST_USE_OPENMP
+#include <omp.h>
+#endif
+
+#include <vector>
+#include <tuple>
+
 using namespace gtsam;
 
 
@@ -320,40 +327,50 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         return (segment_idx % 2) == 1;
     };
 
-    // iterate over all pairs of fingers (not including self collision)
-    for (size_t f1=0; f1 < fingers_.size(); ++f1){
-        for (size_t f2=f1+1; f2 < fingers_.size(); ++f2){
+    // Build list of finger pairs to check (f1 < f2)
+    std::vector<std::pair<int, int>> finger_pairs;
+    for (size_t f1 = 0; f1 < fingers_.size(); ++f1) {
+        for (size_t f2 = f1 + 1; f2 < fingers_.size(); ++f2) {
+            finger_pairs.emplace_back(f1, f2);
+        }
+    }
+
+    // Collect collision pairs in parallel, then add to graph
+    // Each element: (key1, key2)
+    std::vector<std::pair<Key, Key>> collision_pairs;
+
+#ifdef CREST_USE_OPENMP
+    // Thread-local storage for collision pairs
+    std::vector<std::vector<std::pair<Key, Key>>> thread_local_pairs;
+
+    #pragma omp parallel
+    {
+        int num_threads = omp_get_num_threads();
+        int thread_id = omp_get_thread_num();
+
+        #pragma omp single
+        {
+            thread_local_pairs.resize(num_threads);
+        }
+
+        #pragma omp for schedule(dynamic)
+        for (size_t pair_idx = 0; pair_idx < finger_pairs.size(); ++pair_idx) {
+            int f1 = finger_pairs[pair_idx].first;
+            int f2 = finger_pairs[pair_idx].second;
 
             int nodes_f1 = get_num_nodes(f1);
             int nodes_f2 = get_num_nodes(f2);
             int between_nodes_f1 = get_num_between_nodes(f1);
             int between_nodes_f2 = get_num_between_nodes(f2);
-
-            // The first bone segment (metacarpal) is rigidly attached to the base
-            // and cannot collide with other metacarpals. The number of nodes in the
-            // first segment is (num_between_nodes + 1).
             int metacarpal_nodes_f1 = between_nodes_f1 + 1;
             int metacarpal_nodes_f2 = between_nodes_f2 + 1;
 
-            for (int n1 = 0; n1 < nodes_f1; ++n1){
+            for (int n1 = 0; n1 < nodes_f1; ++n1) {
+                if (is_in_joint_segment(n1, between_nodes_f1)) continue;
 
-                // Skip nodes in joint segments (no physical material to collide)
-                if (is_in_joint_segment(n1, between_nodes_f1)) {
-                    continue;
-                }
-
-                for (int n2 = 0; n2 < nodes_f2; ++n2){
-
-                    // Skip nodes in joint segments
-                    if (is_in_joint_segment(n2, between_nodes_f2)) {
-                        continue;
-                    }
-
-                    // Skip collision checks when BOTH nodes are in the metacarpal region
-                    // (these are fixed bones that cannot move relative to each other)
-                    if (n1 < metacarpal_nodes_f1 && n2 < metacarpal_nodes_f2) {
-                        continue;
-                    }
+                for (int n2 = 0; n2 < nodes_f2; ++n2) {
+                    if (is_in_joint_segment(n2, between_nodes_f2)) continue;
+                    if (n1 < metacarpal_nodes_f1 && n2 < metacarpal_nodes_f2) continue;
 
                     Key k1 = get_pose_key(f1, n1);
                     Key k2 = get_pose_key(f2, n2);
@@ -363,12 +380,55 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         Pose3 p2 = current_values.at<Pose3>(k2);
 
                         if (gtsam::distance3(p1.translation(), p2.translation()) < broad_phase_dist) {
-                            graph.add(crest_sparse::SphereContactFactor(k1, k2, radius, radius, contact_noise));
+                            thread_local_pairs[thread_id].emplace_back(k1, k2);
                         }
                     }
                 }
             }
         }
+    }
+
+    // Merge thread-local results
+    for (const auto& local_pairs : thread_local_pairs) {
+        collision_pairs.insert(collision_pairs.end(), local_pairs.begin(), local_pairs.end());
+    }
+
+#else
+    // Sequential fallback
+    for (const auto& [f1, f2] : finger_pairs) {
+        int nodes_f1 = get_num_nodes(f1);
+        int nodes_f2 = get_num_nodes(f2);
+        int between_nodes_f1 = get_num_between_nodes(f1);
+        int between_nodes_f2 = get_num_between_nodes(f2);
+        int metacarpal_nodes_f1 = between_nodes_f1 + 1;
+        int metacarpal_nodes_f2 = between_nodes_f2 + 1;
+
+        for (int n1 = 0; n1 < nodes_f1; ++n1) {
+            if (is_in_joint_segment(n1, between_nodes_f1)) continue;
+
+            for (int n2 = 0; n2 < nodes_f2; ++n2) {
+                if (is_in_joint_segment(n2, between_nodes_f2)) continue;
+                if (n1 < metacarpal_nodes_f1 && n2 < metacarpal_nodes_f2) continue;
+
+                Key k1 = get_pose_key(f1, n1);
+                Key k2 = get_pose_key(f2, n2);
+
+                if (current_values.exists(k1) && current_values.exists(k2)) {
+                    Pose3 p1 = current_values.at<Pose3>(k1);
+                    Pose3 p2 = current_values.at<Pose3>(k2);
+
+                    if (gtsam::distance3(p1.translation(), p2.translation()) < broad_phase_dist) {
+                        collision_pairs.emplace_back(k1, k2);
+                    }
+                }
+            }
+        }
+    }
+#endif
+
+    // Add all collision factors to the graph (must be sequential)
+    for (const auto& [k1, k2] : collision_pairs) {
+        graph.add(crest_sparse::SphereContactFactor(k1, k2, radius, radius, contact_noise));
     }
 
     return graph;
