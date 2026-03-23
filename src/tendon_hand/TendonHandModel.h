@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 #include <string>
-
+#include <openvdb/openvdb.h>
 
 struct TendonHandMarginals {
     std::vector<TendonRobotMarginals> fingers;
@@ -35,10 +35,19 @@ public:
 
     int num_fingers() const { return fingers_.size(); }
 
+    void set_object(const std::string& vdb_path,
+                    const gtsam::Pose3& initial_pose,
+                    const Eigen::VectorXd& prior_sigmas);
+
 private:
     std::vector<std::string> finger_names_;
     std::vector<int> num_tendons_per_finger_;
     gtsam::SharedDiagonal small_wrench_noise_;
+    bool has_object_ = false;
+    openvdb::FloatGrid::Ptr sdf_grid_;
+    gtsam::Key object_key_ = gtsam::Symbol('O', 0);
+    gtsam::Pose3 object_prior_mean_;
+    gtsam::SharedDiagonal object_prior_noise_;
 
     // We use variant to handle different numbers of tendons per finger
     using FingerVariant = std::variant<

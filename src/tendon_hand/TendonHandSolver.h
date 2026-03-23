@@ -30,6 +30,8 @@ public:
 
     int num_fingers() const { return hand_->num_fingers(); }
 
+    TendonHandModel& model() { return *hand_; }
+
 private:
     void build_graph() override;
 

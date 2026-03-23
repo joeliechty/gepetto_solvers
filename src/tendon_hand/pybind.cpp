@@ -33,5 +33,16 @@ void bind_tendon_hand(py::module& m) {
             py::arg("tensions"),
             py::arg("tip_wrenches"),
             py::call_guard<py::gil_scoped_release>())
-        .def("num_fingers", &TendonHandSolver::num_fingers);
+        .def("num_fingers", &TendonHandSolver::num_fingers)
+        .def("set_object", [](TendonHandSolver& self,
+                              const std::string& vdb_path,
+                              const Eigen::Matrix4d& initial_pose_mat,
+                              const Eigen::VectorXd& prior_sigmas) {
+            gtsam::Pose3 initial_pose(initial_pose_mat);
+            self.model().set_object(vdb_path, initial_pose, prior_sigmas);
+        },
+        py::arg("vdb_path"),
+        py::arg("initial_pose"),
+        py::arg("prior_sigmas"),
+        "Set an SDF object for contact simulation");
 }

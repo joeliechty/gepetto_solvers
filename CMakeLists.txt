@@ -10,8 +10,16 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 
 set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
+
+# Use Python's prefix to find conda packages (works even when CONDA_PREFIX isn't set)
+get_filename_component(PYTHON_PREFIX "${Python_EXECUTABLE}" DIRECTORY)
+get_filename_component(PYTHON_PREFIX "${PYTHON_PREFIX}" DIRECTORY)
+list(APPEND CMAKE_PREFIX_PATH ${PYTHON_PREFIX})
+list(APPEND CMAKE_MODULE_PATH ${PYTHON_PREFIX}/lib/cmake/OpenVDB)
+
 find_package(GTSAM REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(OpenVDB REQUIRED)
 
 # OpenMP for parallel collision detection
 find_package(OpenMP)
@@ -31,7 +39,7 @@ include_directories(
     ${EIGEN_INCLUDE_DIR}
 )
 
-target_link_libraries(crest_sparse PRIVATE gtsam)
+target_link_libraries(crest_sparse PRIVATE gtsam OpenVDB::openvdb)
 
 if(OpenMP_CXX_FOUND)
     target_link_libraries(crest_sparse PRIVATE OpenMP::OpenMP_CXX)

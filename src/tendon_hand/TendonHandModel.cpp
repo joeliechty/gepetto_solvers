@@ -2,6 +2,7 @@
 #include "tendon_robot/TendonRobotSolver.h"
 #include "utils/MiscInline.h"
 #include "SphereContactFactor.h"
+#include "SdfContactFactor.h"
 
 #include <gtsam/slam/PriorFactor.h>
 
@@ -339,6 +340,32 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     // Each element: (key1, key2)
     std::vector<std::pair<Key, Key>> collision_pairs;
 
+    // --- OBJECT FACTORS ---
+    if (has_object_) {
+        // Add rolling constraint prior
+        graph.add(gtsam::PriorFactor<gtsam::Pose3>(object_key_, object_prior_mean_, object_prior_noise_));
+
+        auto sdf_noise = gtsam::noiseModel::Isotropic::Sigma(1, 2e-3);
+        double r_finger = 0.005;
+
+        for (size_t f1 = 0; f1 < fingers_.size(); ++f1) {
+            int nodes_f1 = get_num_nodes(f1);
+            for (int n1 = 3; n1 < nodes_f1; ++n1) { // Skip knuckles
+                gtsam::Key k_finger = get_pose_key(f1, n1);
+                
+                // Broad phase: Check if finger is close to object's bounding box center
+                if (current_values.exists(k_finger) && current_values.exists(object_key_)) {
+                    gtsam::Pose3 p_f = current_values.at<gtsam::Pose3>(k_finger);
+                    gtsam::Pose3 p_o = current_values.at<gtsam::Pose3>(object_key_);
+                    
+                    if (gtsam::distance3(p_f.translation(), p_o.translation()) < 0.10) { // 10cm broad phase
+                        graph.add(crest_sparse::SdfContactFactor(k_finger, object_key_, r_finger, sdf_grid_, sdf_noise));
+                    }
+                }
+            }
+        }
+    }
+
 #ifdef CREST_USE_OPENMP
     // Thread-local storage for collision pairs
     std::vector<std::vector<std::pair<Key, Key>>> thread_local_pairs;
@@ -464,3 +491,20 @@ TendonHandMarginals TendonHandModel::get_marginals(
 
     return solution;
 }
+
+void TendonHandModel::set_object(const std::string& vdb_path,
+                                 const gtsam::Pose3& initial_pose,
+                                 const Eigen::VectorXd& prior_sigmas) {
+    openvdb::initialize();
+    openvdb::io::File file(vdb_path);
+    file.open();
+    // Grab the first grid in the file
+    openvdb::GridBase::Ptr baseGrid = file.getGrids()->at(0);
+    sdf_grid_ = openvdb::gridPtrCast<openvdb::FloatGrid>(baseGrid);
+    file.close();
+
+    has_object_ = true;
+    object_prior_mean_ = initial_pose;
+    object_prior_noise_ = gtsam::noiseModel::Diagonal::Sigmas(prior_sigmas);
+}
+

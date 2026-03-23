@@ -24,7 +24,7 @@ conda activate crest
 
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."
-conda install -c conda-forge cmake eigen pybind11 boost boost-cpp llvm-openmp -y
+conda install -c conda-forge cmake eigen pybind11 boost boost-cpp llvm-openmp openvdb -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."
