@@ -31,3 +31,5 @@ venv/
 *compile_commands.json
 
 setup_log.txt
+
+*.vdb

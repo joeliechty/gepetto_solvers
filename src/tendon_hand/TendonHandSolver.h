@@ -32,6 +32,9 @@ public:
 
     TendonHandModel& model() { return *hand_; }
 
+    // Refresh cached initial values (useful after calling set_object on the model)
+    void refresh_initial_values() { get_initial_values(); }
+
 private:
     void build_graph() override;
 

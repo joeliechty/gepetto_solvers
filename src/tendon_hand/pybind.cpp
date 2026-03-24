@@ -18,7 +18,9 @@ void bind_tendon_hand(py::module& m) {
     py::class_<TendonHandMarginals>(m, "TendonHandMarginals")
         .def(py::init<>())
         .def_readwrite("fingers", &TendonHandMarginals::fingers)
-        .def_readwrite("finger_names", &TendonHandMarginals::finger_names);
+        .def_readwrite("finger_names", &TendonHandMarginals::finger_names)
+        .def_readwrite("has_object", &TendonHandMarginals::has_object)
+        .def_readwrite("object_pose", &TendonHandMarginals::object_pose);
 
     py::class_<Solution<TendonHandMarginals>>(m, "TendonHandSolution")
         .def(py::init<>())
@@ -40,6 +42,8 @@ void bind_tendon_hand(py::module& m) {
                               const Eigen::VectorXd& prior_sigmas) {
             gtsam::Pose3 initial_pose(initial_pose_mat);
             self.model().set_object(vdb_path, initial_pose, prior_sigmas);
+            // Refresh the solver's cached initial values to include the object key
+            self.refresh_initial_values();
         },
         py::arg("vdb_path"),
         py::arg("initial_pose"),

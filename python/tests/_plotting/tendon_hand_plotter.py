@@ -1,6 +1,7 @@
 import numpy as np
 import pyvista as pv
 import vtk
+import pyopenvdb as vdb
 
 from . import utils
 from .cosserat_rod_plotter import CosseratRodMeshManager
@@ -175,6 +176,8 @@ class TendonHandPlotter:
                  collision_sphere_radius=0.005,
                  collision_sphere_color="limegreen",
                  collision_sphere_opacity=0.3,
+                 plot_object=True,
+                 vdb_path=None,
                  **kwargs):
 
         if camera_focal_point is None:
@@ -200,6 +203,9 @@ class TendonHandPlotter:
             sphere_opacity=collision_sphere_opacity,
         ) if plot_collision_spheres else None
 
+        self.plot_object = plot_object
+        self.object_transform = None
+
         self.rod_managers = {}
         self.tendon_managers = {}
 
@@ -219,6 +225,59 @@ class TendonHandPlotter:
                 tendon_color_offset=i * 6,
             )
 
+        self.vdb_path = vdb_path
+        self.object_actor = None
+
+        if self.vdb_path:
+            self._init_vdb_object()
+
+    def _init_vdb_object(self):
+        """Initialize and add VDB object mesh to the scene."""
+        if self.object_actor is not None:
+            return  # Already initialized
+
+        print("Extracting SDF surface for visualization...")
+        # 1. Read the VDB file - get metadata to find grid name
+        file = vdb.readAllGridMetadata(self.vdb_path)
+        grid_name = file[0].name if len(file) > 0 else "density"
+
+        # 2. Read the actual grid
+        grid = vdb.read(self.vdb_path, grid_name)
+
+        # 3. Extract bounding box to create a dense array
+        min_box, max_box = grid.evalActiveVoxelBoundingBox()
+        shape = (max_box[0] - min_box[0] + 1,
+                 max_box[1] - min_box[1] + 1,
+                 max_box[2] - min_box[2] + 1)
+
+        # 4. Fast C++ copy of the sparse VDB into a dense Numpy grid
+        dense_grid = np.zeros(shape, dtype=np.float32)
+        grid.copyToArray(dense_grid, ijk=min_box)
+
+        # 5. Create a PyVista volumetric grid
+        vol = pv.ImageData()
+        vol.dimensions = np.array(shape)
+
+        voxel_size = grid.transform.voxelSize()[0]
+        vol.spacing = (voxel_size, voxel_size, voxel_size)
+
+        # Shift the origin so the mesh perfectly aligns with the mathematical SDF coordinates
+        vol.origin = np.array(min_box) * voxel_size
+
+        # PyVista/VTK expects 3D arrays flattened in Fortran order
+        vol.point_data["values"] = dense_grid.flatten(order="F")
+
+        # 6. Extract the zero-level set (the surface of the object)
+        object_mesh = vol.contour([0.0])
+
+        # Add to the scene
+        self.object_actor = self.plotter.plotter.add_mesh(
+            object_mesh,
+            color="lightblue",
+            opacity=0.8,
+            smooth_shading=True
+        )
+
     def _add_world_axes(self):
         """Add RGB axes arrows at the world origin (red=x, green=y, blue=z)."""
         s = self.world_axes_scale
@@ -236,13 +295,15 @@ class TendonHandPlotter:
                 shape=None, show_points=False)
         self._world_axes_added = True
 
-    def update(self, solutions_dict):
+    def update(self, solutions_dict, object_pose=None):
         """Update all fingers and render.
 
         Parameters
         ----------
         solutions_dict : dict
             Maps finger name (str) to TendonRobotSolution.
+        object_pose : np.ndarray (4x4), optional
+            SE(3) transformation matrix for the object. Applied via GPU transform.
         """
         for name in self.finger_names:
             if name not in solutions_dict:
@@ -260,3 +321,10 @@ class TendonHandPlotter:
 
         first_solution = next(iter(solutions_dict.values()))
         self.plotter.update(first_solution)
+
+        # Fast GPU Transform for the object! 
+        if self.object_actor is not None and object_pose is not None:
+            # Setting user_matrix applies a 4x4 SE(3) transform instantly 
+            # without having to recalculate or re-extract the mesh vertices.
+            self.object_actor.user_matrix = object_pose
+

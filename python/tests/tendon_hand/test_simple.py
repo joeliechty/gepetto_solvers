@@ -25,13 +25,13 @@ def compute_tensions(finger_name, finger_idx, frame_idx, mode, num_tendons=6):
     num_tendons : int
         Number of tendons per finger (default 6).
     """
-    background_tension = 0.2
+    background_tension = 0.5
     tensions = np.full(num_tendons, background_tension)
 
     if mode == "sync":
-        phse = 0.01 * frame_idx - np.pi
+        phase = 0.01 * frame_idx + np.pi * 5./6.
     elif mode == "wave":
-        phase = 0.01 * frame_idx - np.pi + 0.5 * finger_idx
+        phase = 0.01 * frame_idx + np.pi * 5./6. + 0.5 * finger_idx
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -97,6 +97,10 @@ def main(mode="wave", PLOT=False):
     print(f"Initialized plotters and covariance matrices in {end_time - start_time:.2f} seconds.")
     start_time = end_time
 
+    # inital solve with no tensions to show initial pose
+    all_tensions = [crest_sparse.VectorXGaussian(np.zeros(num_tendons), tensions_cov) for _ in finger_names]
+    all_tip_wrenches = [crest_sparse.Vector6Gaussian(tip_wrench_mean, tip_wrench_cov) for _ in finger_names]
+    initial_solution = hand_solver.solve(all_tensions, all_tip_wrenches)
 
     for i in range(1000):
         if i % 50 == 0:

@@ -35,8 +35,6 @@ conda install -c conda-forge openvdb libboost-devel tbb-devel cmake eigen pybind
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."
 cd $GIT_REPOS_DIR
-# check if gtsam repo already exists
-echo "Cloning GTSAM repository..."
 git clone https://github.com/borglab/gtsam.git
 cd gtsam
 git checkout 4.3a1  # Tested GTSAM version

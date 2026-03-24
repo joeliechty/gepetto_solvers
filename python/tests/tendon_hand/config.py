@@ -174,7 +174,7 @@ def build_finger_config(bone_joint_spec, base_pose_4x4):
         num_discs=num_discs,
         num_between_nodes=config.num_between_nodes,
         segment_types=segment_types,
-        bone_stiffness_scale=1e-6,
+        bone_stiffness_scale=1e-10,
     )
 
     tendon_routing_radii = _build_default_tendon_routing_radii(bone_joint_spec)
@@ -194,6 +194,50 @@ def build_finger_config(bone_joint_spec, base_pose_4x4):
 
 
 # ---- Hand config builder ----
+
+def get_opposing_finger_config(finger_type="index", finger_separation=0.04):
+    """Build configs for two parallel opposing fingers.
+
+    Creates two fingers of the same type, positioned directly across from
+    each other with flexion tendons (tendon 5) facing inward. This is ideal
+    for pinch grasping and object manipulation.
+
+    Parameters
+    ----------
+    finger_type : str
+        Finger anatomy to use ("index", "middle", "ring", "pinky", or "thumb").
+    finger_separation : float
+        Distance between finger base positions along the Z-axis (meters).
+
+    Returns
+    -------
+    list of (str, TendonRobotSolverConfig)
+        Two configs: ("finger_left", config1), ("finger_right", config2)
+    """
+    bone_joint_spec = DEFAULT_BONE_JOINT_SPECS[finger_type]
+
+    # Finger 1 (left): rotate 90 deg around y so flexion tendon faces -z
+    base_pose_1 = compute_finger_base_pose(
+        fan_angle_rad=0.0,
+        palm_offset=[0, 0, finger_separation / 2],
+        fan_axis='x',
+    )
+    base_pose_1[:3, :3] = _rotation_y(np.pi / 2) @ base_pose_1[:3, :3]
+
+    # Finger 2 (right): Rotated -90 deg around y so flexion tendon faces +z, 
+    R_base = _default_base_rotation()
+    R_flip = _rotation_y(-np.pi/2.)
+    R = R_flip @ R_base
+
+    base_pose_2 = np.eye(4)
+    base_pose_2[:3, :3] = R
+    base_pose_2[:3, 3] = [0, 0, -finger_separation / 2]
+
+    config1 = build_finger_config(bone_joint_spec, base_pose_1)
+    config2 = build_finger_config(bone_joint_spec, base_pose_2)
+
+    return [("finger_left", config1), ("finger_right", config2)]
+
 
 def get_hand_config(num_fingers=4, thumb_side="right", finger_spread_angle_deg=30.0):
     """Build solver configs for all fingers of a hand.

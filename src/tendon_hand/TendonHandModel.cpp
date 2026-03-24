@@ -471,6 +471,11 @@ Values TendonHandModel::get_initial_values() const {
         }, finger);
     }
 
+    // Add object initial pose if object is set
+    if (has_object_) {
+        values.insert(object_key_, object_prior_mean_);
+    }
+
     return values;
 }
 
@@ -487,6 +492,13 @@ TendonHandMarginals TendonHandModel::get_marginals(
         std::visit([&](const auto& finger_ptr) {
             solution.fingers.push_back(finger_ptr->get_marginals(values, marginals));
         }, finger);
+    }
+
+    // Extract object pose if it exists
+    solution.has_object = has_object_;
+    if (has_object_) {
+        solution.object_pose.mean = values.at<gtsam::Pose3>(object_key_).matrix();
+        solution.object_pose.cov = marginals.marginalCovariance(object_key_);
     }
 
     return solution;

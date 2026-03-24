@@ -12,6 +12,8 @@
 struct TendonHandMarginals {
     std::vector<TendonRobotMarginals> fingers;
     std::vector<std::string> finger_names;
+    bool has_object = false;
+    Pose3Gaussian object_pose;
 };
 
 
