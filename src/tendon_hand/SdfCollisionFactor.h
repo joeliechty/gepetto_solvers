@@ -7,13 +7,13 @@
 
 namespace crest_sparse {
 
-class SdfContactFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
+class SsdCollisionFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
 private:
     double R_; // contact radius threshold
     openvdb::FloatGrid::Ptr sdf_grid_; // SDF grid for collision checking
 
 public:
-    SdfContactFactor(gtsam::Key finger_key, gtsam::Key object_key, double radius,
+    SsdCollisionFactor(gtsam::Key finger_key, gtsam::Key object_key, double radius,
                      const openvdb::FloatGrid::Ptr& sdf_grid,
                      const gtsam::SharedNoiseModel& noise_model)
         : NoiseModelFactorN(noise_model, finger_key, object_key), R_(radius), sdf_grid_(sdf_grid) {}

@@ -5,12 +5,12 @@
 
 namespace crest_sparse {
 
-    class SphereContactFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
+    class SphereCollisionFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
     private:
         double R_; // combined radius threshold for contact (r1 + r2)
 
     public:
-        SphereContactFactor(gtsam::Key key1, gtsam::Key key2, double r1, double r2, gtsam::SharedNoiseModel noiseModel)
+        SphereCollisionFactor(gtsam::Key key1, gtsam::Key key2, double r1, double r2, gtsam::SharedNoiseModel noiseModel)
             : NoiseModelFactorN(noiseModel, key1, key2), R_(r1 + r2) {}
 
         gtsam::Vector evaluateError(const gtsam::Pose3& pose1, const gtsam::Pose3& pose2,
@@ -22,15 +22,15 @@ namespace crest_sparse {
             gtsam::Point3 p2 = pose2.translation(H2 ? &D_p2_pose2 : nullptr);
 
             double d = gtsam::distance3(p1, p2);
-            if (d < 1e-7) d = 1e-7; // Protect against divide-by-zero on perfect overlap
+            if (d < 1e-7) d = 1e-7;             // Protect against divide-by-zero on perfect overlap
 
-            double alpha = 2000.0; // Stiff transition: cushion is ~2mm thick
-            double x = R_ - d;     // Positive when penetrating
+            double alpha = 2000.0;              // Stiff transition: cushion is ~2mm thick
+            double no_check_thresh = -0.002;    // If we're more than 2mm outside the combined radius, skip the expensive math and return zero.
+            double x = R_ - d;                  // Positive when penetrating
 
             // --- EARLY EXIT (Maintains Matrix Sparsity) ---
             // If distance is safely outside the 2mm soft cushion, return exactly zero.
-            // This allows GTSAM's sparse solvers to bypass unnecessary math.
-            if (x < -0.002) {
+            if (x < no_check_thresh) {
                 if (H1) *H1 = gtsam::Matrix::Zero(1, 6);
                 if (H2) *H2 = gtsam::Matrix::Zero(1, 6);
                 return gtsam::Vector1::Zero();

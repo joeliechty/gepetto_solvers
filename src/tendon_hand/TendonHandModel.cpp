@@ -1,8 +1,8 @@
 #include "TendonHandModel.h"
 #include "tendon_robot/TendonRobotSolver.h"
 #include "utils/MiscInline.h"
-#include "SphereContactFactor.h"
-#include "SdfContactFactor.h"
+#include "SphereCollisionFactor.h"
+#include "SsdCollisionFactor.h"
 
 #include <gtsam/slam/PriorFactor.h>
 
@@ -359,7 +359,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     gtsam::Pose3 p_o = current_values.at<gtsam::Pose3>(object_key_);
                     
                     if (gtsam::distance3(p_f.translation(), p_o.translation()) < 0.10) { // 10cm broad phase
-                        graph.add(crest_sparse::SdfContactFactor(k_finger, object_key_, r_finger, sdf_grid_, sdf_noise));
+                        graph.add(crest_sparse::SsdCollisionFactor(k_finger, object_key_, r_finger, sdf_grid_, sdf_noise));
                     }
                 }
             }
@@ -455,7 +455,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
 
     // Add all collision factors to the graph (must be sequential)
     for (const auto& [k1, k2] : collision_pairs) {
-        graph.add(crest_sparse::SphereContactFactor(k1, k2, radius, radius, contact_noise));
+        graph.add(crest_sparse::SphereCollisionFactor(k1, k2, radius, radius, contact_noise));
     }
 
     return graph;
