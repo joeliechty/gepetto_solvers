@@ -32,6 +32,10 @@ public:
 
     TendonHandModel& model() { return *hand_; }
 
+    void set_object(const std::string& vdb_path,
+                    const gtsam::Pose3& initial_pose,
+                    const Eigen::VectorXd& prior_sigmas);
+
     // Refresh cached initial values (useful after calling set_object on the model)
     void refresh_initial_values() { get_initial_values(); }
 

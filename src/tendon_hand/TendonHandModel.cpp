@@ -2,7 +2,9 @@
 #include "tendon_robot/TendonRobotSolver.h"
 #include "utils/MiscInline.h"
 #include "SphereCollisionFactor.h"
-#include "SsdCollisionFactor.h"
+#include "SdfCollisionFactor.h"
+#include "DummyPointContactFactor.h" 
+#include <gtsam/inference/Symbol.h>
 
 #include <gtsam/slam/PriorFactor.h>
 
@@ -345,25 +347,24 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         // Add rolling constraint prior
         graph.add(gtsam::PriorFactor<gtsam::Pose3>(object_key_, object_prior_mean_, object_prior_noise_));
 
-        auto sdf_noise = gtsam::noiseModel::Isotropic::Sigma(1, 2e-3);
-        double r_finger = 0.005;
+        // Define the noise model for our 2D Dummy Point error (e1, e2)
+        auto contact_noise = gtsam::noiseModel::Isotropic::Sigma(2, 1e-4);
+        double r_finger = 0.005; // 5mm radius
 
+        // Add the target factor to the TIP of every finger
         for (size_t f1 = 0; f1 < fingers_.size(); ++f1) {
             int nodes_f1 = get_num_nodes(f1);
-            for (int n1 = 3; n1 < nodes_f1; ++n1) { // Skip knuckles
-                gtsam::Key k_finger = get_pose_key(f1, n1);
-                
-                // Broad phase: Check if finger is close to object's bounding box center
-                if (current_values.exists(k_finger) && current_values.exists(object_key_)) {
-                    gtsam::Pose3 p_f = current_values.at<gtsam::Pose3>(k_finger);
-                    gtsam::Pose3 p_o = current_values.at<gtsam::Pose3>(object_key_);
-                    
-                    if (gtsam::distance3(p_f.translation(), p_o.translation()) < 0.10) { // 10cm broad phase
-                        graph.add(crest_sparse::SsdCollisionFactor(k_finger, object_key_, r_finger, sdf_grid_, sdf_noise));
-                    }
-                }
-            }
+            int tip_node_idx = nodes_f1 - 1; // Get the index of the very last node
+
+            gtsam::Key k_tip = get_pose_key(f1, tip_node_idx);
+            gtsam::Key k_dummy = gtsam::Symbol('D', f1); 
+
+            // Add the equality constraint to pull the tip to the SDF surface
+            graph.add(crest_sparse::DummyPointContactFactor(
+                k_tip, object_key_, k_dummy, r_finger, sdf_grid_, contact_noise
+            ));
         }
+
     }
 
 #ifdef CREST_USE_OPENMP
@@ -465,13 +466,27 @@ NonlinearFactorGraph TendonHandModel::build_graph(
 Values TendonHandModel::get_initial_values() const {
     Values values;
 
-    for (const auto& finger : fingers_) {
+    for (size_t f = 0; f < fingers_.size(); ++f) {
         std::visit([&](const auto& finger_ptr) {
-            values.insert(finger_ptr->get_initial_values());
-        }, finger);
+            //get initial values for the finger
+            gtsam::Values finger_values = finger_ptr->get_initial_values();
+            values.insert(finger_values);
+
+            // if we have an object, initialize the dummy point for the finger
+            if (has_object_) {
+                int tip_idx = finger_ptr->get_num_nodes() - 1;
+                gtsam::Key tip_key = finger_ptr->rod_->get_pose_key(tip_idx);
+                gtsam::Pose3 tip_pose = finger_values.at<gtsam::Pose3>(tip_key);
+
+             // Initialize dummy point D at the fingertips initial position
+             gtsam::Key dummy_key = gtsam::Symbol('D', 1000 * f + tip_idx);
+             values.insert(dummy_key, tip_pose.translation());
+            }
+
+        }, fingers_[f]);
     }
 
-    // Add object initial pose if object is set
+    // Add object initial pose
     if (has_object_) {
         values.insert(object_key_, object_prior_mean_);
     }

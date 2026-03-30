@@ -23,6 +23,13 @@ void TendonHandSolver::get_initial_values() {
     values_ = hand_->get_initial_values();
 }
 
+void TendonHandSolver::set_object(const std::string& vdb_path,
+                                  const gtsam::Pose3& initial_pose,
+                                  const Eigen::VectorXd& prior_sigmas) {
+    hand_->set_object(vdb_path, initial_pose, prior_sigmas);
+    get_initial_values();
+}
+
 
 void TendonHandSolver::build_graph() {
     graph_ = hand_->build_graph(tensions_, tip_wrenches_, values_);
