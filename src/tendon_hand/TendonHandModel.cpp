@@ -17,6 +17,10 @@
 
 using namespace gtsam;
 
+namespace {
+constexpr char kDummyPointSymbol = 'Y';
+}
+
 
 TendonHandModel::TendonHandModel(
     const std::vector<std::pair<std::string, TendonRobotSolverConfig>>& finger_configs,
@@ -348,7 +352,10 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         graph.add(gtsam::PriorFactor<gtsam::Pose3>(object_key_, object_prior_mean_, object_prior_noise_));
 
         // Define the noise model for our 2D Dummy Point error (e1, e2)
-        auto contact_noise = gtsam::noiseModel::Isotropic::Sigma(2, 1e-4);
+        auto base_contact_noise = gtsam::noiseModel::Isotropic::Sigma(2, 1e-4);
+        auto contact_noise = gtsam::noiseModel::Robust::Create(
+            gtsam::noiseModel::mEstimator::Huber::Create(1.345), base_contact_noise);
+            
         double r_finger = 0.005; // 5mm radius
 
         // Add the target factor to the TIP of every finger
@@ -357,12 +364,23 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             int tip_node_idx = nodes_f1 - 1; // Get the index of the very last node
 
             gtsam::Key k_tip = get_pose_key(f1, tip_node_idx);
-            gtsam::Key k_dummy = gtsam::Symbol('D', f1); 
+            gtsam::Key k_dummy = gtsam::Symbol(kDummyPointSymbol, f1);
 
             // Add the equality constraint to pull the tip to the SDF surface
             graph.add(crest_sparse::DummyPointContactFactor(
                 k_tip, object_key_, k_dummy, r_finger, sdf_grid_, contact_noise
             ));
+
+            // Add a very weak prior to the dummy point to make the linear system full rank.
+            // We gently anchor it to the fingertip's current position with a 1.0 meter sigma.
+            if (current_values.exists(k_tip)) {
+                gtsam::Pose3 tip_pose = current_values.at<gtsam::Pose3>(k_tip);
+                auto weak_prior_noise = gtsam::noiseModel::Isotropic::Sigma(3, 1.0); 
+                graph.add(gtsam::PriorFactor<gtsam::Point3>(
+                    k_dummy, tip_pose.translation(), weak_prior_noise
+                ));
+            }
+
         }
 
     }
@@ -478,9 +496,28 @@ Values TendonHandModel::get_initial_values() const {
                 gtsam::Key tip_key = finger_ptr->rod_->get_pose_key(tip_idx);
                 gtsam::Pose3 tip_pose = finger_values.at<gtsam::Pose3>(tip_key);
 
-             // Initialize dummy point D at the fingertips initial position
-             gtsam::Key dummy_key = gtsam::Symbol('D', 1000 * f + tip_idx);
-             values.insert(dummy_key, tip_pose.translation());
+                gtsam::Point3 p_finger = tip_pose.translation();
+                gtsam::Point3 p_object = object_prior_mean_.translation();
+                
+                // Calculate the vector pointing from the finger to the object
+                gtsam::Vector3 v_to_object = p_object - p_finger;
+                double dist = v_to_object.norm();
+                
+                double r_finger = 0.005;
+                gtsam::Point3 surface_point;
+
+                if (dist > 1e-6) {
+                    // Normalize the vector, scale it by the radius, and add to the finger center
+                    // This perfectly places the point on the sphere's surface facing the object
+                    surface_point = p_finger + (v_to_object / dist) * r_finger;
+                } else {
+                    // Fallback just in case the object and finger spawn exactly at the same coordinate
+                    surface_point = p_finger + gtsam::Vector3(0.0, 0.0, r_finger);
+                }
+
+                // Insert the dummy point
+                gtsam::Key dummy_key = gtsam::Symbol('Y', f); 
+                values.insert(dummy_key, surface_point);
             }
 
         }, fingers_[f]);

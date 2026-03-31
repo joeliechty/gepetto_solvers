@@ -19,8 +19,10 @@ def solve_ik_grasp(solver, vdb_path, finger_names, target_pose, plotter=None):
     free_tension_cov = (5.0) ** 2 * np.eye(num_tendons)
 
     tip_wrenches = [crest_sparse.Vector6Gaussian(np.zeros(6), (1e-3)**2 * np.eye(6)) for _ in range(num_fingers)]
-    tensions_free_in = [crest_sparse.VectorXGaussian(np.zeros(num_tendons), free_tension_cov) for _ in range(num_fingers)]
-
+    initial_tensions = np.zeros(num_tendons)
+    initial_tensions[5] = 0.5  # 0.5 Newtons of flexion
+    tensions_free_in = [crest_sparse.VectorXGaussian(initial_tensions, free_tension_cov) for _ in range(num_fingers)]
+    
     # --- Setup ---
     print("\n--- INVERSE KINEMATICS GRASP SOLVER ---")
     print(f"Object Target Position: {target_pose[0:3, 3]}")
@@ -72,7 +74,7 @@ def main(vdb_path=None):
     # Choose 1-4 fingers and thumb_side="right", "left", "both", or None
     THUMB_SIDE = None
     FINGER_SPREAD_ANGLE_DEG = 30.0
-    NUM_FINGERS = 4
+    NUM_FINGERS = 1
     configs = get_hand_config(num_fingers=NUM_FINGERS, thumb_side=THUMB_SIDE, finger_spread_angle_deg=FINGER_SPREAD_ANGLE_DEG)
     finger_names = [name for name, _ in configs]
 
