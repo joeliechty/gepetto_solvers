@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from tendon_robot import DistLoadSolver
+from tendon_finger import DistLoadSolver
 
-from _plotting import TendonRobotPlotter
+from _plotting import TendonFingerPlotter
 from config import get_base_config
 from utils import moving_savgol, setup_plt, generate_trajectory, GaussianProcessNoiseModel
 
@@ -53,7 +53,7 @@ def simulation(tensions_cmd, position_cmd, do_plot, save_frames):
         {'radius': 0.02, 'center': np.array([-0.06, 0.07, -0.015]), 'z': np.array([-1.0, 0.0, 0.0]), 'length': 0.1}
     ]
     
-    plotter = TendonRobotPlotter('dist_load_sim', save_frames_mode=save_frames, 
+    plotter = TendonFingerPlotter('dist_load_sim', save_frames_mode=save_frames, 
         cylinders=cylinders, plot_backbone_ellipsoids=False, plot_dist_load=True)
 
     num_poses = config.num_discs + (config.num_discs - 1) * config.poses_between_discs

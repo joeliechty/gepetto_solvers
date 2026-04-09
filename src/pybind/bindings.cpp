@@ -72,5 +72,6 @@ PYBIND11_MODULE(crest_sparse, m) {
     bind_tendon_robot(m);
     bind_multi_robot(m);
     bind_tendon_hand(m);
+    bind_tendon_finger(m);
     bind_utils(m);
 }

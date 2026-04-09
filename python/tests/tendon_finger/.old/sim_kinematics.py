@@ -3,8 +3,8 @@ import copy
 import numpy as np
 import matplotlib.pyplot as plt
 
-from tendon_robot import TipForceSolver
-from _plotting import TendonRobotPlotter
+from tendon_finger import TipForceSolver
+from _plotting import TendonFingerPlotter
 from config import get_base_config
 from utils import TipForceFunction, generate_waypoint_trajectory, setup_plt
 from benchmark import solve_kinematics_bvp
@@ -24,7 +24,7 @@ def run_trajectory_simulation(sim_time, poses_between_discs):
         config.use_midpoint = True
         midpoint_solvers.append(TipForceSolver(config))
 
-    plotter = TendonRobotPlotter('kinematics_sim', plot_tip_force=True, save_frames_mode=True)
+    plotter = TendonFingerPlotter('kinematics_sim', plot_tip_force=True, save_frames_mode=True)
     t, positions, tensions, waypoints = generate_waypoint_trajectory(sim_time, seed=42)
     tip_force_function = TipForceFunction(max_magnitude=2 * config.tip_force_prior_std, seed=42)
 

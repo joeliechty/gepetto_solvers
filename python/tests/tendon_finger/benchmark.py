@@ -28,7 +28,7 @@ def unpack_state(y):
     }
 
 
-class TendonRobotSolver:
+class TendonFingerSolver:
     def __init__(self, config, holes):
         self.K_se_inv = np.array(config.K_inv[3:,3:])
         self.K_bt_inv = np.array(config.K_inv[:3,:3])

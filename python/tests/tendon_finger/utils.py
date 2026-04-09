@@ -163,7 +163,7 @@ class moving_savgol:
 
 def generate_trajectory(position_function, sim_time, damping=5e-2, frame_rate=30):
     config = get_base_config()
-    solver = crest_sparse.TendonRobotSolver(config)
+    solver = crest_sparse.TendonFingerSolver(config)
 
     num_steps = int(sim_time * frame_rate)
     tensions_min = 0.1 * np.ones(4)

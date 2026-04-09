@@ -1,6 +1,6 @@
 import numpy as np
 
-from crest_sparse import TendonRobotSolverConfig, TendonInput, PerDiscTendonInput, RoutingAngleFunction, RoutingFunctionParams
+from crest_sparse import TendonFingerSolverConfig, TendonInput, PerDiscTendonInput, RoutingAngleFunction, RoutingFunctionParams
 
 
 def get_K_inv():
@@ -158,7 +158,7 @@ def get_tendon_input():
 
 
 def get_base_config():
-    config = TendonRobotSolverConfig()
+    config = TendonFingerSolverConfig()
 
     config.base.use_dense = False
     config.base.linear_solver_type = "MULTIFRONTAL_QR"
@@ -381,7 +381,7 @@ def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
         Per-tendon per-segment radius specification.
         Defaults to a linear taper from 5mm to 3mm if not provided.
     """
-    config = TendonRobotSolverConfig()
+    config = TendonFingerSolverConfig()
 
     config.base.use_dense = False
     config.base.linear_solver_type = "MULTIFRONTAL_QR"
