@@ -33,3 +33,5 @@ venv/
 setup_log.txt
 
 *.vdb
+
+*.png

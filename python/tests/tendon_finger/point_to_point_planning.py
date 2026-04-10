@@ -2,6 +2,7 @@ import numpy as np
 import time
 import crest_sparse
 from .._plotting.tendon_finger_plotter import TendonFingerPlotter
+from .._plotting.trajectory_plotter import plot_trajectory
 from .config import get_6tendon_config
 
 def main():
@@ -12,7 +13,9 @@ def main():
     # 2. Setup Planner Config
     planner_config = crest_sparse.TrajectoryPlannerConfig()
     planner_config.model_config = model_config
-    planner_config.K = 100       # K+1 = 21 time steps
+    planner_config.model_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY"
+    planner_config.model_config.base.delta_initial = 1.0
+    planner_config.K = 10       # K+1 = 21 time steps
     planner_config.dt = 0.1
 
     # Background Tensions: passive tendons (0-4) are tight, active tendon (5) is free
@@ -82,6 +85,10 @@ def main():
         time.sleep(0.5)
 
     input("Press Enter to close...")
+
+    # 5. Plot full trajectory state
+    tendon_names = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
+    plot_trajectory(result, tendon_names=tendon_names, save_path="point_to_point_trajectory.png")
 
 if __name__ == "__main__":
     main()
