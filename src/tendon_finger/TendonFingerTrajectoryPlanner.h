@@ -47,7 +47,13 @@ struct TrajectoryPlannerConfig {
     Eigen::VectorXd background_tensions_sigmas;  // tight for passive, loose for active
 
     // GP temporal prior between consecutive tensions
-    Eigen::MatrixXd gp_Qc;  // N x N process noise covariance
+    Eigen::MatrixXd gp_tense_Qc;  // N x N process noise covariance
+
+    // GP temporal prior between consecutive tendon lengths (Eq 13)
+    Eigen::MatrixXd gp_len_Qc;  // N x N process noise covariance for lengths
+
+    // GP temporal prior between consecutive poses (6x6 for SE3)
+    gtsam::Matrix6 gp_pose_Qc = gtsam::Matrix6::Identity();
 
     // Tension limit barrier
     double tension_limit_alpha = 10.0;

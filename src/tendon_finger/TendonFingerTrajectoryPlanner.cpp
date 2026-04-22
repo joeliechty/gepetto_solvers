@@ -123,7 +123,7 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
     Eigen::Matrix<double, N, N> bg_cov =
         bg_sigmas.array().square().matrix().asDiagonal();
 
-    Eigen::Matrix<double, N, N> Qc = config_.gp_Qc.topLeftCorner<N, N>();
+    // Eigen::Matrix<double, N, N> Qc = config_.gp_tense_Qc.topLeftCorner<N, N>();
 
     // build the graph for each time step
     for (int k = 0; k <= K; ++k) {
@@ -163,14 +163,41 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
         }
 
         // 5. GP temporal prior between consecutive time steps
-        if (k < K) {
-            auto gp_noise = noiseModel::Gaussian::Covariance(Qc * config_.dt);
+        // 5.1 GP on tensions (commented out - using GP on lengths instead)
+        // if (k < K) {
+        //     auto gp_noise = noiseModel::Gaussian::Covariance(Qc * config_.dt);
+        //     graph_.add(BetweenFactor<Eigen::Vector<double, N>>(
+        //         models_[k]->get_tensions_key(),
+        //         models_[k + 1]->get_tensions_key(),
+        //         Eigen::Vector<double, N>::Zero(),
+        //         gp_noise));
+        // }
+
+        // 5.2 GP on tendon lengths (identity state transition)
+        if (k < K && config_.gp_len_Qc.size() > 0) {
+            Eigen::Matrix<double, N, N> Qc_len = config_.gp_len_Qc.topLeftCorner<N, N>();
+            auto gp_len_noise = noiseModel::Gaussian::Covariance(Qc_len * config_.dt);
             graph_.add(BetweenFactor<Eigen::Vector<double, N>>(
-                models_[k]->get_tensions_key(),
-                models_[k + 1]->get_tensions_key(),
+                models_[k]->get_lengths_key(),
+                models_[k + 1]->get_lengths_key(),
                 Eigen::Vector<double, N>::Zero(),
-                gp_noise));
+                gp_len_noise));
         }
+
+        // 5.3 GP on poses: apply between factor for every node i: T_{i,k} -> T_{i,k+1}
+        // if (k < K) {
+        //     auto gp_pose_noise = noiseModel::Gaussian::Covariance(config_.gp_pose_Qc * config_.dt);
+        //     const auto& pose_keys_k  = models_[k]->rod_->get_pose_keys();
+        //     const auto& pose_keys_k1 = models_[k + 1]->rod_->get_pose_keys();
+        //     for (int i = 0; i < static_cast<int>(pose_keys_k.size()); ++i) {
+        //         graph_.add(BetweenFactor<Pose3>(
+        //             pose_keys_k[i],
+        //             pose_keys_k1[i],
+        //             Pose3::Identity(),
+        //             gp_pose_noise));
+        //     }
+        // }
+
     }
 
     // 6. Start boundary conditions at k=0

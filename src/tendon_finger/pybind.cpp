@@ -35,7 +35,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("tendon_config", &TendonFingerMarginals::tendon_config)
         .def_readwrite("external_wrenches", &TendonFingerMarginals::external_wrenches)
         .def_readwrite("tensions", &TendonFingerMarginals::tensions)
-        .def_readwrite("J_pose_tensions", &TendonFingerMarginals::J_pose_tensions);
+        .def_readwrite("J_pose_tensions", &TendonFingerMarginals::J_pose_tensions)
+        .def_readwrite("tendon_lengths", &TendonFingerMarginals::tendon_lengths);
 
     py::class_<Solution<TendonFingerMarginals>>(m, "TendonFingerSolution")
         .def(py::init<>())
@@ -73,7 +74,8 @@ void bind_tendon_finger(py::module& m) {
         // Background tension prior
         .def_readwrite("background_tensions_mean", &TrajectoryPlannerConfig::background_tensions_mean)
         .def_readwrite("background_tensions_sigmas", &TrajectoryPlannerConfig::background_tensions_sigmas)
-        .def_readwrite("gp_Qc", &TrajectoryPlannerConfig::gp_Qc)
+        .def_readwrite("gp_tense_Qc", &TrajectoryPlannerConfig::gp_tense_Qc)
+        .def_readwrite("gp_len_Qc", &TrajectoryPlannerConfig::gp_len_Qc)
         .def_readwrite("tension_limit_alpha", &TrajectoryPlannerConfig::tension_limit_alpha)
         .def_readwrite("tension_limit_q_min", &TrajectoryPlannerConfig::tension_limit_q_min)
         .def_readwrite("active_tendon_indices", &TrajectoryPlannerConfig::active_tendon_indices)

@@ -33,7 +33,7 @@ def main():
 
     start_time = time.time()
 
-    for i in range(1000):
+    for i in range(10000):
         tensions_mean = np.zeros(num_tendons)
         # Tendons 0-4 (passive): constant background tension
         tensions_mean[0] = background_tension
@@ -42,7 +42,8 @@ def main():
         tensions_mean[3] = background_tension
         tensions_mean[4] = background_tension
         # Tendon 5 (active flexor at 180 deg): varies
-        tensions_mean[5] = background_tension + 1.0 * (np.cos(0.01 * i - np.pi) + 1)
+        tensions_mean[5] = background_tension + 2.0 * (np.cos(0.01 * i - np.pi) + 1)
+        # tensions_mean[5] = background_tension
 
         tip_wrench_mean = np.zeros(6)
 
@@ -56,7 +57,10 @@ def main():
             print(f"Iteration {i}/1000")
             print(f"  Tensions mean: {tensions_mean}")
             print(f"  Tip wrench mean: {tip_wrench_mean}")
+            print(f"  Tip pose mean:\n{solution.marginals.rod.states[-1].pose.mean}")
+            print(f"  Tendon lengths: {solution.marginals.tendon_lengths}")
 
+                  
     end_time = time.time()
     print(f"Completed 1000 iterations in {end_time - start_time:.2f} seconds.")
 

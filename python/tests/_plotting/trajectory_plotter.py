@@ -35,8 +35,12 @@ def _extract_trajectory_data(trajectory):
         for d in range(num_discs):
             external_wrenches[k, d] = m.external_wrenches[d].mean
 
+    # Tendon lengths: (K, num_tendons)
+    tendon_lengths = np.array([m.tendon_lengths for m in trajectory])
+
     return {
         "tensions": tensions,
+        "tendon_lengths": tendon_lengths,
         "disc_positions": disc_positions,
         "disc_euler_xyz": disc_euler_xyz,
         "internal_wrenches": internal_wrenches,
@@ -75,10 +79,10 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
     disc_cmap = plt.cm.viridis(np.linspace(0, 1, num_discs))
     tendon_cmap = plt.cm.tab10(np.linspace(0, 1, max(num_tendons, 2)))
 
-    fig = plt.figure(figsize=(18, 28))
-    fig.suptitle("Tendon Finger Trajectory", fontsize=14, fontweight="bold")
+    fig = plt.figure(figsize=(18, 32))
+    # fig.suptitle("Tendon Finger Trajectory", fontsize=14, fontweight="bold")
 
-    gs = gridspec.GridSpec(7, 3, figure=fig, hspace=0.55, wspace=0.35)
+    gs = gridspec.GridSpec(8, 3, figure=fig, hspace=0.55, wspace=0.35)
 
     # ------------------------------------------------------------------ #
     # Row 0: Tendon tensions (full width)                                 #
@@ -94,11 +98,24 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
     ax_tensions.grid(True, alpha=0.3)
 
     # ------------------------------------------------------------------ #
-    # Row 1: Disc tip positions (x, y, z)                                 #
+    # Row 1: Tendon lengths (full width)                                  #
+    # ------------------------------------------------------------------ #
+    ax_lengths = fig.add_subplot(gs[1, :])
+    for i in range(num_tendons):
+        ax_lengths.plot(steps, data["tendon_lengths"][:, i], label=tendon_names[i],
+                        color=tendon_cmap[i], linewidth=1.5)
+    ax_lengths.set_title("Tendon Lengths")
+    ax_lengths.set_xlabel("Step")
+    ax_lengths.set_ylabel("Length (m)")
+    ax_lengths.legend(ncol=num_tendons, fontsize=8, loc="upper right")
+    ax_lengths.grid(True, alpha=0.3)
+
+    # ------------------------------------------------------------------ #
+    # Row 2: Disc tip positions (x, y, z)                                 #
     # ------------------------------------------------------------------ #
     pos_labels = ["X (m)", "Y (m)", "Z (m)"]
     for col, lbl in enumerate(pos_labels):
-        ax = fig.add_subplot(gs[1, col])
+        ax = fig.add_subplot(gs[2, col])
         for d in range(num_discs):
             ax.plot(steps, data["disc_positions"][:, d, col],
                     color=disc_cmap[d], linewidth=1.2,
@@ -107,14 +124,14 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
         ax.set_xlabel("Step")
         ax.set_ylabel(lbl)
         ax.grid(True, alpha=0.3)
-    fig.axes[1].legend(ncol=2, fontsize=7, loc="best")
+    fig.axes[2].legend(ncol=2, fontsize=7, loc="best")
 
     # ------------------------------------------------------------------ #
     # Row 2: Disc tip orientations (roll, pitch, yaw)                     #
     # ------------------------------------------------------------------ #
     euler_labels = ["Roll (°)", "Pitch (°)", "Yaw (°)"]
     for col, lbl in enumerate(euler_labels):
-        ax = fig.add_subplot(gs[2, col])
+        ax = fig.add_subplot(gs[3, col])
         for d in range(num_discs):
             ax.plot(steps, data["disc_euler_xyz"][:, d, col],
                     color=disc_cmap[d], linewidth=1.2)
@@ -130,7 +147,7 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
     int_moment_labels = ["Internal Mx (N·m)", "Internal My (N·m)", "Internal Mz (N·m)"]
 
     for col, lbl in enumerate(int_force_labels):
-        ax = fig.add_subplot(gs[3, col])
+        ax = fig.add_subplot(gs[4, col])
         for d in range(num_discs):
             ax.plot(steps, data["internal_wrenches"][:, d, 3 + col],
                     color=disc_cmap[d], linewidth=1.2,
@@ -139,10 +156,10 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
         ax.set_xlabel("Step")
         ax.set_ylabel("Force (N)")
         ax.grid(True, alpha=0.3)
-    fig.axes[7].legend(ncol=2, fontsize=7, loc="best")
+    fig.axes[8].legend(ncol=2, fontsize=7, loc="best")
 
     for col, lbl in enumerate(int_moment_labels):
-        ax = fig.add_subplot(gs[4, col])
+        ax = fig.add_subplot(gs[5, col])
         for d in range(num_discs):
             ax.plot(steps, data["internal_wrenches"][:, d, col],
                     color=disc_cmap[d], linewidth=1.2)
@@ -158,7 +175,7 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
     ext_moment_labels = ["External Mx (N·m)", "External My (N·m)", "External Mz (N·m)"]
 
     for col, lbl in enumerate(ext_force_labels):
-        ax = fig.add_subplot(gs[5, col])
+        ax = fig.add_subplot(gs[6, col])
         for d in range(num_discs):
             ax.plot(steps, data["external_wrenches"][:, d, 3 + col],
                     color=disc_cmap[d], linewidth=1.2,
@@ -167,10 +184,10 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
         ax.set_xlabel("Step")
         ax.set_ylabel("Force (N)")
         ax.grid(True, alpha=0.3)
-    fig.axes[13].legend(ncol=2, fontsize=7, loc="best")
+    fig.axes[14].legend(ncol=2, fontsize=7, loc="best")
 
     for col, lbl in enumerate(ext_moment_labels):
-        ax = fig.add_subplot(gs[6, col])
+        ax = fig.add_subplot(gs[7, col])
         for d in range(num_discs):
             ax.plot(steps, data["external_wrenches"][:, d, col],
                     color=disc_cmap[d], linewidth=1.2)
@@ -182,6 +199,67 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
     if save_path is not None:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Saved trajectory plot to: {save_path}")
+
+    if show:
+        plt.show()
+
+    return fig
+
+
+def plot_trajectory_comparison(result, control_traj, planner_config, tendon_names=None, show=True, save_path=None):
+    """
+    Compare GP-interpolated tendon lengths against the discrete planned trajectory.
+
+    Parameters
+    ----------
+    result : trajectory planner result
+        result.trajectory is a list of marginals (K+1 steps).
+    control_traj : np.ndarray, shape (N_control, num_tendons)
+        High-rate interpolated tendon lengths from interpolate_gp_trajectory.
+    planner_config : TrajectoryPlannerConfig
+        Used for dt and K to reconstruct discrete time axis.
+    tendon_names : list of str, optional
+    show : bool
+    save_path : str, optional
+    """
+    num_tendons = control_traj.shape[1]
+    if tendon_names is None:
+        tendon_names = [f"T{i}" for i in range(num_tendons)]
+
+    K = planner_config.K
+    dt = planner_config.dt
+    control_hz = (len(control_traj) - 1) / (K * dt)
+    control_dt = 1.0 / control_hz
+
+    # Discrete planned time axis (K+1 points)
+    discrete_times = np.array([k * dt for k in range(K + 1)])
+    discrete_lengths = np.array([result.trajectory[k].tendon_lengths for k in range(K + 1)])
+
+    # Interpolated time axis
+    interp_times = np.arange(len(control_traj)) * control_dt
+
+    cmap = plt.cm.tab10(np.linspace(0, 1, max(num_tendons, 2)))
+
+    fig, axes = plt.subplots(num_tendons, 1, figsize=(10, 2.5 * num_tendons), sharex=True)
+    if num_tendons == 1:
+        axes = [axes]
+
+    for i, ax in enumerate(axes):
+        ax.plot(interp_times, control_traj[:, i], color=cmap[i], linewidth=1.2, label="Interpolated")
+        ax.plot(discrete_times, discrete_lengths[:, i], "o--", color=cmap[i],
+                markersize=6, linewidth=1.0, alpha=0.7, label="Planned")
+        ax.set_ylabel("Length (m)")
+        ax.set_title(tendon_names[i])
+        ax.legend(fontsize=8, loc="best")
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle("Planned vs. GP-Interpolated Tendon Lengths", fontsize=13, fontweight="bold")
+    fig.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved comparison plot to: {save_path}")
 
     if show:
         plt.show()

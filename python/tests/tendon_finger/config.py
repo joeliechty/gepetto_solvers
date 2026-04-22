@@ -390,13 +390,13 @@ def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
 
     if bone_joint_spec is None:
         bone_joint_spec = [
-            ("bone", 0.05),     # metacarpal
+            ("bone", 0.06),     # metacarpal
             ("joint", 0.01),    # MCP
-            ("bone", 0.05),     # proximal phalanx
-            ("joint", 0.01),    # PIP
-            ("bone", 0.03),     # middle phalanx
-            ("joint", 0.01),    # DIP
-            ("bone", 0.02),     # distal phalanx
+            ("bone", 0.03),     # proximal phalanx
+            ("joint", 0.005),    # PIP
+            ("bone", 0.015),     # middle phalanx
+            ("joint", 0.005),    # DIP
+            ("bone", 0.012),     # distal phalanx
         ]
 
     disc_positions, segment_types, num_discs, total_length = \

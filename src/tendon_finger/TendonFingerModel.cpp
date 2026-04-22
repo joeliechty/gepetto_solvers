@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "TendonDiscWrenchFactor.h"
+#include "TendonLengthFactor.h"
 #include "utils/Gaussians.h"
 
 using namespace gtsam;
@@ -308,6 +309,12 @@ Key TendonFingerModel<N>::get_tensions_key() const {
 
 
 template<int N>
+Key TendonFingerModel<N>::get_lengths_key() const {
+    return Symbol('L', 1000 * id_);
+}
+
+
+template<int N>
 Key TendonFingerModel<N>::get_disc_wrench_key(int disc_idx) const {
     // We dont ever want to include disc wrenches for base disc
     if (disc_idx < 1)
@@ -332,6 +339,39 @@ Key TendonFingerModel<N>::get_external_wrench_key(int node_idx) const {
 
 
 template<int N>
+Eigen::Vector<double, N> TendonFingerModel<N>::compute_tendon_lengths(const Values& values) const {
+    Eigen::Vector<double, N> lengths = Eigen::Vector<double, N>::Zero();
+
+    for (int t = 0; t < N; ++t) {
+        double length = 0.0;
+        bool has_prev = false;
+        Point3 p_prev;
+
+        for (size_t disc_idx = 0; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
+            auto& hole_opt = tendon_config_.hole_locations[disc_idx][t];
+
+            if (hole_opt.has_value()) {
+                int pose_idx = tendon_config_.disc_pose_idx[disc_idx];
+                Pose3 disc_pose = values.at<Pose3>(rod_->get_pose_key(pose_idx));
+                Point3 p_curr = disc_pose.transformFrom(hole_opt.value());
+
+                if (has_prev) {
+                    length += (p_curr - p_prev).norm();
+                }
+                p_prev = p_curr;
+                has_prev = true;
+            } else {
+                break;
+            }
+        }
+        lengths[t] = length;
+    }
+
+    return lengths;
+}
+
+
+template<int N>
 Values TendonFingerModel<N>::get_initial_values() const {
     Values values;
 
@@ -343,6 +383,10 @@ Values TendonFingerModel<N>::get_initial_values() const {
     for (size_t disc_idx = 1; disc_idx < tendon_config_.disc_pose_idx.size(); ++disc_idx) {
         values.insert(get_disc_wrench_key(disc_idx), Vector6(Vector6::Zero()));
     }
+
+    // Compute initial tendon lengths from the straight-rod initial poses
+    Eigen::Vector<double, N> init_lengths = compute_tendon_lengths(values);
+    values.insert(get_lengths_key(), init_lengths);
 
     return values;
 }
@@ -418,6 +462,19 @@ NonlinearFactorGraph TendonFingerModel<N>::build_graph(const VectorNGaussian<N>&
             active_prev,
             active_next,
             stress_noise_));  // This could be a separate friction noise
+    }
+
+    // Tendon length inextensibility constraint
+    {
+        std::vector<Key> disc_pose_keys;
+        disc_pose_keys.reserve(num_discs_);
+        for (int d = 0; d < num_discs_; ++d)
+            disc_pose_keys.push_back(rod_->get_pose_key(tendon_config_.disc_pose_idx[d]));
+
+        auto length_noise = noiseModel::Isotropic::Sigma(N, sigma_length_);
+        graph.add(TendonLengthFactor<N>(
+            get_lengths_key(), disc_pose_keys,
+            tendon_config_.hole_locations, length_noise));
     }
 
     // Measurement prior on tensions
@@ -499,6 +556,19 @@ NonlinearFactorGraph TendonFingerModel<N>::build_graph_kinematic() const
             stress_noise_));  // This could be a separate friction noise
     }
 
+    // Tendon length inextensibility constraint
+    {
+        std::vector<Key> disc_pose_keys;
+        disc_pose_keys.reserve(num_discs_);
+        for (int d = 0; d < num_discs_; ++d)
+            disc_pose_keys.push_back(rod_->get_pose_key(tendon_config_.disc_pose_idx[d]));
+
+        auto length_noise = noiseModel::Isotropic::Sigma(N, sigma_length_);
+        graph.add(TendonLengthFactor<N>(
+            get_lengths_key(), disc_pose_keys,
+            tendon_config_.hole_locations, length_noise));
+    }
+
     return graph;
 }
 
@@ -542,6 +612,12 @@ TendonFingerMarginals TendonFingerModel<N>::get_marginals(
     }
 
     get_J_pose_tensions(marginals, m);
+
+    // Calculate the length of each tendon from disc poses
+    Eigen::Vector<double, N> lengths = compute_tendon_lengths(values);
+    m.tendon_lengths.resize(N);
+    for (int t = 0; t < N; ++t)
+        m.tendon_lengths[t] = lengths[t];
 
     return m;
 }

@@ -67,6 +67,8 @@ struct TendonFingerMarginals {
     VectorXGaussian tensions;
 
     Eigen::MatrixXd J_pose_tensions;
+
+    std::vector<double> tendon_lengths;
 };
 
 
@@ -136,7 +138,11 @@ public:
 
     gtsam::Key get_tensions_key() const;
 
+    gtsam::Key get_lengths_key() const;
+
     gtsam::Key get_disc_wrench_key(int disc_idx) const;
+
+    Eigen::Vector<double, N> compute_tendon_lengths(const gtsam::Values& values) const;
 
     inline int get_num_nodes() const { return num_nodes_; }
 
@@ -148,7 +154,7 @@ public:
 
     std::unique_ptr<CosseratRodModel> rod_;
 
-private:
+protected:
     void init_tendon_disc_config(TendonInput tendon_input, const std::vector<double>& disc_positions_normalized = {});
     void init_tendon_disc_config_per_disc(PerDiscTendonInput per_disc_input, const std::vector<double>& disc_positions_normalized = {});
 
@@ -172,6 +178,8 @@ private:
 
     gtsam::Pose3 base_pose_mean_;
     gtsam::SharedDiagonal base_pose_noise_;
+
+    double sigma_length_ = 1e-4;
 
     TendonConfig tendon_config_;
 };
