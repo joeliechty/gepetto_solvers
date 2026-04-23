@@ -5,6 +5,7 @@
 #include "TendonFingerModel.h"
 #include "TendonFingerSolver.h"
 #include "TendonFingerTrajectoryPlanner.h"
+#include "TendonFingerIterativeSolver.h"
 
 namespace py = pybind11;
 
@@ -90,4 +91,29 @@ void bind_tendon_finger(py::module& m) {
     py::class_<TendonFingerTrajectoryPlannerDispatch>(m, "TendonFingerTrajectoryPlanner")
         .def(py::init<const TrajectoryPlannerConfig&>())
         .def("plan", &TendonFingerTrajectoryPlannerDispatch::plan);
+
+    // --- Iterative (ISAM2) State Estimator ---
+
+    py::class_<TendonFingerEstimatorConfig>(m, "TendonFingerEstimatorConfig")
+        .def(py::init<>())
+        .def_readwrite("base_config", &TendonFingerEstimatorConfig::base_config)
+        .def_readwrite("background_tensions_mean", &TendonFingerEstimatorConfig::background_tensions_mean)
+        .def_readwrite("background_tensions_cov",  &TendonFingerEstimatorConfig::background_tensions_cov)
+        .def_readwrite("gp_tense_Qc", &TendonFingerEstimatorConfig::gp_tense_Qc)
+        .def_readwrite("gp_len_Qc",   &TendonFingerEstimatorConfig::gp_len_Qc)
+        .def_readwrite("gp_pose_Qc",  &TendonFingerEstimatorConfig::gp_pose_Qc);
+
+    py::class_<TendonFingerIterativeSolverDispatch>(m, "TendonFingerIterativeSolver")
+        .def(py::init<const TendonFingerEstimatorConfig&, double>(),
+             py::arg("config"), py::arg("bend_sigma"))
+        .def("step", &TendonFingerIterativeSolverDispatch::step,
+             py::arg("timestamp_sec"),
+             py::arg("tensions_meas")     = std::nullopt,
+             py::arg("lengths_meas")      = std::nullopt,
+             py::arg("measured_bend")     = std::nullopt,
+             py::arg("tip_wrench_meas")   = std::nullopt,
+             py::arg("tip_position_meas") = std::nullopt)
+        .def("get_current_marginals",
+             &TendonFingerIterativeSolverDispatch::get_current_marginals)
+        .def("num_tendons", &TendonFingerIterativeSolverDispatch::num_tendons);
 }
