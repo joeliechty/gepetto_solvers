@@ -82,6 +82,7 @@ def save_interp_trajectory(control_traj, save_path):
     """
     Saves the interpolated traj in a data structure that can be loaded by the controller later
     """
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     np.savez(save_path, trajectory=control_traj)
 
 def main():
@@ -92,10 +93,10 @@ def main():
     # 2. Setup Planner Config
     planner_config = crest_sparse.TrajectoryPlannerConfig()
     planner_config.model_config = model_config
-    # planner_config.model_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY"
+    planner_config.model_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY" # FOR APPLE
     planner_config.model_config.base.delta_initial = 1.0
     planner_config.K = 2       # K+1 steps
-    planner_hz = 2  # planning frequency
+    planner_hz = 5  # planning frequency
     planner_config.dt = 1.0 / planner_hz  # time step duration
 
     # Background Tensions: passive tendons (0-4) are tight, active tendon (5) is free

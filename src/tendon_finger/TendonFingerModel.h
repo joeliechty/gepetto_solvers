@@ -148,6 +148,8 @@ public:
 
     inline int get_num_between_nodes() const { return num_between_nodes_; }
 
+    const TendonConfig& get_tendon_config() const { return tendon_config_; }
+
     TendonFingerMarginals get_marginals(
         const gtsam::Values& values,
         const gtsam::Marginals& marginals) const;

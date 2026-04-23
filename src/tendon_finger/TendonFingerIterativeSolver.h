@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TendonFingerSolver.h"
 #include "TendonFingerEstimatorModel.h"
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/slam/BetweenFactor.h>
