@@ -131,6 +131,42 @@ void TendonFingerIterativeSolver<N>::step(
     if (prev_timestamp_.has_value()){
         dt = timestamp_sec - prev_timestamp_.value();
     }
+
+    // ========================================================================
+    // BRANCH A: SIMULTANEOUS MEASUREMENT (dt < 1e-6)
+    // ========================================================================
+    if (prev_timestamp_.has_value() && dt < 1e-6) {
+        gtsam::NonlinearFactorGraph simultaneous_factors;
+        
+        // 1. Add whatever new measurements just arrived, but attach them to 
+        // the ALREADY EXISTING keys in latest_model_
+        if (has_bend_measurement) { 
+            // Note: Use your actual boolean/optional check for the bend meas
+            simultaneous_factors.add(
+                KnuckleBendFactor(latest_model_->get_pose_key(bend_node_idx), bend_meas, bend_noise)
+            );
+        }
+        if (has_length_measurement) {
+            simultaneous_factors.add(
+                TendonLengthFactor(latest_model_->get_lengths_key(), lengths_meas, length_noise)
+            );
+        }
+
+        // 2. Update ISAM2. 
+        // We pass EMPTY initial values and EMPTY timestamps because we aren't 
+        // spawning any new variables. We just add edges to existing ones.
+        smoother_.update(simultaneous_factors, gtsam::Values(), gtsam::FixedLagSmoother::KeyTimestampMap());
+        
+        // 3. Re-extract the marginals since the estimate for this timestamp 
+        // just got more accurate with the combined sensor data.
+        current_estimate_ = smoother_.calculateEstimate();
+        
+        return; // Exit the step early. We do not advance time.
+    }
+
+    // ========================================================================
+    // BRANCH B: NORMAL TIME ADVANCEMENT (dt >= 1e-6 or First Step)
+    // ========================================================================
     
     // avoid backwards/really small time steps which can cause numerical issues, if sensors 
     // are that close to each other then we can stick them in the same state

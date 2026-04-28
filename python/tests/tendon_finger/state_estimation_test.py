@@ -35,6 +35,8 @@ def make_bend_signal(bend_hz, end_angle_deg, t_total):
     """Synthesize a linearly-ramped bend sensor reading from 0° to end_angle_deg."""
     t = np.arange(0.0, t_total, 1.0 / bend_hz)
     angles = np.deg2rad(np.linspace(0.0, end_angle_deg, len(t)))
+    # add guassian noise to simulate sensor imperfections
+    angles += np.random.normal(0.0, 1e-2, size=angles.shape)
     return t, angles
 
 
