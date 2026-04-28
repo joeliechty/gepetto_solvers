@@ -140,16 +140,20 @@ void TendonFingerIterativeSolver<N>::step(
         
         // 1. Add whatever new measurements just arrived, but attach them to 
         // the ALREADY EXISTING keys in latest_model_
-        if (has_bend_measurement) { 
-            // Note: Use your actual boolean/optional check for the bend meas
-            simultaneous_factors.add(
-                KnuckleBendFactor(latest_model_->get_pose_key(bend_node_idx), bend_meas, bend_noise)
-            );
+        if (measured_bend.has_value() && latest_model_->get_num_nodes() >= 3) {
+            int pose_idx_proximal = latest_model_->get_tendon_config().disc_pose_idx[1];
+            int pose_idx_distal = latest_model_->get_tendon_config().disc_pose_idx[2];
+            simultaneous_factors.add(KnuckleBendFactor(
+                latest_model_->rod_->get_pose_key(pose_idx_proximal),
+                latest_model_->rod_->get_pose_key(pose_idx_distal),
+                measured_bend.value(),
+                bend_noise_));
         }
-        if (has_length_measurement) {
-            simultaneous_factors.add(
-                TendonLengthFactor(latest_model_->get_lengths_key(), lengths_meas, length_noise)
-            );
+        if (lengths_meas.has_value()) {
+            simultaneous_factors.add(gtsam::PriorFactor<Eigen::Vector<double, N>>(
+                latest_model_->get_lengths_key(),
+                lengths_meas.value().mean,
+                gtsam::noiseModel::Gaussian::Covariance(lengths_meas.value().cov)));
         }
 
         // 2. Update ISAM2. 
