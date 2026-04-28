@@ -203,8 +203,18 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
 
 
 CosseratRodMarginals CosseratRodModel::get_marginals(
-    const gtsam::Values& values, 
-    const gtsam::Marginals& marginals) const 
+    const gtsam::Values& values,
+    const gtsam::Marginals& marginals) const
+{
+    return get_marginals(values, [&](gtsam::Key k) {
+        return marginals.marginalCovariance(k);
+    });
+}
+
+
+CosseratRodMarginals CosseratRodModel::get_marginals(
+    const gtsam::Values& values,
+    const CovFn& cov_of) const
 {
     CosseratRodMarginals solution;
 
@@ -212,14 +222,14 @@ CosseratRodMarginals CosseratRodModel::get_marginals(
 
     for (int i = 0; i < num_nodes_; ++i) {
         solution.states[i].pose.mean = values.at<Pose3>(pose_keys_[i]).matrix();
-        solution.states[i].pose.cov = marginals.marginalCovariance(pose_keys_[i]);
+        solution.states[i].pose.cov = cov_of(pose_keys_[i]);
 
         solution.states[i].stress.mean = values.at<Vector6>(stress_keys_[i]);
-        solution.states[i].stress.cov = marginals.marginalCovariance(stress_keys_[i]);
-        
+        solution.states[i].stress.cov = cov_of(stress_keys_[i]);
+
         solution.states[i].wrench.mean = values.at<Vector6>(wrench_keys_[i]);
-        solution.states[i].wrench.cov = marginals.marginalCovariance(wrench_keys_[i]);
+        solution.states[i].wrench.cov = cov_of(wrench_keys_[i]);
     }
-    
+
     return solution;
 }

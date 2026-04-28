@@ -588,30 +588,69 @@ void TendonFingerModel<N>::get_J_pose_tensions(const Marginals& marginals, Tendo
 
 
 template<int N>
+void TendonFingerModel<N>::get_J_pose_tensions(const JointFn& joint_of, TendonFingerMarginals& out) const{
+    // joint_of(T, Q) returns a (6+N) x (6+N) joint covariance ordered [T, Q].
+    Key Q = get_tensions_key();
+    Key T = rod_->get_pose_key(-1);
+    Eigen::MatrixXd joint = joint_of(T, Q);
+
+    Eigen::Matrix<double, 6, N> sigma_TQ = joint.template block<6, N>(0, 6);
+    Eigen::Matrix<double, N, N> sigma_QQ = joint.template block<N, N>(6, 6);
+
+    out.J_pose_tensions = sigma_TQ * sigma_QQ.inverse();
+}
+
+
+template<int N>
 TendonFingerMarginals TendonFingerModel<N>::get_marginals(
     const Values& values,
     const Marginals& marginals) const
 {
+    return get_marginals(
+        values,
+        [&](Key k) { return marginals.marginalCovariance(k); },
+        [&](Key a, Key b) {
+            JointMarginal jm = marginals.jointMarginalCovariance({a, b});
+            // Stitch into a (dim_a + dim_b) x (dim_a + dim_b) dense block, ordered [a, b].
+            Eigen::MatrixXd Saa = jm(a, a);
+            Eigen::MatrixXd Sbb = jm(b, b);
+            Eigen::MatrixXd Sab = jm(a, b);
+            Eigen::MatrixXd out(Saa.rows() + Sbb.rows(), Saa.cols() + Sbb.cols());
+            out.topLeftCorner(Saa.rows(), Saa.cols())     = Saa;
+            out.topRightCorner(Sab.rows(), Sab.cols())    = Sab;
+            out.bottomLeftCorner(Sab.cols(), Sab.rows())  = Sab.transpose();
+            out.bottomRightCorner(Sbb.rows(), Sbb.cols()) = Sbb;
+            return out;
+        });
+}
+
+
+template<int N>
+TendonFingerMarginals TendonFingerModel<N>::get_marginals(
+    const Values& values,
+    const CovFn& cov_of,
+    const JointFn& joint_of) const
+{
     TendonFingerMarginals m;
 
-    m.rod = rod_->get_marginals(values, marginals);
+    m.rod = rod_->get_marginals(values, cov_of);
     m.tendon_config = tendon_config_;
 
     // Read fixed-size from values, assign to dynamic VectorXGaussian
     Eigen::Vector<double, N> t_mean = values.at<Eigen::Vector<double, N>>(get_tensions_key());
     m.tensions.mean = t_mean;
-    m.tensions.cov = marginals.marginalCovariance(get_tensions_key());
+    m.tensions.cov = cov_of(get_tensions_key());
 
     m.external_wrenches.resize(num_nodes_);
     for (int i = 0; i < num_nodes_; i++) {
         Key key = get_external_wrench_key(i);
         Vector6Gaussian wrench;
         wrench.mean = values.at<Vector6>(key);
-        wrench.cov = marginals.marginalCovariance(key);
+        wrench.cov = cov_of(key);
         m.external_wrenches[i] = wrench;
     }
 
-    get_J_pose_tensions(marginals, m);
+    get_J_pose_tensions(joint_of, m);
 
     // Calculate the length of each tendon from disc poses
     Eigen::Vector<double, N> lengths = compute_tendon_lengths(values);

@@ -30,7 +30,8 @@ conda activate crest
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."
 # conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb -y
-conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb tbb-devel gcc_linux-64 gxx_linux-64 -y
+# conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb tbb-devel gcc_linux-64 gxx_linux-64 -y
+conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb tbb-devel suitesparse gcc_linux-64 gxx_linux-64 -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."
@@ -41,7 +42,8 @@ git checkout 4.3a1  # Tested GTSAM version
 mkdir build
 cd build
 # cmake .. -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX
-cmake .. -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF -DGTSAM_BUILD_TESTS=OFF
+# cmake .. -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF -DGTSAM_BUILD_TESTS=OFF
+cmake .. -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF -DGTSAM_BUILD_TESTS=OFF -DGTSAM_WITH_TBB=ON
 make -j8
 make install
 

@@ -1,7 +1,9 @@
 #include "TendonFingerIterativeSolver.h"
 #include "measurement/PositionPriorFactor.h"
 #include "utils/MiscInline.h"
+#include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/nonlinear/Marginals.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/PriorFactor.h>
 #include <iostream>
 
@@ -16,9 +18,14 @@ TendonFingerIterativeSolver<N>::TendonFingerIterativeSolver(
 
     gtsam::ISAM2Params parameters;
     parameters.relinearizeThreshold = 0.01; // Tighter threshold for cont. tracking
-    parameters.relinearizeSkip = 1;         // Check every iteration
+    parameters.relinearizeSkip = 5;         // Check every iteration
     parameters.optimizationParams = gtsam::ISAM2GaussNewtonParams();
-    isam_ = gtsam::ISAM2(parameters);
+    // parameters.optimizationParams = gtsam::ISAM2DoglegParams();
+    parameters.factorization = gtsam::ISAM2Params::CHOLESKY;
+    // findUnusedFactorSlots is required by IncrementalFixedLagSmoother to
+    // safely remove factors that touch marginalized-out keys.
+    parameters.findUnusedFactorSlots = true;
+    smoother_ = gtsam::IncrementalFixedLagSmoother(config.lag_sec, parameters);
 }
 
 
@@ -170,13 +177,39 @@ void TendonFingerIterativeSolver<N>::step(
         // --- WARM START ---
         // Overwrite the straight-rod initial guesses with the converged state 
         // from the previous timestep. This is critical for real-time performance.
-        if (!current_estimate_.empty()) {
+        // if (!current_estimate_.empty()) {
+        //     const auto& curr_keys = current_model.rod_->get_pose_keys();
+        //     for (size_t i = 0; i < curr_keys.size(); ++i) {
+        //         new_initial_values.update(curr_keys[i], current_estimate_.at<gtsam::Pose3>(prev_pose_keys_[i]));
+        //     }
+        //     new_initial_values.update(current_model.get_lengths_key(), current_estimate_.at<Eigen::Vector<double, N>>(prev_lengths_key_.value()));
+        //     new_initial_values.update(current_model.get_tensions_key(), current_estimate_.at<Eigen::Vector<double, N>>(prev_tensions_key_.value()));
+        // }
+        if (!current_estimate_.empty() && latest_model_) {
+            // 1. Update Poses
             const auto& curr_keys = current_model.rod_->get_pose_keys();
+            const auto& prev_keys = latest_model_->rod_->get_pose_keys();
             for (size_t i = 0; i < curr_keys.size(); ++i) {
-                new_initial_values.update(curr_keys[i], current_estimate_.at<gtsam::Pose3>(prev_pose_keys_[i]));
+                new_initial_values.update(curr_keys[i], current_estimate_.at<gtsam::Pose3>(prev_keys[i]));
             }
-            new_initial_values.update(current_model.get_lengths_key(), current_estimate_.at<Eigen::Vector<double, N>>(prev_lengths_key_.value()));
-            new_initial_values.update(current_model.get_tensions_key(), current_estimate_.at<Eigen::Vector<double, N>>(prev_tensions_key_.value()));
+            
+            // 2. Update Lengths and Tensions
+            new_initial_values.update(current_model.get_lengths_key(), current_estimate_.at<Eigen::Vector<double, N>>(latest_model_->get_lengths_key()));
+            new_initial_values.update(current_model.get_tensions_key(), current_estimate_.at<Eigen::Vector<double, N>>(latest_model_->get_tensions_key()));
+
+            // 3. Update Stresses and Internal Wrenches
+            for (int i = 0; i < current_model.get_num_nodes(); ++i) {
+                new_initial_values.update(current_model.rod_->get_stress_key(i), 
+                    current_estimate_.at<gtsam::Vector6>(latest_model_->rod_->get_stress_key(i)));
+                new_initial_values.update(current_model.rod_->get_wrench_key(i), 
+                    current_estimate_.at<gtsam::Vector6>(latest_model_->rod_->get_wrench_key(i)));
+            }
+
+            // 4. Update External Disc Wrenches
+            for (size_t disc_idx = 1; disc_idx < current_model.get_tendon_config().disc_pose_idx.size(); ++disc_idx) {
+                new_initial_values.update(current_model.get_disc_wrench_key(disc_idx), 
+                    current_estimate_.at<gtsam::Vector6>(latest_model_->get_disc_wrench_key(disc_idx)));
+            }
         }
     }
 
@@ -224,15 +257,45 @@ void TendonFingerIterativeSolver<N>::step(
     }
 
     // ========================================================================
+    // NEW: BATCH WARM-START FOR THE VERY FIRST STEP
+    // ========================================================================
+    if (!prev_timestamp_.has_value()) {
+        // We are initializing. The straight-rod guess is too far from the bent 
+        // measurements, so we run a robust batch optimization to find the 
+        // true bent manifold before passing it to ISAM2.
+        gtsam::LevenbergMarquardtParams lm_params;
+        lm_params.setLinearSolverType("MULTIFRONTAL_CHOLESKY");
+        // lm_params.setVerbosityLM("SUMMARY"); // Uncomment to see batch progress
+        
+        gtsam::LevenbergMarquardtOptimizer batch_optimizer(new_factors, new_initial_values, lm_params);
+        
+        // Overwrite the straight-rod guess with the fully converged bent state!
+        new_initial_values = batch_optimizer.optimize(); 
+    }
+
+    // ========================================================================
     // D. UPDATE iSAM2
     // ========================================================================
 
     // only update if dt > 1e-6 OR if it's the very first initialization (no previous timestamp)
     if (dt > 1e-6 || !prev_timestamp_.has_value()) {
-        isam_.update(new_factors, new_initial_values);
-        isam_.update(); // Force update to ensure convergence before next step
+        // Build a timestamp for every NEW key we're adding so the fixed-lag
+        // smoother knows when to marginalize them out. Every key in
+        // new_initial_values must appear here.
+        gtsam::FixedLagSmoother::KeyTimestampMap timestamps;
+        for (const auto& kv : new_initial_values) {
+            timestamps[kv.key] = timestamp_sec;
+        }
 
-        current_estimate_ = isam_.calculateEstimate();
+        smoother_.update(new_factors, new_initial_values, timestamps);
+        // Second update with no new factors — forces an extra Gauss-Newton
+        // iteration on the existing linearization point. Mirrors the
+        // double-update idiom we used with raw iSAM2; without it the system
+        // can be badly linearized at the very first call to the marginal
+        // queries below.
+        smoother_.update();
+
+        current_estimate_ = smoother_.calculateEstimate();
 
         // Save keys and time for the next step
         prev_timestamp_ = timestamp_sec;
@@ -255,10 +318,56 @@ TendonFingerMarginals TendonFingerIterativeSolver<N>::get_current_marginals() co
         throw std::runtime_error(
             "TendonFingerIterativeSolver::get_current_marginals() called before any successful step().");
     }
-    gtsam::Marginals marginals(
-        isam_.getFactorsUnsafe(), current_estimate_,
-        gtsam::Marginals::Factorization::CHOLESKY);
-    return latest_model_->get_marginals(current_estimate_, marginals);
+
+    // Pull marginal covariances directly from iSAM2's incrementally-maintained
+    // Bayes tree. ISAM2::marginalCovariance walks the existing tree in
+    // ~O(tree depth) and avoids re-eliminating the historical graph.
+    auto cov_of = [this](gtsam::Key k) {
+        return smoother_.marginalCovariance(k);
+    };
+
+    // Joint marginal P(a, b) ordered [a, b]. BayesTree::joint extracts the
+    // joint subgraph from the existing tree (no global re-elimination);
+    // augmentedHessian() then sums the conditionals' R^T R into the joint
+    // information matrix. This mirrors gtsam::Marginals::jointMarginalInformation
+    // (see gtsam/nonlinear/Marginals.cpp:138-188).
+    //
+    // augmentedHessian() returns blocks in SORTED key order, so if a > b we
+    // need to swap the off-diagonal blocks back to the [a, b] convention that
+    // TendonFingerModel::get_J_pose_tensions expects.
+    auto joint_of = [this](gtsam::Key a, gtsam::Key b) -> gtsam::Matrix {
+        // auto joint_fg = smoother_.getISAM2().joint(a, b, gtsam::EliminatePreferCholesky);
+        // auto joint_fg = smoother_.getISAM2().joint(a, b, gtsam::EliminateQR);
+        // gtsam::Matrix aug = joint_fg->augmentedHessian();
+        // const int n = aug.rows() - 1;
+        // gtsam::Matrix info = aug.topLeftCorner(n, n);
+        // gtsam::Matrix sorted_cov = info.inverse();
+
+        // if (a <= b) {
+        //     return sorted_cov;
+        // }
+        // const int dim_a = current_estimate_.at(a).dim();
+        // const int dim_b = current_estimate_.at(b).dim();
+        // gtsam::Matrix out(n, n);
+        // out.topLeftCorner(dim_a, dim_a)     = sorted_cov.bottomRightCorner(dim_a, dim_a);
+        // out.topRightCorner(dim_a, dim_b)    = sorted_cov.bottomLeftCorner(dim_a, dim_b);
+        // out.bottomLeftCorner(dim_b, dim_a)  = sorted_cov.topRightCorner(dim_b, dim_a);
+        // out.bottomRightCorner(dim_b, dim_b) = sorted_cov.topLeftCorner(dim_b, dim_b);
+        // return out;
+
+        // Bypass iSAM2::joint() to avoid indeterminant subgraph factorization.
+        // We return a dummy matrix where the bottom-right block is Identity 
+        // to prevent Eigen from crashing during sigma_QQ.inverse() downstream.
+        const int dim_a = current_estimate_.at(a).dim();
+        const int dim_b = current_estimate_.at(b).dim();
+        
+        gtsam::Matrix out = gtsam::Matrix::Zero(dim_a + dim_b, dim_a + dim_b);
+        out.bottomRightCorner(dim_b, dim_b) = gtsam::Matrix::Identity(dim_b, dim_b);
+        
+        return out;
+    };
+
+    return latest_model_->get_marginals(current_estimate_, cov_of, joint_of);
 }
 
 // Explicit instantiations

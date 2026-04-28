@@ -411,7 +411,7 @@ def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
         num_discs=num_discs,
         num_between_nodes=config.num_between_nodes,
         segment_types=segment_types,
-        bone_stiffness_scale=1e-6
+        bone_stiffness_scale=1e-10
     )
 
     if tendon_routing_radii is None:

@@ -6,6 +6,8 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/inference/Symbol.h>
 
+#include <functional>
+
 #include "utils/Gaussians.h"
 
 
@@ -59,8 +61,16 @@ public:
         const gtsam::Pose3& base_pose_init = gtsam::Pose3::Identity()) const;
 
     CosseratRodMarginals get_marginals(
-        const gtsam::Values& values, 
+        const gtsam::Values& values,
         const gtsam::Marginals& marginals) const;
+
+    // Functor-based overload — accepts any source of marginal covariances
+    // (e.g. ISAM2/IncrementalFixedLagSmoother's Bayes-tree query) so the
+    // iterative solver can avoid rebuilding gtsam::Marginals from scratch.
+    using CovFn = std::function<gtsam::Matrix(gtsam::Key)>;
+    CosseratRodMarginals get_marginals(
+        const gtsam::Values& values,
+        const CovFn& cov_of) const;
 
     gtsam::Key get_pose_key(int node_idx) const;
 

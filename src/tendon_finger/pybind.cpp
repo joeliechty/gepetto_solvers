@@ -101,7 +101,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("background_tensions_cov",  &TendonFingerEstimatorConfig::background_tensions_cov)
         .def_readwrite("gp_tense_Qc", &TendonFingerEstimatorConfig::gp_tense_Qc)
         .def_readwrite("gp_len_Qc",   &TendonFingerEstimatorConfig::gp_len_Qc)
-        .def_readwrite("gp_pose_Qc",  &TendonFingerEstimatorConfig::gp_pose_Qc);
+        .def_readwrite("gp_pose_Qc",  &TendonFingerEstimatorConfig::gp_pose_Qc)
+        .def_readwrite("lag_sec",     &TendonFingerEstimatorConfig::lag_sec);
 
     py::class_<TendonFingerIterativeSolverDispatch>(m, "TendonFingerIterativeSolver")
         .def(py::init<const TendonFingerEstimatorConfig&, double>(),

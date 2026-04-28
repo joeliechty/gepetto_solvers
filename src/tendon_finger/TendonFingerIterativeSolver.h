@@ -3,7 +3,7 @@
 #include "TendonFingerSolver.h"
 #include "TendonFingerEstimatorModel.h"
 #include "utils/Gaussians.h"
-#include <gtsam/nonlinear/ISAM2.h>
+#include <gtsam/nonlinear/IncrementalFixedLagSmoother.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <memory>
 #include <optional>
@@ -22,6 +22,12 @@ struct TendonFingerEstimatorConfig {
     Eigen::MatrixXd gp_tense_Qc;    // Size NxN. Empty to disable.
     Eigen::MatrixXd gp_len_Qc;      // Size NxN. Empty to disable.
     gtsam::Matrix6 gp_pose_Qc;      // Size 6x6. Identity to disable.
+
+    // Fixed-lag smoother window in seconds. States older than this are
+    // marginalized out, keeping the graph bounded for true real-time
+    // performance. Set very large (e.g. 1e9) to effectively disable
+    // marginalization and behave like plain ISAM2.
+    double lag_sec = 2.0;
 };
 
 template<int N>
@@ -63,7 +69,7 @@ public:
         gtsam::SharedNoiseModel bend_noise_;
         gtsam::SharedDiagonal stress_noise_;
 
-        gtsam::ISAM2 isam_;
+        gtsam::IncrementalFixedLagSmoother smoother_;
         gtsam::Values current_estimate_;
 
         std::optional<double> prev_timestamp_;

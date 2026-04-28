@@ -60,19 +60,26 @@ def build_estimator_config(num_tendons):
     ec = crest_sparse.TendonFingerEstimatorConfig()
     ec.base_config = base
 
+    ec.lag_sec = 0.15
+
     # Background tension prior — same values used by the planner:
     # passive tendons (0-4) held at 0.5 N, active tendon (5) left free.
     bg_mean = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.0])
-    bg_sigmas = np.array([1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e6])
+    bg_sigmas = np.array([1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 10.0])
     ec.background_tensions_mean = bg_mean
     ec.background_tensions_cov = np.diag(bg_sigmas ** 2)
 
     # GP smoothness on tensions (matches planner).
-    ec.gp_tense_Qc = np.eye(num_tendons) * 1e-2
+    ec.gp_tense_Qc = np.eye(num_tendons) * 1e-1
+    # ec.gp_tense_Qc = np.empty((0, 0))   # empty → factor not added
     # Smoothness on tendon lengths (same order of magnitude as planner).
-    ec.gp_len_Qc = np.eye(num_tendons) * 1e-5
+    ec.gp_len_Qc = np.eye(num_tendons) * 1e-2
     # Light smoothness on disc poses.
-    ec.gp_pose_Qc = np.eye(6) * 1e-6
+    ec.gp_pose_Qc = np.eye(6) * 1e-2
+    # ec.gp_pose_Qc  = np.eye(6)          # identity → factor not added
+
+    print("Estimator lag: %.3f sec" % ec.lag_sec)
+
     return ec
 
 
@@ -94,6 +101,7 @@ def run_single_sweep(estimator_config, t_lengths, lengths,
     length_cov[-1, -1] = 1e-8  # very confident measurement for active tendon length
 
     ts_recorded, lengths_est, tip_pos, tip_pos_cov = [], [], [], []
+    step_times_ms = []
 
     t_start = time.time()
     for ts, kind, payload in events:
@@ -102,6 +110,7 @@ def run_single_sweep(estimator_config, t_lengths, lengths,
             t_step = time.perf_counter()
             solver.step(timestamp_sec=ts, lengths_meas=meas)
             step_ms = (time.perf_counter() - t_step) * 1e3
+            step_times_ms.append(step_ms)
             # Record state after each length event (aligned with planner 100 Hz grid).
             marginals = solver.get_current_marginals()
             tip_T = marginals.rod.states[-1].pose.mean
@@ -117,9 +126,12 @@ def run_single_sweep(estimator_config, t_lengths, lengths,
                 sol.meta = _MockMeta(total_ms=step_ms)
                 plotter.update(sol)
         else:  # "bend"
+            t_step = time.perf_counter()
             solver.step(timestamp_sec=ts, measured_bend=payload)
+            step_times_ms.append((time.perf_counter() - t_step) * 1e3)
 
     elapsed = time.time() - t_start
+    step_times_ms = np.asarray(step_times_ms)
 
     return {
         "t": np.asarray(ts_recorded),
@@ -129,6 +141,7 @@ def run_single_sweep(estimator_config, t_lengths, lengths,
         "t_bend": t_bend,
         "bend_angles": bend_angles,
         "wall_time_sec": elapsed,
+        "step_times_ms": step_times_ms,
     }
 
 
@@ -167,8 +180,11 @@ def main(bend_freqs_hz=[200, 300, 400],
                 bend_sigma=bend_sigma, length_sigma=length_sigma,
                 plotter=plotter,
             )
+            st = out["step_times_ms"]
             print(f"  wall time: {out['wall_time_sec']:.2f}s  "
-                  f"({len(out['t'])} recorded states)")
+                  f"({len(out['t'])} recorded states, {len(st)} total steps)")
+            print(f"  step time [ms]:  mean={st.mean():.2f}  std={st.std():.2f}  "
+                  f"min={st.min():.2f}  max={st.max():.2f}")
             tip_final = out["tip_pos"][-1]
             tip_std = np.sqrt(np.diag(out["tip_pos_cov"][-1]))
             print(f"  final tip pos: [{tip_final[0]:+.4f}, {tip_final[1]:+.4f}, {tip_final[2]:+.4f}] m")

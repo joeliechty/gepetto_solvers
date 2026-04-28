@@ -8,6 +8,7 @@
 #include "utils/Gaussians.h"
 
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -154,6 +155,17 @@ public:
         const gtsam::Values& values,
         const gtsam::Marginals& marginals) const;
 
+    // Functor-based overload — accepts callables that return marginal/joint
+    // covariances directly. The iterative solver passes lambdas that read
+    // from the IncrementalFixedLagSmoother's Bayes tree, avoiding the cost
+    // of building a fresh gtsam::Marginals on the entire historical graph.
+    using CovFn   = std::function<gtsam::Matrix(gtsam::Key)>;
+    using JointFn = std::function<gtsam::Matrix(gtsam::Key, gtsam::Key)>;
+    TendonFingerMarginals get_marginals(
+        const gtsam::Values& values,
+        const CovFn& cov_of,
+        const JointFn& joint_of) const;
+
     std::unique_ptr<CosseratRodModel> rod_;
 
 protected:
@@ -163,6 +175,7 @@ protected:
     void compute_disc_positions_and_segments(const std::vector<double>& disc_positions_normalized);
 
     void get_J_pose_tensions(const gtsam::Marginals& marginals, TendonFingerMarginals& out) const;
+    void get_J_pose_tensions(const JointFn& joint_of, TendonFingerMarginals& out) const;
 
     // Unique ID for key generation to avoid collisions when multiple TendonFingerModels are in the same graph
     const int id_;

@@ -126,7 +126,8 @@ def main():
     planner_config.start_position_cov = np.eye(3) * 1e-6
 
     # Goal position
-    planner_config.goal_position = np.array([6.16703767e-02, 4.02459538e-02, 0.0])
+    # planner_config.goal_position = np.array([6.16703767e-02, 4.02459538e-02, 0.0])
+    planner_config.goal_position = np.array([6.02088876e-02, 3.77734425e-02, 0.0])
     planner_config.goal_position_cov = np.eye(3) * 1e-5
 
     zero_bend_length = 0.13723930740614093 # [m] length of actuation tendon for this robot in the fully straight configuration TODO: compute from geo later
