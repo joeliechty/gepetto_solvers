@@ -1,7 +1,7 @@
 #!/bin/bash
 
 
-exec > >(tee -i setup_log.txt) 2>&1
+exec > >(tee -i setup_log_py10.txt) 2>&1
 
 # get working directiry for where crest repo is located (assumes this script is run from the repo root)
 CREST_SPARSE_DIR=$(pwd)
@@ -17,15 +17,15 @@ rm -rf $GIT_REPOS_DIR/gtsam
 # Create and activate conda environment (used instead of venv for isolation)
 echo "Creating and activating conda environment 'crest'..."
 # check if the environment already exists
-if conda info --envs | grep -q "crest"; then
-    echo "Conda environment 'crest' already exists. Removing it..."
-    conda env remove -n crest -y
+if conda info --envs | grep -q "crest_py10"; then
+    echo "Conda environment 'crest_py10' already exists. Removing it..."
+    conda env remove -n crest_py10 -y
 fi
 
-echo "Conda environment 'crest' does not exist. Creating it..."
-conda create -n crest python=3.12 -y
+echo "Conda environment 'crest_py10' does not exist. Creating it..."
+conda create -n crest_py10 python=3.10 -y
 source $(conda info --base)/etc/profile.d/conda.sh
-conda activate crest
+conda activate crest_py10
 
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."

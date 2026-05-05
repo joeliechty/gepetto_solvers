@@ -64,7 +64,7 @@ void bind_utils(py::module& m) {
 }
 
 
-PYBIND11_MODULE(crest_sparse, m) {
+PYBIND11_MODULE(_crest_sparse, m) {
     bind_cosserat_rod(m);
     bind_cosserat_dynamics(m);
     bind_cosserat_shell(m);

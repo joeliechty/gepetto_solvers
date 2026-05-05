@@ -30,7 +30,7 @@ venv/
 # clangd
 *compile_commands.json
 
-setup_log.txt
+setup_log*
 
 *.vdb
 

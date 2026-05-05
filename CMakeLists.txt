@@ -31,7 +31,7 @@ endif()
 
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 
-pybind11_add_module(crest_sparse ${SOURCES})
+pybind11_add_module(_crest_sparse ${SOURCES})
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -39,14 +39,14 @@ include_directories(
     ${EIGEN_INCLUDE_DIR}
 )
 
-target_link_libraries(crest_sparse PRIVATE gtsam OpenVDB::openvdb)
+target_link_libraries(_crest_sparse PRIVATE gtsam OpenVDB::openvdb)
 
 if(OpenMP_CXX_FOUND)
-    target_link_libraries(crest_sparse PRIVATE OpenMP::OpenMP_CXX)
-    target_compile_definitions(crest_sparse PRIVATE CREST_USE_OPENMP)
+    target_link_libraries(_crest_sparse PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(_crest_sparse PRIVATE CREST_USE_OPENMP)
 endif()
 
-install(TARGETS crest_sparse LIBRARY DESTINATION .)
+install(TARGETS _crest_sparse LIBRARY DESTINATION crest_sparse)
 
 # target_compile_features(crest_sparse PRIVATE cxx_std_17)
 # target_compile_options(crest_sparse PRIVATE -O3 -fPIC)

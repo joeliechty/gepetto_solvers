@@ -7,6 +7,7 @@ CMAKE_EXPORT_COMPILE_COMMANDS = "ON"
 
 [tool.scikit-build]
 build-dir = "build"
+wheel.packages = ["python/crest_sparse"]
 
 [project]
 name = "crest_sparse"
