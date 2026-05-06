@@ -40,6 +40,19 @@ def make_bend_signal(bend_hz, end_angle_deg, t_total):
     return t, angles
 
 
+def make_bend_signal_triangle(bend_hz, peak_angle_deg, t_total):
+    """Synthesize a V-shape bend signal: peak_angle_deg → 0° → peak_angle_deg."""
+    t = np.arange(0.0, t_total, 1.0 / bend_hz)
+    n = len(t)
+    half = n // 2
+    angles = np.deg2rad(np.concatenate([
+        np.linspace(peak_angle_deg, 0.0, half),
+        np.linspace(0.0, peak_angle_deg, n - half),
+    ]))
+    angles += np.random.normal(0.0, 1e-2, size=angles.shape)
+    return t, angles
+
+
 def merge_event_streams(t_lengths, lengths, t_bend, bend_angles):
     """
     Merge asynchronous length and bend events into a single time-sorted stream.
@@ -87,11 +100,19 @@ def build_estimator_config(num_tendons):
 
 def run_single_sweep(estimator_config, t_lengths, lengths,
                      bend_hz, end_angle_deg, bend_sigma, length_sigma,
-                     plotter=None):
-    """Run the iterative solver for one (bend_hz, end_angle_deg) configuration."""
+                     plotter=None, bend_signal=None):
+    """Run the iterative solver for one (bend_hz, end_angle_deg) configuration.
+
+    bend_signal : (t_bend, angles) tuple, optional
+        Pre-built bend signal.  When provided, bend_hz and end_angle_deg are
+        ignored for signal generation.
+    """
     num_tendons = lengths.shape[1]
     t_total = float(t_lengths[-1]) + 1e-9
-    t_bend, bend_angles = make_bend_signal(bend_hz, end_angle_deg, t_total)
+    if bend_signal is not None:
+        t_bend, bend_angles = bend_signal
+    else:
+        t_bend, bend_angles = make_bend_signal(bend_hz, end_angle_deg, t_total)
     events = merge_event_streams(t_lengths, lengths, t_bend, bend_angles)
 
     solver = crest_sparse.TendonFingerIterativeSolver(
@@ -147,12 +168,28 @@ def run_single_sweep(estimator_config, t_lengths, lengths,
     }
 
 
+def _print_run_summary(out):
+    st = out["step_times_ms"]
+    print(f"  wall time: {out['wall_time_sec']:.2f}s  "
+          f"({len(out['t'])} recorded states, {len(st)} total steps)")
+    print(f"  step time [ms]:  mean={st.mean():.2f}  std={st.std():.2f}  "
+          f"min={st.min():.2f}  max={st.max():.2f}")
+    tip_final = out["tip_pos"][-1]
+    tip_std = np.sqrt(np.diag(out["tip_pos_cov"][-1]))
+    print(f"  final tip pos: [{tip_final[0]:+.4f}, {tip_final[1]:+.4f}, {tip_final[2]:+.4f}] m")
+    print(f"  final tip ±σ:  [{tip_std[0]:.2e}, {tip_std[1]:.2e}, {tip_std[2]:.2e}] m")
+
+
 def main(bend_freqs_hz=[200, 300, 400],
          end_angles_deg=[0, 45, 90],
          traj_path="~/git_repos/underactuated_hand/interpolated_trajectory.npz",
          control_hz=100,
          bend_sigma=1e-2,
          length_sigma=1e-4,
+         run_test4=True,
+         test4_bend_hz=200,
+         test4_t_total=None,
+         test4_peak_angle_deg=-45.0,
          save_path="state_estimation_sweep.png"):
 
     print(f"Loading planner trajectory from {traj_path} ...")
@@ -182,16 +219,33 @@ def main(bend_freqs_hz=[200, 300, 400],
                 bend_sigma=bend_sigma, length_sigma=length_sigma,
                 plotter=plotter,
             )
-            st = out["step_times_ms"]
-            print(f"  wall time: {out['wall_time_sec']:.2f}s  "
-                  f"({len(out['t'])} recorded states, {len(st)} total steps)")
-            print(f"  step time [ms]:  mean={st.mean():.2f}  std={st.std():.2f}  "
-                  f"min={st.min():.2f}  max={st.max():.2f}")
-            tip_final = out["tip_pos"][-1]
-            tip_std = np.sqrt(np.diag(out["tip_pos_cov"][-1]))
-            print(f"  final tip pos: [{tip_final[0]:+.4f}, {tip_final[1]:+.4f}, {tip_final[2]:+.4f}] m")
-            print(f"  final tip ±σ:  [{tip_std[0]:.2e}, {tip_std[1]:.2e}, {tip_std[2]:.2e}] m")
+            _print_run_summary(out)
             results[(bend_hz, end_angle)] = out
+
+    if run_test4:
+        # Test 4: constant midpoint tendon lengths, V-shape bend peak→0°→peak.
+        # Default duration matches the planner trajectory so all four runs share a time axis.
+        t_total4 = float(t_lengths[-1]) if test4_t_total is None else float(test4_t_total)
+        mid_idx = len(lengths) // 2
+        midpoint_lengths = lengths[mid_idx]
+        n = int(t_total4 * control_hz) + 1
+        t_lengths4 = np.arange(n) / control_hz
+        const_lengths = np.tile(midpoint_lengths, (len(t_lengths4), 1))
+        t_bend4, bend_angles4 = make_bend_signal_triangle(
+            test4_bend_hz, test4_peak_angle_deg, t_total4)
+
+        print(f"\n--- Test 4: constant midpoint lengths (index {mid_idx}), "
+              f"bend {test4_peak_angle_deg}°→0°→{test4_peak_angle_deg}° ---")
+        print(f"  midpoint lengths: {midpoint_lengths}")
+        out = run_single_sweep(
+            estimator_config, t_lengths4, const_lengths,
+            bend_hz=test4_bend_hz, end_angle_deg=test4_peak_angle_deg,
+            bend_sigma=bend_sigma, length_sigma=length_sigma,
+            plotter=plotter,
+            bend_signal=(t_bend4, bend_angles4),
+        )
+        _print_run_summary(out)
+        results[(test4_bend_hz, test4_peak_angle_deg)] = out
 
     print("\nPlotting sweep results ...")
     plot_estimation_sweep(results, lengths, t_lengths, save_path=save_path)

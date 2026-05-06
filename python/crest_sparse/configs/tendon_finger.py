@@ -368,6 +368,91 @@ def _build_default_tendon_routing_radii(bone_joint_spec, base_radius=0.005, min_
     return [list(single_tendon) for _ in range(num_tendons)]
 
 
+def get_bone_capsules_for_rviz(config, bone_joint_spec=None, solution=None):
+    """Generate RViz CYLINDER marker data for the rigid bone segments of a tendon finger.
+
+    RViz CYLINDER markers are centered at their origin, so this function shifts
+    each capsule forward by length/2 along the base disc's local Z-axis so that
+    the visual bottom of the cylinder sits flush with the disc plane.
+
+    Parameters
+    ----------
+    config : TendonFingerSolverConfig
+        Config produced by get_6tendon_config.
+    bone_joint_spec : list of tuples
+        The (type, length_m) spec passed to get_6tendon_config — needed because
+        the config object does not retain segment type information.
+    solution : optional
+        Solver solution with marginals. When provided, rviz_position and
+        rviz_quaternion are filled from the actual solved disc poses.
+
+    Returns
+    -------
+    list of dict, one per bone segment:
+        bone_name        : str            e.g. "phalanx_1"
+        start_disc_idx   : int            disc at the proximal end of this bone
+        end_disc_idx     : int            disc at the distal end
+        length           : float          bone length in metres
+        radius           : float          capsule radius in metres
+        base_pose_matrix : ndarray (4,4) or None   SE(3) pose of the base disc
+        rviz_position    : ndarray (3,)  or None   capsule centre in world frame
+        rviz_quaternion  : ndarray (4,)  or None   orientation as [x, y, z, w]
+    """
+    from scipy.spatial.transform import Rotation
+
+    disc_positions = config.disc_positions_normalized
+    rod_length = config.rod_length
+
+    if bone_joint_spec is None:
+        bone_joint_spec = [
+            ("bone", 0.06),     # metacarpal
+            ("joint", 0.01),    # MCP
+            ("bone", 0.03),     # proximal phalanx
+            ("joint", 0.005),    # PIP
+            ("bone", 0.015),     # middle phalanx
+            ("joint", 0.005),    # DIP
+            ("bone", 0.012),     # distal phalanx
+        ]
+
+    try:
+        base_radius = config.per_disc_tendon_input.routing_radius
+    except AttributeError:
+        base_radius = 0.006
+
+    capsules = []
+    for seg_idx, (seg_type, _) in enumerate(bone_joint_spec):
+        if seg_type != "bone":
+            continue
+
+        start_disc = seg_idx
+        end_disc = seg_idx + 1
+        length = (disc_positions[end_disc] - disc_positions[start_disc]) * rod_length
+
+        base_pose_matrix = None
+        rviz_position = None
+        rviz_quaternion = None
+
+        if solution is not None:
+            state_idx = solution.marginals.tendon_config.disc_pose_idx[start_disc]
+            base_pose_matrix = np.array(solution.marginals.rod.states[state_idx].pose.mean)
+            local_z = base_pose_matrix[:3, 2]
+            rviz_position = base_pose_matrix[:3, 3] + local_z * (length / 2.0)
+            rviz_quaternion = Rotation.from_matrix(base_pose_matrix[:3, :3]).as_quat()
+
+        capsules.append({
+            "bone_name": f"phalanx_{len(capsules) + 1}",
+            "start_disc_idx": start_disc,
+            "end_disc_idx": end_disc,
+            "length": length,
+            "radius": base_radius,
+            "base_pose_matrix": base_pose_matrix,
+            "rviz_position": rviz_position,
+            "rviz_quaternion": rviz_quaternion,
+        })
+
+    return capsules
+
+
 def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
     """Get a full solver config for a 6-tendon underactuated finger.
 
@@ -411,7 +496,7 @@ def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
         num_discs=num_discs,
         num_between_nodes=config.num_between_nodes,
         segment_types=segment_types,
-        bone_stiffness_scale=1e-10
+        bone_stiffness_scale=1e-15
     )
 
     if tendon_routing_radii is None:
