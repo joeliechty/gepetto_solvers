@@ -28,6 +28,13 @@ struct TendonFingerEstimatorConfig {
     // performance. Set very large (e.g. 1e9) to effectively disable
     // marginalization and behave like plain ISAM2.
     double lag_sec = 2.0;
+
+    // Numerical continuation steps for the very first step()'s batch
+    // initialization. Phase A solves a zero-bend graph to recover rest
+    // tendon lengths; Phase B ramps bend (and lengths if measured) from
+    // rest values to the true measurements over this many LM solves.
+    // Set 0 to disable and fall back to a single batch LM solve.
+    int homotopy_steps = 5;
 };
 
 template<int N>

@@ -300,17 +300,111 @@ void TendonFingerIterativeSolver<N>::step(
     // NEW: BATCH WARM-START FOR THE VERY FIRST STEP
     // ========================================================================
     if (!prev_timestamp_.has_value()) {
-        // We are initializing. The straight-rod guess is too far from the bent 
-        // measurements, so we run a robust batch optimization to find the 
-        // true bent manifold before passing it to ISAM2.
         gtsam::LevenbergMarquardtParams lm_params;
         lm_params.setLinearSolverType("MULTIFRONTAL_CHOLESKY");
         // lm_params.setVerbosityLM("SUMMARY"); // Uncomment to see batch progress
-        
-        gtsam::LevenbergMarquardtOptimizer batch_optimizer(new_factors, new_initial_values, lm_params);
-        
-        // Overwrite the straight-rod guess with the fully converged bent state!
-        new_initial_values = batch_optimizer.optimize(); 
+
+        if (config_.homotopy_steps <= 0) {
+            // Legacy single-batch path: jump directly to the true measurements.
+            gtsam::LevenbergMarquardtOptimizer batch_optimizer(new_factors, new_initial_values, lm_params);
+            new_initial_values = batch_optimizer.optimize();
+        } else {
+            // Numerical continuation. Phase A solves a zero-bend graph to
+            // recover rest tendon lengths (the user does not know them a
+            // priori). Phase B ramps bend (and lengths if measured) from
+            // those rest values up to the true measurements, warm-starting
+            // each LM solve with the previous one.
+            auto build_homotopy_graph = [&](double alpha,
+                                            const std::optional<Eigen::Vector<double, N>>& length_target,
+                                            const std::optional<Eigen::Vector<double, N>>& length_source) {
+                gtsam::NonlinearFactorGraph g = current_model.build_graph(bg_tensions);
+
+                int num_nodes_local = current_model.get_num_nodes();
+                for (int i = 1; i + 1 < num_nodes_local; ++i) {
+                    g.add(gtsam::PriorFactor<gtsam::Vector6>(
+                        current_model.get_external_wrench_key(i),
+                        gtsam::Vector6::Zero(),
+                        stress_noise_));
+                }
+                gtsam::Vector6 tip_w_mean = gtsam::Vector6::Zero();
+                gtsam::SharedNoiseModel tip_w_noise =
+                    gtsam::noiseModel::Gaussian::Covariance(stress_noise_->covariance());
+                if (tip_wrench_meas.has_value()) {
+                    tip_w_mean = tip_wrench_meas->mean;
+                    tip_w_noise = gtsam::noiseModel::Gaussian::Covariance(tip_wrench_meas->cov);
+                }
+                g.add(gtsam::PriorFactor<gtsam::Vector6>(
+                    current_model.get_external_wrench_key(num_nodes_local - 1),
+                    tip_w_mean,
+                    tip_w_noise));
+
+                if (measured_bend.has_value() && num_nodes_local >= 3) {
+                    int p = current_model.get_tendon_config().disc_pose_idx[1];
+                    int d = current_model.get_tendon_config().disc_pose_idx[2];
+                    g.add(KnuckleBendFactor(
+                        current_model.rod_->get_pose_key(p),
+                        current_model.rod_->get_pose_key(d),
+                        alpha * measured_bend.value(),
+                        bend_noise_));
+                }
+
+                if (length_target.has_value() && length_source.has_value() && lengths_meas.has_value()) {
+                    Eigen::Vector<double, N> interp =
+                        (1.0 - alpha) * length_source.value() + alpha * length_target.value();
+                    g.add(gtsam::PriorFactor<Eigen::Vector<double, N>>(
+                        current_model.get_lengths_key(),
+                        interp,
+                        gtsam::noiseModel::Gaussian::Covariance(lengths_meas->cov)));
+                }
+
+                if (tensions_meas.has_value()) {
+                    g.add(gtsam::PriorFactor<Eigen::Vector<double, N>>(
+                        current_model.get_tensions_key(),
+                        tensions_meas->mean,
+                        gtsam::noiseModel::Gaussian::Covariance(tensions_meas->cov)));
+                }
+
+                if (tip_position_meas.has_value()) {
+                    g.add(PositionPriorFactor(
+                        current_model.rod_->get_pose_key(-1),
+                        tip_position_meas->mean,
+                        gtsam::noiseModel::Gaussian::Covariance(tip_position_meas->cov)));
+                }
+
+                return g;
+            };
+
+            gtsam::Values working_values = new_initial_values;
+
+            // Phase A: zero-bend batch with no length prior → recover rest lengths.
+            {
+                gtsam::NonlinearFactorGraph zero_bend_graph =
+                    build_homotopy_graph(0.0, std::nullopt, std::nullopt);
+                gtsam::LevenbergMarquardtOptimizer rest_opt(zero_bend_graph, working_values, lm_params);
+                working_values = rest_opt.optimize();
+            }
+
+            std::optional<Eigen::Vector<double, N>> rest_lengths;
+            if (lengths_meas.has_value()) {
+                rest_lengths = working_values.at<Eigen::Vector<double, N>>(current_model.get_lengths_key());
+            }
+            std::optional<Eigen::Vector<double, N>> length_target;
+            if (lengths_meas.has_value()) {
+                length_target = lengths_meas->mean;
+            }
+
+            // Phase B: ramp from rest configuration to true measurements.
+            int K = config_.homotopy_steps;
+            for (int k = 1; k <= K; ++k) {
+                double alpha = static_cast<double>(k) / static_cast<double>(K);
+                gtsam::NonlinearFactorGraph step_graph =
+                    build_homotopy_graph(alpha, length_target, rest_lengths);
+                gtsam::LevenbergMarquardtOptimizer step_opt(step_graph, working_values, lm_params);
+                working_values = step_opt.optimize();
+            }
+
+            new_initial_values = working_values;
+        }
     }
 
     // ========================================================================
