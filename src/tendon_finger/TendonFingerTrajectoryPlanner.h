@@ -4,9 +4,11 @@
 #include "TendonFingerSolver.h"
 #include "TensionLimitFactor.h"
 #include "measurement/PositionPriorFactor.h"
+#include "utils/EnvironmentFactors.h"
 #include "utils/SolverBase.h"
 #include "utils/Gaussians.h"
 
+#include <gtsam/inference/Symbol.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
@@ -63,6 +65,11 @@ struct TrajectoryPlannerConfig {
     // Noise for zero external wrench priors on interior nodes
     double sigma_ext_wrench_force = 1e-4;
     double sigma_ext_wrench_moment = 1e-5;
+
+    // Optional environment for collision/contact (Section 3). When unset the
+    // planner runs the pure free-space formulation and behaves identically to
+    // the legacy code.
+    std::optional<crest_sparse::EnvironmentConfig> environment;
 };
 
 
@@ -85,6 +92,13 @@ private:
     void build_graph() override;
     void extract_solution() override;
     void get_initial_values() override;
+
+    gtsam::Key object_key(int k) const {
+        const bool per_step = config_.environment &&
+                              config_.environment->object_pose_per_step;
+        return gtsam::Symbol('O', per_step ? k : 0);
+    }
+    static gtsam::Key dummy_point_key() { return gtsam::Symbol('Y', 0); }
 
     TrajectoryPlannerConfig config_;
 

@@ -6,6 +6,10 @@
 #include "TendonFingerSolver.h"
 #include "TendonFingerTrajectoryPlanner.h"
 #include "TendonFingerIterativeSolver.h"
+#include "utils/EnvironmentFactors.h"
+
+#include <openvdb/openvdb.h>
+#include <openvdb/io/File.h>
 
 namespace py = pybind11;
 
@@ -51,6 +55,36 @@ void bind_tendon_finger(py::module& m) {
              py::arg("tip_force"),
              py::arg("tip_meas"));
 
+    // --- Environment (collision/contact) ---
+
+    py::class_<crest_sparse::EnvironmentConfig>(m, "EnvironmentConfig")
+        .def(py::init<>())
+        .def_readwrite("object_pose_mean",     &crest_sparse::EnvironmentConfig::object_pose_mean)
+        .def_readwrite("object_pose_cov",      &crest_sparse::EnvironmentConfig::object_pose_cov)
+        .def_readwrite("object_pose_per_step", &crest_sparse::EnvironmentConfig::object_pose_per_step)
+        .def_readwrite("collision_epsilon",      &crest_sparse::EnvironmentConfig::collision_epsilon)
+        .def_readwrite("collision_sigma",        &crest_sparse::EnvironmentConfig::collision_sigma)
+        .def_readwrite("collision_node_indices", &crest_sparse::EnvironmentConfig::collision_node_indices)
+        .def_readwrite("collision_node_radii",   &crest_sparse::EnvironmentConfig::collision_node_radii)
+        .def_readwrite("target_contact_node", &crest_sparse::EnvironmentConfig::target_contact_node)
+        .def_readwrite("contact_node_radius", &crest_sparse::EnvironmentConfig::contact_node_radius)
+        .def_readwrite("contact_cov",         &crest_sparse::EnvironmentConfig::contact_cov)
+        .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
+            openvdb::initialize();
+            openvdb::io::File f(path);
+            f.open();
+            auto names = f.getGrids();
+            if (names->empty()) {
+                f.close();
+                throw std::runtime_error("VDB file contains no grids: " + path);
+            }
+            self.sdf_grid = openvdb::gridPtrCast<openvdb::FloatGrid>(names->at(0));
+            f.close();
+            if (!self.sdf_grid) {
+                throw std::runtime_error("First grid in VDB file is not a FloatGrid: " + path);
+            }
+        }, py::arg("path"));
+
     // --- Trajectory Planner ---
 
     py::class_<TrajectoryPlannerConfig>(m, "TrajectoryPlannerConfig")
@@ -81,7 +115,9 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("tension_limit_q_min", &TrajectoryPlannerConfig::tension_limit_q_min)
         .def_readwrite("active_tendon_indices", &TrajectoryPlannerConfig::active_tendon_indices)
         .def_readwrite("sigma_ext_wrench_force", &TrajectoryPlannerConfig::sigma_ext_wrench_force)
-        .def_readwrite("sigma_ext_wrench_moment", &TrajectoryPlannerConfig::sigma_ext_wrench_moment);
+        .def_readwrite("sigma_ext_wrench_moment", &TrajectoryPlannerConfig::sigma_ext_wrench_moment)
+        // Optional environment for collision/contact (Section 3). None => free-space planner.
+        .def_readwrite("environment", &TrajectoryPlannerConfig::environment);
 
     py::class_<TrajectoryPlannerResult>(m, "TrajectoryPlannerResult")
         .def(py::init<>())

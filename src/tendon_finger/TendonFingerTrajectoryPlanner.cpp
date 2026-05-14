@@ -3,11 +3,16 @@
 #include "utils/MiscInline.h"
 
 #include <gtsam/geometry/Pose3.h>
+#include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
+#include <iostream>
+
 using namespace gtsam;
+using crest_sparse::SdfCollisionFactor;
+using crest_sparse::SdfContactFactor;
 
 
 // --- Helper: create a TendonFingerModel<N> from config ---
@@ -108,6 +113,33 @@ void TendonFingerTrajectoryPlanner<N>::get_initial_values() {
         // Override tension initial values
         values_.update(models_[k]->get_tensions_key(), t_init);
     }
+
+    if (!config_.environment) return;
+
+    const auto& env = *config_.environment;
+    Pose3 obj_mean(env.object_pose_mean);
+
+    if (env.object_pose_per_step) {
+        for (int k = 0; k <= config_.K; ++k) {
+            values_.insert(object_key(k), obj_mean);
+        }
+    } else {
+        values_.insert(object_key(0), obj_mean);
+    }
+
+    if (env.target_contact_node.has_value()) {
+        int i_node = *env.target_contact_node;
+        const Pose3 tip_pose = values_.at<Pose3>(
+            models_[config_.K]->rod_->get_pose_key(i_node));
+        Point3 tip   = tip_pose.translation();
+        Point3 obj_c = obj_mean.translation();
+        Point3 diff  = obj_c - tip;
+        double norm  = diff.norm();
+        Point3 dir   = (norm > 1e-8) ? Point3(diff / norm)
+                                     : Point3(0.0, 0.0, 1.0);
+        Point3 seed  = tip + env.contact_node_radius * dir;
+        values_.insert(dummy_point_key(), seed);
+    }
 }
 
 
@@ -198,6 +230,22 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
         //     }
         // }
 
+        // 5.4 SDF collision running cost (Eq 28/29). Cubic barrier on each
+        // configured node sphere against the object SDF.
+        if (config_.environment && config_.environment->sdf_grid &&
+            !config_.environment->collision_node_indices.empty()) {
+            const auto& env = *config_.environment;
+            auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
+            for (size_t j = 0; j < env.collision_node_indices.size(); ++j) {
+                int i_node = env.collision_node_indices[j];
+                double r   = env.collision_node_radii[j];
+                graph_.add(SdfCollisionFactor(
+                    models_[k]->rod_->get_pose_key(i_node),
+                    object_key(k),
+                    r, env.collision_epsilon, env.sdf_grid, col_noise));
+            }
+        }
+
     }
 
     // 6. Start boundary conditions at k=0
@@ -223,13 +271,24 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
     }
 
     // 7. Goal boundary conditions at k=K
-    if (config_.goal_pose.has_value()) {
+    // In contact-as-goal mode (Eq 30) the terminal contact factor replaces
+    // the goal pose/position priors.
+    const bool contact_mode = config_.environment &&
+                              config_.environment->target_contact_node.has_value();
+
+    if (contact_mode &&
+        (config_.goal_pose.has_value() || config_.goal_position.has_value())) {
+        std::cerr << "[TendonFingerTrajectoryPlanner] target_contact_node is set; "
+                  << "suppressing goal_pose/goal_position priors (Eq 30)." << std::endl;
+    }
+
+    if (!contact_mode && config_.goal_pose.has_value()) {
         graph_.add(PriorFactor<Pose3>(
             models_[K]->rod_->get_pose_key(-1),
             Pose3(*config_.goal_pose),
             noiseModel::Gaussian::Covariance(config_.goal_pose_cov)));
     }
-    if (config_.goal_position.has_value()) {
+    if (!contact_mode && config_.goal_position.has_value()) {
         graph_.add(PositionPriorFactor(
             models_[K]->rod_->get_pose_key(-1),
             *config_.goal_position,
@@ -242,6 +301,50 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
             models_[K]->get_tensions_key(),
             config_.goal_tensions->head<N>(),
             noiseModel::Gaussian::Covariance(gt_cov)));
+    }
+
+    // 8. Environment factors: object pose prior(s), optional per-step GP,
+    //    and the terminal surface-contact factor (Eq 26).
+    if (config_.environment) {
+        const auto& env = *config_.environment;
+        auto obj_prior = noiseModel::Gaussian::Covariance(env.object_pose_cov);
+        Pose3 obj_mean(env.object_pose_mean);
+
+        if (env.object_pose_per_step) {
+            for (int k = 0; k <= K; ++k) {
+                graph_.add(PriorFactor<Pose3>(object_key(k), obj_mean, obj_prior));
+            }
+            if (config_.gp_pose_Qc.size() > 0) {
+                auto gp = noiseModel::Gaussian::Covariance(config_.gp_pose_Qc * config_.dt);
+                for (int k = 0; k < K; ++k) {
+                    graph_.add(BetweenFactor<Pose3>(
+                        object_key(k), object_key(k + 1), Pose3::Identity(), gp));
+                }
+            }
+        } else {
+            graph_.add(PriorFactor<Pose3>(object_key(0), obj_mean, obj_prior));
+        }
+
+        if (contact_mode) {
+            int i_node = *env.target_contact_node;
+            auto cn = noiseModel::Gaussian::Covariance(env.contact_cov);
+            graph_.add(SdfContactFactor(
+                models_[K]->rod_->get_pose_key(i_node),
+                object_key(K),
+                dummy_point_key(),
+                env.contact_node_radius,
+                env.sdf_grid, cn));
+
+            // Tikhonov regularizer on the dummy contact point. SdfContactFactor
+            // only constrains p_c along two of three DoF (sphere surface +
+            // object surface), leaving a 1D sliding manifold that yields an
+            // indeterminate linear system. A weak prior toward the seed picks
+            // a unique minimum without overpowering the tight contact factor.
+            Point3 p_seed = values_.at<Point3>(dummy_point_key());
+            auto weak_prior_noise = noiseModel::Isotropic::Sigma(3, 1.0);
+            graph_.add(PriorFactor<Point3>(
+                dummy_point_key(), p_seed, weak_prior_noise));
+        }
     }
 }
 

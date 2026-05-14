@@ -1,7 +1,7 @@
 import pyopenvdb as vdb
 import numpy as np
 
-def create_cylinder_sdf(radius=0.01, height=0.08, voxel_size=0.002):
+def create_cylinder_sdf(radius=0.005, height=0.04, voxel_size=0.001):
     # Create an empty floating-point grid. The background value represents 
     # the distance in empty space (positive means outside the object).
     grid = vdb.FloatGrid(10.0) 
