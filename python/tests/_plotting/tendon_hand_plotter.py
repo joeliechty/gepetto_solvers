@@ -1,7 +1,10 @@
 import numpy as np
 import pyvista as pv
 import vtk
-import pyopenvdb as vdb
+try:
+    import openvdb as vdb
+except ImportError:
+    import pyopenvdb as vdb
 
 from . import utils
 from .cosserat_rod_plotter import CosseratRodMeshManager

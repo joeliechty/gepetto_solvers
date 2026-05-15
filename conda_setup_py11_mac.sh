@@ -29,13 +29,14 @@ conda activate crest_py11
 
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."
-conda install -c conda-forge openvdb libboost-devel tbb-devel cmake eigen pybind11 llvm-openmp -y
+conda install -c conda-forge openvdb libboost-devel tbb-devel openvdb cmake eigen pybind11 llvm-openmp -y
 # conda install -c conda-forge openvdb libboost-devteel cmake eigen pybind11 llvm-openmp -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."
 cd $GIT_REPOS_DIR
-git clone https://github.com/borglab/gtsam.git
+# git clone https://github.com/borglab/gtsam.git
+git clone git@github.com:borglab/gtsam.git
 cd gtsam
 git checkout 4.3a1  # Tested GTSAM version
 mkdir build

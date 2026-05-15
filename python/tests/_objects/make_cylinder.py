@@ -1,4 +1,7 @@
-import pyopenvdb as vdb
+try:
+    import openvdb as vdb
+except ImportError:
+    import pyopenvdb as vdb
 import numpy as np
 
 def create_cylinder_sdf(radius=0.005, height=0.04, voxel_size=0.001):

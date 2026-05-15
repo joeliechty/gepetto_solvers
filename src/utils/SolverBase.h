@@ -1,6 +1,7 @@
 #pragma once
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Marginals.h>
 
@@ -26,6 +27,8 @@ struct Solution {
 
 struct SolverBaseConfig {
     std::string linear_solver_type = "MULTIFRONTAL_QR";
+    // Nonlinear optimizer: "DOGLEG" or "LM" (Levenberg-Marquardt).
+    std::string optimizer_type = "DOGLEG";
     bool use_dense = false;
     double delta_initial = 1.0;
 };

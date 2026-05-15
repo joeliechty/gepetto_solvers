@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import time
+import pyvista as pv
 import crest_sparse
 from .._plotting.tendon_finger_plotter import TendonFingerPlotter
 from .._plotting.trajectory_plotter import plot_trajectory
@@ -25,18 +26,20 @@ def main():
     planner_config = crest_sparse.TrajectoryPlannerConfig()
     planner_config.model_config = model_config
     planner_config.model_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY"
+    # planner_config.model_config.base.optimizer_type = "LM"
+
     planner_config.model_config.base.delta_initial = 1.0
-    planner_config.K = 2
+    planner_config.K = 10
     planner_hz = 5
     planner_config.dt = 1.0 / planner_hz
 
     bg_mean = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.0])
-    bg_sigmas = np.array([1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e6])
+    bg_sigmas = np.array([1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e1])
     planner_config.background_tensions_mean = bg_mean
     planner_config.background_tensions_sigmas = bg_sigmas
 
     planner_config.gp_tense_Qc = np.eye(num_tendons) * 1e-2
-    planner_config.gp_len_Qc = np.eye(num_tendons) * 1e-5
+    planner_config.gp_len_Qc = np.eye(num_tendons) * 1e-4
 
     planner_config.tension_limit_alpha = 10.0
     planner_config.tension_limit_q_min = 0.0
@@ -67,8 +70,10 @@ def main():
     # Collision running cost on the disc nodes.
     env.collision_epsilon = 0.002             # 2 mm safety margin
     env.collision_sigma = 1e-3
-    env.collision_node_indices = disc_node_indices
-    env.collision_node_radii = [0.003] * len(disc_node_indices)
+    # env.collision_node_indices = disc_node_indices
+    # env.collision_node_radii = [0.003] * len(disc_node_indices)
+    env.collision_node_indices = []
+    env.collision_node_radii = []
 
     # Terminal contact: tip sphere must land on the cylinder's surface.
     tip_radius = 0.003
@@ -116,6 +121,11 @@ def main():
         camera_elevation=-90,
         camera_focal_point=[0, 0.1, 0]
     )
+
+    # Show the target sphere in the scene.
+    sphere_radius = 0.005
+    sphere_mesh = pv.Sphere(radius=sphere_radius, center=object_pose[0:3, 3])
+    plotter.plotter.plotter.add_mesh(sphere_mesh, color='cadmiumyellow', opacity=0.5, smooth_shading=True)
 
     for k, marginals in enumerate(result.trajectory):
         print(f"Displaying Step {k}/{planner_config.K}")

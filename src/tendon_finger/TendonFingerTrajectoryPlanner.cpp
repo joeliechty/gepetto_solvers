@@ -128,16 +128,28 @@ void TendonFingerTrajectoryPlanner<N>::get_initial_values() {
     }
 
     if (env.target_contact_node.has_value()) {
+        // Seed p_c on the object's surface, on the side facing the tip, so the
+        // contact factor's SDF row has a non-zero gradient at iteration 0.
+        // We query the SDF at the object's local-frame origin to get the
+        // distance from that origin to the nearest surface (negative inside);
+        // |sdf| is the step length from the object center toward the tip that
+        // lands on the surface for convex shapes whose local origin sits
+        // inside.
         int i_node = *env.target_contact_node;
         const Pose3 tip_pose = values_.at<Pose3>(
             models_[config_.K]->rod_->get_pose_key(i_node));
         Point3 tip   = tip_pose.translation();
         Point3 obj_c = obj_mean.translation();
-        Point3 diff  = obj_c - tip;
+        Point3 diff  = tip - obj_c;
         double norm  = diff.norm();
         Point3 dir   = (norm > 1e-8) ? Point3(diff / norm)
                                      : Point3(0.0, 0.0, 1.0);
-        Point3 seed  = tip + env.contact_node_radius * dir;
+
+        openvdb::tools::GridSampler<openvdb::FloatGrid, openvdb::tools::BoxSampler>
+            sampler(*env.sdf_grid);
+        double r_obj = std::abs(sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0)));
+
+        Point3 seed = obj_c + r_obj * dir;
         values_.insert(dummy_point_key(), seed);
     }
 }
@@ -155,7 +167,7 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
     Eigen::Matrix<double, N, N> bg_cov =
         bg_sigmas.array().square().matrix().asDiagonal();
 
-    // Eigen::Matrix<double, N, N> Qc = config_.gp_tense_Qc.topLeftCorner<N, N>();
+    Eigen::Matrix<double, N, N> Qc = config_.gp_tense_Qc.topLeftCorner<N, N>();
 
     // build the graph for each time step
     for (int k = 0; k <= K; ++k) {
@@ -196,14 +208,14 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
 
         // 5. GP temporal prior between consecutive time steps
         // 5.1 GP on tensions (commented out - using GP on lengths instead)
-        // if (k < K) {
-        //     auto gp_noise = noiseModel::Gaussian::Covariance(Qc * config_.dt);
-        //     graph_.add(BetweenFactor<Eigen::Vector<double, N>>(
-        //         models_[k]->get_tensions_key(),
-        //         models_[k + 1]->get_tensions_key(),
-        //         Eigen::Vector<double, N>::Zero(),
-        //         gp_noise));
-        // }
+        if (k < K) {
+            auto gp_noise = noiseModel::Gaussian::Covariance(Qc * config_.dt);
+            graph_.add(BetweenFactor<Eigen::Vector<double, N>>(
+                models_[k]->get_tensions_key(),
+                models_[k + 1]->get_tensions_key(),
+                Eigen::Vector<double, N>::Zero(),
+                gp_noise));
+        }
 
         // 5.2 GP on tendon lengths (identity state transition)
         if (k < K && config_.gp_len_Qc.size() > 0) {
@@ -341,7 +353,7 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
             // indeterminate linear system. A weak prior toward the seed picks
             // a unique minimum without overpowering the tight contact factor.
             Point3 p_seed = values_.at<Point3>(dummy_point_key());
-            auto weak_prior_noise = noiseModel::Isotropic::Sigma(3, 1.0);
+            auto weak_prior_noise = noiseModel::Isotropic::Sigma(3, 10.0);
             graph_.add(PriorFactor<Point3>(
                 dummy_point_key(), p_seed, weak_prior_noise));
         }

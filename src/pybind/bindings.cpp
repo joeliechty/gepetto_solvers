@@ -10,6 +10,7 @@ void bind_utils(py::module& m) {
     py::class_<SolverBaseConfig>(m, "SolverBaseConfig")
         .def(py::init<>())
         .def_readwrite("linear_solver_type", &SolverBaseConfig::linear_solver_type)
+        .def_readwrite("optimizer_type", &SolverBaseConfig::optimizer_type)
         .def_readwrite("use_dense", &SolverBaseConfig::use_dense)
         .def_readwrite("delta_initial", &SolverBaseConfig::delta_initial);
 

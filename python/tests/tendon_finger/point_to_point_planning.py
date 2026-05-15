@@ -95,7 +95,7 @@ def main():
     planner_config.model_config = model_config
     planner_config.model_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY" # FOR APPLE
     planner_config.model_config.base.delta_initial = 1.0
-    planner_config.K = 2       # K+1 steps
+    planner_config.K = 10       # K+1 steps
     planner_hz = 5  # planning frequency
     planner_config.dt = 1.0 / planner_hz  # time step duration
 

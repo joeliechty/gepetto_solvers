@@ -88,10 +88,18 @@ SolutionMetadata SolverBase::optimize() {
     // params.relativeErrorTol = 1e-12;
 
     SolutionMetadata meta;
-    // If we want to use dense solver, e.g. for comparison 
+    // If we want to use dense solver, e.g. for comparison
     if (config_.use_dense) {
         optimize_dense_benchmark(params, meta);
+    } else if (config_.optimizer_type == "LM") {
+        LevenbergMarquardtParams lm_params;
+        lm_params.setLinearSolverType(config_.linear_solver_type);
+        LevenbergMarquardtOptimizer optimizer(graph_, values_, lm_params);
+        values_ = optimizer.optimize();
+        meta.error = optimizer.error();
+        meta.iterations = optimizer.iterations();
     } else {
+        // Default: Dogleg
         DoglegOptimizer optimizer(graph_, values_, params);
         values_ = optimizer.optimize();
         meta.error = optimizer.error();

@@ -1,4 +1,7 @@
-import pyopenvdb as vdb
+try:
+    import openvdb as vdb
+except ImportError:
+    import pyopenvdb as vdb
 import numpy as np
 
 
