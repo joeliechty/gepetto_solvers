@@ -4,7 +4,13 @@
 #include <gtsam/linear/HessianFactor.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+
+#include <gtsam/base/types.h>
+
+#include <algorithm>
 #include <limits>
+#include <map>
+#include <typeinfo>
 
 using namespace gtsam;
 
@@ -84,6 +90,7 @@ SolutionMetadata SolverBase::optimize() {
     DoglegParams params;
     params.setLinearSolverType(config_.linear_solver_type);
     params.deltaInitial = config_.delta_initial;
+    params.maxIterations = config_.max_iterations;
     // params.absoluteErrorTol = 1e-12;
     // params.relativeErrorTol = 1e-12;
 
@@ -97,6 +104,7 @@ SolutionMetadata SolverBase::optimize() {
         lm_params.lambdaInitial = config_.lambda_initial;
         lm_params.lambdaUpperBound = config_.lambda_upper_bound;
         lm_params.diagonalDamping = config_.diagonal_damping;
+        lm_params.maxIterations = config_.max_iterations;
         LevenbergMarquardtOptimizer optimizer(graph_, values_, lm_params);
         values_ = optimizer.optimize();
         meta.error = optimizer.error();
@@ -132,4 +140,28 @@ SolutionMetadata SolverBase::optimize() {
 
 
     return meta;
+}
+
+
+std::vector<std::tuple<std::string, int, double>>
+SolverBase::get_factor_error_summary() const {
+    std::map<std::string, std::pair<int, double>> by_type;
+    for (const auto& factor : graph_) {
+        if (!factor) continue;
+        const auto& f = *factor;
+        const std::string name = gtsam::demangle(typeid(f).name());
+        const double e = factor->error(values_);
+        auto& entry = by_type[name];
+        entry.first  += 1;
+        entry.second += e;
+    }
+    std::vector<std::tuple<std::string, int, double>> out;
+    out.reserve(by_type.size());
+    for (const auto& [name, ce] : by_type) {
+        out.emplace_back(name, ce.first, ce.second);
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        return std::get<2>(a) > std::get<2>(b);
+    });
+    return out;
 }

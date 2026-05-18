@@ -12,6 +12,10 @@ class TendonFingerPlotter:
                  plot_base_wrenches=False,
                  plot_backbone_frames=False,
                  plot_backbone_ellipsoids=True,
+                 collision_node_indices=None,
+                 collision_node_radii=None,
+                 contact_node_index=None,
+                 contact_node_radius=None,
                  camera_focal_point=None,
                  camera_azimuth=15,
                  camera_elevation=20,
@@ -28,8 +32,15 @@ class TendonFingerPlotter:
             camera_distance=camera_distance,
             **kwargs
         )
-        
+
         self.plot_tip_force = plot_tip_force
+
+        self.collision_node_indices = list(collision_node_indices) if collision_node_indices else []
+        self.collision_node_radii = list(collision_node_radii) if collision_node_radii else []
+        if len(self.collision_node_indices) != len(self.collision_node_radii):
+            raise ValueError("collision_node_indices and collision_node_radii must have the same length")
+        self.contact_node_index = contact_node_index
+        self.contact_node_radius = contact_node_radius
 
         self.rod_manager = CosseratRodMeshManager(
             plot_backbone_ellipsoids=plot_backbone_ellipsoids,
@@ -159,6 +170,40 @@ class TendonFingerPlotter:
             matrix = utils.get_arrow_transform(p, tip_force_gt, scale=force_scale)
             self.tip_force_gt_transform.SetMatrix(matrix.flatten().tolist())
         
+    def update_collision_spheres(self, solution):
+        if not self.collision_node_indices and self.contact_node_index is None:
+            return
+
+        if self.plotter.frame == 0:
+            self.collision_sphere_transforms = []
+            for idx, radius in zip(self.collision_node_indices, self.collision_node_radii):
+                mesh = pv.Sphere(radius=radius)
+                transform = vtk.vtkTransform()
+                actor = self.plotter.plotter.add_mesh(
+                    mesh, color='crimson', opacity=0.25, lighting=False)
+                actor.SetUserTransform(transform)
+                self.collision_sphere_transforms.append((idx, transform))
+
+            self.contact_sphere_transform = None
+            if self.contact_node_index is not None and self.contact_node_radius is not None:
+                mesh = pv.Sphere(radius=self.contact_node_radius)
+                self.contact_sphere_transform = vtk.vtkTransform()
+                actor = self.plotter.plotter.add_mesh(
+                    mesh, color='limegreen', opacity=0.35, lighting=False)
+                actor.SetUserTransform(self.contact_sphere_transform)
+
+        for idx, transform in self.collision_sphere_transforms:
+            p = solution.marginals.rod.states[idx].pose.mean[:3, 3]
+            matrix = np.eye(4)
+            matrix[:3, 3] = p
+            transform.SetMatrix(matrix.flatten().tolist())
+
+        if self.contact_sphere_transform is not None:
+            p = solution.marginals.rod.states[self.contact_node_index].pose.mean[:3, 3]
+            matrix = np.eye(4)
+            matrix[:3, 3] = p
+            self.contact_sphere_transform.SetMatrix(matrix.flatten().tolist())
+
     def update_p_desired(self, p):
         if self.plotter.frame == 0:
             mesh = pv.Sphere(radius=0.002)
@@ -175,7 +220,8 @@ class TendonFingerPlotter:
         self.update_tendons(solution)
         self.update_discs(solution)
         self.update_tip_force(solution, tip_force_gt)
-        
+        self.update_collision_spheres(solution)
+
         if p_desired is not None:
             self.update_p_desired(p_desired)
         

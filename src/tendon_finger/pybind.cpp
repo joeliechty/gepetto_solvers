@@ -128,7 +128,9 @@ void bind_tendon_finger(py::module& m) {
         .def(py::init<const TrajectoryPlannerConfig&>())
         .def("plan", &TendonFingerTrajectoryPlannerDispatch::plan)
         .def("set_contact_cov", &TendonFingerTrajectoryPlannerDispatch::set_contact_cov,
-             py::arg("contact_cov"));
+             py::arg("contact_cov"))
+        .def("get_factor_error_summary",
+             &TendonFingerTrajectoryPlannerDispatch::get_factor_error_summary);
 
     // --- Iterative (ISAM2) State Estimator ---
 

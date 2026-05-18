@@ -30,9 +30,14 @@ struct EnvironmentConfig {
     std::vector<double> collision_node_radii;
 
     // Contact-as-goal terminal factor (Eq 26 / 30).
+    // 3x3 covariance: rows 0-1 weight the dummy-point sphere/surface equality
+    // (e1, e2 in SdfContactFactor); row 2 weights the tip-side non-penetration
+    // hinge e3 = max(0, R - SDF(T_obj^-1 p_tip)).
     std::optional<int> target_contact_node;
     double contact_node_radius = 0.0;
-    gtsam::Matrix2 contact_cov = (gtsam::Matrix2() << 1e-6, 0.0, 0.0, 1e-6).finished();
+    gtsam::Matrix3 contact_cov = (gtsam::Matrix3() << 1e-6, 0.0, 0.0,
+                                                      0.0, 1e-6, 0.0,
+                                                      0.0, 0.0, 1e-6).finished();
 };
 
 
@@ -108,15 +113,22 @@ public:
 };
 
 
-// Surface-to-surface contact factor (Eq 26).
+// Surface-to-surface contact factor (Eq 26) + tip-side non-penetration hinge.
 // Connects:
 //   - node_pose_key  (Pose3)   : finger node whose sphere should touch the surface
 //   - object_key     (Pose3)   : object pose
 //   - point_key      (Point3)  : dummy contact point p_c in world frame
 //
-// 2D residual = [ ||p_c - p_i||_2 - r ,  SDF(T_obj^{-1} p_c) ].
-// Driving both terms to zero places p_c on both the sphere surface and the
-// object surface, i.e. tangential contact.
+// 3D residual = [ ||p_c - p_i||_2 - R,
+//                 SDF(T_obj^{-1} p_c),
+//                 max(0, R - SDF(T_obj^{-1} p_i)) ].
+// Rows 0-1 drive p_c onto both the body sphere (radius R around the tip) and
+// the object surface — tangential contact. Row 2 is a one-sided hinge: it
+// penalises configurations where the tip center sits inside the object's
+// R-offset surface (i.e. the tip-sphere penetrates the object). Adding row 2
+// removes the side-symmetry of rows 0-1 — without it, a tip *inside* the
+// object can satisfy e1 = e2 = 0 by placing p_c on the surface "behind" the
+// tip, which is the penetration mode observed at the end of the trajectory.
 class SdfContactFactor : public gtsam::NoiseModelFactor3<gtsam::Pose3, gtsam::Pose3, gtsam::Point3> {
 private:
     double R_;
@@ -153,15 +165,29 @@ public:
         openvdb::Vec3R vdb_pt(p_local.x(), p_local.y(), p_local.z());
         double e2 = sampler.wsSample(vdb_pt);
 
-        if (H1 || H2 || H3) {
-            if (H1) *H1 = gtsam::Matrix::Zero(2, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(2, 6);
-            if (H3) *H3 = gtsam::Matrix::Zero(2, 3);
+        // Tip in object-local frame for the non-penetration hinge e3.
+        gtsam::Matrix36 D_tiplocal_obj;
+        gtsam::Matrix33 D_tiplocal_center;
+        gtsam::Point3 tip_local = object_pose.transformTo(center,
+            (H1 || H2) ? &D_tiplocal_obj    : nullptr,
+            (H1)       ? &D_tiplocal_center : nullptr);
 
+        openvdb::Vec3R vdb_tip(tip_local.x(), tip_local.y(), tip_local.z());
+        double sdf_tip = sampler.wsSample(vdb_tip);
+        const bool e3_active = (sdf_tip < R_);
+        double e3 = e3_active ? (R_ - sdf_tip) : 0.0;
+
+        if (H1 || H2 || H3) {
+            if (H1) *H1 = gtsam::Matrix::Zero(3, 6);
+            if (H2) *H2 = gtsam::Matrix::Zero(3, 6);
+            if (H3) *H3 = gtsam::Matrix::Zero(3, 3);
+
+            // Row 0: e1 = ||p_c - p_i|| - R
             gtsam::Vector3 n_sphere = (dummy_point - center) / dist_to_center;
             if (H1) H1->row(0) = -n_sphere.transpose() * D_center_pose;
             if (H3) H3->row(0) = n_sphere.transpose();
 
+            // Row 1: e2 = SDF(T_obj^-1 p_c)  — FD gradient in object-local frame.
             double h = 1e-4;
             double dx = sampler.wsSample(openvdb::Vec3R(vdb_pt.x() + h, vdb_pt.y(), vdb_pt.z())) -
                         sampler.wsSample(openvdb::Vec3R(vdb_pt.x() - h, vdb_pt.y(), vdb_pt.z()));
@@ -176,9 +202,27 @@ public:
             gtsam::Matrix13 de2_dplocal = n_local.transpose();
             if (H2) H2->row(1) = de2_dplocal * D_plocal_obj;
             if (H3) H3->row(1) = de2_dplocal * D_plocal_point;
+
+            // Row 2: e3 = max(0, R - SDF(tip_local)). Zero Jacobian when inactive.
+            if (e3_active) {
+                double dx_t = sampler.wsSample(openvdb::Vec3R(vdb_tip.x() + h, vdb_tip.y(), vdb_tip.z())) -
+                              sampler.wsSample(openvdb::Vec3R(vdb_tip.x() - h, vdb_tip.y(), vdb_tip.z()));
+                double dy_t = sampler.wsSample(openvdb::Vec3R(vdb_tip.x(), vdb_tip.y() + h, vdb_tip.z())) -
+                              sampler.wsSample(openvdb::Vec3R(vdb_tip.x(), vdb_tip.y() - h, vdb_tip.z()));
+                double dz_t = sampler.wsSample(openvdb::Vec3R(vdb_tip.x(), vdb_tip.y(), vdb_tip.z() + h)) -
+                              sampler.wsSample(openvdb::Vec3R(vdb_tip.x(), vdb_tip.y(), vdb_tip.z() - h));
+                gtsam::Vector3 n_tip(dx_t, dy_t, dz_t);
+                double norm_t = n_tip.norm();
+                if (norm_t > 1e-8) n_tip /= norm_t;
+
+                gtsam::Matrix13 de3_dtiplocal = -n_tip.transpose();
+                if (H1) H1->row(2) = de3_dtiplocal * D_tiplocal_center * D_center_pose;
+                if (H2) H2->row(2) = de3_dtiplocal * D_tiplocal_obj;
+                // H3 row 2 stays zero: e3 does not depend on p_c.
+            }
         }
 
-        return gtsam::Vector2(e1, e2);
+        return gtsam::Vector3(e1, e2, e3);
     }
 };
 

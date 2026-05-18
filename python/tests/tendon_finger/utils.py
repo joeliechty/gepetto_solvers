@@ -1,4 +1,6 @@
 import os
+import sys
+from datetime import datetime
 from collections import deque
 
 import numpy as np
@@ -6,6 +8,119 @@ import matplotlib.pyplot as plt
 
 import crest_sparse
 from .config import get_base_config
+
+
+class _Tee:
+    """File-like object that writes to multiple streams (e.g. stdout + a file)."""
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+class PlannerLogger:
+    """
+    Redirects stdout to both the terminal and a uniquely-named text file in
+    the tendon_finger directory. File name: <planner_name>_<YYYYmmdd_HHMMSS>.log
+    """
+    def __init__(self, planner_name, log_dir=None):
+        if log_dir is None:
+            log_dir = os.path.dirname(os.path.abspath(__file__))
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.path = os.path.join(log_dir, f"{planner_name}_{timestamp}.log")
+        self._file = open(self.path, "w")
+        self._orig_stdout = sys.stdout
+        sys.stdout = _Tee(self._orig_stdout, self._file)
+        print(f"Logging to: {self.path}")
+
+    def close(self):
+        if self._file is not None:
+            sys.stdout = self._orig_stdout
+            self._file.close()
+            self._file = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+
+def _format_value(v, indent=4):
+    """Pretty-format a value for logging. Handles numpy arrays nicely."""
+    if isinstance(v, np.ndarray):
+        with np.printoptions(precision=6, suppress=True, linewidth=120):
+            text = np.array2string(v)
+        pad = " " * indent
+        return ("\n" + pad).join(text.splitlines())
+    return repr(v)
+
+
+def _dump_attrs(obj, indent=2, _seen=None):
+    """Recursively dump attributes of a config-like object."""
+    if _seen is None:
+        _seen = set()
+    oid = id(obj)
+    if oid in _seen:
+        return "<cycle>"
+    _seen.add(oid)
+
+    pad = " " * indent
+    lines = []
+    # Prefer __dict__ if present; otherwise fall back to dir().
+    attrs = []
+    if hasattr(obj, "__dict__") and obj.__dict__:
+        attrs = list(obj.__dict__.keys())
+    else:
+        attrs = [a for a in dir(obj) if not a.startswith("_")]
+
+    for name in sorted(attrs):
+        if name.startswith("_"):
+            continue
+        try:
+            v = getattr(obj, name)
+        except Exception as e:
+            lines.append(f"{pad}{name} = <error: {e}>")
+            continue
+        if callable(v):
+            continue
+        # Recurse into nested config-like objects (no __dict__ on pybind objs,
+        # but they expose attributes via dir(); only recurse one or two levels
+        # to keep output readable).
+        if hasattr(v, "__dict__") and v.__dict__ and indent < 8:
+            lines.append(f"{pad}{name}:")
+            lines.append(_dump_attrs(v, indent + 2, _seen))
+        else:
+            lines.append(f"{pad}{name} = {_format_value(v, indent + 4)}")
+    return "\n".join(lines)
+
+
+def log_planner_parameters(planner_config, environment=None, extras=None):
+    """Print planner + environment parameters in a readable block."""
+    print("=" * 72)
+    print("PLANNER CONFIG")
+    print("=" * 72)
+    print(_dump_attrs(planner_config))
+    if environment is not None:
+        print("=" * 72)
+        print("ENVIRONMENT CONFIG")
+        print("=" * 72)
+        print(_dump_attrs(environment))
+    if extras:
+        print("=" * 72)
+        print("EXTRA PARAMETERS")
+        print("=" * 72)
+        for k, v in extras.items():
+            print(f"  {k} = {_format_value(v, 4)}")
+    print("=" * 72)
 
 
 class GaussianProcessNoiseModel:

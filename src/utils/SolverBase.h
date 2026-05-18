@@ -5,6 +5,10 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Marginals.h>
 
+#include <string>
+#include <tuple>
+#include <vector>
+
 
 struct SolutionMetadata {
     double total_time_ms;
@@ -42,6 +46,10 @@ struct SolverBaseConfig {
     double lambda_initial = 1e-5;
     double lambda_upper_bound = 1e5;
     bool diagonal_damping = false;
+
+    // GTSAM's default is 100, which silently caps stiff contact problems
+    // mid-descent. Expose so callers can bump.
+    int max_iterations = 100;
 };
 
 
@@ -50,6 +58,14 @@ public:
     SolverBase(const SolverBaseConfig& params);
 
     SolutionMetadata optimize();
+
+    // Walk the factor graph and group factors by C++ type, summing the
+    // unweighted error contribution (0.5 * ||whitened_residual||^2 per factor,
+    // matching GTSAM's NonlinearFactor::error semantics). Returns entries
+    // sorted by total error descending: (demangled_type_name, count, total_error).
+    // Use to diagnose which factor type dominates the residual.
+    std::vector<std::tuple<std::string, int, double>>
+        get_factor_error_summary() const;
 
 private:
     void optimize_dense_benchmark(

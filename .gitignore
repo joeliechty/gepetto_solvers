@@ -35,3 +35,5 @@ setup_log*
 *.vdb
 
 *.png
+
+*.log

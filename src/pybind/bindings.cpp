@@ -15,7 +15,8 @@ void bind_utils(py::module& m) {
         .def_readwrite("delta_initial", &SolverBaseConfig::delta_initial)
         .def_readwrite("lambda_initial", &SolverBaseConfig::lambda_initial)
         .def_readwrite("lambda_upper_bound", &SolverBaseConfig::lambda_upper_bound)
-        .def_readwrite("diagonal_damping", &SolverBaseConfig::diagonal_damping);
+        .def_readwrite("diagonal_damping", &SolverBaseConfig::diagonal_damping)
+        .def_readwrite("max_iterations", &SolverBaseConfig::max_iterations);
 
     py::class_<SolutionMetadata>(m, "SolutionMetadata")
         .def(py::init<>())

@@ -96,6 +96,13 @@ public:
     // mode to be configured.
     void set_contact_cov(const gtsam::Matrix& contact_cov);
 
+    // Forwarder: SolverBase is privately inherited so its public methods
+    // aren't accessible through a planner reference without re-exposing.
+    std::vector<std::tuple<std::string, int, double>>
+        get_factor_error_summary() const {
+        return SolverBase::get_factor_error_summary();
+    }
+
 private:
     void build_graph() override;
     void extract_solution() override;
@@ -126,6 +133,9 @@ public:
     TrajectoryPlannerResult plan();
 
     void set_contact_cov(const gtsam::Matrix& contact_cov);
+
+    std::vector<std::tuple<std::string, int, double>>
+        get_factor_error_summary() const;
 
     int num_tendons() const { return num_tendons_; }
 

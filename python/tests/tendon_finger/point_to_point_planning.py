@@ -5,6 +5,7 @@ import crest_sparse
 from .._plotting.tendon_finger_plotter import TendonFingerPlotter
 from .._plotting.trajectory_plotter import plot_trajectory, plot_trajectory_comparison
 from .config import get_6tendon_config
+from .utils import PlannerLogger, log_planner_parameters
 
 def make_calc_phi(num_tendons):
     """Returns a function that generates the Identity transition matrix."""
@@ -86,6 +87,14 @@ def save_interp_trajectory(control_traj, save_path):
     np.savez(save_path, trajectory=control_traj)
 
 def main():
+    logger = PlannerLogger("point_to_point")
+    try:
+        _main()
+    finally:
+        logger.close()
+
+
+def _main():
     # 1. Setup Base Model Config
     model_config = get_6tendon_config()
     num_tendons = model_config.num_tendons  # 6
@@ -149,6 +158,16 @@ def main():
     # # Goal tension
     # planner_config.goal_tensions = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 1.5])
     # planner_config.goal_tensions_cov = np.eye(num_tendons) * 1e-4
+
+    log_planner_parameters(
+        planner_config,
+        environment=getattr(planner_config, "environment", None),
+        extras={
+            "planner_hz": planner_hz,
+            "num_tendons": num_tendons,
+            "zero_bend_length": zero_bend_length,
+        },
+    )
 
     # 3. Initialize and Run Planner
     print("Building factor graph...")

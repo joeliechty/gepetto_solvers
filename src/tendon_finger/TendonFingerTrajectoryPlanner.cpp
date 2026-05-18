@@ -425,9 +425,9 @@ void TendonFingerTrajectoryPlanner<N>::set_contact_cov(
             "set_contact_cov: target_contact_node is not set; planner is "
             "not in contact mode");
     }
-    if (contact_cov.rows() != 2 || contact_cov.cols() != 2) {
+    if (contact_cov.rows() != 3 || contact_cov.cols() != 3) {
         throw std::invalid_argument(
-            "set_contact_cov: expected a 2x2 matrix");
+            "set_contact_cov: expected a 3x3 matrix");
     }
     config_.environment->contact_cov = contact_cov;
 }
@@ -478,4 +478,12 @@ void TendonFingerTrajectoryPlannerDispatch::set_contact_cov(
     const gtsam::Matrix& contact_cov)
 {
     std::visit([&](auto& p) { p->set_contact_cov(contact_cov); }, planner_);
+}
+
+
+std::vector<std::tuple<std::string, int, double>>
+TendonFingerTrajectoryPlannerDispatch::get_factor_error_summary() const {
+    return std::visit(
+        [](const auto& p) { return p->get_factor_error_summary(); },
+        planner_);
 }
