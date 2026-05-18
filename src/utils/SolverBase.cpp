@@ -94,6 +94,9 @@ SolutionMetadata SolverBase::optimize() {
     } else if (config_.optimizer_type == "LM") {
         LevenbergMarquardtParams lm_params;
         lm_params.setLinearSolverType(config_.linear_solver_type);
+        lm_params.lambdaInitial = config_.lambda_initial;
+        lm_params.lambdaUpperBound = config_.lambda_upper_bound;
+        lm_params.diagonalDamping = config_.diagonal_damping;
         LevenbergMarquardtOptimizer optimizer(graph_, values_, lm_params);
         values_ = optimizer.optimize();
         meta.error = optimizer.error();

@@ -94,6 +94,14 @@ def main():
     planner_config = crest_sparse.TrajectoryPlannerConfig()
     planner_config.model_config = model_config
     planner_config.model_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY" # FOR APPLE
+    
+    # Levenberg-Marquardt optimizer settings: more aggressive damping to start, and a higher upper bound to avoid premature termination.  Marquardt-style diagonal damping seems to help convergence in this problem.
+    # planner_config.model_config.base.optimizer_type      = "LM"      # TODO: Buggy, fix later
+    # planner_config.model_config.base.delta_initial       = 1.0       # ignored under LM, fine to leave
+    # planner_config.model_config.base.lambda_initial      = 1.0       # start conservative (default is 1e-5)
+    # planner_config.model_config.base.lambda_upper_bound  = 1e20      # don't bail early (default is 1e5)
+    # planner_config.model_config.base.diagonal_damping    = True      # Marquardt-style scaling
+    
     planner_config.model_config.base.delta_initial = 1.0
     planner_config.K = 10       # K+1 steps
     planner_hz = 5  # planning frequency
@@ -101,7 +109,7 @@ def main():
 
     # Background Tensions: passive tendons (0-4) are tight, active tendon (5) is free
     bg_mean = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.0])
-    bg_sigmas = np.array([1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e6])
+    bg_sigmas = np.array([1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e1])
     planner_config.background_tensions_mean = bg_mean
     planner_config.background_tensions_sigmas = bg_sigmas
 
@@ -109,7 +117,7 @@ def main():
     planner_config.gp_tense_Qc = np.eye(num_tendons) * 1e-2
 
     # GP Prior Covariance for tendon lengths (smoothness of length changes over time)
-    planner_config.gp_len_Qc = np.eye(num_tendons) * 1e-5
+    planner_config.gp_len_Qc = np.eye(num_tendons) * 1e-6
 
     # Tension limit barrier: only active tendon (index 5) needs the barrier
     planner_config.tension_limit_alpha = 10.0

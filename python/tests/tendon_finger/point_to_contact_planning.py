@@ -76,20 +76,30 @@ def main():
     env.collision_node_radii = []
 
     # Terminal contact: tip sphere must land on the cylinder's surface.
+    # The first contact_cov here seeds the planner; later stages tighten it
+    # via set_contact_cov() in the continuation loop below.
     tip_radius = 0.003
     env.target_contact_node = tip_node_index
     env.contact_node_radius = tip_radius
-    env.contact_cov = np.diag([1e-6, 1e-6])
+    contact_cov_stages = [1e-3, 1e-4, 1e-5, 1e-6]
+    env.contact_cov = np.diag([contact_cov_stages[0], contact_cov_stages[0]])
 
     planner_config.environment = env
 
-    # 4. Plan
+    # 4. Plan with contact-cov continuation. Solving cold at the tight cov
+    # collapses Dogleg's trust region (huge residual / σ at iter 0). Warm-
+    # starting from looser stages avoids that — values_ is reused across
+    # plan() calls, only the contact factor's covariance changes.
     print("Building factor graph...")
     planner = crest_sparse.TendonFingerTrajectoryPlanner(planner_config)
 
-    print("Planning contact trajectory...")
+    print("Planning contact trajectory (with continuation)...")
     start_time = time.time()
-    result = planner.plan()
+    for stage, cov_val in enumerate(contact_cov_stages):
+        planner.set_contact_cov(np.diag([cov_val, cov_val]))
+        result = planner.plan()
+        print(f"  stage {stage}: contact_cov diag = {cov_val:.0e} | "
+              f"iters={result.meta.iterations} | error={result.meta.error:.4g}")
     elapsed = time.time() - start_time
 
     print(f"Solved in {elapsed:.2f}s | iters={result.meta.iterations} | error={result.meta.error:.4g}")
@@ -104,7 +114,7 @@ def main():
     tip_in_obj = np.linalg.inv(object_pose) @ np.append(tip_world, 1.0)
     tip_in_obj = tip_in_obj[:3]
     # Sphere SDF: distance from center minus radius.
-    sdf_at_tip = np.linalg.norm(tip_in_obj) - 0.005  # sphere radius 0.005 m
+    sdf_at_tip = np.linalg.norm(tip_in_obj) - 0.025  # sphere radius 0.005 m
     print(f"\nContact check:")
     print(f"  Tip world pos:   {tip_world}")
     print(f"  Tip in obj frame:{tip_in_obj}")
@@ -123,7 +133,7 @@ def main():
     )
 
     # Show the target sphere in the scene.
-    sphere_radius = 0.005
+    sphere_radius = 0.025
     sphere_mesh = pv.Sphere(radius=sphere_radius, center=object_pose[0:3, 3])
     plotter.plotter.plotter.add_mesh(sphere_mesh, color='cadmiumyellow', opacity=0.5, smooth_shading=True)
 

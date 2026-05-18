@@ -130,27 +130,56 @@ void TendonFingerTrajectoryPlanner<N>::get_initial_values() {
     if (env.target_contact_node.has_value()) {
         // Seed p_c on the object's surface, on the side facing the tip, so the
         // contact factor's SDF row has a non-zero gradient at iteration 0.
-        // We query the SDF at the object's local-frame origin to get the
-        // distance from that origin to the nearest surface (negative inside);
-        // |sdf| is the step length from the object center toward the tip that
-        // lands on the surface for convex shapes whose local origin sits
-        // inside.
+        // Ray-march in the *object's local frame* from the local origin along
+        // the (object-frame) direction toward the tip until the SDF crosses
+        // zero. Stepping in local frame keeps the seed in-plane with the tip
+        // and object center (avoiding the off-plane drift seen when the seed
+        // lands outside the narrow band).
         int i_node = *env.target_contact_node;
         const Pose3 tip_pose = values_.at<Pose3>(
             models_[config_.K]->rod_->get_pose_key(i_node));
-        Point3 tip   = tip_pose.translation();
-        Point3 obj_c = obj_mean.translation();
-        Point3 diff  = tip - obj_c;
-        double norm  = diff.norm();
-        Point3 dir   = (norm > 1e-8) ? Point3(diff / norm)
-                                     : Point3(0.0, 0.0, 1.0);
+        Point3 tip_world = tip_pose.translation();
+        Point3 tip_local = obj_mean.transformTo(tip_world);
+        double tip_local_norm = tip_local.norm();
+        Point3 dir_local = (tip_local_norm > 1e-8)
+                               ? Point3(tip_local / tip_local_norm)
+                               : Point3(0.0, 0.0, 1.0);
 
         openvdb::tools::GridSampler<openvdb::FloatGrid, openvdb::tools::BoxSampler>
             sampler(*env.sdf_grid);
-        double r_obj = std::abs(sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0)));
 
-        Point3 seed = obj_c + r_obj * dir;
-        values_.insert(dummy_point_key(), seed);
+        // March outward from the origin in object-local coords. We expect the
+        // origin to sit inside (SDF < 0); the first sign change marks the
+        // surface. Step size and budget are chosen so a few-mm primitive is
+        // found in <100 steps without overrunning a meter-scale object.
+        const double step    = 5e-4;          // 0.5 mm per step
+        const int    max_it  = 4000;          // up to 2 m along the ray
+        double t = 0.0;
+        double prev_sdf = sampler.wsSample(
+            openvdb::Vec3R(0.0, 0.0, 0.0));
+        double t_surface = -1.0;
+        for (int it = 1; it <= max_it; ++it) {
+            double tt = it * step;
+            Point3 q = tt * dir_local;
+            double sdf = sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z()));
+            if (std::isfinite(prev_sdf) && std::isfinite(sdf)
+                    && prev_sdf * sdf < 0.0) {
+                // Linear interpolation between samples.
+                double alpha = prev_sdf / (prev_sdf - sdf);
+                t_surface = t + alpha * step;
+                break;
+            }
+            prev_sdf = sdf;
+            t = tt;
+        }
+        // Fallback: previous heuristic if the ray-march failed (e.g. unknown
+        // background sentinel, sample never flipped sign).
+        if (t_surface < 0.0) {
+            t_surface = std::abs(sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0)));
+        }
+        Point3 seed_local = t_surface * dir_local;
+        Point3 seed_world = obj_mean.transformFrom(seed_local);
+        values_.insert(dummy_point_key(), seed_world);
     }
 }
 
@@ -349,11 +378,14 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
 
             // Tikhonov regularizer on the dummy contact point. SdfContactFactor
             // only constrains p_c along two of three DoF (sphere surface +
-            // object surface), leaving a 1D sliding manifold that yields an
-            // indeterminate linear system. A weak prior toward the seed picks
-            // a unique minimum without overpowering the tight contact factor.
+            // object surface), leaving a 1D sliding manifold. Under a tight
+            // contact_cov the dummy point will slide freely along that
+            // manifold and drag the tip with it through row 0 of the contact
+            // factor. The Tikhonov σ is set to the body sphere radius scale —
+            // strong enough to pin the sliding DoF, loose enough not to fight
+            // contact refinement.
             Point3 p_seed = values_.at<Point3>(dummy_point_key());
-            auto weak_prior_noise = noiseModel::Isotropic::Sigma(3, 10.0);
+            auto weak_prior_noise = noiseModel::Isotropic::Sigma(3, 1e-2);
             graph_.add(PriorFactor<Point3>(
                 dummy_point_key(), p_seed, weak_prior_noise));
         }
@@ -377,6 +409,27 @@ TrajectoryPlannerResult TendonFingerTrajectoryPlanner<N>::plan() {
     result_ = TrajectoryPlannerResult{};
     result_.meta = optimize();
     return result_;
+}
+
+
+template<int N>
+void TendonFingerTrajectoryPlanner<N>::set_contact_cov(
+    const gtsam::Matrix& contact_cov)
+{
+    if (!config_.environment.has_value()) {
+        throw std::runtime_error(
+            "set_contact_cov: environment is not configured on this planner");
+    }
+    if (!config_.environment->target_contact_node.has_value()) {
+        throw std::runtime_error(
+            "set_contact_cov: target_contact_node is not set; planner is "
+            "not in contact mode");
+    }
+    if (contact_cov.rows() != 2 || contact_cov.cols() != 2) {
+        throw std::invalid_argument(
+            "set_contact_cov: expected a 2x2 matrix");
+    }
+    config_.environment->contact_cov = contact_cov;
 }
 
 
@@ -418,4 +471,11 @@ TendonFingerTrajectoryPlannerDispatch::TendonFingerTrajectoryPlannerDispatch(
 
 TrajectoryPlannerResult TendonFingerTrajectoryPlannerDispatch::plan() {
     return std::visit([](auto& p) { return p->plan(); }, planner_);
+}
+
+
+void TendonFingerTrajectoryPlannerDispatch::set_contact_cov(
+    const gtsam::Matrix& contact_cov)
+{
+    std::visit([&](auto& p) { p->set_contact_cov(contact_cov); }, planner_);
 }

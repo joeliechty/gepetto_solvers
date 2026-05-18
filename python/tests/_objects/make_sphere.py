@@ -5,7 +5,7 @@ except ImportError:
 import numpy as np
 
 
-def create_sphere_sdf(radius=0.005, voxel_size=0.001):
+def create_sphere_sdf(radius=0.025, voxel_size=0.001):
     grid = vdb.FloatGrid(10.0)
     grid.gridClass = vdb.GridClass.LEVEL_SET
     grid.transform = vdb.createLinearTransform(voxelSize=voxel_size)

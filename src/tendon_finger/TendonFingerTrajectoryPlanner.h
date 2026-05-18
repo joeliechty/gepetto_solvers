@@ -88,6 +88,14 @@ public:
 
     TrajectoryPlannerResult plan();
 
+    // Update the terminal contact factor's covariance without resetting the
+    // optimizer's working values. Enables a continuation / homotopy loop:
+    // solve with loose contact_cov to land near the surface, then resolve
+    // with progressively tighter cov, warm-starting each pass from the
+    // previous solution stored in values_. Requires environment & contact
+    // mode to be configured.
+    void set_contact_cov(const gtsam::Matrix& contact_cov);
+
 private:
     void build_graph() override;
     void extract_solution() override;
@@ -116,6 +124,8 @@ public:
     TendonFingerTrajectoryPlannerDispatch(const TrajectoryPlannerConfig& config);
 
     TrajectoryPlannerResult plan();
+
+    void set_contact_cov(const gtsam::Matrix& contact_cov);
 
     int num_tendons() const { return num_tendons_; }
 

@@ -30,7 +30,18 @@ struct SolverBaseConfig {
     // Nonlinear optimizer: "DOGLEG" or "LM" (Levenberg-Marquardt).
     std::string optimizer_type = "DOGLEG";
     bool use_dense = false;
+
+    // Dogleg trust-region initial radius.
     double delta_initial = 1.0;
+
+    // LM tuning. Defaults match GTSAM's, which are tuned for problems whose
+    // initial values are already near the optimum; on highly nonlinear
+    // problems started far from the solution, bumping lambda_initial up
+    // (e.g. 1.0) and enabling diagonal_damping is often what gets LM to
+    // accept a first step instead of bailing out at iters=0.
+    double lambda_initial = 1e-5;
+    double lambda_upper_bound = 1e5;
+    bool diagonal_damping = false;
 };
 
 

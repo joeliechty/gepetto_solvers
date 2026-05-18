@@ -12,7 +12,10 @@ void bind_utils(py::module& m) {
         .def_readwrite("linear_solver_type", &SolverBaseConfig::linear_solver_type)
         .def_readwrite("optimizer_type", &SolverBaseConfig::optimizer_type)
         .def_readwrite("use_dense", &SolverBaseConfig::use_dense)
-        .def_readwrite("delta_initial", &SolverBaseConfig::delta_initial);
+        .def_readwrite("delta_initial", &SolverBaseConfig::delta_initial)
+        .def_readwrite("lambda_initial", &SolverBaseConfig::lambda_initial)
+        .def_readwrite("lambda_upper_bound", &SolverBaseConfig::lambda_upper_bound)
+        .def_readwrite("diagonal_damping", &SolverBaseConfig::diagonal_damping);
 
     py::class_<SolutionMetadata>(m, "SolutionMetadata")
         .def(py::init<>())
