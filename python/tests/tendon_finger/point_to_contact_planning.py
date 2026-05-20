@@ -7,7 +7,7 @@ from .._plotting.tendon_finger_plotter import TendonFingerPlotter
 from .._plotting.trajectory_plotter import plot_trajectory
 from .config import get_6tendon_config
 from .utils import PlannerLogger, log_planner_parameters
-
+import argparse
 
 
 def main():
@@ -17,8 +17,14 @@ def main():
     finally:
         logger.close()
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--traj_steps", "-K", type=int, default=10, help="Number of timesteps")
+    return parser.parse_args()
 
 def _main():
+
+    args = parse_args()
     # 1. Setup base model config
     model_config = get_6tendon_config()
     num_tendons = model_config.num_tendons  # 6
@@ -42,7 +48,7 @@ def _main():
     # continuation stage hits that cap mid-descent. Bump so we can tell
     # whether the optimizer is iter-limited vs actually converged.
     planner_config.model_config.base.max_iterations = 500
-    planner_config.K = 11
+    planner_config.K = args.traj_steps
     planner_hz = 5
     planner_config.dt = 1.0 / planner_hz
 
@@ -63,6 +69,19 @@ def _main():
     planner_config.start_position_cov = np.eye(3) * 1e-6
 
     # No goal_position / goal_pose — contact-as-goal supersedes them (Eq 30).
+
+    # Warm-start: bias k=K toward a flexed configuration so the planner
+    # initializes its rod state along the natural curl manifold rather than
+    # straight-from-rest. Without this the optimizer can't cross the rod-stress
+    # hump from a straight initial guess and converges to a local minimum with
+    # the tip 5-8 cm off the sphere (see point_to_contact_*.log K-sweep).
+    # get_initial_values() interpolates t_k = t_start + (k/K)*(t_goal - t_start)
+    # across timesteps, so this also seeds intermediate k's tendon tensions.
+    # The cov is tight on passive tendons (lock them at 0.5) and loose on the
+    # flexor so the optimizer can refine its terminal value freely.
+    planner_config.goal_tensions = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 3.0])
+    planner_config.goal_tensions_cov = np.diag(
+        [1e-8, 1e-8, 1e-8, 1e-8, 1e-8, 1e-1])
 
     # 3. Build the environment (cylinder SDF object)
     objects_dir = os.path.join(os.path.dirname(__file__), "..", "_objects")

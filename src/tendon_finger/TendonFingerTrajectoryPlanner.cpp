@@ -101,17 +101,26 @@ template<int N>
 void TendonFingerTrajectoryPlanner<N>::get_initial_values() {
     values_.clear();
 
-    Eigen::Vector<double, N> t_init;
-    if (config_.start_tensions.has_value()) {
-        t_init = config_.start_tensions->head<N>();
-    } else {
-        t_init = config_.background_tensions_mean.head<N>();
-    }
+    Eigen::Vector<double, N> t_start = config_.start_tensions.has_value()
+        ? config_.start_tensions->head<N>()
+        : config_.background_tensions_mean.head<N>();
+    // Warm-start: if goal_tensions is configured, linearly interpolate the per-
+    // step tension seed from t_start (k=0) to t_goal (k=K). The Cosserat stress
+    // factors will then curl the rod toward equilibrium with the seeded
+    // tension at each k during the first few iterations, putting the trajectory
+    // on the natural curl manifold instead of forcing the optimizer to cross
+    // a rod-stress hump from the straight rest pose.
+    Eigen::Vector<double, N> t_goal = config_.goal_tensions.has_value()
+        ? config_.goal_tensions->head<N>()
+        : t_start;
 
     for (int k = 0; k <= config_.K; ++k) {
+        double alpha = (config_.K > 0)
+            ? static_cast<double>(k) / static_cast<double>(config_.K)
+            : 0.0;
+        Eigen::Vector<double, N> t_k = t_start + alpha * (t_goal - t_start);
         values_.insert(models_[k]->get_initial_values());
-        // Override tension initial values
-        values_.update(models_[k]->get_tensions_key(), t_init);
+        values_.update(models_[k]->get_tensions_key(), t_k);
     }
 
     if (!config_.environment) return;
