@@ -1,10 +1,14 @@
 #include "TendonFingerSolver.h"
 
 #include "measurement/PositionPriorFactor.h"
+#include "utils/EnvironmentFactors.h"
 #include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
 #include "utils/SolverBase.h"
 #include <gtsam/linear/NoiseModel.h>
+#include <gtsam/slam/PriorFactor.h>
+
+#include <cmath>
 
 using namespace gtsam;
 
@@ -16,6 +20,8 @@ TendonFingerSolver<N>::TendonFingerSolver(const TendonFingerSolverConfig& config
 :
     SolverBase(config.base)
 {
+    sphere_contact_ = config.sphere_contact;
+
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos);
 
@@ -145,6 +151,22 @@ void TendonFingerSolver<N>::build_graph() {
             tip_position_meas_->mean,
             noiseModel::Gaussian::Covariance(tip_position_meas_->cov)));
     }
+
+    // Optional sphere-sphere tip contact: anchor a sphere primitive in the
+    // world with a tight PriorFactor<Pose3>, then connect a rod node to it
+    // via the 1-residual SphereSphereContactFactor (signed surface gap).
+    if (sphere_contact_) {
+        const auto& sc = *sphere_contact_;
+        Pose3 sphere_pose(Rot3(), sc.sphere_center);
+        graph_.add(PriorFactor<Pose3>(
+            sphere_object_key(), sphere_pose,
+            noiseModel::Gaussian::Covariance(sc.sphere_pose_cov)));
+        graph_.add(crest_sparse::SphereSphereContactFactor(
+            robot_->rod_->get_pose_key(sc.finger_node_index),
+            sphere_object_key(),
+            sc.finger_node_radius, sc.sphere_radius,
+            noiseModel::Isotropic::Sigma(1, std::sqrt(sc.contact_cov))));
+    }
 }
 
 
@@ -156,6 +178,12 @@ void TendonFingerSolver<N>::extract_solution() {
 template<int N>
 void TendonFingerSolver<N>::get_initial_values() {
     values_ = robot_->get_initial_values();
+
+    if (sphere_contact_) {
+        const auto& sc = *sphere_contact_;
+        values_.insert(sphere_object_key(),
+            Pose3(Rot3(), sc.sphere_center));
+    }
 }
 
 

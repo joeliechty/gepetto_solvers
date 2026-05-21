@@ -385,18 +385,10 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
                 env.contact_node_radius,
                 env.sdf_grid, cn));
 
-            // Tikhonov regularizer on the dummy contact point. SdfContactFactor
-            // only constrains p_c along two of three DoF (sphere surface +
-            // object surface), leaving a 1D sliding manifold. Under a tight
-            // contact_cov the dummy point will slide freely along that
-            // manifold and drag the tip with it through row 0 of the contact
-            // factor. The Tikhonov σ is set to the body sphere radius scale —
-            // strong enough to pin the sliding DoF, loose enough not to fight
-            // contact refinement.
-            Point3 p_seed = values_.at<Point3>(dummy_point_key());
-            auto weak_prior_noise = noiseModel::Isotropic::Sigma(3, 1e-2);
-            graph_.add(PriorFactor<Point3>(
-                dummy_point_key(), p_seed, weak_prior_noise));
+            // Eq 30's normal-alignment residual (row 2 of SdfContactFactor)
+            // pins the third DoF of p_c, so no Tikhonov regularizer on the
+            // dummy point is needed. The ray-march seed inserted in
+            // initialize_values() supplies the initial Value.
         }
     }
 }

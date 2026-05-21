@@ -16,6 +16,7 @@ class TendonFingerPlotter:
                  collision_node_radii=None,
                  contact_node_index=None,
                  contact_node_radius=None,
+                 sphere_primitives=None,
                  camera_focal_point=None,
                  camera_azimuth=15,
                  camera_elevation=20,
@@ -41,6 +42,8 @@ class TendonFingerPlotter:
             raise ValueError("collision_node_indices and collision_node_radii must have the same length")
         self.contact_node_index = contact_node_index
         self.contact_node_radius = contact_node_radius
+
+        self.sphere_primitives = list(sphere_primitives) if sphere_primitives else []
 
         self.rod_manager = CosseratRodMeshManager(
             plot_backbone_ellipsoids=plot_backbone_ellipsoids,
@@ -204,6 +207,20 @@ class TendonFingerPlotter:
             matrix[:3, 3] = p
             self.contact_sphere_transform.SetMatrix(matrix.flatten().tolist())
 
+    def update_sphere_primitives(self):
+        if not self.sphere_primitives:
+            return
+        if self.plotter.frame != 0:
+            return
+        for spec in self.sphere_primitives:
+            center = np.asarray(spec["center"], dtype=float)
+            radius = float(spec["radius"])
+            color = spec.get("color", "goldenrod")
+            opacity = float(spec.get("opacity", 0.3))
+            mesh = pv.Sphere(radius=radius, center=center)
+            self.plotter.plotter.add_mesh(
+                mesh, color=color, opacity=opacity, smooth_shading=True)
+
     def update_p_desired(self, p):
         if self.plotter.frame == 0:
             mesh = pv.Sphere(radius=0.002)
@@ -221,6 +238,7 @@ class TendonFingerPlotter:
         self.update_discs(solution)
         self.update_tip_force(solution, tip_force_gt)
         self.update_collision_spheres(solution)
+        self.update_sphere_primitives()
 
         if p_desired is not None:
             self.update_p_desired(p_desired)

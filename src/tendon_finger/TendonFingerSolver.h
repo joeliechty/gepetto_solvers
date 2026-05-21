@@ -3,10 +3,32 @@
 #include "utils/Gaussians.h"
 #include "utils/SolverBase.h"
 #include "TendonFingerModel.h"
+#include <gtsam/geometry/Point3.h>
+#include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
 
 #include <memory>
+#include <optional>
 #include <variant>
+
+
+// Single-state sphere-sphere contact constraint applied via
+// SphereSphereContactFactor (utils/EnvironmentFactors.h, 1-residual gap
+// form). Pins one rod node sphere of radius r_a against a fixed-world
+// sphere primitive of radius r_b.
+struct SpherePrimitiveContactConfig {
+    int    finger_node_index  = -1;   // -1 = tip alias (clamp_node_idx)
+    double finger_node_radius = 0.0;  // r_a
+
+    gtsam::Point3 sphere_center = gtsam::Point3::Zero();  // world frame
+    double        sphere_radius = 0.0;                    // r_b
+
+    // Scalar variance on the signed-gap residual e = ||c_a-c_b|| - (r_a+r_b)
+    // in meters^2.
+    double contact_cov = 1e-6;
+    // Tight prior on the sphere primitive's pose (rigid anchor).
+    gtsam::Matrix6 sphere_pose_cov = 1e-8 * gtsam::Matrix6::Identity();
+};
 
 
 struct TendonFingerSolverConfig{
@@ -47,6 +69,10 @@ struct TendonFingerSolverConfig{
     // Optional: custom base pose as a 4x4 SE(3) matrix.
     // If all zeros (default), uses legacy hardcoded Rx(-pi/2)*Rz(pi) at origin.
     gtsam::Matrix4 base_pose = gtsam::Matrix4::Zero();
+
+    // Optional sphere-sphere contact constraint on a chosen rod node. When
+    // unset the solver runs the legacy free-space formulation.
+    std::optional<SpherePrimitiveContactConfig> sphere_contact;
 };
 
 
@@ -76,6 +102,9 @@ private:
     VectorNGaussian<N> tensions_;
     std::optional<Vector6Gaussian> tip_wrench_;
     std::optional<Vector3Gaussian> tip_position_meas_;
+
+    std::optional<SpherePrimitiveContactConfig> sphere_contact_;
+    static gtsam::Key sphere_object_key() { return gtsam::Symbol('O', 0); }
 
     TendonFingerMarginals extracted_;
 };
