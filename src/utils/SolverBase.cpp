@@ -4,6 +4,8 @@
 #include <gtsam/linear/HessianFactor.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+#include <gtsam/constrained/AugmentedLagrangianOptimizer.h>
+#include <gtsam/constrained/NonlinearConstraint.h>
 
 #include <gtsam/base/types.h>
 
@@ -95,8 +97,31 @@ SolutionMetadata SolverBase::optimize() {
     // params.relativeErrorTol = 1e-12;
 
     SolutionMetadata meta;
-    // If we want to use dense solver, e.g. for comparison
-    if (config_.use_dense) {
+    // Augmented Lagrangian path: a subclass set use_augmented_lagrangian_
+    // because the graph carries hard equality constraints (NonlinearConstraint
+    // factors). GTSAM's optimizer splits graph_ into cost factors vs.
+    // constraints internally and drives the constraint residuals to zero via
+    // its own mu/lambda schedule.
+    if (use_augmented_lagrangian_) {
+        auto p = std::make_shared<AugmentedLagrangianParams>();
+        p->initialMuEq      = config_.al_initial_mu;
+        p->muEqIncreaseRate = config_.al_mu_increase_rate;
+        p->maxIterations    = config_.al_max_iterations;
+        p->storeOptProgress = true;  // populate progress() for iteration count
+        p->lm_params.setLinearSolverType(config_.linear_solver_type);
+        p->lm_params.lambdaInitial    = config_.lambda_initial;
+        p->lm_params.lambdaUpperBound = config_.lambda_upper_bound;
+        p->lm_params.diagonalDamping  = config_.diagonal_damping;
+        p->lm_params.maxIterations    = config_.max_iterations;
+
+        AugmentedLagrangianOptimizer optimizer(graph_, values_, p);
+        values_ = optimizer.optimize();
+        const auto& progress = optimizer.progress();
+        meta.iterations = progress.empty() ? 0 : progress.back().iteration;
+        // meta.error is set below from the cost-only graph; the full-graph
+        // error would be dominated by the (large) hard-constraint penalty.
+    } else if (config_.use_dense) {
+        // If we want to use dense solver, e.g. for comparison
         optimize_dense_benchmark(params, meta);
     } else if (config_.optimizer_type == "LM") {
         LevenbergMarquardtParams lm_params;
@@ -116,11 +141,28 @@ SolutionMetadata SolverBase::optimize() {
         meta.error = optimizer.error();
         meta.iterations = optimizer.iterations();
     }
-    
+
     auto stop_optimize = now();
     auto start_marginalize = stop_optimize;
 
-    marginals_ = Marginals(graph_, values_);
+    // A hard-constraint (Constrained-noise) factor left in the graph makes the
+    // Cholesky/QR factorization behind Marginals singular, so strip any
+    // NonlinearConstraint factors before computing marginals. Contact is a hard
+    // constraint (satisfied exactly at convergence), not a measurement, so it
+    // contributes no covariance information. The free-space path has no such
+    // factors and so builds marginals over the full graph as before.
+    if (use_augmented_lagrangian_) {
+        NonlinearFactorGraph cost_graph;
+        for (const auto& factor : graph_) {
+            if (std::dynamic_pointer_cast<NonlinearConstraint>(factor)) continue;
+            cost_graph.add(factor);
+        }
+        // Report the objective (cost) error, excluding the constraint penalty.
+        meta.error = cost_graph.error(values_);
+        marginals_ = Marginals(cost_graph, values_);
+    } else {
+        marginals_ = Marginals(graph_, values_);
+    }
 
     auto stop_marginalize = now();
     auto start_extract = stop_marginalize;

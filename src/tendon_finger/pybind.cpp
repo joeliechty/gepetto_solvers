@@ -41,7 +41,6 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("finger_node_radius", &SpherePrimitiveContactConfig::finger_node_radius)
         .def_readwrite("sphere_center",      &SpherePrimitiveContactConfig::sphere_center)
         .def_readwrite("sphere_radius",      &SpherePrimitiveContactConfig::sphere_radius)
-        .def_readwrite("contact_cov",        &SpherePrimitiveContactConfig::contact_cov)
         .def_readwrite("sphere_pose_cov",    &SpherePrimitiveContactConfig::sphere_pose_cov);
 
     py::class_<TendonFingerMarginals>(m, "TendonFingerMarginals")
@@ -78,7 +77,6 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("collision_node_radii",   &crest_sparse::EnvironmentConfig::collision_node_radii)
         .def_readwrite("target_contact_node", &crest_sparse::EnvironmentConfig::target_contact_node)
         .def_readwrite("contact_node_radius", &crest_sparse::EnvironmentConfig::contact_node_radius)
-        .def_readwrite("contact_cov",         &crest_sparse::EnvironmentConfig::contact_cov)
         .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);
@@ -137,8 +135,6 @@ void bind_tendon_finger(py::module& m) {
     py::class_<TendonFingerTrajectoryPlannerDispatch>(m, "TendonFingerTrajectoryPlanner")
         .def(py::init<const TrajectoryPlannerConfig&>())
         .def("plan", &TendonFingerTrajectoryPlannerDispatch::plan)
-        .def("set_contact_cov", &TendonFingerTrajectoryPlannerDispatch::set_contact_cov,
-             py::arg("contact_cov"))
         .def("get_factor_error_summary",
              &TendonFingerTrajectoryPlannerDispatch::get_factor_error_summary);
 

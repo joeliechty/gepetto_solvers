@@ -12,10 +12,13 @@
 #include <variant>
 
 
-// Single-state sphere-sphere contact constraint applied via
-// SphereSphereContactFactor (utils/EnvironmentFactors.h, 1-residual gap
-// form). Pins one rod node sphere of radius r_a against a fixed-world
-// sphere primitive of radius r_b.
+// Single-state sphere-sphere contact, enforced as a hard equality constraint.
+// SphereSphereContactFactor (utils/EnvironmentFactors.h, 1-residual gap form)
+// is wrapped in a gtsam::ZeroCostConstraint so the solver's Augmented
+// Lagrangian path drives the signed surface gap exactly to zero, pinning one
+// rod node sphere of radius r_a tangent to a fixed-world sphere primitive of
+// radius r_b. Convergence is governed by the AL parameters on
+// SolverBaseConfig (al_initial_mu, al_mu_increase_rate, al_max_iterations).
 struct SpherePrimitiveContactConfig {
     int    finger_node_index  = -1;   // -1 = tip alias (clamp_node_idx)
     double finger_node_radius = 0.0;  // r_a
@@ -23,9 +26,6 @@ struct SpherePrimitiveContactConfig {
     gtsam::Point3 sphere_center = gtsam::Point3::Zero();  // world frame
     double        sphere_radius = 0.0;                    // r_b
 
-    // Scalar variance on the signed-gap residual e = ||c_a-c_b|| - (r_a+r_b)
-    // in meters^2.
-    double contact_cov = 1e-6;
     // Tight prior on the sphere primitive's pose (rigid anchor).
     gtsam::Matrix6 sphere_pose_cov = 1e-8 * gtsam::Matrix6::Identity();
 };

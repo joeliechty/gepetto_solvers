@@ -50,6 +50,16 @@ struct SolverBaseConfig {
     // GTSAM's default is 100, which silently caps stiff contact problems
     // mid-descent. Expose so callers can bump.
     int max_iterations = 100;
+
+    // Augmented Lagrangian (constrained) optimization tuning. Only consulted
+    // when a subclass enables the AL path (i.e. when a hard contact constraint
+    // is configured); the free-space Dogleg/LM path ignores these. The inner
+    // nonlinear sub-solver is LM and reuses linear_solver_type / lambda_initial
+    // / lambda_upper_bound / max_iterations above. Defaults match GTSAM's
+    // AugmentedLagrangianParams.
+    double al_initial_mu       = 1.0;  // initialMuEq: starting penalty weight
+    double al_mu_increase_rate = 2.0;  // muEqIncreaseRate: outer-loop growth
+    int    al_max_iterations   = 20;   // maxIterations: outer AL loop steps
 };
 
 
@@ -81,6 +91,13 @@ protected:
     gtsam::NonlinearFactorGraph graph_;
     gtsam::Values values_;
     gtsam::Marginals marginals_;
+
+    // When true, optimize() solves the graph with GTSAM's Augmented Lagrangian
+    // optimizer, treating factors that derive from gtsam::NonlinearConstraint
+    // (e.g. ZeroCostConstraint-wrapped contact factors) as hard equality
+    // constraints. Subclasses set this in their constructor body when a hard
+    // contact constraint is configured. Defaults false => legacy Dogleg/LM.
+    bool use_augmented_lagrangian_ = false;
 
     const SolverBaseConfig config_;
 };

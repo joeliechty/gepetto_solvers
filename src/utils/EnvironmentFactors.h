@@ -30,18 +30,14 @@ struct EnvironmentConfig {
     std::vector<int>    collision_node_indices;
     std::vector<double> collision_node_radii;
 
-    // Contact-as-goal terminal factor (Eq 30).
-    // 3x3 covariance: rows 0-1 weight metric residuals in meters
-    // (e1 = ||p_c - p_i|| - r_i, e2 = SDF(T_obj^-1 p_c)); row 2 weights the
-    // unit-less normal-alignment residual e3 = 1 + N_i . N_obj in [0, 2].
-    // Default row-2 sigma is an order of magnitude looser than rows 0-1
-    // because e3 is unit-less and at convergence e1/e2 drive p_c onto the
-    // surface while e3 only fixes the contact orientation.
+    // Contact-as-goal terminal constraint (Eq 33-35). When target_contact_node
+    // is set, the planner adds a hard equality constraint on that node — the
+    // 3-residual SdfContactFactor [e1, e2, e3] wrapped in a
+    // gtsam::ZeroCostConstraint — and solves with the Augmented Lagrangian
+    // optimizer, which drives all three residuals exactly to zero. Convergence
+    // is governed by the AL parameters on SolverBaseConfig, not a covariance.
     std::optional<int> target_contact_node;
     double contact_node_radius = 0.0;
-    gtsam::Matrix3 contact_cov = (gtsam::Matrix3() << 1e-6, 0.0, 0.0,
-                                                      0.0, 1e-6, 0.0,
-                                                      0.0, 0.0, 1e-3).finished();
 };
 
 
@@ -113,6 +109,11 @@ public:
         }
 
         return gtsam::Vector1(e);
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new SdfCollisionFactor(*this)));
     }
 };
 
@@ -231,6 +232,11 @@ public:
 
         return gtsam::Vector3(e1, e2, e3);
     }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new SdfContactFactor(*this)));
+    }
 };
 
 
@@ -279,6 +285,11 @@ public:
         if (H2) *H2 = -n.transpose() * D_cb_pose;   // 1x6
 
         return (gtsam::Vector(1) << e).finished();
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new SphereSphereContactFactor(*this)));
     }
 };
 

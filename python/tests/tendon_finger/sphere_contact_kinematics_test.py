@@ -27,9 +27,14 @@ def main():
     sc.finger_node_radius = tip_radius
     sc.sphere_center = sphere_center
     sc.sphere_radius = sphere_radius
-    sc.contact_cov = 1e-6   # scalar variance on signed-gap residual
     sc.sphere_pose_cov = 1e-8 * np.eye(6)
     config.sphere_contact = sc
+
+    # Contact is now a hard equality constraint solved with GTSAM's Augmented
+    # Lagrangian optimizer (auto-enabled whenever sphere_contact is set). The
+    # signed surface gap is driven to ~0 exactly rather than via a tight cov.
+    # AL tuning knobs live on config.base (defaults are usually fine):
+    # config.base.al_initial_mu / al_mu_increase_rate / al_max_iterations.
 
     solver = crest_sparse.TendonFingerSolver(config)
 

@@ -2,6 +2,7 @@
 
 #include "utils/MiscInline.h"
 
+#include <gtsam/constrained/NonlinearEqualityConstraint.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
@@ -67,6 +68,13 @@ TendonFingerTrajectoryPlanner<N>::TendonFingerTrajectoryPlanner(
     config_(config)
 {
     const auto& mc = config.model_config;
+
+    // Contact-as-goal mode (a terminal SdfContactFactor, Eq 30) is a hard
+    // equality constraint, so route plan() through SolverBase's Augmented
+    // Lagrangian path. Pure free-space planning stays on Dogleg/LM.
+    use_augmented_lagrangian_ =
+        config.environment.has_value() &&
+        config.environment->target_contact_node.has_value();
 
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         mc.sigma_twist_rot, mc.sigma_twist_pos);
@@ -377,13 +385,18 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
 
         if (contact_mode) {
             int i_node = *env.target_contact_node;
-            auto cn = noiseModel::Gaussian::Covariance(env.contact_cov);
-            graph_.add(SdfContactFactor(
+            // Hard terminal contact (Eq 33-35): wrap the 3-residual
+            // SdfContactFactor in a ZeroCostConstraint so the AL optimizer
+            // drives [c_R, c_O, c_N] exactly to zero. The unit noise model is
+            // only the per-row constraint scaling.
+            auto contact = std::make_shared<SdfContactFactor>(
                 models_[K]->rod_->get_pose_key(i_node),
                 object_key(K),
                 dummy_point_key(),
                 env.contact_node_radius,
-                env.sdf_grid, cn));
+                env.sdf_grid,
+                noiseModel::Isotropic::Sigma(3, 1.0));
+            graph_.add(gtsam::ZeroCostConstraint(contact));
 
             // Eq 30's normal-alignment residual (row 2 of SdfContactFactor)
             // pins the third DoF of p_c, so no Tikhonov regularizer on the
@@ -410,27 +423,6 @@ TrajectoryPlannerResult TendonFingerTrajectoryPlanner<N>::plan() {
     result_ = TrajectoryPlannerResult{};
     result_.meta = optimize();
     return result_;
-}
-
-
-template<int N>
-void TendonFingerTrajectoryPlanner<N>::set_contact_cov(
-    const gtsam::Matrix& contact_cov)
-{
-    if (!config_.environment.has_value()) {
-        throw std::runtime_error(
-            "set_contact_cov: environment is not configured on this planner");
-    }
-    if (!config_.environment->target_contact_node.has_value()) {
-        throw std::runtime_error(
-            "set_contact_cov: target_contact_node is not set; planner is "
-            "not in contact mode");
-    }
-    if (contact_cov.rows() != 3 || contact_cov.cols() != 3) {
-        throw std::invalid_argument(
-            "set_contact_cov: expected a 3x3 matrix");
-    }
-    config_.environment->contact_cov = contact_cov;
 }
 
 
@@ -472,13 +464,6 @@ TendonFingerTrajectoryPlannerDispatch::TendonFingerTrajectoryPlannerDispatch(
 
 TrajectoryPlannerResult TendonFingerTrajectoryPlannerDispatch::plan() {
     return std::visit([](auto& p) { return p->plan(); }, planner_);
-}
-
-
-void TendonFingerTrajectoryPlannerDispatch::set_contact_cov(
-    const gtsam::Matrix& contact_cov)
-{
-    std::visit([&](auto& p) { p->set_contact_cov(contact_cov); }, planner_);
 }
 
 

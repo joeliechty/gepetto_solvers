@@ -113,16 +113,13 @@ def _main():
     env.collision_node_indices = disc_node_indices + [tip_node_index]
     env.collision_node_radii = [0.003] * len(disc_node_indices) + [tip_radius]
 
-    # Terminal contact: tip sphere must land on the cylinder's surface.
-    # The first contact_cov here seeds the planner; later stages tighten it
-    # via set_contact_cov() in the continuation loop below.
-    # contact_cov is 3x3: rows 0-1 weight the dummy-point equality
-    # (e1, e2 in SdfContactFactor); row 2 weights the tip-side non-penetration
-    # hinge e3.
+    # Terminal contact: tip sphere must land on the sphere's surface. This is a
+    # hard equality constraint (Eq 33-35) on the 3-residual SdfContactFactor,
+    # enforced by GTSAM's Augmented Lagrangian optimizer (auto-enabled whenever
+    # target_contact_node is set). The AL outer loop replaces the old manual
+    # contact_cov continuation; tune via model_config.base.al_* if needed.
     env.target_contact_node = tip_node_index
     env.contact_node_radius = tip_radius
-    contact_cov_stages = [1e-3, 1e-4, 1e-5, 1e-6]
-    env.contact_cov = np.diag([contact_cov_stages[0]] * 3)
 
     planner_config.environment = env
 
@@ -138,16 +135,15 @@ def _main():
             "tip_node_index": tip_node_index,
             "disc_node_indices": disc_node_indices,
             "tip_radius": tip_radius,
-            "contact_cov_stages": contact_cov_stages,
             "object_pose": object_pose,
             "vdb_path": vdb_path,
         },
     )
 
-    # 4. Plan with contact-cov continuation. Solving cold at the tight cov
-    # collapses Dogleg's trust region (huge residual / σ at iter 0). Warm-
-    # starting from looser stages avoids that — values_ is reused across
-    # plan() calls, only the contact factor's covariance changes.
+    # 4. Plan. Contact is a hard equality constraint solved by the Augmented
+    # Lagrangian optimizer, which manages the soft->hard penalty progression
+    # internally via its mu/lambda schedule — no manual contact_cov continuation
+    # loop is needed anymore.
     print("Building factor graph...")
     planner = crest_sparse.TendonFingerTrajectoryPlanner(planner_config)
 
@@ -160,18 +156,15 @@ def _main():
         tip_in_obj_ = (obj_pose_inv @ np.append(tip_w, 1.0))[:3]
         return np.linalg.norm(tip_in_obj_) - sphere_world_radius
 
-    print("Planning contact trajectory (with continuation)...")
+    print("Planning contact trajectory (Augmented Lagrangian)...")
     start_time = time.time()
-    for stage, cov_val in enumerate(contact_cov_stages):
-        planner.set_contact_cov(np.diag([cov_val] * 3))
-        result = planner.plan()
-        per_step = [tip_sdf_at_step(result.trajectory, k)
-                    for k in range(planner_config.K + 1)]
-        worst_k = int(np.argmin(per_step))
-        print(f"  stage {stage}: contact_cov={cov_val:.0e} | "
-              f"iters={result.meta.iterations} | error={result.meta.error:.4g} | "
-              f"tip_sdf[K]={per_step[-1]:+.5f} | "
-              f"worst_sdf={per_step[worst_k]:+.5f}@k={worst_k}")
+    result = planner.plan()
+    per_step = [tip_sdf_at_step(result.trajectory, k)
+                for k in range(planner_config.K + 1)]
+    worst_k = int(np.argmin(per_step))
+    print(f"  iters={result.meta.iterations} | error={result.meta.error:.4g} | "
+          f"tip_sdf[K]={per_step[-1]:+.5f} | "
+          f"worst_sdf={per_step[worst_k]:+.5f}@k={worst_k}")
     elapsed = time.time() - start_time
 
     print(f"Solved in {elapsed:.2f}s | iters={result.meta.iterations} | error={result.meta.error:.4g}")

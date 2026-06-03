@@ -5,6 +5,7 @@
 #include "utils/Gaussians.h"
 #include "utils/MiscInline.h"
 #include "utils/SolverBase.h"
+#include <gtsam/constrained/NonlinearEqualityConstraint.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/slam/PriorFactor.h>
 
@@ -21,6 +22,11 @@ TendonFingerSolver<N>::TendonFingerSolver(const TendonFingerSolverConfig& config
     SolverBase(config.base)
 {
     sphere_contact_ = config.sphere_contact;
+
+    // A configured sphere contact is a hard equality constraint, so route this
+    // solve through SolverBase's Augmented Lagrangian path. Without contact the
+    // solver stays on the legacy free-space Dogleg/LM path.
+    use_augmented_lagrangian_ = sphere_contact_.has_value();
 
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos);
@@ -153,19 +159,23 @@ void TendonFingerSolver<N>::build_graph() {
     }
 
     // Optional sphere-sphere tip contact: anchor a sphere primitive in the
-    // world with a tight PriorFactor<Pose3>, then connect a rod node to it
-    // via the 1-residual SphereSphereContactFactor (signed surface gap).
+    // world with a tight PriorFactor<Pose3>, then connect a rod node to it via
+    // the 1-residual SphereSphereContactFactor (signed surface gap). The factor
+    // is wrapped in a gtsam::ZeroCostConstraint so the AL optimizer enforces the
+    // gap == 0 as a hard equality constraint; the factor's unit noise model is
+    // only the source of the per-row constraint scaling.
     if (sphere_contact_) {
         const auto& sc = *sphere_contact_;
         Pose3 sphere_pose(Rot3(), sc.sphere_center);
         graph_.add(PriorFactor<Pose3>(
             sphere_object_key(), sphere_pose,
             noiseModel::Gaussian::Covariance(sc.sphere_pose_cov)));
-        graph_.add(crest_sparse::SphereSphereContactFactor(
+        auto contact = std::make_shared<crest_sparse::SphereSphereContactFactor>(
             robot_->rod_->get_pose_key(sc.finger_node_index),
             sphere_object_key(),
             sc.finger_node_radius, sc.sphere_radius,
-            noiseModel::Isotropic::Sigma(1, std::sqrt(sc.contact_cov))));
+            noiseModel::Isotropic::Sigma(1, 1.0));
+        graph_.add(gtsam::ZeroCostConstraint(contact));
     }
 }
 
