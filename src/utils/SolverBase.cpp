@@ -97,6 +97,9 @@ SolutionMetadata SolverBase::optimize() {
     // params.relativeErrorTol = 1e-12;
 
     SolutionMetadata meta;
+    // Final equality penalty weight reached by the AL outer loop; reused to
+    // build a well-conditioned marginals graph below.
+    double al_final_mu = config_.al_initial_mu;
     // Augmented Lagrangian path: a subclass set use_augmented_lagrangian_
     // because the graph carries hard equality constraints (NonlinearConstraint
     // factors). GTSAM's optimizer splits graph_ into cost factors vs.
@@ -117,7 +120,10 @@ SolutionMetadata SolverBase::optimize() {
         AugmentedLagrangianOptimizer optimizer(graph_, values_, p);
         values_ = optimizer.optimize();
         const auto& progress = optimizer.progress();
-        meta.iterations = progress.empty() ? 0 : progress.back().iteration;
+        if (!progress.empty()) {
+            meta.iterations = progress.back().iteration;
+            if (progress.back().muEq > 0.0) al_final_mu = progress.back().muEq;
+        }
         // meta.error is set below from the cost-only graph; the full-graph
         // error would be dominated by the (large) hard-constraint penalty.
     } else if (config_.use_dense) {
@@ -146,20 +152,26 @@ SolutionMetadata SolverBase::optimize() {
     auto start_marginalize = stop_optimize;
 
     // A hard-constraint (Constrained-noise) factor left in the graph makes the
-    // Cholesky/QR factorization behind Marginals singular, so strip any
-    // NonlinearConstraint factors before computing marginals. Contact is a hard
-    // constraint (satisfied exactly at convergence), not a measurement, so it
-    // contributes no covariance information. The free-space path has no such
-    // factors and so builds marginals over the full graph as before.
+    // Cholesky/QR factorization behind Marginals singular. But simply dropping
+    // the contact constraint also drops the information it carries — e.g. an
+    // underactuated tendon whose tension is pinned *only* by the contact would
+    // become indeterminate. So we instead replace each NonlinearConstraint with
+    // its finite-weight penalty factor at the final AL penalty (mu): a
+    // well-conditioned Gaussian (info ~ mu) that preserves the constraint's
+    // information contribution. The free-space path has no constraints and so
+    // builds marginals over the full graph unchanged.
     if (use_augmented_lagrangian_) {
-        NonlinearFactorGraph cost_graph;
+        NonlinearFactorGraph marg_graph;
         for (const auto& factor : graph_) {
-            if (std::dynamic_pointer_cast<NonlinearConstraint>(factor)) continue;
-            cost_graph.add(factor);
+            if (auto c = std::dynamic_pointer_cast<NonlinearConstraint>(factor)) {
+                marg_graph.add(c->penaltyFactor(al_final_mu));
+            } else {
+                marg_graph.add(factor);
+            }
         }
-        // Report the objective (cost) error, excluding the constraint penalty.
-        meta.error = cost_graph.error(values_);
-        marginals_ = Marginals(cost_graph, values_);
+        // Report the objective error (the penalty term is ~0 at convergence).
+        meta.error = marg_graph.error(values_);
+        marginals_ = Marginals(marg_graph, values_);
     } else {
         marginals_ = Marginals(graph_, values_);
     }

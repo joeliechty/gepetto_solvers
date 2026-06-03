@@ -375,7 +375,15 @@ template<int N>
 Values TendonFingerModel<N>::get_initial_values() const {
     Values values;
 
-    values.insert(rod_->get_initial_values(segment_lengths_));
+    // Seed the rod nodes along the actual base orientation (base_pose_mean_),
+    // not the world frame. The base-pose prior anchors node 0 at
+    // base_pose_mean_ (e.g. Rx(-pi/2)*Rz(pi), i.e. the finger lying
+    // horizontally), so seeding from Identity would start the whole rod
+    // pointing straight up — a poor initial guess that makes the optimizer
+    // cross a large rod-bending gap and is prone to local minima, especially
+    // for contact problems. Since the base pose is precisely known (the finger
+    // is rigidly mounted), starting the rod there is well justified.
+    values.insert(rod_->get_initial_values(segment_lengths_, base_pose_mean_));
 
     Eigen::Vector<double, N> zero = Eigen::Vector<double, N>::Zero();
     values.insert(get_tensions_key(), zero);
