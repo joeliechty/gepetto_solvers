@@ -334,6 +334,38 @@ void TendonFingerSolver<N>::get_initial_values() {
 }
 
 
+template<int N>
+std::vector<Solution<TendonFingerMarginals>>
+TendonFingerSolver<N>::get_intermediate_solutions() const {
+    std::vector<Solution<TendonFingerMarginals>> results;
+    results.reserve(intermediate_values_.size());
+
+    // Zero-returning functors: extract means only without expensive Marginals computation.
+    // joint_of must return a (6+N)x(6+N) block (pose dim + tensions dim), since
+    // TendonFingerModel::get_J_pose_tensions reads block<6,N>(0,6) and block<N,N>(6,6).
+    auto zero_cov   = [](gtsam::Key) { return gtsam::Matrix::Zero(6, 6); };
+    auto zero_joint = [](gtsam::Key, gtsam::Key) { return gtsam::Matrix::Zero(6 + N, 6 + N); };
+
+    for (const auto& vals : intermediate_values_) {
+        Solution<TendonFingerMarginals> sol;
+        sol.marginals = robot_->get_marginals(vals, zero_cov, zero_joint);
+        results.push_back(std::move(sol));
+    }
+    return results;
+}
+
+
+template<int N>
+Solution<TendonFingerMarginals>
+TendonFingerSolver<N>::get_initial_solution() const {
+    auto zero_cov   = [](gtsam::Key) { return gtsam::Matrix::Zero(6, 6); };
+    auto zero_joint = [](gtsam::Key, gtsam::Key) { return gtsam::Matrix::Zero(6 + N, 6 + N); };
+    Solution<TendonFingerMarginals> sol;
+    sol.marginals = robot_->get_marginals(initial_values_, zero_cov, zero_joint);
+    return sol;
+}
+
+
 // Explicit instantiations
 template class TendonFingerSolver<1>;
 template class TendonFingerSolver<2>;
@@ -387,5 +419,47 @@ Solution<TendonFingerMarginals> TendonFingerSolverDispatch::solve(
         t_fixed.cov = tensions.cov;
 
         return solver_ptr->solve(t_fixed, tip_wrench, tip_position_meas);
+    }, solver_);
+}
+
+std::vector<std::tuple<std::string, int, double>>
+TendonFingerSolverDispatch::get_factor_error_summary() const {
+    return std::visit([](const auto& solver_ptr) {
+        return solver_ptr->get_factor_error_summary();
+    }, solver_);
+}
+
+std::vector<std::pair<std::string, std::vector<double>>>
+TendonFingerSolverDispatch::get_factor_errors_by_type() const {
+    return std::visit([](const auto& solver_ptr) {
+        return solver_ptr->get_factor_errors_by_type();
+    }, solver_);
+}
+
+std::vector<std::tuple<std::string, int, double>>
+TendonFingerSolverDispatch::get_initial_factor_error_summary() const {
+    return std::visit([](const auto& solver_ptr) {
+        return solver_ptr->get_initial_factor_error_summary();
+    }, solver_);
+}
+
+std::pair<Eigen::MatrixXd, Eigen::VectorXd>
+TendonFingerSolverDispatch::get_hessian_and_gradient() const {
+    return std::visit([](const auto& solver_ptr) {
+        return solver_ptr->get_hessian_and_gradient();
+    }, solver_);
+}
+
+std::vector<Solution<TendonFingerMarginals>>
+TendonFingerSolverDispatch::get_intermediate_solutions() const {
+    return std::visit([](const auto& solver_ptr) {
+        return solver_ptr->get_intermediate_solutions();
+    }, solver_);
+}
+
+Solution<TendonFingerMarginals>
+TendonFingerSolverDispatch::get_initial_solution() const {
+    return std::visit([](const auto& solver_ptr) {
+        return solver_ptr->get_initial_solution();
     }, solver_);
 }

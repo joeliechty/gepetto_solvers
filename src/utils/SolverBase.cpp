@@ -36,14 +36,14 @@ inline double ms(const ClockTimePoint& start, const ClockTimePoint& stop) {
 
 void SolverBase::optimize_dense_benchmark(const DoglegParams& params, SolutionMetadata& meta) {
     double last_error = std::numeric_limits<double>::infinity();
-    double error;
+    double error = last_error;
     int iterations = 0;
 
     // A more fair comparison might include comparing SparseMatrix ldlt to gtsam elimination
     for (int i = 0; i < params.maxIterations; i++) {
         // Linearize each factor
         auto linear = graph_.linearize(values_);
-        
+
         // Form and solve normal equations for this iter
         auto [A, b] = linear->hessian();
         Eigen::LLT<Matrix, Eigen::Upper> llt(A);
@@ -70,7 +70,10 @@ void SolverBase::optimize_dense_benchmark(const DoglegParams& params, SolutionMe
         last_error = error;
         iterations++;
 
-        if (abs_error_change < params.absoluteErrorTol || 
+        meta.iteration_errors.push_back(error);
+        meta.iteration_step_norms.push_back(delta_values.norm());
+
+        if (abs_error_change < params.absoluteErrorTol ||
             rel_error_change < params.relativeErrorTol)
             break;
     }
@@ -85,7 +88,9 @@ SolutionMetadata SolverBase::optimize() {
     auto start_build = start;
 
     build_graph();
-    
+    intermediate_values_.clear();
+    initial_values_ = values_;
+
     auto stop_build = now();
     auto start_optimize = stop_build;
 
@@ -98,8 +103,10 @@ SolutionMetadata SolverBase::optimize() {
 
     SolutionMetadata meta;
     // Final equality penalty weight reached by the AL outer loop; reused to
-    // build a well-conditioned marginals graph below.
-    double al_final_mu = config_.al_initial_mu;
+    // build a well-conditioned marginals graph below and by
+    // get_hessian_and_gradient(). Stored on the instance so diagnostics run
+    // after optimize() can rebuild the same penalty surrogate.
+    al_final_mu_ = config_.al_initial_mu;
     // Augmented Lagrangian path: a subclass set use_augmented_lagrangian_
     // because the graph carries hard equality constraints (NonlinearConstraint
     // factors). GTSAM's optimizer splits graph_ into cost factors vs.
@@ -122,7 +129,7 @@ SolutionMetadata SolverBase::optimize() {
         const auto& progress = optimizer.progress();
         if (!progress.empty()) {
             meta.iterations = progress.back().iteration;
-            if (progress.back().muEq > 0.0) al_final_mu = progress.back().muEq;
+            if (progress.back().muEq > 0.0) al_final_mu_ = progress.back().muEq;
         }
         // meta.error is set below from the cost-only graph; the full-graph
         // error would be dominated by the (large) hard-constraint penalty.
@@ -137,13 +144,65 @@ SolutionMetadata SolverBase::optimize() {
         lm_params.diagonalDamping = config_.diagonal_damping;
         lm_params.maxIterations = config_.max_iterations;
         LevenbergMarquardtOptimizer optimizer(graph_, values_, lm_params);
-        values_ = optimizer.optimize();
+        if (config_.record_iterations) {
+            double prev_error = optimizer.error();
+            meta.iteration_errors.push_back(prev_error);
+            meta.iteration_trust_region.push_back(optimizer.lambda());
+            Values prev_vals = optimizer.values();
+            for (int i = 0; i < lm_params.maxIterations - 1; i++) {
+                optimizer.iterate();
+                double curr_error = optimizer.error();
+                Values curr_vals = optimizer.values();
+                meta.iteration_errors.push_back(curr_error);
+                meta.iteration_trust_region.push_back(optimizer.lambda());
+                meta.iteration_step_norms.push_back(
+                    prev_vals.localCoordinates(curr_vals).norm());
+                if (config_.iteration_sample_interval > 0 &&
+                    i % config_.iteration_sample_interval == 0)
+                    intermediate_values_.push_back(curr_vals);
+                double abs_change = prev_error - curr_error;
+                if (std::abs(abs_change) < lm_params.absoluteErrorTol ||
+                    (prev_error > 0 && std::abs(abs_change) / prev_error < lm_params.relativeErrorTol))
+                    break;
+                prev_error = curr_error;
+                prev_vals = std::move(curr_vals);
+            }
+            values_ = optimizer.values();
+        } else {
+            values_ = optimizer.optimize();
+        }
         meta.error = optimizer.error();
         meta.iterations = optimizer.iterations();
     } else {
         // Default: Dogleg
         DoglegOptimizer optimizer(graph_, values_, params);
-        values_ = optimizer.optimize();
+        if (config_.record_iterations) {
+            double prev_error = optimizer.error();
+            meta.iteration_errors.push_back(prev_error);
+            meta.iteration_trust_region.push_back(optimizer.getDelta());
+            Values prev_vals = optimizer.values();
+            for (int i = 0; i < params.maxIterations - 1; i++) {
+                optimizer.iterate();
+                double curr_error = optimizer.error();
+                Values curr_vals = optimizer.values();
+                meta.iteration_errors.push_back(curr_error);
+                meta.iteration_trust_region.push_back(optimizer.getDelta());
+                meta.iteration_step_norms.push_back(
+                    prev_vals.localCoordinates(curr_vals).norm());
+                if (config_.iteration_sample_interval > 0 &&
+                    i % config_.iteration_sample_interval == 0)
+                    intermediate_values_.push_back(curr_vals);
+                double abs_change = prev_error - curr_error;
+                if (std::abs(abs_change) < params.absoluteErrorTol ||
+                    (prev_error > 0 && std::abs(abs_change) / prev_error < params.relativeErrorTol))
+                    break;
+                prev_error = curr_error;
+                prev_vals = std::move(curr_vals);
+            }
+            values_ = optimizer.values();
+        } else {
+            values_ = optimizer.optimize();
+        }
         meta.error = optimizer.error();
         meta.iterations = optimizer.iterations();
     }
@@ -164,7 +223,7 @@ SolutionMetadata SolverBase::optimize() {
         NonlinearFactorGraph marg_graph;
         for (const auto& factor : graph_) {
             if (auto c = std::dynamic_pointer_cast<NonlinearConstraint>(factor)) {
-                marg_graph.add(c->penaltyFactor(al_final_mu));
+                marg_graph.add(c->penaltyFactor(al_final_mu_));
             } else {
                 marg_graph.add(factor);
             }
@@ -218,4 +277,81 @@ SolverBase::get_factor_error_summary() const {
         return std::get<2>(a) > std::get<2>(b);
     });
     return out;
+}
+
+
+std::vector<std::pair<std::string, std::vector<double>>>
+SolverBase::get_factor_errors_by_type() const {
+    // Accumulate per-type lists in a map, then materialize sorted by total.
+    std::map<std::string, std::vector<double>> by_type;
+    for (const auto& factor : graph_) {
+        if (!factor) continue;
+        const auto& f = *factor;
+        const std::string name = gtsam::demangle(typeid(f).name());
+        by_type[name].push_back(factor->error(values_));
+    }
+    std::vector<std::pair<std::string, std::vector<double>>> out;
+    out.reserve(by_type.size());
+    for (auto& [name, errs] : by_type) {
+        out.emplace_back(name, std::move(errs));
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        double sa = 0.0, sb = 0.0;
+        for (double v : a.second) sa += v;
+        for (double v : b.second) sb += v;
+        return sa > sb;
+    });
+    return out;
+}
+
+
+std::vector<std::tuple<std::string, int, double>>
+SolverBase::get_initial_factor_error_summary() const {
+    std::map<std::string, std::pair<int, double>> by_type;
+    for (const auto& factor : graph_) {
+        if (!factor) continue;
+        const auto& f = *factor;
+        const std::string name = gtsam::demangle(typeid(f).name());
+        const double e = factor->error(initial_values_);
+        auto& entry = by_type[name];
+        entry.first  += 1;
+        entry.second += e;
+    }
+    std::vector<std::tuple<std::string, int, double>> out;
+    out.reserve(by_type.size());
+    for (const auto& [name, ce] : by_type) {
+        out.emplace_back(name, ce.first, ce.second);
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        return std::get<2>(a) > std::get<2>(b);
+    });
+    return out;
+}
+
+
+std::pair<Eigen::MatrixXd, Eigen::VectorXd>
+SolverBase::get_hessian_and_gradient() const {
+    // A raw linearization of a constrained-noise (hard-equality) factor cannot
+    // form a Hessian ("cannot update information with constrained noise model").
+    // On the AL path the graph still carries such factors, so mirror the
+    // marginals rebuild: replace each NonlinearConstraint with its finite-weight
+    // penalty factor at the final AL penalty (mu) before linearizing. This gives
+    // a well-conditioned diagnostic Hessian that reflects the converged problem.
+    const NonlinearFactorGraph* graph_ptr = &graph_;
+    NonlinearFactorGraph penalty_graph;
+    if (use_augmented_lagrangian_) {
+        for (const auto& factor : graph_) {
+            if (auto c = std::dynamic_pointer_cast<NonlinearConstraint>(factor)) {
+                penalty_graph.add(c->penaltyFactor(al_final_mu_));
+            } else {
+                penalty_graph.add(factor);
+            }
+        }
+        graph_ptr = &penalty_graph;
+    }
+    auto linear = graph_ptr->linearize(values_);
+    // GaussianFactorGraph::hessian() returns (Hessian, information vector g)
+    // where the linearized quadratic is 0.5 dx^T H dx - g^T dx + const.
+    auto [H, g] = linear->hessian();
+    return {std::move(H), std::move(g)};
 }

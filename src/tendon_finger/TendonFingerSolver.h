@@ -104,6 +104,34 @@ public:
         const std::optional<Vector6Gaussian>& tip_wrench,
         const std::optional<Vector3Gaussian>& tip_position_meas);
 
+    // SolverBase is privately inherited, so re-expose its public diagnostics.
+    std::vector<std::tuple<std::string, int, double>>
+        get_factor_error_summary() const {
+        return SolverBase::get_factor_error_summary();
+    }
+    std::vector<std::pair<std::string, std::vector<double>>>
+        get_factor_errors_by_type() const {
+        return SolverBase::get_factor_errors_by_type();
+    }
+    std::vector<std::tuple<std::string, int, double>>
+        get_initial_factor_error_summary() const {
+        return SolverBase::get_initial_factor_error_summary();
+    }
+    std::pair<Eigen::MatrixXd, Eigen::VectorXd>
+        get_hessian_and_gradient() const {
+        return SolverBase::get_hessian_and_gradient();
+    }
+
+    // Returns lightweight intermediate solutions (means only, zero covariances)
+    // from Values snapshots stored during the last solve's iterate() loop.
+    // Only populated when config.base.record_iterations == true and
+    // config.base.iteration_sample_interval > 0.
+    std::vector<Solution<TendonFingerMarginals>> get_intermediate_solutions() const;
+
+    // Means-only solution at the initial guess (zero covariances). Always
+    // available after solve() since initial_values_ is captured unconditionally.
+    Solution<TendonFingerMarginals> get_initial_solution() const;
+
 private:
     void build_graph() override;
 
@@ -138,6 +166,16 @@ public:
         const VectorXGaussian& tensions,
         const std::optional<Vector6Gaussian>& tip_wrench,
         const std::optional<Vector3Gaussian>& tip_position_meas);
+
+    std::vector<std::tuple<std::string, int, double>> get_factor_error_summary() const;
+    std::vector<std::pair<std::string, std::vector<double>>>
+        get_factor_errors_by_type() const;
+    std::vector<std::tuple<std::string, int, double>>
+        get_initial_factor_error_summary() const;
+    std::pair<Eigen::MatrixXd, Eigen::VectorXd> get_hessian_and_gradient() const;
+
+    std::vector<Solution<TendonFingerMarginals>> get_intermediate_solutions() const;
+    Solution<TendonFingerMarginals> get_initial_solution() const;
 
     int num_tendons() const { return num_tendons_; }
 

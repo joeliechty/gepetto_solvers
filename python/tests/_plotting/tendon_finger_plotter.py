@@ -56,7 +56,26 @@ class TendonFingerPlotter:
             force_scale=0.05,
             moment_scale=0.2
         )
+
+        # Lazily-created ghost-backbone mesh for the initial-guess overlay.
+        self._initial_backbone_mesh = None
   
+    def update_initial(self, initial_solution, color="lightslategray",
+                       opacity=0.35, radius=0.0015):
+        """Render the initial-guess backbone as a faded overlay.
+
+        Call once after solve(); the tube is created on first call and not
+        updated afterwards (the initial guess never changes during a solve).
+        """
+        if self._initial_backbone_mesh is not None:
+            return
+        poses = [state.pose.mean for state in initial_solution.marginals.rod.states]
+        tube = utils.get_tube_from_poses(poses, radius=radius)
+        self._initial_backbone_mesh = tube
+        self.plotter.plotter.add_mesh(
+            tube, color=color, opacity=opacity, lighting=False,
+            name="initial_backbone")
+
     def update_tendons(self, solution):
         num_tendons = solution.marginals.tendon_config.num_tendons
         num_discs = solution.marginals.tendon_config.num_discs

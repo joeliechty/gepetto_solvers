@@ -4,6 +4,7 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Marginals.h>
+#include <gtsam/nonlinear/Values.h>
 
 #include <string>
 #include <tuple>
@@ -16,9 +17,14 @@ struct SolutionMetadata {
     double optimize_time_ms;
     double marginalize_time_ms;
     double extract_time_ms;
-    
+
     int iterations;
-    int error;
+    double error;
+
+    // Populated when SolverBaseConfig::record_iterations == true.
+    std::vector<double> iteration_errors;        // error after each iterate() call
+    std::vector<double> iteration_trust_region;  // Dogleg delta or LM lambda after each iterate()
+    std::vector<double> iteration_step_norms;    // ||Δx|| in localCoordinates after each iterate()
 };
 
 
@@ -60,6 +66,16 @@ struct SolverBaseConfig {
     double al_initial_mu       = 1.0;  // initialMuEq: starting penalty weight
     double al_mu_increase_rate = 2.0;  // muEqIncreaseRate: outer-loop growth
     int    al_max_iterations   = 20;   // maxIterations: outer AL loop steps
+
+    // When true, optimize() uses a manual iterate() loop instead of
+    // optimizer.optimize(). Populates SolutionMetadata::iteration_errors and
+    // ::iteration_trust_region. Required for get_intermediate_solutions().
+    bool record_iterations = false;
+
+    // If > 0 (and record_iterations == true), store a gtsam::Values snapshot
+    // every N iterations so intermediate solutions can be extracted afterwards.
+    // 0 = disabled (no snapshots stored).
+    int iteration_sample_interval = 0;
 };
 
 
@@ -76,6 +92,25 @@ public:
     // Use to diagnose which factor type dominates the residual.
     std::vector<std::tuple<std::string, int, double>>
         get_factor_error_summary() const;
+
+    // Same grouping as get_factor_error_summary(), but returns the list of
+    // individual factor errors per type (in graph traversal order). Used for
+    // per-factor-type residual histograms.
+    std::vector<std::pair<std::string, std::vector<double>>>
+        get_factor_errors_by_type() const;
+
+    // Like get_factor_error_summary(), but evaluated at initial_values_ (the
+    // snapshot taken at the start of optimize()) rather than at the final
+    // values_. Use to diagnose how poor the initial guess was per factor type.
+    std::vector<std::tuple<std::string, int, double>>
+        get_initial_factor_error_summary() const;
+
+    // Linearize the factor graph at current values_ and return the dense
+    // Hessian H and gradient g of the linearized quadratic.
+    // For diagnostics: sparsity pattern, condition number, smallest singular
+    // values to detect gauge freedom / ill-conditioning.
+    std::pair<Eigen::MatrixXd, Eigen::VectorXd>
+        get_hessian_and_gradient() const;
 
 private:
     void optimize_dense_benchmark(
@@ -98,6 +133,23 @@ protected:
     // constraints. Subclasses set this in their constructor body when a hard
     // contact constraint is configured. Defaults false => legacy Dogleg/LM.
     bool use_augmented_lagrangian_ = false;
+
+    // Final equality-penalty weight (mu) reached by the AL outer loop on the
+    // last optimize() call. Reused to build well-conditioned Gaussian surrogates
+    // for the hard constraints (penaltyFactor(mu)) in both the marginals graph
+    // and get_hessian_and_gradient(); a raw linearization of a constrained-noise
+    // factor cannot form a Hessian. Only meaningful when use_augmented_lagrangian_.
+    double al_final_mu_ = 1.0;
+
+    // Snapshot of values_ at the start of each optimize() call (the initial
+    // guess for that solve). Used by get_initial_factor_error_summary() and
+    // by subclass extractors of the "initial solution".
+    gtsam::Values initial_values_;
+
+    // Populated during the manual iterate() loop when
+    // config_.record_iterations == true and config_.iteration_sample_interval > 0.
+    // Cleared at the start of each optimize() call.
+    std::vector<gtsam::Values> intermediate_values_;
 
     const SolverBaseConfig config_;
 };

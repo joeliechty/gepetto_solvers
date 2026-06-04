@@ -19,7 +19,9 @@ void bind_utils(py::module& m) {
         .def_readwrite("max_iterations", &SolverBaseConfig::max_iterations)
         .def_readwrite("al_initial_mu", &SolverBaseConfig::al_initial_mu)
         .def_readwrite("al_mu_increase_rate", &SolverBaseConfig::al_mu_increase_rate)
-        .def_readwrite("al_max_iterations", &SolverBaseConfig::al_max_iterations);
+        .def_readwrite("al_max_iterations", &SolverBaseConfig::al_max_iterations)
+        .def_readwrite("record_iterations", &SolverBaseConfig::record_iterations)
+        .def_readwrite("iteration_sample_interval", &SolverBaseConfig::iteration_sample_interval);
 
     py::class_<SolutionMetadata>(m, "SolutionMetadata")
         .def(py::init<>())
@@ -29,7 +31,10 @@ void bind_utils(py::module& m) {
         .def_readwrite("marginalize_time_ms", &SolutionMetadata::marginalize_time_ms)
         .def_readwrite("extract_time_ms", &SolutionMetadata::extract_time_ms)
         .def_readwrite("iterations", &SolutionMetadata::iterations)
-        .def_readwrite("error", &SolutionMetadata::error);
+        .def_readwrite("error", &SolutionMetadata::error)
+        .def_readwrite("iteration_errors", &SolutionMetadata::iteration_errors)
+        .def_readwrite("iteration_trust_region", &SolutionMetadata::iteration_trust_region)
+        .def_readwrite("iteration_step_norms", &SolutionMetadata::iteration_step_norms);
 
     py::class_<Vector6Gaussian>(m, "Vector6Gaussian")
         .def(py::init<>())

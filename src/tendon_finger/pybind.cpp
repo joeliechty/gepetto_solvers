@@ -64,7 +64,19 @@ void bind_tendon_finger(py::module& m) {
         .def("solve", &TendonFingerSolverDispatch::solve,
              py::arg("tensions"),
              py::arg("tip_force"),
-             py::arg("tip_meas"));
+             py::arg("tip_meas"))
+        .def("get_factor_error_summary",
+             &TendonFingerSolverDispatch::get_factor_error_summary)
+        .def("get_factor_errors_by_type",
+             &TendonFingerSolverDispatch::get_factor_errors_by_type)
+        .def("get_initial_factor_error_summary",
+             &TendonFingerSolverDispatch::get_initial_factor_error_summary)
+        .def("get_hessian_and_gradient",
+             &TendonFingerSolverDispatch::get_hessian_and_gradient)
+        .def("get_intermediate_solutions",
+             &TendonFingerSolverDispatch::get_intermediate_solutions)
+        .def("get_initial_solution",
+             &TendonFingerSolverDispatch::get_initial_solution);
 
     // --- Environment (collision/contact) ---
 
