@@ -13,7 +13,7 @@
 
 using namespace gtsam;
 using crest_sparse::SdfCollisionFactor;
-using crest_sparse::SdfContactFactor;
+using crest_sparse::SdfWitnessContactFactor;
 
 
 // --- Helper: create a TendonFingerModel<N> from config ---
@@ -69,7 +69,7 @@ TendonFingerTrajectoryPlanner<N>::TendonFingerTrajectoryPlanner(
 {
     const auto& mc = config.model_config;
 
-    // Contact-as-goal mode (a terminal SdfContactFactor, Eq 30) is a hard
+    // Contact-as-goal mode (a terminal SdfWitnessContactFactor, Eq 30-31) is a hard
     // equality constraint, so route plan() through SolverBase's Augmented
     // Lagrangian path. Pure free-space planning stays on Dogleg/LM.
     use_augmented_lagrangian_ =
@@ -385,23 +385,23 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
 
         if (contact_mode) {
             int i_node = *env.target_contact_node;
-            // Hard terminal contact (Eq 33-35): wrap the 3-residual
-            // SdfContactFactor in a ZeroCostConstraint so the AL optimizer
-            // drives [c_R, c_O, c_N] exactly to zero. The unit noise model is
-            // only the per-row constraint scaling.
-            auto contact = std::make_shared<SdfContactFactor>(
+            // Hard terminal contact (Eq 33-35): wrap the 5-residual
+            // SdfWitnessContactFactor in a ZeroCostConstraint so the AL
+            // optimizer drives [c_R, c_O, c_N, c_T1, c_T2] exactly to zero. The
+            // unit noise model is only the per-row constraint scaling.
+            auto contact = std::make_shared<SdfWitnessContactFactor>(
                 models_[K]->rod_->get_pose_key(i_node),
                 object_key(K),
                 dummy_point_key(),
                 env.contact_node_radius,
                 env.sdf_grid,
-                noiseModel::Isotropic::Sigma(3, 1.0));
+                noiseModel::Isotropic::Sigma(5, 1.0));
             graph_.add(gtsam::ZeroCostConstraint(contact));
 
-            // Eq 30's normal-alignment residual (row 2 of SdfContactFactor)
-            // pins the third DoF of p_c, so no Tikhonov regularizer on the
-            // dummy point is needed. The ray-march seed inserted in
-            // initialize_values() supplies the initial Value.
+            // Eq 30-31's normal-alignment and C-frame tangent residuals fully
+            // pin p_c, so no Tikhonov regularizer on the dummy point is needed.
+            // The ray-march seed inserted in initialize_values() supplies the
+            // initial Value.
         }
     }
 }

@@ -28,8 +28,7 @@ def main():
     tip_radius = 0.003
 
     objects_dir = os.path.join(os.path.dirname(__file__), "..", "_objects")
-    vdb_path = os.path.normpath(os.path.join(objects_dir, "cylinder.vdb"))
-    # vdb_path = os.path.normpath(os.path.join(objects_dir, "sphere.vdb"))
+    vdb_path = os.path.normpath(os.path.join(objects_dir, "sphere.vdb"))
 
 
     # Use the SDF-backed 3-residual SdfContactFactor ([c_R, c_O, c_N]) with an

@@ -175,42 +175,19 @@ void TendonFingerSolver<N>::build_graph() {
             noiseModel::Gaussian::Covariance(sc.sphere_pose_cov)));
         Key finger_key = robot_->rod_->get_pose_key(sc.finger_node_index);
         if (sc.witness) {
-            // 3-residual witness-point form ([c_R, c_O, c_N]) -- the analytic
-            // counterpart of the SDF contact below. An explicit dummy point p_c
-            // is driven onto both sphere surfaces with antiparallel normals.
-            auto contact = std::make_shared<crest_sparse::SphereSphereWitnessContactFactor>(
+            // 5-residual witness-point form ([c_R, c_O, c_N, c_T1, c_T2]) --
+            // the analytic counterpart of the SDF contact below. An explicit
+            // dummy point p_c is driven onto both sphere surfaces with
+            // antiparallel normals; the two C-frame tangent residuals pin its
+            // remaining gauge DOF, so no stabilizing prior on p_c is needed
+            // (the factor's gauge-fixing residuals make the system full rank).
+            auto contact = std::make_shared<crest_sparse::SphereWitnessContactFactor>(
                 finger_key,
                 sphere_object_key(),
                 dummy_point_key(),
                 sc.finger_node_radius, sc.sphere_radius,
-                noiseModel::Isotropic::Sigma(3, 1.0));
+                noiseModel::Isotropic::Sigma(5, 1.0));
             graph_.add(gtsam::ZeroCostConstraint(contact));
-
-            // The dummy point appears only in the hard constraint and no cost
-            // factor, leaving the AL cost graph short one variable. A very weak
-            // prior (1 m sigma) anchored at the finger node puts it in the cost
-            // graph and makes the system full rank without biasing the contact
-            // solution.
-            //
-            // NOTE: for the pure sphere-sphere witness case this stabilizing
-            // prior is NOT sufficient. The witness point has a genuine 1-DOF
-            // gauge freedom -- rotating it about the axis joining the two sphere
-            // centers leaves all three residuals ([c_R, c_O, c_N]) invariant --
-            // so the contact constraint pins only 2 of its 3 DOF. No fixed-sigma
-            // prior can stabilize this: the AL penalty weight grows like
-            // sqrt(mu) toward ~1e6, so a prior loose enough not to bias the
-            // contact in its constrained directions at low mu is swamped in the
-            // gauge direction at high mu (-> IndeterminantLinearSystem), while a
-            // prior tight enough to survive high mu overpowers the contact early
-            // and stalls short of the surface. Stabilizing the sphere-sphere
-            // witness form would require a gauge-fixing residual in the factor
-            // itself (or a mu-coupled prior). The SDF path below has no such
-            // gauge -- a general surface normal is unique -- so the 1 m prior is
-            // sufficient there.
-            Point3 finger_pos = values_.at<Pose3>(finger_key).translation();
-            graph_.add(PriorFactor<Point3>(
-                dummy_point_key(), finger_pos,
-                noiseModel::Isotropic::Sigma(3, 1.0)));
         } else {
             auto contact = std::make_shared<crest_sparse::SphereSphereContactFactor>(
                 finger_key,
@@ -222,37 +199,29 @@ void TendonFingerSolver<N>::build_graph() {
     }
 
     // Optional SDF surface contact: anchor the object pose in the world with a
-    // tight PriorFactor<Pose3>, then connect a rod node to it via the 3-residual
-    // witness-point SdfContactFactor (Section 3, [c_R, c_O, c_N]). The factor is
-    // wrapped in a gtsam::ZeroCostConstraint so the AL optimizer drives all three
-    // residuals exactly to zero; the unit noise model is only the per-row
-    // constraint scaling. Mirrors TendonFingerTrajectoryPlanner's contact mode.
+    // tight PriorFactor<Pose3>, then connect a rod node to it via the 5-residual
+    // witness-point SdfWitnessContactFactor (Section 3, [c_R, c_O, c_N, c_T1, c_T2]).
+    // The factor is wrapped in a gtsam::ZeroCostConstraint so the AL optimizer
+    // drives all five residuals exactly to zero; the unit noise model is only the
+    // per-row constraint scaling. Mirrors TendonFingerTrajectoryPlanner's contact mode.
     else if (sdf_contact_) {
         const auto& env = *sdf_contact_;
         Key tip_key = robot_->rod_->get_pose_key(*env.target_contact_node);
         graph_.add(PriorFactor<Pose3>(
             sphere_object_key(), Pose3(env.object_pose_mean),
             noiseModel::Gaussian::Covariance(env.object_pose_cov)));
-        auto contact = std::make_shared<crest_sparse::SdfContactFactor>(
+        auto contact = std::make_shared<crest_sparse::SdfWitnessContactFactor>(
             tip_key,
             sphere_object_key(),
             dummy_point_key(),
             env.contact_node_radius,
             env.sdf_grid,
-            noiseModel::Isotropic::Sigma(3, 1.0));
+            noiseModel::Isotropic::Sigma(5, 1.0));
         graph_.add(gtsam::ZeroCostConstraint(contact));
-
-        // Without this the dummy point appears only in the hard-constraint
-        // factor and in no cost factor, leaving the AL optimizer's cost-graph
-        // variable set short one variable -- which corrupts the heap / yields
-        // an underconstrained linear system. A very weak prior (1 m sigma)
-        // anchored at the tip puts the dummy point in the cost graph and makes
-        // the system full rank without biasing the contact solution. Mirrors
-        // a stabilizing prior for DummyPointContactFactor.
-        Point3 tip_pos = values_.at<Pose3>(tip_key).translation();
-        graph_.add(PriorFactor<Point3>(
-            dummy_point_key(), tip_pos,
-            noiseModel::Isotropic::Sigma(3, 1.0)));
+        // The factor's C-frame tangent residuals ([c_T1, c_T2]) pin p_c's gauge
+        // DOF, so the system is full rank without a stabilizing prior on the
+        // dummy point. The ray-march seed in get_initial_values() supplies its
+        // initial Value.
     }
 }
 

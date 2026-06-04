@@ -14,6 +14,26 @@
 
 namespace crest_sparse {
 
+// Frisvad/Hughes-Moller Householder basis: maps +Z onto the unit normal n and
+// returns the two orthonormal tangent vectors spanning n's tangent plane. This
+// is the explicitly-unrolled Householder reflection -- a few lines of arithmetic
+// with no matrix allocation, suitable for a factor evaluated thousands of times
+// per second. The single singularity at the south pole (n ~ -Z) is handled
+// explicitly. Used by the witness-point contact factors to deterministically
+// build the local Contact Frame (Section 3, Eq 30-31).
+inline void frisvad_tangent_basis(const gtsam::Vector3& n,
+                                  gtsam::Vector3& t1, gtsam::Vector3& t2) {
+    if (n.z() < -0.9999999) {
+        t1 = gtsam::Vector3( 0.0, -1.0,  0.0);
+        t2 = gtsam::Vector3(-1.0,  0.0,  0.0);
+    } else {
+        const double a = 1.0 / (1.0 + n.z());
+        const double b = -n.x() * n.y() * a;
+        t1 = gtsam::Vector3(1.0 - n.x() * n.x() * a, b, -n.x());
+        t2 = gtsam::Vector3(b, 1.0 - n.y() * n.y() * a, -n.y());
+    }
+}
+
 // Configuration for an OpenVDB-backed environment used by trajectory planners.
 // Implements the math in Section 3 of the underactuated object manipulation
 // formulation (cubic-polynomial barrier collision + dummy-point surface
@@ -32,9 +52,9 @@ struct EnvironmentConfig {
 
     // Contact-as-goal terminal constraint (Eq 33-35). When target_contact_node
     // is set, the planner adds a hard equality constraint on that node — the
-    // 3-residual SdfContactFactor [e1, e2, e3] wrapped in a
-    // gtsam::ZeroCostConstraint — and solves with the Augmented Lagrangian
-    // optimizer, which drives all three residuals exactly to zero. Convergence
+    // 5-residual SdfWitnessContactFactor [c_R, c_O, c_N, c_T1, c_T2] wrapped in
+    // a gtsam::ZeroCostConstraint — and solves with the Augmented Lagrangian
+    // optimizer, which drives all five residuals exactly to zero. Convergence
     // is governed by the AL parameters on SolverBaseConfig, not a covariance.
     std::optional<int> target_contact_node;
     double contact_node_radius = 0.0;
@@ -118,31 +138,35 @@ public:
 };
 
 
-// Surface-to-surface contact factor (Eq 30).
+// Surface-to-surface witness-point contact factor (Eq 30-31).
 // Connects:
 //   - node_pose_key  (Pose3)   : finger node whose sphere should touch the surface
 //   - object_key     (Pose3)   : object pose
 //   - point_key      (Point3)  : dummy contact point p_c in world frame
 //
-// 3D residual = [ ||p_c - p_i||_2 - R,
-//                 SDF(T_obj^{-1} p_c),
-//                 1 + N_i . N_obj ].
+// 5D residual = [ ||p_c - p_i||_2 - R,            (c_R)
+//                 SDF(T_obj^{-1} p_c),            (c_O)
+//                 1 + N_i . N_obj,                (c_N)
+//                 (p_c - p_i) . t1(N_obj),        (c_T1)
+//                 (p_c - p_i) . t2(N_obj) ].      (c_T2)
 // Rows 0-1 drive p_c onto both the body sphere (radius R around the tip) and
 // the object surface — tangential contact. Row 2 enforces antiparallel
 // alignment of the body-sphere outward normal (N_i = (p_c - c_i)/||.||) and
-// the object surface normal (N_obj = R_obj * normalize(grad SDF)). Together
-// the three residuals fully constrain p_c, removing the 1-DoF sliding
-// manifold that rows 0-1 alone leave behind — so no Tikhonov regularizer on
-// p_c is required.
-class SdfContactFactor : public gtsam::NoiseModelFactor3<gtsam::Pose3, gtsam::Pose3, gtsam::Point3> {
+// the object surface normal (N_obj = R_obj * normalize(grad SDF)). Rows 3-4
+// are the C-frame gauge-fixing residuals: t1, t2 span the object surface's
+// tangent plane (Frisvad basis of N_obj), so penalizing the projection of
+// (p_c - p_i) onto them pins p_c strictly along the contact normal axis. This
+// removes the residual gauge freedom of p_c and yields a full-rank gradient,
+// so no Tikhonov regularizer / stabilizing prior on p_c is required.
+class SdfWitnessContactFactor : public gtsam::NoiseModelFactor3<gtsam::Pose3, gtsam::Pose3, gtsam::Point3> {
 private:
     double R_;
     openvdb::FloatGrid::Ptr sdf_grid_;
 
 public:
-    SdfContactFactor(gtsam::Key node_pose_key, gtsam::Key object_key, gtsam::Key point_key,
-                     double radius, const openvdb::FloatGrid::Ptr& sdf_grid,
-                     const gtsam::SharedNoiseModel& noise_model)
+    SdfWitnessContactFactor(gtsam::Key node_pose_key, gtsam::Key object_key, gtsam::Key point_key,
+                            double radius, const openvdb::FloatGrid::Ptr& sdf_grid,
+                            const gtsam::SharedNoiseModel& noise_model)
         : NoiseModelFactor3(noise_model, node_pose_key, object_key, point_key),
           R_(radius), sdf_grid_(sdf_grid) {}
 
@@ -193,14 +217,23 @@ public:
         gtsam::Vector3 n_obj_world = R_obj * n_obj_local;
         double e3 = 1.0 + n_i.dot(n_obj_world);
 
+        // --- e4, e5 = C-frame gauge fixing (Eq 30-31) --------------------
+        // Build a deterministic tangent basis (t1, t2) of the object surface
+        // normal and penalize the projection of v = (p_c - c_i) onto it, so
+        // p_c is pinned along the contact normal axis. t1, t2 are treated as
+        // constant within the local Gauss-Newton step (C-frame held fixed --
+        // standard SOTA contact convention), so their Jacobian contribution
+        // reduces to the tangent vectors themselves.
+        gtsam::Vector3 t1, t2;
+        frisvad_tangent_basis(n_obj_world, t1, t2);
+        gtsam::Vector3 v = diff;  // p_c - c_i
+        double e4 = v.dot(t1);
+        double e5 = v.dot(t2);
+
         if (H1 || H2 || H3) {
-            if (H1) *H1 = gtsam::Matrix::Zero(3, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(3, 6);
-            if (H3) *H3 = gtsam::Matrix::Zero(3, 3);
-            // // SAFE WAY: Zeros out the existing memory block in-place.
-            // if (H1) H1->setZero();
-            // if (H2) H2->setZero();
-            // if (H3) H3->setZero();
+            if (H1) *H1 = gtsam::Matrix::Zero(5, 6);
+            if (H2) *H2 = gtsam::Matrix::Zero(5, 6);
+            if (H3) *H3 = gtsam::Matrix::Zero(5, 3);
 
             // Row 0: e1 -- only c_i (via node_pose) and p_c.
             if (H1) H1->row(0) = -n_i.transpose() * D_center_pose;
@@ -232,14 +265,22 @@ public:
                 H2->block<1, 3>(2, 0) = n_i.transpose() * dRv_dxiR;
                 H2->block<1, 3>(2, 3) = Eigen::RowVector3d::Zero();
             }
+
+            // Rows 3-4: e4, e5. With t1, t2 constant, de/dp_c = t^T and
+            // de/dc_i = -t^T (v = p_c - c_i). Object pose has no effect on v
+            // under the fixed-C-frame approximation, so H2 rows 3-4 stay zero.
+            if (H3) H3->row(3) = t1.transpose();
+            if (H3) H3->row(4) = t2.transpose();
+            if (H1) H1->row(3) = -t1.transpose() * D_center_pose;
+            if (H1) H1->row(4) = -t2.transpose() * D_center_pose;
         }
 
-        return gtsam::Vector3(e1, e2, e3);
+        return (gtsam::Vector(5) << e1, e2, e3, e4, e5).finished();
     }
 
     gtsam::NonlinearFactor::shared_ptr clone() const override {
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
-            gtsam::NonlinearFactor::shared_ptr(new SdfContactFactor(*this)));
+            gtsam::NonlinearFactor::shared_ptr(new SdfWitnessContactFactor(*this)));
     }
 };
 
@@ -297,28 +338,36 @@ public:
     }
 };
 
-// 3-residual sphere-to-sphere contact factor using a dummy witness point.
-// Serves as an analytical in-between of the 1-DoF SphereSphereContactFactor 
-// and the SDF-backed SdfContactFactor.
+// 5-residual sphere-to-sphere witness-point contact factor (Eq 30-31).
+// Serves as an analytical counterpart of the 1-DoF SphereSphereContactFactor
+// and the SDF-backed SdfWitnessContactFactor.
 //
 // Connects:
 //   - pose_a_key  (Pose3)  : Body A (e.g., finger node)
-//   - pose_b_key  (Pose3)  : Body B (e.g., primitive sphere)
+//   - pose_b_key  (Pose3)  : Body B (e.g., primitive sphere -- the contacted object)
 //   - point_key   (Point3) : Dummy contact point p_c in world frame
 //
-// 3D residual = [ ||p_c - c_a|| - r_a,
-//                 ||p_c - c_b|| - r_b,
-//                 1 + N_a . N_b ].
-class SphereSphereWitnessContactFactor
+// 5D residual = [ ||p_c - c_a|| - r_a,        (c_R)
+//                 ||p_c - c_b|| - r_b,        (c_O)
+//                 1 + N_a . N_b,              (c_N)
+//                 (p_c - c_a) . t1(N_b),      (c_T1)
+//                 (p_c - c_a) . t2(N_b) ].    (c_T2)
+// Rows 3-4 are the C-frame gauge-fixing residuals: t1, t2 span the tangent
+// plane of body B's outward normal N_b (the contacted object), so penalizing
+// the projection of (p_c - c_a) onto them pins p_c along the contact normal
+// axis. This removes the genuine 1-DoF gauge freedom that rows 0-2 alone leave
+// behind (rotating p_c about the center-to-center axis is invariant to them),
+// so no stabilizing prior on p_c is required.
+class SphereWitnessContactFactor
     : public gtsam::NoiseModelFactor3<gtsam::Pose3, gtsam::Pose3, gtsam::Point3>
 {
 private:
     double r_a_, r_b_;
 
 public:
-    SphereSphereWitnessContactFactor(gtsam::Key pose_a_key, gtsam::Key pose_b_key, gtsam::Key point_key,
-                                     double r_a, double r_b,
-                                     const gtsam::SharedNoiseModel& noise_model)
+    SphereWitnessContactFactor(gtsam::Key pose_a_key, gtsam::Key pose_b_key, gtsam::Key point_key,
+                               double r_a, double r_b,
+                               const gtsam::SharedNoiseModel& noise_model)
         : NoiseModelFactor3(noise_model, pose_a_key, pose_b_key, point_key),
           r_a_(r_a), r_b_(r_b) {}
 
@@ -351,6 +400,17 @@ public:
         double e2 = norm_b - r_b_;
         double e3 = 1.0 + n_a.dot(n_b);
 
+        // --- e4, e5 = C-frame gauge fixing (Eq 30-31) --------------------
+        // Tangent basis of body B's normal (the contacted object), used to pin
+        // p_c along the contact normal axis. t1, t2 held constant within the
+        // local Gauss-Newton step (C-frame fixed), so their Jacobian reduces to
+        // the tangent vectors themselves.
+        gtsam::Vector3 t1, t2;
+        frisvad_tangent_basis(n_b, t1, t2);
+        gtsam::Vector3 v = d_a;  // p_c - c_a
+        double e4 = v.dot(t1);
+        double e5 = v.dot(t2);
+
         // --- Jacobians ---
         if (H1 || H2 || H3) {
             // GTSAM passes these in as default-constructed 0x0 matrices
@@ -359,9 +419,9 @@ public:
             // H->setZero() does NOT resize a dynamic Eigen matrix, so the later
             // H->row()/H->block() writes would scribble past a 0-byte allocation
             // and corrupt the heap.
-            if (H1) *H1 = gtsam::Matrix::Zero(3, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(3, 6);
-            if (H3) *H3 = gtsam::Matrix::Zero(3, 3);
+            if (H1) *H1 = gtsam::Matrix::Zero(5, 6);
+            if (H2) *H2 = gtsam::Matrix::Zero(5, 6);
+            if (H3) *H3 = gtsam::Matrix::Zero(5, 3);
 
             // Row 0: e1 (Tangent to Sphere A)
             // de1/dc_a = -n_a^T, de1/dp_c = n_a^T
@@ -403,14 +463,22 @@ public:
             if (H1) H1->row(2) = de3_dca * D_ca_pose;
             if (H2) H2->row(2) = de3_dcb * D_cb_pose;
             if (H3) H3->row(2) = -de3_dca - de3_dcb; // Note: dn_a/dp_c = P_a, so de3/dp_c = de3_dna*P_a = -de3_dca
+
+            // Rows 3-4: e4, e5. With t1, t2 constant, de/dp_c = t^T and
+            // de/dc_a = -t^T (v = p_c - c_a). Body B has no effect on v under
+            // the fixed-C-frame approximation, so H2 rows 3-4 stay zero.
+            if (H3) H3->row(3) = t1.transpose();
+            if (H3) H3->row(4) = t2.transpose();
+            if (H1) H1->row(3) = -t1.transpose() * D_ca_pose;
+            if (H1) H1->row(4) = -t2.transpose() * D_ca_pose;
         }
 
-        return gtsam::Vector3(e1, e2, e3);
+        return (gtsam::Vector(5) << e1, e2, e3, e4, e5).finished();
     }
 
     gtsam::NonlinearFactor::shared_ptr clone() const override {
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
-            gtsam::NonlinearFactor::shared_ptr(new SphereSphereWitnessContactFactor(*this)));
+            gtsam::NonlinearFactor::shared_ptr(new SphereWitnessContactFactor(*this)));
     }
 };
 

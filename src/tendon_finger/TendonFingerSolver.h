@@ -30,9 +30,9 @@ struct SpherePrimitiveContactConfig {
     // Tight prior on the sphere primitive's pose (rigid anchor).
     gtsam::Matrix6 sphere_pose_cov = 1e-8 * gtsam::Matrix6::Identity();
 
-    // When true, use the 3-residual SphereSphereWitnessContactFactor
-    // ([||p_c - c_a|| - r_a, ||p_c - c_b|| - r_b, 1 + N_a . N_b]) with an
-    // explicit dummy witness point instead of the 1-residual analytic gap form.
+    // When true, use the 5-residual SphereWitnessContactFactor
+    // ([c_R, c_O, c_N, c_T1, c_T2]) with an explicit dummy witness point
+    // instead of the 1-residual analytic gap form.
     // This is the analytic counterpart of the SDF witness-point contact and
     // exists mainly to cross-check the witness formulation against the closed
     // form on a pure sphere-sphere problem.
@@ -83,8 +83,8 @@ struct TendonFingerSolverConfig{
     // unset the solver runs the legacy free-space formulation.
     std::optional<SpherePrimitiveContactConfig> sphere_contact;
 
-    // Optional SDF surface contact on a chosen rod node, using the 3-residual
-    // witness-point SdfContactFactor (Section 3, [c_R, c_O, c_N]) wrapped as a
+    // Optional SDF surface contact on a chosen rod node, using the 5-residual
+    // witness-point SdfWitnessContactFactor (Section 3, [c_R, c_O, c_N, c_T1, c_T2]) wrapped as a
     // hard AL equality constraint. Reuses EnvironmentConfig as the carrier:
     // sdf_grid, object_pose_mean/cov, target_contact_node, contact_node_radius.
     // Mutually exclusive with sphere_contact (only one contact mode at a time).
