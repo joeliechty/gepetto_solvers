@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import time
 
@@ -13,31 +14,54 @@ def main():
 
     # Tip node index (last rod node). The C++ side also accepts -1 as a tip
     # alias via CosseratRodModel::clamp_node_idx; we compute the explicit
-    # index here for use as the plotter's contact_node_index too.
+    # index here for use as the contact target and as the plotter's
+    # contact_node_index too.
     num_nodes = config.num_discs + (config.num_discs - 1) * config.num_between_nodes
     tip_node_index = num_nodes - 1
 
     # Sphere primitive at the p2p goal position used in point_to_point_planning.py.
+    # The SDF lives in _objects/sphere.vdb (radius 0.025 m, centered at the VDB
+    # local origin -- see _objects/make_sphere.py); we place it in the world by
+    # translating the object pose to sphere_center.
     sphere_center = np.array([6.02088876e-02, 3.77734425e-02, 0.0])
     sphere_radius = 0.025
     tip_radius = 0.003
 
-    sc = crest_sparse.SpherePrimitiveContactConfig()
-    sc.finger_node_index = -1
-    sc.finger_node_radius = tip_radius
-    sc.sphere_center = sphere_center
-    sc.sphere_radius = sphere_radius
-    sc.sphere_pose_cov = 1e-8 * np.eye(6)
-    config.sphere_contact = sc
+    objects_dir = os.path.join(os.path.dirname(__file__), "..", "_objects")
+    vdb_path = os.path.normpath(os.path.join(objects_dir, "cylinder.vdb"))
+    # vdb_path = os.path.normpath(os.path.join(objects_dir, "sphere.vdb"))
+
+
+    # Use the SDF-backed 3-residual SdfContactFactor ([c_R, c_O, c_N]) with an
+    # explicit dummy witness point, instead of the analytic sphere contact. This
+    # is the SDF counterpart of SphereSphereWitnessContactFactor: e1 is the same
+    # finger-sphere tangency, but the object surface and its outward normal come
+    # from the SDF (value + normalized gradient) rather than a closed-form
+    # sphere. EnvironmentConfig is the carrier for sdf_contact.
+    env = crest_sparse.EnvironmentConfig()
+    env.load_sdf(vdb_path)
+
+    object_pose = np.eye(4)
+    object_pose[0:3, 3] = sphere_center
+    env.object_pose_mean = object_pose
+    env.object_pose_cov = 1e-8 * np.eye(6)   # rigidly anchored
+    env.object_pose_per_step = False
+
+    # Terminal contact: the tip sphere (radius tip_radius) must land tangent to
+    # the SDF surface. Wrapped as a hard AL equality constraint on the tip node.
+    env.target_contact_node = tip_node_index
+    env.contact_node_radius = tip_radius
+
+    config.sdf_contact = env
 
     # Contact is a hard equality constraint solved with GTSAM's Augmented
-    # Lagrangian optimizer (auto-enabled whenever sphere_contact is set): it
-    # drives the signed surface gap to ~0 exactly, instead of approximating it
-    # with a tight covariance. Convergence is governed by the AL params on
-    # config.base. A gradual penalty schedule (al_mu_increase_rate=2) run for
-    # enough outer iterations converges to a ~micron gap; growing the penalty
-    # too fast (rate >= 5) trips the relative-convergence check early and stalls
-    # the finger short of the surface.
+    # Lagrangian optimizer (auto-enabled whenever sdf_contact is set): it drives
+    # all three residuals ([c_R, c_O, c_N]) to ~0 exactly, instead of
+    # approximating contact with a tight covariance. Convergence is governed by
+    # the AL params on config.base. A gradual penalty schedule
+    # (al_mu_increase_rate=2) run for enough outer iterations converges to a
+    # ~micron gap; growing the penalty too fast (rate >= 5) trips the
+    # relative-convergence check early and stalls the finger short of the surface.
     config.base.al_initial_mu = 1.0
     config.base.al_mu_increase_rate = 2.0
     config.base.al_max_iterations = 40

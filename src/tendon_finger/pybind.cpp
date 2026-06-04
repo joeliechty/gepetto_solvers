@@ -33,7 +33,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("tendon_input", &TendonFingerSolverConfig::tendon_input)
         .def_readwrite("per_disc_tendon_input", &TendonFingerSolverConfig::per_disc_tendon_input)
         .def_readwrite("base_pose", &TendonFingerSolverConfig::base_pose)
-        .def_readwrite("sphere_contact", &TendonFingerSolverConfig::sphere_contact);
+        .def_readwrite("sphere_contact", &TendonFingerSolverConfig::sphere_contact)
+        .def_readwrite("sdf_contact", &TendonFingerSolverConfig::sdf_contact);
 
     py::class_<SpherePrimitiveContactConfig>(m, "SpherePrimitiveContactConfig")
         .def(py::init<>())
@@ -41,7 +42,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("finger_node_radius", &SpherePrimitiveContactConfig::finger_node_radius)
         .def_readwrite("sphere_center",      &SpherePrimitiveContactConfig::sphere_center)
         .def_readwrite("sphere_radius",      &SpherePrimitiveContactConfig::sphere_radius)
-        .def_readwrite("sphere_pose_cov",    &SpherePrimitiveContactConfig::sphere_pose_cov);
+        .def_readwrite("sphere_pose_cov",    &SpherePrimitiveContactConfig::sphere_pose_cov)
+        .def_readwrite("witness",            &SpherePrimitiveContactConfig::witness);
 
     py::class_<TendonFingerMarginals>(m, "TendonFingerMarginals")
         .def(py::init<>())

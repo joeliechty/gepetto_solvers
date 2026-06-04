@@ -2,6 +2,7 @@
 
 #include "utils/Gaussians.h"
 #include "utils/SolverBase.h"
+#include "utils/EnvironmentFactors.h"
 #include "TendonFingerModel.h"
 #include <gtsam/geometry/Point3.h>
 #include <gtsam/inference/Symbol.h>
@@ -28,6 +29,14 @@ struct SpherePrimitiveContactConfig {
 
     // Tight prior on the sphere primitive's pose (rigid anchor).
     gtsam::Matrix6 sphere_pose_cov = 1e-8 * gtsam::Matrix6::Identity();
+
+    // When true, use the 3-residual SphereSphereWitnessContactFactor
+    // ([||p_c - c_a|| - r_a, ||p_c - c_b|| - r_b, 1 + N_a . N_b]) with an
+    // explicit dummy witness point instead of the 1-residual analytic gap form.
+    // This is the analytic counterpart of the SDF witness-point contact and
+    // exists mainly to cross-check the witness formulation against the closed
+    // form on a pure sphere-sphere problem.
+    bool witness = false;
 };
 
 
@@ -73,6 +82,13 @@ struct TendonFingerSolverConfig{
     // Optional sphere-sphere contact constraint on a chosen rod node. When
     // unset the solver runs the legacy free-space formulation.
     std::optional<SpherePrimitiveContactConfig> sphere_contact;
+
+    // Optional SDF surface contact on a chosen rod node, using the 3-residual
+    // witness-point SdfContactFactor (Section 3, [c_R, c_O, c_N]) wrapped as a
+    // hard AL equality constraint. Reuses EnvironmentConfig as the carrier:
+    // sdf_grid, object_pose_mean/cov, target_contact_node, contact_node_radius.
+    // Mutually exclusive with sphere_contact (only one contact mode at a time).
+    std::optional<crest_sparse::EnvironmentConfig> sdf_contact;
 };
 
 
@@ -104,7 +120,9 @@ private:
     std::optional<Vector3Gaussian> tip_position_meas_;
 
     std::optional<SpherePrimitiveContactConfig> sphere_contact_;
+    std::optional<crest_sparse::EnvironmentConfig> sdf_contact_;
     static gtsam::Key sphere_object_key() { return gtsam::Symbol('O', 0); }
+    static gtsam::Key dummy_point_key()   { return gtsam::Symbol('Y', 0); }
 
     TendonFingerMarginals extracted_;
 };

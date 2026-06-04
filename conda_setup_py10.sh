@@ -36,9 +36,12 @@ conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb tbb-deve
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."
 cd $GIT_REPOS_DIR
-git clone https://github.com/borglab/gtsam.git
+# Forked GTSAM 4.3a1 carrying our constrained-module heap-overflow fix
+# (NonlinearEquality/InequalityConstraint::violationVector: middleCols -> segment).
+git clone https://github.com/joeliechty/gtsam.git
+# git clone git@github.com:joeliechty/gtsam.git   # SSH alternative
 cd gtsam
-git checkout 4.3a1  # Tested GTSAM version
+git checkout release-4.3a1-fixes  # 4.3a1 + constrained-module fixes
 mkdir build
 cd build
 # cmake .. -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX

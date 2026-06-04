@@ -22,11 +22,14 @@ TendonFingerSolver<N>::TendonFingerSolver(const TendonFingerSolverConfig& config
     SolverBase(config.base)
 {
     sphere_contact_ = config.sphere_contact;
+    sdf_contact_    = config.sdf_contact;
 
-    // A configured sphere contact is a hard equality constraint, so route this
-    // solve through SolverBase's Augmented Lagrangian path. Without contact the
-    // solver stays on the legacy free-space Dogleg/LM path.
-    use_augmented_lagrangian_ = sphere_contact_.has_value();
+    // A configured contact (sphere-sphere or SDF surface) is a hard equality
+    // constraint, so route this solve through SolverBase's Augmented Lagrangian
+    // path. Without contact the solver stays on the legacy free-space
+    // Dogleg/LM path.
+    use_augmented_lagrangian_ =
+        sphere_contact_.has_value() || sdf_contact_.has_value();
 
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         config.sigma_twist_rot, config.sigma_twist_pos);
@@ -170,12 +173,86 @@ void TendonFingerSolver<N>::build_graph() {
         graph_.add(PriorFactor<Pose3>(
             sphere_object_key(), sphere_pose,
             noiseModel::Gaussian::Covariance(sc.sphere_pose_cov)));
-        auto contact = std::make_shared<crest_sparse::SphereSphereContactFactor>(
-            robot_->rod_->get_pose_key(sc.finger_node_index),
+        Key finger_key = robot_->rod_->get_pose_key(sc.finger_node_index);
+        if (sc.witness) {
+            // 3-residual witness-point form ([c_R, c_O, c_N]) -- the analytic
+            // counterpart of the SDF contact below. An explicit dummy point p_c
+            // is driven onto both sphere surfaces with antiparallel normals.
+            auto contact = std::make_shared<crest_sparse::SphereSphereWitnessContactFactor>(
+                finger_key,
+                sphere_object_key(),
+                dummy_point_key(),
+                sc.finger_node_radius, sc.sphere_radius,
+                noiseModel::Isotropic::Sigma(3, 1.0));
+            graph_.add(gtsam::ZeroCostConstraint(contact));
+
+            // The dummy point appears only in the hard constraint and no cost
+            // factor, leaving the AL cost graph short one variable. A very weak
+            // prior (1 m sigma) anchored at the finger node puts it in the cost
+            // graph and makes the system full rank without biasing the contact
+            // solution.
+            //
+            // NOTE: for the pure sphere-sphere witness case this stabilizing
+            // prior is NOT sufficient. The witness point has a genuine 1-DOF
+            // gauge freedom -- rotating it about the axis joining the two sphere
+            // centers leaves all three residuals ([c_R, c_O, c_N]) invariant --
+            // so the contact constraint pins only 2 of its 3 DOF. No fixed-sigma
+            // prior can stabilize this: the AL penalty weight grows like
+            // sqrt(mu) toward ~1e6, so a prior loose enough not to bias the
+            // contact in its constrained directions at low mu is swamped in the
+            // gauge direction at high mu (-> IndeterminantLinearSystem), while a
+            // prior tight enough to survive high mu overpowers the contact early
+            // and stalls short of the surface. Stabilizing the sphere-sphere
+            // witness form would require a gauge-fixing residual in the factor
+            // itself (or a mu-coupled prior). The SDF path below has no such
+            // gauge -- a general surface normal is unique -- so the 1 m prior is
+            // sufficient there.
+            Point3 finger_pos = values_.at<Pose3>(finger_key).translation();
+            graph_.add(PriorFactor<Point3>(
+                dummy_point_key(), finger_pos,
+                noiseModel::Isotropic::Sigma(3, 1.0)));
+        } else {
+            auto contact = std::make_shared<crest_sparse::SphereSphereContactFactor>(
+                finger_key,
+                sphere_object_key(),
+                sc.finger_node_radius, sc.sphere_radius,
+                noiseModel::Isotropic::Sigma(1, 1.0));
+            graph_.add(gtsam::ZeroCostConstraint(contact));
+        }
+    }
+
+    // Optional SDF surface contact: anchor the object pose in the world with a
+    // tight PriorFactor<Pose3>, then connect a rod node to it via the 3-residual
+    // witness-point SdfContactFactor (Section 3, [c_R, c_O, c_N]). The factor is
+    // wrapped in a gtsam::ZeroCostConstraint so the AL optimizer drives all three
+    // residuals exactly to zero; the unit noise model is only the per-row
+    // constraint scaling. Mirrors TendonFingerTrajectoryPlanner's contact mode.
+    else if (sdf_contact_) {
+        const auto& env = *sdf_contact_;
+        Key tip_key = robot_->rod_->get_pose_key(*env.target_contact_node);
+        graph_.add(PriorFactor<Pose3>(
+            sphere_object_key(), Pose3(env.object_pose_mean),
+            noiseModel::Gaussian::Covariance(env.object_pose_cov)));
+        auto contact = std::make_shared<crest_sparse::SdfContactFactor>(
+            tip_key,
             sphere_object_key(),
-            sc.finger_node_radius, sc.sphere_radius,
-            noiseModel::Isotropic::Sigma(1, 1.0));
+            dummy_point_key(),
+            env.contact_node_radius,
+            env.sdf_grid,
+            noiseModel::Isotropic::Sigma(3, 1.0));
         graph_.add(gtsam::ZeroCostConstraint(contact));
+
+        // Without this the dummy point appears only in the hard-constraint
+        // factor and in no cost factor, leaving the AL optimizer's cost-graph
+        // variable set short one variable -- which corrupts the heap / yields
+        // an underconstrained linear system. A very weak prior (1 m sigma)
+        // anchored at the tip puts the dummy point in the cost graph and makes
+        // the system full rank without biasing the contact solution. Mirrors
+        // a stabilizing prior for DummyPointContactFactor.
+        Point3 tip_pos = values_.at<Pose3>(tip_key).translation();
+        graph_.add(PriorFactor<Point3>(
+            dummy_point_key(), tip_pos,
+            noiseModel::Isotropic::Sigma(3, 1.0)));
     }
 }
 
@@ -193,6 +270,66 @@ void TendonFingerSolver<N>::get_initial_values() {
         const auto& sc = *sphere_contact_;
         values_.insert(sphere_object_key(),
             Pose3(Rot3(), sc.sphere_center));
+
+        if (sc.witness) {
+            // Seed the witness point on sphere B's surface, along the line from
+            // the sphere center toward the finger node (the contact point lies
+            // on this line at tangency). Mirrors the SDF path's surface seed.
+            Point3 finger_pos = values_
+                .at<Pose3>(robot_->rod_->get_pose_key(sc.finger_node_index))
+                .translation();
+            Vector3 d = finger_pos - sc.sphere_center;
+            double dn = d.norm();
+            Vector3 dir = (dn > 1e-8) ? Vector3(d / dn) : Vector3(0.0, 0.0, 1.0);
+            values_.insert(dummy_point_key(),
+                Point3(sc.sphere_center + sc.sphere_radius * dir));
+        }
+    }
+    else if (sdf_contact_) {
+        const auto& env = *sdf_contact_;
+        Pose3 obj_mean(env.object_pose_mean);
+        values_.insert(sphere_object_key(), obj_mean);
+
+        // Seed the witness/dummy point on the surface. Ray-march in the
+        // object's local frame from the local origin toward the contact node
+        // until the SDF crosses zero; this keeps the seed in-plane with the tip
+        // and object center. Mirrors TendonFingerTrajectoryPlanner's seed.
+        int i_node = *env.target_contact_node;
+        const Pose3 tip_pose = values_.at<Pose3>(robot_->rod_->get_pose_key(i_node));
+        Point3 tip_world = tip_pose.translation();
+        Point3 tip_local = obj_mean.transformTo(tip_world);
+        double tip_local_norm = tip_local.norm();
+        Point3 dir_local = (tip_local_norm > 1e-8)
+                               ? Point3(tip_local / tip_local_norm)
+                               : Point3(0.0, 0.0, 1.0);
+
+        openvdb::tools::GridSampler<openvdb::FloatGrid, openvdb::tools::BoxSampler>
+            sampler(*env.sdf_grid);
+
+        const double step   = 5e-4;   // 0.5 mm per step
+        const int    max_it = 4000;   // up to 2 m along the ray
+        double t = 0.0;
+        double prev_sdf = sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0));
+        double t_surface = -1.0;
+        for (int it = 1; it <= max_it; ++it) {
+            double tt = it * step;
+            Point3 q = tt * dir_local;
+            double sdf = sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z()));
+            if (std::isfinite(prev_sdf) && std::isfinite(sdf)
+                    && prev_sdf * sdf < 0.0) {
+                double alpha = prev_sdf / (prev_sdf - sdf);
+                t_surface = t + alpha * step;
+                break;
+            }
+            prev_sdf = sdf;
+            t = tt;
+        }
+        if (t_surface < 0.0) {
+            t_surface = std::abs(sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0)));
+        }
+        Point3 seed_local = t_surface * dir_local;
+        Point3 seed_world = obj_mean.transformFrom(seed_local);
+        values_.insert(dummy_point_key(), seed_world);
     }
 }
 
