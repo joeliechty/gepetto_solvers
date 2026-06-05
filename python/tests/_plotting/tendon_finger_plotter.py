@@ -17,6 +17,7 @@ class TendonFingerPlotter:
                  contact_node_index=None,
                  contact_node_radius=None,
                  sphere_primitives=None,
+                 primitives=None,
                  camera_focal_point=None,
                  camera_azimuth=15,
                  camera_elevation=20,
@@ -43,7 +44,15 @@ class TendonFingerPlotter:
         self.contact_node_index = contact_node_index
         self.contact_node_radius = contact_node_radius
 
-        self.sphere_primitives = list(sphere_primitives) if sphere_primitives else []
+        # Generic object primitives to render in the scene. Each spec is a dict
+        # with a "type" key ("sphere", "cylinder", or "cube") plus geometry. The
+        # legacy sphere_primitives list (no "type" key) is folded in as spheres.
+        self.primitives = []
+        for spec in (sphere_primitives or []):
+            spec = dict(spec)
+            spec.setdefault("type", "sphere")
+            self.primitives.append(spec)
+        self.primitives.extend(primitives or [])
 
         self.rod_manager = CosseratRodMeshManager(
             plot_backbone_ellipsoids=plot_backbone_ellipsoids,
@@ -226,17 +235,34 @@ class TendonFingerPlotter:
             matrix[:3, 3] = p
             self.contact_sphere_transform.SetMatrix(matrix.flatten().tolist())
 
-    def update_sphere_primitives(self):
-        if not self.sphere_primitives:
+    def update_primitives(self):
+        if not self.primitives:
             return
         if self.plotter.frame != 0:
             return
-        for spec in self.sphere_primitives:
+        for spec in self.primitives:
+            ptype = spec.get("type", "sphere")
             center = np.asarray(spec["center"], dtype=float)
-            radius = float(spec["radius"])
             color = spec.get("color", "goldenrod")
             opacity = float(spec.get("opacity", 0.3))
-            mesh = pv.Sphere(radius=radius, center=center)
+
+            if ptype == "sphere":
+                mesh = pv.Sphere(radius=float(spec["radius"]), center=center)
+            elif ptype == "cylinder":
+                # Axis defaults to Y to match _objects/make_cylinder.py.
+                direction = spec.get("direction", (0.0, 1.0, 0.0))
+                mesh = pv.Cylinder(
+                    center=center, direction=direction,
+                    radius=float(spec["radius"]), height=float(spec["height"]))
+            elif ptype in ("cube", "box"):
+                # extents = full side lengths (x, y, z).
+                ex, ey, ez = spec["extents"]
+                mesh = pv.Cube(center=center,
+                               x_length=float(ex), y_length=float(ey),
+                               z_length=float(ez))
+            else:
+                raise ValueError(f"Unknown primitive type: {ptype!r}")
+
             self.plotter.plotter.add_mesh(
                 mesh, color=color, opacity=opacity, smooth_shading=True)
 
@@ -257,7 +283,7 @@ class TendonFingerPlotter:
         self.update_discs(solution)
         self.update_tip_force(solution, tip_force_gt)
         self.update_collision_spheres(solution)
-        self.update_sphere_primitives()
+        self.update_primitives()
 
         if p_desired is not None:
             self.update_p_desired(p_desired)

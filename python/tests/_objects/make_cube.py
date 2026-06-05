@@ -5,58 +5,51 @@ except ImportError:
 import numpy as np
 
 
-def create_cylinder_sdf(radius=0.025, height=0.04, voxel_size=0.001,
-                        band_halfwidth=0.06):
+def create_cube_sdf(half_extents=(0.025, 0.02, 0.025), voxel_size=0.001,
+                    band_halfwidth=0.06):
     # band_halfwidth controls how far from the surface SDF values are stored.
     # Outside this band the sampler returns the constant background (10.0) with
     # zero gradient, so the witness-point contact solver gets no pull. A wide
     # band gives a usable gradient signal far from the surface to guide the
-    # solver in toward contact (matches make_sphere.py). The cylinder is aligned
-    # with the Y-axis.
+    # solver in toward contact (matches make_sphere.py).
     grid = vdb.FloatGrid(10.0)
     grid.gridClass = vdb.GridClass.LEVEL_SET
     grid.transform = vdb.createLinearTransform(voxelSize=voxel_size)
 
-    half_height = height / 2.0
-
     accessor = grid.getAccessor()
 
+    hx, hy, hz = half_extents
+
     margin = int(band_halfwidth / voxel_size)
-    rx = int(radius / voxel_size) + margin
-    ry = int(half_height / voxel_size) + margin
-    rz = int(radius / voxel_size) + margin
+    rx = int(hx / voxel_size) + margin
+    ry = int(hy / voxel_size) + margin
+    rz = int(hz / voxel_size) + margin
 
     print("Generating SDF voxels...")
     for i in range(-rx, rx + 1):
         for j in range(-ry, ry + 1):
             for k in range(-rz, rz + 1):
-                # Convert voxel indices to world coordinates
                 x = i * voxel_size
                 y = j * voxel_size
                 z = k * voxel_size
 
-                # Mathematical SDF for a cylinder aligned with the Y-axis.
-                # Distance from center axis in XZ plane.
-                dist_xz = np.sqrt(x**2 + z**2)
+                # Analytic SDF for an axis-aligned box centered at the origin.
+                dx = abs(x) - hx
+                dy = abs(y) - hy
+                dz = abs(z) - hz
 
-                # Distance vector to the bounds [radius, half_height]
-                dx = abs(dist_xz) - radius
-                dy = abs(y) - half_height
-
-                # Exterior distance (if outside) + Interior distance (if inside)
-                out_dist = np.sqrt(max(dx, 0)**2 + max(dy, 0)**2)
-                in_dist = min(max(dx, dy), 0.0)
+                out_dist = np.sqrt(max(dx, 0) ** 2 + max(dy, 0) ** 2 + max(dz, 0) ** 2)
+                in_dist = min(max(dx, max(dy, dz)), 0.0)
 
                 sdf_val = out_dist + in_dist
 
-                # Store a wide band so the solver gets a gradient far from the surface.
                 if abs(sdf_val) < band_halfwidth:
                     accessor.setValueOn((i, j, k), sdf_val)
 
-    filename = "cylinder.vdb"
+    filename = "cube.vdb"
     vdb.write(filename, grids=[grid])
     print(f"Saved {filename}!")
 
 
 if __name__ == "__main__":
-    create_cylinder_sdf()
+    create_cube_sdf()
