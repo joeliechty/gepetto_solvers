@@ -27,15 +27,21 @@ class _Tee:
 
 class PlannerLogger:
     """
-    Redirects stdout to both the terminal and a uniquely-named text file in
-    the tendon_finger directory. File name: <planner_name>_<YYYYmmdd_HHMMSS>.log
+    Redirects stdout to both the terminal and a text file in the tendon_finger
+    directory (or log_dir). With timestamp=True the file is uniquely named
+    <planner_name>_<YYYYmmdd_HHMMSS>.log; with timestamp=False it is simply
+    <planner_name>.log, so re-running the same experiment overwrites its log.
     """
-    def __init__(self, planner_name, log_dir=None):
+    def __init__(self, planner_name, log_dir=None, timestamp=True):
         if log_dir is None:
             log_dir = os.path.dirname(os.path.abspath(__file__))
         os.makedirs(log_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.path = os.path.join(log_dir, f"{planner_name}_{timestamp}.log")
+        if timestamp:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{planner_name}_{stamp}.log"
+        else:
+            filename = f"{planner_name}.log"
+        self.path = os.path.join(log_dir, filename)
         self._file = open(self.path, "w")
         self._orig_stdout = sys.stdout
         sys.stdout = _Tee(self._orig_stdout, self._file)

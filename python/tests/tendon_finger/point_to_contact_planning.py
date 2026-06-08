@@ -13,10 +13,29 @@ from .sdf_3dof_contact_kinematics_test import (
 import argparse
 
 
+def experiment_label(args):
+    """Per-experiment label, e.g. point_to_contact_sphere_sdf_K10. Used to name
+    the results directory that collects this run's log, frames, and figures."""
+    return (f"point_to_contact_{args.primitive}_{args.contact_mode}"
+            f"_K{args.traj_steps}")
+
+
 def main():
-    logger = PlannerLogger("point_to_contact")
+    args = parse_args()
+    if args.contact_mode == "analytic-sphere" and args.primitive != "sphere":
+        raise SystemExit("--contact-mode analytic-sphere is only valid with the sphere primitive.")
+
+    # Everything this run produces (log, animation frames, GIF, tension plot)
+    # lands in a single per-experiment results directory.
+    results_dir = os.path.join("results", experiment_label(args))
+    os.makedirs(results_dir, exist_ok=True)
+
+    # timestamp=False: the results dir already encodes the experiment params, so
+    # re-running the same config overwrites its log rather than accumulating one
+    # per run.
+    logger = PlannerLogger("point_to_contact", log_dir=results_dir, timestamp=False)
     try:
-        _main()
+        _main(args, results_dir)
     finally:
         logger.close()
 
@@ -37,17 +56,19 @@ def parse_args():
     parser.add_argument("--traj_steps", "-K", type=int, default=10, help="Number of timesteps")
     parser.add_argument("--no-viz", action="store_true",
                         help="Skip the interactive 3D animation (for headless runs / tuning).")
+    parser.add_argument("--save-figures", "-SF", action="store_true",
+                        help="Render the trajectory animation off-screen and save it to "
+                             "results/<experiment>/ as a sequence of frame PNGs plus a GIF "
+                             "(no interactive window).")
+    parser.add_argument("--fps", type=int, default=10,
+                        help="Frames per second for the saved animation video.")
     parser.add_argument("--al-mu", type=float, default=1e4, help="AL initial penalty mu")
     parser.add_argument("--al-rate", type=float, default=2.0, help="AL mu increase rate")
     parser.add_argument("--al-iters", type=int, default=40, help="AL max outer iterations")
     return parser.parse_args()
 
 
-def _main():
-    args = parse_args()
-    if args.contact_mode == "analytic-sphere" and args.primitive != "sphere":
-        raise SystemExit("--contact-mode analytic-sphere is only valid with the sphere primitive.")
-
+def _main(args, results_dir):
     spec = get_primitive_specs()[args.primitive]
     object_rotation = np.asarray(spec.get("rotation", np.eye(3)), dtype=float)
     object_pose = np.eye(4)
@@ -209,13 +230,15 @@ def _main():
     print(f"  Flexor tension @K:    {flexor_K:.3f}")
 
     # 6. Animate
+    tendon_names = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
+    exp_label = experiment_label(args)
+
     if args.no_viz:
-        tendon_names = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
         plot_trajectory(result, tendon_names=tendon_names,
-                        save_path="point_to_contact_trajectory.png")
+                        save_path=os.path.join(results_dir, f"{exp_label}_tensions.png"))
         return
 
-    plotter = TendonFingerPlotter(
+    plotter_kwargs = dict(
         plot_backbone_frames=True,
         plot_tip_force=True,
         plot_backbone_ellipsoids=True,
@@ -227,6 +250,13 @@ def _main():
         camera_focal_point=[0, 0.1, 0],
     )
 
+    if args.save_figures:
+        # Frames -> results/<exp_label>/frames/{k}.png, video -> results/<exp_label>/<exp_label>.gif.
+        plotter_kwargs["save_frames_dir_name"] = "frames"
+        plotter_kwargs["frames_base_dir"] = results_dir
+
+    plotter = TendonFingerPlotter(**plotter_kwargs)
+
     for k, marginals in enumerate(result.trajectory):
         print(f"Displaying Step {k}/{planner_config.K}  flexor={marginals.tensions.mean[5]:.3f}")
 
@@ -236,12 +266,19 @@ def _main():
         sol.marginals = marginals
         sol.meta = result.meta
         plotter.update(sol)
-        time.sleep(planner_config.dt)
+        if not args.save_figures:
+            time.sleep(planner_config.dt)
+
+    if args.save_figures:
+        plotter.plotter.save_video(fps=args.fps, name=exp_label)
+        plot_trajectory(result, tendon_names=tendon_names,
+                        save_path=os.path.join(results_dir, f"{exp_label}_tensions.png"))
+        print(f"Saved experiment results to {results_dir}/")
+        return
 
     input("Press Enter to close...")
-
-    tendon_names = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
-    plot_trajectory(result, tendon_names=tendon_names, save_path="point_to_contact_trajectory.png")
+    plot_trajectory(result, tendon_names=tendon_names,
+                    save_path=os.path.join(results_dir, f"{exp_label}_tensions.png"))
 
 
 if __name__ == "__main__":

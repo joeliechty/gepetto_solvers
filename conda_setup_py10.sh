@@ -31,7 +31,7 @@ conda activate crest_py10
 echo "Installing C++ build dependencies via conda..."
 # conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb -y
 # conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb tbb-devel gcc_linux-64 gxx_linux-64 -y
-conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb tbb-devel suitesparse gcc_linux-64 gxx_linux-64 -y
+conda install -c conda-forge cmake eigen pybind11 boost libgomp openvdb tbb-devel suitesparse gcc_linux-64 gxx_linux-64 openssh git -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."

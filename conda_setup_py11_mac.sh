@@ -29,7 +29,7 @@ conda activate crest_py11
 
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."
-conda install -c conda-forge openvdb libboost-devel tbb-devel openvdb cmake eigen pybind11 llvm-openmp -y
+conda install -c conda-forge openvdb libboost-devel tbb-devel openvdb cmake eigen pybind11 llvm-openmp openssh git -y
 # conda install -c conda-forge openvdb libboost-devteel cmake eigen pybind11 llvm-openmp -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)

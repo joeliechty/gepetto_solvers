@@ -117,6 +117,7 @@ def get_arrow_transform(p, vec, scale=1.0):
 class PlotterBase:
     def __init__(self,
                  save_frames_dir_name=None,
+                 frames_base_dir=None,
                  single_plot_mode=False,
                  plot_rviz_coords=False,
                  camera_focal_point=None,
@@ -126,6 +127,10 @@ class PlotterBase:
                  window_size=(1200, 1200)):
 
         self.save_frames_dir_name = save_frames_dir_name
+        # Base directory the per-run frames subdirectory is created under. Defaults
+        # to videos/frames for backward compatibility; callers (e.g. the tendon
+        # finger tests) can redirect frames into a figures/<experiment> tree.
+        self.frames_base_dir = Path(frames_base_dir) if frames_base_dir else Path("videos") / "frames"
         self.single_plot_mode = single_plot_mode
         self.plot_rviz_coords = plot_rviz_coords
 
@@ -139,7 +144,7 @@ class PlotterBase:
         self.camera_distance = camera_distance
 
         if self.save_frames_dir_name:
-            self.frames_path = Path("videos") / "frames" / self.save_frames_dir_name
+            self.frames_path = self.frames_base_dir / self.save_frames_dir_name
             shutil.rmtree(self.frames_path, ignore_errors=True)
             self.frames_path.mkdir(parents=True, exist_ok=True)
 
@@ -196,5 +201,38 @@ class PlotterBase:
 
         if self.save_frames_dir_name:
             self.plotter.screenshot(self.frames_path / f"{self.frame}.png", window_size=self.window_size)
-        
+
         self.frame += 1
+
+    def save_video(self, fps=10, name=None, output_dir=None):
+        """Assemble the saved PNG frames into an animated GIF.
+
+        Frames must have been captured during update() (save_frames_dir_name set).
+        The GIF is written as <output_dir>/<name>.gif, defaulting to a file named
+        after the frames subdirectory, placed alongside that subdirectory.
+
+        Returns the GIF path, or None if no frames were captured.
+        """
+        from PIL import Image
+
+        if not self.save_frames_dir_name:
+            raise RuntimeError("save_video requires save_frames_dir_name to be set")
+
+        frame_files = sorted(
+            self.frames_path.glob("*.png"),
+            key=lambda p: int(p.stem) if p.stem.isdigit() else p.stem)
+        if not frame_files:
+            print(f"save_video: no frames found in {self.frames_path}")
+            return None
+
+        out_dir = Path(output_dir) if output_dir else self.frames_path.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        gif_path = out_dir / f"{name or self.save_frames_dir_name}.gif"
+
+        frames = [Image.open(f).convert("RGB") for f in frame_files]
+        duration_ms = int(round(1000.0 / fps))
+        frames[0].save(
+            gif_path, save_all=True, append_images=frames[1:],
+            duration=duration_ms, loop=0, optimize=True)
+        print(f"Saved {len(frames)}-frame animation to {gif_path}")
+        return gif_path
