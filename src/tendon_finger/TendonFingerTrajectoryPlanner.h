@@ -70,6 +70,14 @@ struct TrajectoryPlannerConfig {
     // planner runs the pure free-space formulation and behaves identically to
     // the legacy code.
     std::optional<crest_sparse::EnvironmentConfig> environment;
+
+    // Optional analytic sphere-primitive contact on a chosen rod node at the
+    // terminal step (k=K), mirroring TendonFingerSolverConfig::sphere_contact.
+    // The closed-form counterpart of the SDF witness contact: a rod-node sphere
+    // is driven tangent to a fixed-world sphere primitive via a hard AL equality
+    // constraint. Mutually exclusive with environment->target_contact_node
+    // (one contact mode at a time, both share object key 'O',0 / dummy 'Y',0).
+    std::optional<SpherePrimitiveContactConfig> sphere_contact;
 };
 
 

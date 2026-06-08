@@ -1,12 +1,15 @@
 import os
 import numpy as np
 import time
-import pyvista as pv
 import crest_sparse
 from .._plotting.tendon_finger_plotter import TendonFingerPlotter
 from .._plotting.trajectory_plotter import plot_trajectory
 from .config import get_6tendon_config
 from .utils import PlannerLogger, log_planner_parameters
+# Reuse the primitive registry + analytic surface-gap helper from the kinematic
+# contact test so the planner is verified against exactly the same geometry.
+from .sdf_3dof_contact_kinematics_test import (
+    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
 import argparse
 
 
@@ -17,37 +20,71 @@ def main():
     finally:
         logger.close()
 
+
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Plan a tendon-finger trajectory that ends in contact with a "
+                    "primitive object, against either its SDF or (for a sphere) an "
+                    "analytic sphere primitive.")
+    parser.add_argument("primitive", nargs="?", default="sphere",
+                        choices=["sphere", "cylinder", "cube"],
+                        help="Object primitive to plan contact against.")
+    parser.add_argument("--contact-mode", default="sdf",
+                        choices=["sdf", "analytic-sphere"],
+                        help="sdf: SDF witness contact (any primitive). "
+                             "analytic-sphere: closed-form sphere-sphere contact "
+                             "(sphere primitive only).")
     parser.add_argument("--traj_steps", "-K", type=int, default=10, help="Number of timesteps")
+    parser.add_argument("--no-viz", action="store_true",
+                        help="Skip the interactive 3D animation (for headless runs / tuning).")
+    parser.add_argument("--al-mu", type=float, default=1e4, help="AL initial penalty mu")
+    parser.add_argument("--al-rate", type=float, default=2.0, help="AL mu increase rate")
+    parser.add_argument("--al-iters", type=int, default=40, help="AL max outer iterations")
     return parser.parse_args()
 
-def _main():
 
+def _main():
     args = parse_args()
+    if args.contact_mode == "analytic-sphere" and args.primitive != "sphere":
+        raise SystemExit("--contact-mode analytic-sphere is only valid with the sphere primitive.")
+
+    spec = get_primitive_specs()[args.primitive]
+    object_rotation = np.asarray(spec.get("rotation", np.eye(3)), dtype=float)
+    object_pose = np.eye(4)
+    object_pose[0:3, 0:3] = object_rotation
+    object_pose[0:3, 3] = OBJECT_CENTER
+
     # 1. Setup base model config
     model_config = get_6tendon_config()
     num_tendons = model_config.num_tendons  # 6
 
-    # The finger has num_discs=9 with num_between_nodes=3 -> 33 rod nodes total.
     num_discs = model_config.num_discs
     num_between_nodes = model_config.num_between_nodes
     num_nodes = num_discs + (num_discs - 1) * num_between_nodes
     tip_node_index = num_nodes - 1
     # Disc nodes only — cheaper than collision-checking every interior node.
     disc_node_indices = [i * (num_between_nodes + 1) for i in range(num_discs)]
+    tip_radius = 0.003
 
     # 2. Setup planner config
     planner_config = crest_sparse.TrajectoryPlannerConfig()
     planner_config.model_config = model_config
-    planner_config.model_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY"
-    # planner_config.model_config.base.optimizer_type = "LM"
-
+    # Leave linear_solver_type at the default MULTIFRONTAL_QR (as the working
+    # sdf_3dof_contact_kinematics_test does) — QR is more stable than CHOLESKY on
+    # the ill-conditioned witness-point contact system.
     planner_config.model_config.base.delta_initial = 1.0
-    # GTSAM's default per-call cap is 100; on the contact problem every
-    # continuation stage hits that cap mid-descent. Bump so we can tell
-    # whether the optimizer is iter-limited vs actually converged.
     planner_config.model_config.base.max_iterations = 500
+
+    # Augmented Lagrangian schedule for the hard terminal contact constraint.
+    # The planner's large static objective (~hundreds of rod/prior factors)
+    # dwarfs the contact penalty at low mu, so AL's relative-convergence check
+    # trips after a handful of outer steps. Starting mu high (~1e4) makes the
+    # contact penalty bite in the first inner solve and drives the tip onto the
+    # surface (~20 micron terminal gap); mu=1 stalls the tip ~7 cm short.
+    planner_config.model_config.base.al_initial_mu = args.al_mu
+    planner_config.model_config.base.al_mu_increase_rate = args.al_rate
+    planner_config.model_config.base.al_max_iterations = args.al_iters
+
     planner_config.K = args.traj_steps
     planner_hz = 5
     planner_config.dt = 1.0 / planner_hz
@@ -71,203 +108,138 @@ def _main():
     # No goal_position / goal_pose — contact-as-goal supersedes them (Eq 30).
 
     # Warm-start: bias k=K toward a flexed configuration so the planner
-    # initializes its rod state along the natural curl manifold rather than
-    # straight-from-rest. Without this the optimizer can't cross the rod-stress
-    # hump from a straight initial guess and converges to a local minimum with
-    # the tip 5-8 cm off the sphere (see point_to_contact_*.log K-sweep).
-    # get_initial_values() interpolates t_k = t_start + (k/K)*(t_goal - t_start)
-    # across timesteps, so this also seeds intermediate k's tendon tensions.
-    # The cov is tight on passive tendons (lock them at 0.5) and loose on the
-    # flexor so the optimizer can refine its terminal value freely.
+    # initializes its rod state along the natural curl manifold. The flexor
+    # (index 5) cov is loose so the optimizer refines its terminal value freely.
     planner_config.goal_tensions = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 3.0])
-    planner_config.goal_tensions_cov = np.diag(
-        [1e-8, 1e-8, 1e-8, 1e-8, 1e-8, 1e-1])
+    planner_config.goal_tensions_cov = np.diag([1e-8, 1e-8, 1e-8, 1e-8, 1e-8, 1e-1])
 
-    # 3. Build the environment (cylinder SDF object)
     objects_dir = os.path.join(os.path.dirname(__file__), "..", "_objects")
-    vdb_path = os.path.normpath(os.path.join(objects_dir, "sphere.vdb"))
 
-    # Sphere: radius 0.025 m (see _objects/make_sphere.py).  No rotation needed
-    # (sphere is symmetric).  Centered at the p2p goal position so we know the
-    # finger can reach it.
-    object_pose = np.eye(4)
-    object_pose[0:3, 3] = [6.02088876e-02, 3.77734425e-02, 0.0]
+    log_extras = {
+        "planner_hz": planner_hz,
+        "num_tendons": num_tendons,
+        "num_discs": num_discs,
+        "num_nodes": num_nodes,
+        "tip_node_index": tip_node_index,
+        "tip_radius": tip_radius,
+        "primitive": args.primitive,
+        "contact_mode": args.contact_mode,
+        "object_pose": object_pose,
+    }
 
-    env = crest_sparse.EnvironmentConfig()
-    env.load_sdf(vdb_path)
-    env.object_pose_mean = object_pose
-    env.object_pose_cov = 1e-8 * np.eye(6)   # rigidly anchored
-    env.object_pose_per_step = False
-
-    # Collision running cost on the disc nodes AND the tip. The tip needs its
-    # own collision sphere because the terminal contact factor's e1/e2 rows
-    # (Eq 26) are surface-equality with no side preference — a tip *inside*
-    # the object can satisfy them by placing p_c behind the tip. The
-    # collision factor's one-sided hinge supplies the missing sign at every
-    # k (intermediate + terminal). collision_sigma tightened from 1e-3 to
-    # 1e-4 so info per row (1e8) sits above the final-stage contact factor
-    # (1e6) and below the start anchor (1e12).
-    tip_radius = 0.003
-    env.collision_epsilon = 0.002             # 2 mm safety margin
-    env.collision_sigma = 1e-4
-    env.collision_node_indices = disc_node_indices + [tip_node_index]
-    env.collision_node_radii = [0.003] * len(disc_node_indices) + [tip_radius]
-
-    # Terminal contact: tip sphere must land on the sphere's surface. This is a
-    # hard equality constraint (Eq 33-35) on the 3-residual SdfContactFactor,
-    # enforced by GTSAM's Augmented Lagrangian optimizer (auto-enabled whenever
-    # target_contact_node is set). The AL outer loop replaces the old manual
-    # contact_cov continuation; tune via model_config.base.al_* if needed.
-    env.target_contact_node = tip_node_index
-    env.contact_node_radius = tip_radius
-
-    planner_config.environment = env
-
-    log_planner_parameters(
-        planner_config,
-        environment=env,
-        extras={
-            "planner_hz": planner_hz,
-            "num_tendons": num_tendons,
-            "num_discs": num_discs,
-            "num_between_nodes": num_between_nodes,
-            "num_nodes": num_nodes,
-            "tip_node_index": tip_node_index,
-            "disc_node_indices": disc_node_indices,
-            "tip_radius": tip_radius,
-            "object_pose": object_pose,
-            "vdb_path": vdb_path,
-        },
-    )
+    # 3. Configure the terminal contact (and, for SDF mode, the collision running
+    #    cost) according to the chosen contact mode.
+    if args.contact_mode == "sdf":
+        vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
+        if not os.path.exists(vdb_path):
+            raise FileNotFoundError(
+                f"{vdb_path} not found. Generate it with "
+                f"python -m tests._objects.make_{args.primitive} (run from python/).")
+        env = crest_sparse.EnvironmentConfig()
+        env.load_sdf(vdb_path)
+        env.object_pose_mean = object_pose
+        env.object_pose_cov = 1e-8 * np.eye(6)   # rigidly anchored
+        env.object_pose_per_step = False
+        # Collision running cost on the disc nodes (disc 7 == the tip node). The
+        # planner auto-skips the collision factor on the terminal contact node at
+        # k=K so it can't fight the contact factor; intermediate steps still keep
+        # the finger out of the object.
+        env.collision_epsilon = 0.002             # 2 mm safety margin
+        env.collision_sigma = 1e-4
+        env.collision_node_indices = disc_node_indices
+        env.collision_node_radii = [0.003] * len(disc_node_indices)
+        # Terminal contact: tip sphere lands tangent to the SDF surface. Hard AL
+        # equality constraint on the 5-residual SdfWitnessContactFactor.
+        env.target_contact_node = tip_node_index
+        env.contact_node_radius = tip_radius
+        planner_config.environment = env
+        log_extras["vdb_path"] = vdb_path
+        log_planner_parameters(planner_config, environment=env, extras=log_extras)
+    else:  # analytic-sphere
+        sc = crest_sparse.SpherePrimitiveContactConfig()
+        sc.finger_node_index = tip_node_index
+        sc.finger_node_radius = tip_radius
+        sc.sphere_center = OBJECT_CENTER
+        sc.sphere_radius = spec["radius"]
+        sc.sphere_pose_cov = 1e-8 * np.eye(6)
+        sc.witness = True   # 5-residual witness form, mirrors the SDF contact
+        planner_config.sphere_contact = sc
+        log_planner_parameters(planner_config, extras=log_extras)
 
     # 4. Plan. Contact is a hard equality constraint solved by the Augmented
-    # Lagrangian optimizer, which manages the soft->hard penalty progression
-    # internally via its mu/lambda schedule — no manual contact_cov continuation
-    # loop is needed anymore.
-    print("Building factor graph...")
+    #    Lagrangian optimizer (auto-enabled by the contact config).
+    print(f"Building factor graph ({args.primitive}, {args.contact_mode})...")
     planner = crest_sparse.TendonFingerTrajectoryPlanner(planner_config)
 
-    sphere_world_radius = 0.025  # matches _objects/sphere.vdb
-    obj_pose_inv = np.linalg.inv(object_pose)
-
-    def tip_sdf_at_step(traj, k):
-        tip_pose = np.array(traj[k].rod.states[-1].pose.mean)
-        tip_w = tip_pose[0:3, 3]
-        tip_in_obj_ = (obj_pose_inv @ np.append(tip_w, 1.0))[:3]
-        return np.linalg.norm(tip_in_obj_) - sphere_world_radius
+    def tip_gap_at(step):
+        """Signed gap between the tip sphere surface and the object surface at a
+        trajectory step (analytic, independent of the solver)."""
+        tip_pose = np.array(planner_result.trajectory[step].rod.states[-1].pose.mean)
+        tip_pos = tip_pose[:3, 3]
+        tip_local = object_rotation.T @ (tip_pos - OBJECT_CENTER)
+        return primitive_surface_gap(tip_local, spec) - tip_radius, tip_pos
 
     print("Planning contact trajectory (Augmented Lagrangian)...")
     start_time = time.time()
-    result = planner.plan()
-    per_step = [tip_sdf_at_step(result.trajectory, k)
-                for k in range(planner_config.K + 1)]
-    worst_k = int(np.argmin(per_step))
-    print(f"  iters={result.meta.iterations} | error={result.meta.error:.4g} | "
-          f"tip_sdf[K]={per_step[-1]:+.5f} | "
-          f"worst_sdf={per_step[worst_k]:+.5f}@k={worst_k}")
+    planner_result = planner.plan()
+    result = planner_result
     elapsed = time.time() - start_time
 
-    print(f"Solved in {elapsed:.2f}s | iters={result.meta.iterations} | error={result.meta.error:.4g}")
-    print(f"  build={result.meta.build_time_ms:.0f}ms  opt={result.meta.optimize_time_ms:.0f}ms  "
+    per_step = [tip_gap_at(k)[0] for k in range(planner_config.K + 1)]
+    worst_k = int(np.argmin(per_step))
+    print(f"  iters={result.meta.iterations} | error={result.meta.error:.4g} | "
+          f"gap[K]={per_step[-1]:+.6f} | worst_gap={per_step[worst_k]:+.6f}@k={worst_k}")
+    print(f"Solved in {elapsed:.2f}s | "
+          f"build={result.meta.build_time_ms:.0f}ms opt={result.meta.optimize_time_ms:.0f}ms "
           f"marginals={result.meta.marginalize_time_ms:.0f}ms")
 
-    # Per-factor-type residual breakdown — diagnoses which factor type
-    # contributes the bulk of result.meta.error. A well-conditioned graph
-    # should not have a single factor type dominating by orders of magnitude.
     summary = planner.get_factor_error_summary()
-    print(f"\nTop factor types by total error (sum of factor->error(values)):")
+    print("\nTop factor types by total error:")
     for name, count, total in summary[:8]:
         print(f"  {total:11.4g}  ({count:5d} factors)  {name}")
 
-    # 5. Verify the terminal tip ends up on the sphere surface and no
-    #    intermediate step penetrates.
-    def tip_sdf_at(step):
-        tip_pose = np.array(result.trajectory[step].rod.states[-1].pose.mean)
-        tip_w = tip_pose[0:3, 3]
-        tip_in_obj_ = (obj_pose_inv @ np.append(tip_w, 1.0))[:3]
-        return np.linalg.norm(tip_in_obj_) - sphere_world_radius, tip_w
-
-    sdf_at_tip, tip_world = tip_sdf_at(-1)
-    tip_in_obj = (obj_pose_inv @ np.append(tip_world, 1.0))[:3]
-    print(f"\nContact check:")
-    print(f"  Tip world pos:   {tip_world}")
-    print(f"  Tip in obj frame:{tip_in_obj}")
-    print(f"  SDF at tip:      {sdf_at_tip:.5f} m  (target = contact radius {tip_radius:.5f})")
-    print(f"  Residual:        {sdf_at_tip - tip_radius:+.5f} m")
-
-    # Per-step penetration check. sdf - tip_radius < 0 means the tip sphere
-    # is intersecting the object.
-    per_step = [tip_sdf_at(k)[0] for k in range(planner_config.K + 1)]
-    worst_step = int(np.argmin(per_step))
-    worst_sdf = per_step[worst_step]
-    print(f"  Worst per-step SDF (tip center to surface): {worst_sdf:+.5f} m at k={worst_step}")
-    print(f"  Worst tip-sphere penetration depth: {max(0.0, tip_radius - worst_sdf) * 1000:.3f} mm")
+    # 5. Verify terminal contact + no intermediate penetration.
+    gap_K, tip_world = tip_gap_at(-1)
+    flexor_K = result.trajectory[-1].tensions.mean[5]
+    print("\nContact check:")
+    print(f"  Tip world pos:        {tip_world}")
+    print(f"  Terminal surface gap: {gap_K:+.6f} m  (target ~0)")
+    print(f"  Worst per-step gap:   {per_step[worst_k]:+.6f} m at k={worst_k}")
+    print(f"  Worst penetration:    {max(0.0, -per_step[worst_k]) * 1000:.3f} mm")
+    print(f"  Flexor tension @K:    {flexor_K:.3f}")
 
     # 6. Animate
-    # Visualize the same disc collision spheres the planner is now actually
-    # constraining.
-    viz_collision_indices = disc_node_indices + [tip_node_index]
-    viz_collision_radii = [0.003] * len(disc_node_indices) + [tip_radius]
+    if args.no_viz:
+        tendon_names = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
+        plot_trajectory(result, tendon_names=tendon_names,
+                        save_path="point_to_contact_trajectory.png")
+        return
 
-    common_plotter_kwargs = dict(
-        single_plot_mode=False,
+    plotter = TendonFingerPlotter(
         plot_backbone_frames=True,
         plot_tip_force=True,
         plot_backbone_ellipsoids=True,
-        collision_node_indices=viz_collision_indices,
-        collision_node_radii=viz_collision_radii,
         contact_node_index=tip_node_index,
         contact_node_radius=tip_radius,
+        primitives=[dict(spec["plot"](OBJECT_CENTER), color="goldenrod", opacity=0.35)],
+        camera_azimuth=165,
+        camera_elevation=20,
         camera_focal_point=[0, 0.1, 0],
     )
 
-    side_plotter = TendonFingerPlotter(
-        camera_azimuth=180,
-        camera_elevation=-90,
-        **common_plotter_kwargs,
-    )
-    top_plotter = TendonFingerPlotter(
-        camera_azimuth=180,
-        camera_elevation=0,
-        **common_plotter_kwargs,
-    )
-    bottom_plotter = TendonFingerPlotter(
-        camera_azimuth=180,
-        camera_elevation=90,
-        **common_plotter_kwargs,
-    )
-    front_plotter = TendonFingerPlotter(
-        camera_azimuth=90,
-        camera_elevation=0,
-        **common_plotter_kwargs,
-    )
-    plotters = [side_plotter, top_plotter, bottom_plotter, front_plotter]
-
-    # Show the target sphere in both scenes.
-    sphere_radius = 0.025
-    for p in plotters:
-        sphere_mesh = pv.Sphere(radius=sphere_radius, center=object_pose[0:3, 3])
-        p.plotter.plotter.add_mesh(sphere_mesh, color='cadmiumyellow', opacity=0.5, smooth_shading=True)
-
     for k, marginals in enumerate(result.trajectory):
-        print(f"Displaying Step {k}/{planner_config.K}")
-        print(f"  Tensions mean: {marginals.tensions.mean}")
-        print(f"  Tendon lengths: {marginals.tendon_lengths}")
-        print(f"  Tip pose mean:\n{marginals.rod.states[-1].pose.mean}")
+        print(f"Displaying Step {k}/{planner_config.K}  flexor={marginals.tensions.mean[5]:.3f}")
 
         class MockSolution:
             pass
         sol = MockSolution()
         sol.marginals = marginals
         sol.meta = result.meta
-
-        for p in plotters:
-            p.update(sol)
+        plotter.update(sol)
         time.sleep(planner_config.dt)
 
     input("Press Enter to close...")
 
-    # 7. Plot full trajectory state
     tendon_names = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
     plot_trajectory(result, tendon_names=tendon_names, save_path="point_to_contact_trajectory.png")
 

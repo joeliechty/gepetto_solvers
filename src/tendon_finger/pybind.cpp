@@ -139,7 +139,9 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("sigma_ext_wrench_force", &TrajectoryPlannerConfig::sigma_ext_wrench_force)
         .def_readwrite("sigma_ext_wrench_moment", &TrajectoryPlannerConfig::sigma_ext_wrench_moment)
         // Optional environment for collision/contact (Section 3). None => free-space planner.
-        .def_readwrite("environment", &TrajectoryPlannerConfig::environment);
+        .def_readwrite("environment", &TrajectoryPlannerConfig::environment)
+        // Optional analytic sphere-primitive terminal contact (mirrors model_config.sphere_contact).
+        .def_readwrite("sphere_contact", &TrajectoryPlannerConfig::sphere_contact);
 
     py::class_<TrajectoryPlannerResult>(m, "TrajectoryPlannerResult")
         .def(py::init<>())

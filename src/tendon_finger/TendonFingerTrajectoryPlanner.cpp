@@ -14,6 +14,8 @@
 using namespace gtsam;
 using crest_sparse::SdfCollisionFactor;
 using crest_sparse::SdfWitnessContactFactor;
+using crest_sparse::SphereWitnessContactFactor;
+using crest_sparse::SphereSphereContactFactor;
 
 
 // --- Helper: create a TendonFingerModel<N> from config ---
@@ -69,12 +71,15 @@ TendonFingerTrajectoryPlanner<N>::TendonFingerTrajectoryPlanner(
 {
     const auto& mc = config.model_config;
 
-    // Contact-as-goal mode (a terminal SdfWitnessContactFactor, Eq 30-31) is a hard
+    // Contact-as-goal mode (a terminal witness contact factor, Eq 30-31) is a hard
     // equality constraint, so route plan() through SolverBase's Augmented
-    // Lagrangian path. Pure free-space planning stays on Dogleg/LM.
+    // Lagrangian path. This covers both the SDF surface contact
+    // (environment->target_contact_node) and the analytic sphere-primitive
+    // contact (sphere_contact). Pure free-space planning stays on Dogleg/LM.
     use_augmented_lagrangian_ =
-        config.environment.has_value() &&
-        config.environment->target_contact_node.has_value();
+        (config.environment.has_value() &&
+         config.environment->target_contact_node.has_value()) ||
+        config.sphere_contact.has_value();
 
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         mc.sigma_twist_rot, mc.sigma_twist_pos);
@@ -129,6 +134,28 @@ void TendonFingerTrajectoryPlanner<N>::get_initial_values() {
         Eigen::Vector<double, N> t_k = t_start + alpha * (t_goal - t_start);
         values_.insert(models_[k]->get_initial_values());
         values_.update(models_[k]->get_tensions_key(), t_k);
+    }
+
+    // Analytic sphere-primitive contact: seed the sphere pose at object_key(0)
+    // and (witness form) the dummy point on the sphere surface, along the line
+    // from the sphere center toward the terminal contact node. Mirrors
+    // TendonFingerSolver::get_initial_values()'s sphere_contact branch. This is
+    // mutually exclusive with the SDF environment contact below (both share
+    // object key 'O',0 / dummy 'Y',0).
+    if (config_.sphere_contact) {
+        const auto& sc = *config_.sphere_contact;
+        values_.insert(object_key(0), Pose3(Rot3(), sc.sphere_center));
+        if (sc.witness) {
+            Point3 finger_pos = values_
+                .at<Pose3>(models_[config_.K]->rod_->get_pose_key(sc.finger_node_index))
+                .translation();
+            Vector3 d = finger_pos - sc.sphere_center;
+            double dn = d.norm();
+            Vector3 dir = (dn > 1e-8) ? Vector3(d / dn) : Vector3(0.0, 0.0, 1.0);
+            values_.insert(dummy_point_key(),
+                Point3(sc.sphere_center + sc.sphere_radius * dir));
+        }
+        return;
     }
 
     if (!config_.environment) return;
@@ -215,6 +242,18 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
 
     Eigen::Matrix<double, N, N> Qc = config_.gp_tense_Qc.topLeftCorner<N, N>();
 
+    // Terminal contact node (if any), used to skip the collision running cost on
+    // that node at k=K — the collision hinge (which keeps the node *outside* the
+    // surface by collision_epsilon) would otherwise fight the terminal contact
+    // factor (which pulls the node *tangent* to the surface). Resolved to an
+    // explicit index here so the k=K skip below can compare pose keys (handles
+    // the -1 tip alias).
+    std::optional<int> contact_node_idx;
+    if (config_.environment && config_.environment->target_contact_node.has_value())
+        contact_node_idx = *config_.environment->target_contact_node;
+    else if (config_.sphere_contact)
+        contact_node_idx = config_.sphere_contact->finger_node_index;
+
     // build the graph for each time step
     for (int k = 0; k <= K; ++k) {
         // 1. Kinematic factors (rod mechanics + base pose + tendon disc wrenches)
@@ -297,6 +336,13 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
             for (size_t j = 0; j < env.collision_node_indices.size(); ++j) {
                 int i_node = env.collision_node_indices[j];
                 double r   = env.collision_node_radii[j];
+                // Skip the terminal contact node at k=K: its collision hinge
+                // would oppose the terminal contact factor. Compare resolved
+                // pose keys so the -1 tip alias matches its explicit index.
+                if (k == K && contact_node_idx &&
+                    models_[k]->rod_->get_pose_key(i_node) ==
+                        models_[k]->rod_->get_pose_key(*contact_node_idx))
+                    continue;
                 graph_.add(SdfCollisionFactor(
                     models_[k]->rod_->get_pose_key(i_node),
                     object_key(k),
@@ -330,13 +376,16 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
 
     // 7. Goal boundary conditions at k=K
     // In contact-as-goal mode (Eq 30) the terminal contact factor replaces
-    // the goal pose/position priors.
-    const bool contact_mode = config_.environment &&
-                              config_.environment->target_contact_node.has_value();
+    // the goal pose/position priors. Contact mode is either the SDF surface
+    // contact or the analytic sphere-primitive contact.
+    const bool contact_mode =
+        (config_.environment &&
+         config_.environment->target_contact_node.has_value()) ||
+        config_.sphere_contact.has_value();
 
     if (contact_mode &&
         (config_.goal_pose.has_value() || config_.goal_position.has_value())) {
-        std::cerr << "[TendonFingerTrajectoryPlanner] target_contact_node is set; "
+        std::cerr << "[TendonFingerTrajectoryPlanner] contact mode is set; "
                   << "suppressing goal_pose/goal_position priors (Eq 30)." << std::endl;
     }
 
@@ -383,7 +432,7 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
             graph_.add(PriorFactor<Pose3>(object_key(0), obj_mean, obj_prior));
         }
 
-        if (contact_mode) {
+        if (env.target_contact_node.has_value()) {
             int i_node = *env.target_contact_node;
             // Hard terminal contact (Eq 33-35): wrap the 5-residual
             // SdfWitnessContactFactor in a ZeroCostConstraint so the AL
@@ -402,6 +451,39 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
             // pin p_c, so no Tikhonov regularizer on the dummy point is needed.
             // The ray-march seed inserted in initialize_values() supplies the
             // initial Value.
+        }
+    }
+
+    // 8b. Analytic sphere-primitive contact (Eq 26): anchor a fixed-world sphere
+    // at object_key(0) and add the terminal contact factor at k=K. Mirrors
+    // TendonFingerSolver::build_graph()'s sphere_contact branch. Mutually
+    // exclusive with the SDF environment contact above.
+    if (config_.sphere_contact) {
+        const auto& sc = *config_.sphere_contact;
+        graph_.add(PriorFactor<Pose3>(
+            object_key(0), Pose3(Rot3(), sc.sphere_center),
+            noiseModel::Gaussian::Covariance(sc.sphere_pose_cov)));
+        Key finger_key = models_[K]->rod_->get_pose_key(sc.finger_node_index);
+        if (sc.witness) {
+            // 5-residual witness-point form ([c_R, c_O, c_N, c_T1, c_T2]) — the
+            // analytic counterpart of the SDF contact. The dummy point's gauge
+            // DOF is pinned by the C-frame tangent residuals (no stabilizing
+            // prior needed); its seed comes from get_initial_values().
+            auto contact = std::make_shared<SphereWitnessContactFactor>(
+                finger_key,
+                object_key(0),
+                dummy_point_key(),
+                sc.finger_node_radius, sc.sphere_radius,
+                noiseModel::Isotropic::Sigma(5, 1.0));
+            graph_.add(gtsam::ZeroCostConstraint(contact));
+        } else {
+            // 1-residual analytic gap form (no dummy point).
+            auto contact = std::make_shared<SphereSphereContactFactor>(
+                finger_key,
+                object_key(0),
+                sc.finger_node_radius, sc.sphere_radius,
+                noiseModel::Isotropic::Sigma(1, 1.0));
+            graph_.add(gtsam::ZeroCostConstraint(contact));
         }
     }
 }
