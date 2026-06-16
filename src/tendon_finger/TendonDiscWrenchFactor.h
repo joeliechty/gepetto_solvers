@@ -6,6 +6,7 @@
 #include "tendon_finger/TendonFingerModel.h"
 
 #include <array>
+#include <optional>
 
 
 template<int N>
@@ -31,7 +32,12 @@ public:
         const std::array<bool, N>& active,          // Has hole at current disc
         const std::array<bool, N>& active_prev,     // Has hole at prev disc
         const std::array<bool, N>& active_next,     // Has hole at next disc
-        const gtsam::SharedNoiseModel& model);
+        const gtsam::SharedNoiseModel& model,
+        // Hand-base reparameterization (Section 4): when the previous disc is the
+        // reparameterized node 0, pose_prev_key is the hand base and this fixed
+        // offset reconstructs the disc pose as pose_prev o offset (with the
+        // Jacobian chain-ruled back to the hand base). Unset = legacy behavior.
+        std::optional<gtsam::Pose3> pose_prev_offset = std::nullopt);
 
     gtsam::Vector evaluateError(
         const gtsam::Pose3& pose_prev,
@@ -65,4 +71,5 @@ private:
     std::array<bool, N> active_;         // tendon has hole at THIS disc
     std::array<bool, N> active_prev_;    // tendon has hole at PREV disc
     std::array<bool, N> active_next_;    // tendon has hole at NEXT disc
+    std::optional<gtsam::Pose3> pose_prev_offset_;
 };

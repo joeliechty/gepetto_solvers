@@ -72,6 +72,19 @@ public:
         const gtsam::Values& values,
         const CovFn& cov_of) const;
 
+    // Hand-base reparameterization (paper Section 4, Eq. 43-44). When enabled,
+    // node 0 is no longer an independent variable: its pose is the deterministic
+    // composition T_0 = T_base o offset, where T_base is a new variable keyed by
+    // get_root_base_key(). build_graph then emits Root* variants of the factors
+    // that touch node 0, and node 0's value is reconstructed (not optimized).
+    void set_root_reparameterization(const gtsam::Pose3& offset);
+
+    bool uses_root() const { return use_root_; }
+
+    gtsam::Key get_root_base_key() const { return root_base_key_; }
+
+    const gtsam::Pose3& get_root_offset() const { return root_offset_; }
+
     gtsam::Key get_pose_key(int node_idx) const;
 
     gtsam::Key get_stress_key(int node_idx) const;
@@ -100,4 +113,9 @@ private:
     std::vector<gtsam::Key> stress_keys_;
     std::vector<gtsam::Key> wrench_keys_;
     gtsam::Key dummy_wrench_key_;
+
+    // Hand-base reparameterization state (off by default; legacy node-0 path).
+    bool use_root_ = false;
+    gtsam::Key root_base_key_;
+    gtsam::Pose3 root_offset_;
 };

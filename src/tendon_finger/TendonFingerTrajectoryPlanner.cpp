@@ -104,6 +104,12 @@ TendonFingerTrajectoryPlanner<N>::TendonFingerTrajectoryPlanner(
     for (int k = 0; k <= config.K; ++k) {
         models_.push_back(make_model<N>(
             mc, twist_noise, stress_noise, base_pose_mean, base_pose_noise));
+        // Hand-base reparameterization (Section 4) — must precede get_initial_values().
+        // Each per-step model gets its own hand-base variable, anchored per step
+        // (the node-0 base prior moves onto it in build_graph_kinematic()).
+        if (mc.use_hand_base) {
+            models_.back()->set_hand_base(Pose3(mc.hand_base_offset));
+        }
     }
 
     get_initial_values();
@@ -333,6 +339,17 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
             !config_.environment->collision_node_indices.empty()) {
             const auto& env = *config_.environment;
             auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
+            // With the hand-base reparameterization the base disc (node 0) is no
+            // longer a free variable; its pose is the hand base (T_0 = T_base for
+            // offset = Identity). Route the base-disc collision sphere to the
+            // hand-base key so it stays a valid graph variable.
+            auto collision_pose_key = [&](int node) {
+                return (models_[k]->rod_->uses_root() &&
+                        models_[k]->rod_->get_pose_key(node) ==
+                            models_[k]->rod_->get_pose_key(0))
+                    ? models_[k]->rod_->get_root_base_key()
+                    : models_[k]->rod_->get_pose_key(node);
+            };
             for (size_t j = 0; j < env.collision_node_indices.size(); ++j) {
                 int i_node = env.collision_node_indices[j];
                 double r   = env.collision_node_radii[j];
@@ -344,7 +361,7 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
                         models_[k]->rod_->get_pose_key(*contact_node_idx))
                     continue;
                 graph_.add(SdfCollisionFactor(
-                    models_[k]->rod_->get_pose_key(i_node),
+                    collision_pose_key(i_node),
                     object_key(k),
                     r, env.collision_epsilon, env.sdf_grid, col_noise));
             }

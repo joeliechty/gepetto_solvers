@@ -33,6 +33,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("tendon_input", &TendonFingerSolverConfig::tendon_input)
         .def_readwrite("per_disc_tendon_input", &TendonFingerSolverConfig::per_disc_tendon_input)
         .def_readwrite("base_pose", &TendonFingerSolverConfig::base_pose)
+        .def_readwrite("use_hand_base", &TendonFingerSolverConfig::use_hand_base)
+        .def_readwrite("hand_base_offset", &TendonFingerSolverConfig::hand_base_offset)
         .def_readwrite("sphere_contact", &TendonFingerSolverConfig::sphere_contact)
         .def_readwrite("sdf_contact", &TendonFingerSolverConfig::sdf_contact);
 

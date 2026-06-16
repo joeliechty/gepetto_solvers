@@ -3,6 +3,9 @@
 #include "CosseratTwistFactor.h"
 #include "CosseratStressFactor.h"
 #include "BoundaryStressFactor.h"
+#include "RootCosseratTwistFactor.h"
+#include "RootCosseratStressFactor.h"
+#include "RootBoundaryStressFactor.h"
 #include <gtsam/base/Vector.h>
 
 using namespace gtsam;
@@ -70,6 +73,14 @@ CosseratRodModel::CosseratRodModel (
 }
 
 
+void CosseratRodModel::set_root_reparameterization(const Pose3& offset) {
+    use_root_ = true;
+    root_offset_ = offset;
+    // 'H' for Hand base; namespaced by this rod's unique id like the other keys.
+    root_base_key_ = Symbol('H', 1000 * id_);
+}
+
+
 int CosseratRodModel::clamp_node_idx(int node_idx) const {
     if (node_idx == -1) 
         return num_nodes_ - 1;
@@ -115,11 +126,18 @@ Values CosseratRodModel::get_initial_values(
     Values values;
     double current_z = 0.0;
 
+    // When reparameterized, node 0 is not a free variable; instead seed the hand
+    // base T_base such that T_base o offset = base_pose_init (the intended node-0
+    // pose), i.e. T_base = base_pose_init o offset^{-1}.
+    if (use_root_)
+        values.insert(root_base_key_, base_pose_init * root_offset_.inverse());
+
     for (int i = 0; i < num_nodes_; ++i) {
         if (i > 0) current_z += ds[i - 1];
         Vector3 p = Vector3(0, 0, current_z);
         Pose3 pose = base_pose_init * Pose3(Rot3::Identity(), p);
-        values.insert(pose_keys_[i], pose);
+        if (!(use_root_ && i == 0))
+            values.insert(pose_keys_[i], pose);
         values.insert(stress_keys_[i], Vector6(Vector6::Zero()));
         values.insert(wrench_keys_[i], Vector6(Vector6::Zero()));
     }
@@ -154,6 +172,35 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
 
     // Cosserat kinematics and mechanics factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
+        Key wrench_key = (i == num_nodes_ - 2) ? dummy_wrench_key_ : wrench_keys_[i + 1];
+
+        // When reparameterized, node 0's pose is the hand base composed with the
+        // fixed offset (T_0 = T_base o offset), so the factors that touch node 0
+        // are the Root* variants keyed on root_base_key_ instead of pose_keys_[0].
+        if (use_root_ && i == 0) {
+            graph.add(RootCosseratTwistFactor(
+                root_base_key_,
+                pose_keys_[i + 1],
+                stress_keys_[i],
+                stress_keys_[i + 1],
+                root_offset_,
+                ds[i],
+                nominal_strain ? *nominal_strain : straight_rod_strain,
+                K_inv_[i],
+                twist_noise_,
+                use_midpoint_));
+
+            graph.add(RootCosseratStressFactor(
+                root_base_key_,
+                pose_keys_[i + 1],
+                stress_keys_[i],
+                stress_keys_[i + 1],
+                wrench_key,
+                root_offset_,
+                stress_noise_));
+            continue;
+        }
+
         // Poses integrate due to stresses in rod
         graph.add(CosseratTwistFactor(
             pose_keys_[i],
@@ -167,7 +214,6 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
             use_midpoint_));
 
         // Stresses integrate due to wrenches on the rod
-        Key wrench_key = (i == num_nodes_ - 2) ? dummy_wrench_key_ : wrench_keys_[i + 1];
         graph.add(CosseratStressFactor(
             pose_keys_[i],
             pose_keys_[i + 1],
@@ -191,12 +237,22 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
 
     // Constrain base stress to equal base force
     is_base = true;
-    graph.add(BoundaryStressFactor(
-        stress_keys_.front(),
-        wrench_keys_.front(),
-        pose_keys_.front(),
-        stress_noise_,
-        is_base));
+    if (use_root_) {
+        graph.add(RootBoundaryStressFactor(
+            stress_keys_.front(),
+            wrench_keys_.front(),
+            root_base_key_,
+            root_offset_,
+            stress_noise_,
+            is_base));
+    } else {
+        graph.add(BoundaryStressFactor(
+            stress_keys_.front(),
+            wrench_keys_.front(),
+            pose_keys_.front(),
+            stress_noise_,
+            is_base));
+    }
 
     return graph;
 }
@@ -221,8 +277,16 @@ CosseratRodMarginals CosseratRodModel::get_marginals(
     solution.states.resize(num_nodes_);
 
     for (int i = 0; i < num_nodes_; ++i) {
-        solution.states[i].pose.mean = values.at<Pose3>(pose_keys_[i]).matrix();
-        solution.states[i].pose.cov = cov_of(pose_keys_[i]);
+        if (use_root_ && i == 0) {
+            // Node 0 is derived: T_0 = T_base o offset. Report the hand-base
+            // marginal covariance (for offset = Identity this is the node-0 frame).
+            Pose3 pose0 = values.at<Pose3>(root_base_key_).compose(root_offset_);
+            solution.states[i].pose.mean = pose0.matrix();
+            solution.states[i].pose.cov = cov_of(root_base_key_);
+        } else {
+            solution.states[i].pose.mean = values.at<Pose3>(pose_keys_[i]).matrix();
+            solution.states[i].pose.cov = cov_of(pose_keys_[i]);
+        }
 
         solution.states[i].stress.mean = values.at<Vector6>(stress_keys_[i]);
         solution.states[i].stress.cov = cov_of(stress_keys_[i]);

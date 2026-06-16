@@ -23,7 +23,8 @@ TendonDiscWrenchFactor<N>::TendonDiscWrenchFactor(
     const std::array<bool, N>& active,
     const std::array<bool, N>& active_prev,
     const std::array<bool, N>& active_next,
-    const SharedNoiseModel& model)
+    const SharedNoiseModel& model,
+    std::optional<Pose3> pose_prev_offset)
 :
     TendonWrenchBase<N>(model, pose_prev_key, pose_key, pose_next_key, wrench_key, tensions_key, external_wrench_key),
     is_tip_(is_tip),
@@ -32,7 +33,8 @@ TendonDiscWrenchFactor<N>::TendonDiscWrenchFactor(
     holes_next_(holes_next),
     active_(active),
     active_prev_(active_prev),
-    active_next_(active_next) {}
+    active_next_(active_next),
+    pose_prev_offset_(pose_prev_offset) {}
 
 
 template<int N>
@@ -50,6 +52,15 @@ Vector TendonDiscWrenchFactor<N>::evaluateError(
     OptionalMatrixType H5,
     OptionalMatrixType H6) const
 {
+    // Hand-base reparameterization: when the previous disc is node 0, the passed
+    // pose_prev is the hand base; reconstruct the disc pose as pose_prev o offset
+    // and keep the composition Jacobian so H1 maps back to the hand base.
+    Pose3 pose_prev_eff = pose_prev;
+    Matrix6 H_prev_compose = Matrix6::Identity();
+    if (pose_prev_offset_) {
+        pose_prev_eff = pose_prev.compose(*pose_prev_offset_, H_prev_compose);
+    }
+
     Vector6 wrench_tendons = Vector6::Zero();
 
     Eigen::Matrix<double, 6, N> d_wrench_d_tensions = Eigen::Matrix<double, 6, N>::Zero();
@@ -75,7 +86,7 @@ Vector TendonDiscWrenchFactor<N>::evaluateError(
             Vector6 wrench_prev = get_single_tendon_wrench(
                 tensions[tendon_idx],
                 pose,
-                pose_prev,
+                pose_prev_eff,
                 holes_[tendon_idx],
                 holes_prev_[tendon_idx],
                 d_wrench_prev_d_tension,
@@ -115,7 +126,7 @@ Vector TendonDiscWrenchFactor<N>::evaluateError(
     // Error between total wrench and sum of applied, all in spatial coords
     Vector6 wrench_error = wrench - wrench_tendons - wrench_external;
 
-    if (H1) { *H1 = -d_wrench_d_pose_prev; }
+    if (H1) { *H1 = -d_wrench_d_pose_prev * H_prev_compose; }
 
     if (H2) { *H2 = -d_wrench_d_pose; }
 

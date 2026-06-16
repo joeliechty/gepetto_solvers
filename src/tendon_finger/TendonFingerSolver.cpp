@@ -103,6 +103,12 @@ TendonFingerSolver<N>::TendonFingerSolver(const TendonFingerSolverConfig& config
         }
     }
 
+    // Hand-base reparameterization (Section 4). Must precede get_initial_values()
+    // so node 0 is seeded via the hand-base variable instead of pose_keys_[0].
+    if (config.use_hand_base) {
+        robot_->set_hand_base(Pose3(config.hand_base_offset));
+    }
+
     get_initial_values();
 }
 

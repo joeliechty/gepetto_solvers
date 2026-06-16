@@ -79,6 +79,17 @@ struct TendonFingerSolverConfig{
     // If all zeros (default), uses legacy hardcoded Rx(-pi/2)*Rz(pi) at origin.
     gtsam::Matrix4 base_pose = gtsam::Matrix4::Zero();
 
+    // Hand-base reparameterization (paper Section 4). When true, the finger's
+    // node-0 pose is no longer an independent variable: it is the deterministic
+    // SE(3) composition T_0 = T_base o T_offset of a new hand-base variable and
+    // the fixed offset below (Eq. 43). The rigidity is embedded in the graph
+    // topology via "Root" factors instead of a soft base prior, eliminating the
+    // soft-rigid null space. When false (default) the legacy node-0 pose prior
+    // path is used unchanged. With hand_base_offset = Identity the geometry is
+    // identical to the legacy path.
+    bool use_hand_base = false;
+    gtsam::Matrix4 hand_base_offset = gtsam::Matrix4::Identity();
+
     // Optional sphere-sphere contact constraint on a chosen rod node. When
     // unset the solver runs the legacy free-space formulation.
     std::optional<SpherePrimitiveContactConfig> sphere_contact;

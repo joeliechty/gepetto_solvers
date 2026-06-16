@@ -128,6 +128,13 @@ public:
         gtsam::SharedDiagonal base_pose_noise,
         const std::vector<double>& disc_positions_normalized = {});
 
+    // Enable the hand-base reparameterization (paper Section 4). Must be called
+    // before get_initial_values()/build_graph(). Replaces the node-0 pose
+    // variable with a hand-base variable T_base such that T_0 = T_base o offset;
+    // the node-0 base prior moves onto T_base and the factors touching node 0
+    // use their Root/offset-aware variants. Off by default (legacy path).
+    void set_hand_base(const gtsam::Pose3& offset);
+
     gtsam::Values get_initial_values() const;
 
     gtsam::NonlinearFactorGraph build_graph(const VectorNGaussian<N>& tensions) const;
@@ -193,6 +200,10 @@ protected:
 
     gtsam::Pose3 base_pose_mean_;
     gtsam::SharedDiagonal base_pose_noise_;
+
+    // Hand-base reparameterization (off by default; legacy node-0 prior path).
+    bool use_hand_base_ = false;
+    gtsam::Pose3 hand_base_offset_;
 
     double sigma_length_ = 1e-4;
 

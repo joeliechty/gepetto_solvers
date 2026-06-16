@@ -8,7 +8,8 @@ TendonLengthFactor<N>::TendonLengthFactor(
     Key lengths_key,
     const std::vector<Key>& disc_pose_keys,
     const std::vector<std::vector<std::optional<Vector3>>>& hole_locations,
-    const SharedNoiseModel& model)
+    const SharedNoiseModel& model,
+    std::optional<Pose3> first_disc_offset)
 :
     NoiseModelFactor(model, /* keys: */ [&]() {
         KeyVector keys;
@@ -17,7 +18,8 @@ TendonLengthFactor<N>::TendonLengthFactor(
         return keys;
     }()),
     num_discs_(disc_pose_keys.size()),
-    hole_locations_(hole_locations)
+    hole_locations_(hole_locations),
+    first_disc_offset_(first_disc_offset)
 {}
 
 
@@ -33,6 +35,14 @@ Vector TendonLengthFactor<N>::unwhitenedError(
     std::vector<Pose3> poses(num_discs_);
     for (int d = 0; d < num_discs_; ++d)
         poses[d] = x.at<Pose3>(keys()[1 + d]);
+
+    // Hand-base reparameterization: the first disc key is the hand base; the
+    // base-disc pose is T_base o offset. Keep the composition Jacobian so the
+    // accumulated Jacobian for that key maps back to the hand base.
+    Matrix6 H_first_compose = Matrix6::Identity();
+    if (first_disc_offset_ && num_discs_ > 0) {
+        poses[0] = poses[0].compose(*first_disc_offset_, H_first_compose);
+    }
 
     // Initialize Jacobians if requested
     if (H) {
@@ -93,6 +103,11 @@ Vector TendonLengthFactor<N>::unwhitenedError(
             J_prev_pose = J_p_pose;
             has_prev = true;
         }
+    }
+
+    // Map the base-disc Jacobian back to the hand base (chain rule).
+    if (H && first_disc_offset_ && num_discs_ > 0) {
+        (*H)[1] = (*H)[1] * H_first_compose;
     }
 
     // Error: e = L - geometric_lengths
