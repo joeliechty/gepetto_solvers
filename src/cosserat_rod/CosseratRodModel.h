@@ -7,6 +7,7 @@
 #include <gtsam/inference/Symbol.h>
 
 #include <functional>
+#include <optional>
 
 #include "utils/Gaussians.h"
 
@@ -77,7 +78,12 @@ public:
     // composition T_0 = T_base o offset, where T_base is a new variable keyed by
     // get_root_base_key(). build_graph then emits Root* variants of the factors
     // that touch node 0, and node 0's value is reconstructed (not optimized).
-    void set_root_reparameterization(const gtsam::Pose3& offset);
+    // When shared_key is provided, that Key is used as the hand-base variable
+    // instead of this rod's private Symbol('H', 1000*id_). This lets several rods
+    // (e.g. the fingers of one hand) share a single floating wrist base variable,
+    // each with its own offset. Default (nullopt) preserves the legacy per-rod key.
+    void set_root_reparameterization(const gtsam::Pose3& offset,
+                                     std::optional<gtsam::Key> shared_key = std::nullopt);
 
     bool uses_root() const { return use_root_; }
 

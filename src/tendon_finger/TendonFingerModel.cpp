@@ -375,10 +375,11 @@ Eigen::Vector<double, N> TendonFingerModel<N>::compute_tendon_lengths(const Valu
 
 
 template<int N>
-void TendonFingerModel<N>::set_hand_base(const Pose3& offset) {
+void TendonFingerModel<N>::set_hand_base(const Pose3& offset,
+                                         std::optional<gtsam::Key> shared_key) {
     use_hand_base_ = true;
     hand_base_offset_ = offset;
-    rod_->set_root_reparameterization(offset);
+    rod_->set_root_reparameterization(offset, shared_key);
 }
 
 
@@ -422,13 +423,16 @@ NonlinearFactorGraph TendonFingerModel<N>::build_graph(const VectorNGaussian<N>&
     // Base frame prior constraint. With the hand-base reparameterization the
     // node-0 pose is no longer a variable; anchor the hand base T_base such that
     // T_0 = T_base o offset = base_pose_mean_, i.e. T_base = base_pose_mean_ o offset^{-1}.
-    if (use_hand_base_) {
-        graph.add(PriorFactor<Pose3>(
-            rod_->get_root_base_key(),
-            base_pose_mean_ * hand_base_offset_.inverse(),
-            base_pose_noise_));
-    } else {
-        graph.add(PriorFactor<Pose3>(rod_->get_pose_key(0), base_pose_mean_, base_pose_noise_));
+    // Skipped when emit_base_prior_ is false (an owner anchors the shared base).
+    if (emit_base_prior_) {
+        if (use_hand_base_) {
+            graph.add(PriorFactor<Pose3>(
+                rod_->get_root_base_key(),
+                base_pose_mean_ * hand_base_offset_.inverse(),
+                base_pose_noise_));
+        } else {
+            graph.add(PriorFactor<Pose3>(rod_->get_pose_key(0), base_pose_mean_, base_pose_noise_));
+        }
     }
 
     // Priors for discs (using disc indices), start at 1, no force at base disc
@@ -551,13 +555,16 @@ NonlinearFactorGraph TendonFingerModel<N>::build_graph_kinematic() const
     // Base frame prior constraint. With the hand-base reparameterization the
     // node-0 pose is no longer a variable; anchor the hand base T_base such that
     // T_0 = T_base o offset = base_pose_mean_, i.e. T_base = base_pose_mean_ o offset^{-1}.
-    if (use_hand_base_) {
-        graph.add(PriorFactor<Pose3>(
-            rod_->get_root_base_key(),
-            base_pose_mean_ * hand_base_offset_.inverse(),
-            base_pose_noise_));
-    } else {
-        graph.add(PriorFactor<Pose3>(rod_->get_pose_key(0), base_pose_mean_, base_pose_noise_));
+    // Skipped when emit_base_prior_ is false (an owner anchors the shared base).
+    if (emit_base_prior_) {
+        if (use_hand_base_) {
+            graph.add(PriorFactor<Pose3>(
+                rod_->get_root_base_key(),
+                base_pose_mean_ * hand_base_offset_.inverse(),
+                base_pose_noise_));
+        } else {
+            graph.add(PriorFactor<Pose3>(rod_->get_pose_key(0), base_pose_mean_, base_pose_noise_));
+        }
     }
 
     // Priors for discs (using disc indices), start at 1, no force at base disc

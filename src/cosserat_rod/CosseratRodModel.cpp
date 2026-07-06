@@ -73,11 +73,14 @@ CosseratRodModel::CosseratRodModel (
 }
 
 
-void CosseratRodModel::set_root_reparameterization(const Pose3& offset) {
+void CosseratRodModel::set_root_reparameterization(const Pose3& offset,
+                                                   std::optional<Key> shared_key) {
     use_root_ = true;
     root_offset_ = offset;
     // 'H' for Hand base; namespaced by this rod's unique id like the other keys.
-    root_base_key_ = Symbol('H', 1000 * id_);
+    // A shared_key overrides this so several rods can reference one common base
+    // variable (e.g. all fingers of a hand sharing a floating wrist).
+    root_base_key_ = shared_key.value_or(Symbol('H', 1000 * id_));
 }
 
 
