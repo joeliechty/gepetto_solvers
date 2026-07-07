@@ -234,6 +234,59 @@ def get_five_finger_grasp_configs(object_center):
 # boundary. MCP / PIP / DIP total flexible lengths, largest at the base joint:
 _STANDARD_JOINT_LENGTHS = [0.010, 0.006, 0.004]  # MCP / PIP / DIP
 
+# # Fallback copy of the gepetto_core default hand (bundled parameters.scad),
+# # used when gepetto_core is not importable. Fingers: index, middle, ring, pinky.
+# # Only the first thumb is used (n_thumbs = 1). Lengths/origins in mm, angles in deg.
+# DEFAULT_HAND_DIMENSIONS = {
+#     "bl_finger": [[80, 38, 20, 20],
+#                   [82, 41, 20.5, 20.5],
+#                   [79, 38, 19, 19],
+#                   [74, 35, 17, 17]],
+#     "o_finger": [[0, 1.5, 0],
+#                  [0, 0, -12],
+#                  [0, 1, -24],
+#                  [0, 3.5, -34]],
+#     "a_finger": [[0, -10, 0],
+#                  [0, 3, 0],
+#                  [0, 16, 0],
+#                  [0, 30, 0]],
+#     "bl_thumb": [[25, 35, 25, 25]],
+#     "o_thumb": [[-3, 5.5, 15]],
+#     "a_thumb": [[0, -100, 0]],
+# }
+
+# FINGER_NAMES = ["index", "middle", "ring", "pinky"]
+
+
+# def load_hand_dimensions():
+#     """Return the hand morphology dict, preferring ``gepetto_core``.
+
+#     Tries ``gepetto_core.geometry.HandGeometry.default()`` and reads the
+#     per-digit bone lengths / origins / angles from it. Any import failure
+#     (notably ``dynamixel_sdk`` missing, which ``gepetto_core.__init__`` imports)
+#     falls back to :data:`DEFAULT_HAND_DIMENSIONS` so this works standalone.
+
+#     Returns a dict with the same keys as :data:`DEFAULT_HAND_DIMENSIONS`.
+#     """
+#     try:
+#         from gepetto_core.geometry import HandGeometry
+#         g = HandGeometry.default()
+#         dims = {
+#             "bl_finger": g.bl_finger,
+#             "o_finger": g.o_finger,
+#             "a_finger": g.a_finger,
+#             "bl_thumb": g.bl_thumb[:1],
+#             "o_thumb": g.o_thumb[:1],
+#             "a_thumb": g.a_thumb[:1],
+#         }
+#         print("[hand dims] loaded from gepetto_core HandGeometry.default()")
+#         return dims
+#     except Exception as exc:  # noqa: BLE001 - any import/parse failure -> fallback
+#         print(f"[hand dims] gepetto_core unavailable ({exc.__class__.__name__}: "
+#               f"{exc}); using DEFAULT_HAND_DIMENSIONS")
+#         return DEFAULT_HAND_DIMENSIONS
+
+
 # Fallback copy of the gepetto_core default hand (bundled parameters.scad),
 # used when gepetto_core is not importable. Fingers: index, middle, ring, pinky.
 # Only the first thumb is used (n_thumbs = 1). Lengths/origins in mm, angles in deg.
@@ -242,17 +295,21 @@ DEFAULT_HAND_DIMENSIONS = {
                   [82, 41, 20.5, 20.5],
                   [79, 38, 19, 19],
                   [74, 35, 17, 17]],
-    "o_finger": [[0, 1.5, 0],
-                 [0, 0, -12],
-                 [0, 1, -24],
-                 [0, 3.5, -34]],
-    "a_finger": [[0, -10, 0],
-                 [0, 3, 0],
-                 [0, 16, 0],
-                 [0, 30, 0]],
+    "o_finger": [[0, 1.5, 0], [0, 0, -12], [0, 1, -24], [0, 3.5, -34]],
+    "a_finger": [[0, -10, 0], [0, 3, 0], [0, 16, 0], [0, 30, 0]],
+    "jd_finger": [[8.75, 12.5, 7.5, 6.25, 5.0], 
+                  [14.0, 14.0, 8.4, 7.0, 5.6], 
+                  [8.75, 12.5, 7.5, 6.25, 5.0], 
+                  [7.7, 11.0, 6.6, 5.5, 4.4]],
+    "w_finger": [[10.5, 15.0, 12.0, 10.5, 10.5],
+                 [11.2, 16.0, 12.8, 11.2, 11.2],
+                 [10.5, 15.0, 12.0, 10.5, 10.5],
+                 [9.1, 13.0, 10.4, 9.1, 9.1]],
     "bl_thumb": [[25, 35, 25, 25]],
     "o_thumb": [[-3, 5.5, 15]],
     "a_thumb": [[0, -100, 0]],
+    "jd_thumb": [[11.2, 16.0, 9.6, 8.0, 6.4]],
+    "w_thumb": [[14.0, 20.0, 16.0, 14.0, 14.0]]
 }
 
 FINGER_NAMES = ["index", "middle", "ring", "pinky"]
@@ -275,9 +332,13 @@ def load_hand_dimensions():
             "bl_finger": g.bl_finger,
             "o_finger": g.o_finger,
             "a_finger": g.a_finger,
+            "jd_finger": g.jd_finger,
+            "w_finger": g.w_finger,
             "bl_thumb": g.bl_thumb[:1],
             "o_thumb": g.o_thumb[:1],
             "a_thumb": g.a_thumb[:1],
+            "jd_thumb": g.jd_thumb[:1],
+            "w_thumb": g.w_thumb[:1],
         }
         print("[hand dims] loaded from gepetto_core HandGeometry.default()")
         return dims
