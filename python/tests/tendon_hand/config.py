@@ -197,7 +197,10 @@ def get_five_finger_grasp_configs(object_center):
     # pushes the base off the isometry circle (further from the object), so it is
     # left at zero by default; raise it only alongside a solve-in-the-loop tune.
     thumb_opposition = np.deg2rad(130.0)
-    thumb_pronation = np.deg2rad(30.0)
+    # Sign is negative to match the 180-deg CAD tendon-routing flip: the x=0 mirror
+    # of the old +30 deg pronation is -30 deg, keeping the thumb pad turned toward the
+    # finger pads now that the flexor curls to the opposite side.
+    thumb_pronation = np.deg2rad(-30.0)
     thumb_cmc_offset = np.array([0.0, 0.0, 0.0])
 
     roll = np.eye(4)
@@ -224,10 +227,12 @@ def get_five_finger_grasp_configs(object_center):
 # and fall back to the hard-coded ``DEFAULT_HAND_DIMENSIONS`` below so crest-sparse
 # still runs standalone.
 
-# Standard joint lengths (m) interleaved between the four physical bone lengths to
-# make the 7-segment (4 bone + 3 joint) spec the 6-tendon routing requires. Taken
-# from ``_STANDARD_FINGER_SPEC`` (MCP / PIP / DIP).
-_STANDARD_JOINT_LENGTHS = [0.01, 0.005, 0.005]
+# Each joint's flexible segment eats half its length from each adjacent bone
+# end, so the raw CAD/physical bone length isn't also counted as rigid right up
+# to the joint center. This keeps total digit length (sum of raw bone lengths)
+# unchanged -- length just moves from "rigid" to "flexible" at each joint
+# boundary. MCP / PIP / DIP total flexible lengths, largest at the base joint:
+_STANDARD_JOINT_LENGTHS = [0.010, 0.006, 0.004]  # MCP / PIP / DIP
 
 # Fallback copy of the gepetto_core default hand (bundled parameters.scad),
 # used when gepetto_core is not importable. Fingers: index, middle, ring, pinky.
@@ -287,11 +292,25 @@ def bone_joint_spec_from_bones(bone_lengths_mm):
 
     Produces the 7-segment ``[(type, length_m), ...]`` spec (4 bones + 3 joints)
     that ``get_6tendon_config`` requires. ``bone_lengths_mm`` must have length 4.
+
+    Each raw bone length is the full rigid CAD length between joint centers;
+    half of each bordering joint's length (see ``_STANDARD_JOINT_LENGTHS``) is
+    carved off the adjacent bone ends into that joint's flexible segment, so
+    the metacarpal and distal phalanx (one bordering joint each) lose half of
+    that one joint, and the proximal/middle phalanges (a joint at each end)
+    lose half of each of their two bordering joints.
     """
-    bones = [b / 1000.0 for b in bone_lengths_mm]
-    if len(bones) != 4:
+    if len(bone_lengths_mm) != 4:
         raise ValueError(
-            f"expected 4 bone lengths, got {len(bones)}: {bone_lengths_mm}")
+            f"expected 4 bone lengths, got {len(bone_lengths_mm)}: {bone_lengths_mm}")
+    mcp_e, pip_e, dip_e = (j * 1000.0 / 2.0 for j in _STANDARD_JOINT_LENGTHS)
+    adjusted_mm = [
+        bone_lengths_mm[0] - mcp_e,
+        bone_lengths_mm[1] - mcp_e - pip_e,
+        bone_lengths_mm[2] - pip_e - dip_e,
+        bone_lengths_mm[3] - dip_e,
+    ]
+    bones = [b / 1000.0 for b in adjusted_mm]
     j = _STANDARD_JOINT_LENGTHS
     return [
         ("bone", bones[0]),   # metacarpal
@@ -304,24 +323,72 @@ def bone_joint_spec_from_bones(bone_lengths_mm):
     ]
 
 
-def finger_base_offset(o_mm, a_deg):
-    """SE(3) ``hand_base_offset`` placing a digit on the palm.
-
-    ``o_mm`` is the digit's (x, y, z) base origin in mm; ``a_deg`` is its
-    (rx, ry, rz) base rotation in degrees (gepetto_core ``o_finger`` / ``a_finger``
-    convention). The offset is ``T(o) @ R(a) @ default_finger_base_pose()`` so the
-    finger keeps the legacy rod-growth-along-+y orientation, then is repositioned
-    and reoriented on the palm.
-
-    NOTE: the exact mapping from gepetto's palm frame to the rod frame here is a
-    first-pass best guess (rotation composed Rz@Ry@Rx); expect to tune it visually.
+def finger_base_offset(o_mm, a_deg, a_print_deg=45.0):
     """
+    SE(3) `hand_base_offset` placing a digit on the palm.
+    Restores the full 3D rotation and the a_print sandwich to match the physical CAD,
+    with an inverted print angle to cup the fingers inwards.
+    """
+    # 1. Extract local digit angles
     rx, ry, rz = (np.deg2rad(v) for v in a_deg)
-    R = _Rz(rz) @ _Ry(ry) @ _Rx(rx)
+    
+    # Invert the print angle to account for the solver's coordinate frame
+    aprint = np.deg2rad(-a_print_deg)
+    
+    # 2. Map local CAD rotations to Solver axes
+    R_cad_z = _Rz(rz)
+    R_cad_y = _Rx(-ry)
+    R_cad_x = _Ry(rx)
+    R_local = R_cad_z @ R_cad_y @ R_cad_x
+    
+    # 3. Construct the OpenSCAD 'a_print' sandwich (conjugating through Z)
+    R_print = _Rz(aprint)
+    R_print_inv = _Rz(-aprint)
+    
+    # 4. Apply the transformation
     palm = np.eye(4)
-    palm[:3, :3] = R
+    palm[:3, :3] = R_print @ R_local @ R_print_inv
     palm[:3, 3] = np.asarray(o_mm, dtype=float) / 1000.0
+    
     return palm @ default_finger_base_pose()
+
+# def finger_base_offset(o_mm, a_deg):
+#     """SE(3) ``hand_base_offset`` placing a digit on the palm.
+
+#     ``o_mm`` is the digit's (x, y, z) base origin in mm and ``a_deg`` is its
+#     (rx, ry, rz) base rotation in degrees, in the gepetto_core /
+#     ``parameters.scad`` palm convention (``o_finger`` / ``a_finger``). In that
+#     CAD frame a finger grows along +X, the knuckle row is spread along Z (the
+#     ``o_finger`` z entries 0, -12, -24, -34) and ``a_finger``'s ``ry`` is the
+#     side-to-side splay about the growth axis.
+
+#     ``default_finger_base_pose()`` maps the rod's local frame into the port
+#     world frame so a zero-angle finger grows along world +Y, with the knuckle
+#     row along world Z (``o_mm`` is used directly as the world offset -- the CAD
+#     palm and port world share axes here). The splay must therefore be applied
+#     as a rotation about the world **X** axis: the axis perpendicular to both
+#     the growth (Y) and the knuckle-row (Z) directions, so the fingers tilt
+#     apart *within* the flat plane of the hand rather than stacking out of it.
+
+#     Two earlier attempts got this wrong: applying ``ry`` about the growth axis
+#     (Y) only spun each finger about its own shaft (no visible splay), and
+#     conjugating it through Z (the ``a_print`` sandwich from ``hand.scad``)
+#     both flipped the splay inward *and* skewed the knuckle row out of plane so
+#     the fingers looked stacked. Only the world-X splay below keeps the bases in
+#     a flat row while fanning the tips apart.
+
+#     The splay sign is ``-ry``: with the ``a_finger`` values increasing
+#     index->pinky (-10, 3, 16, 30), the index tip tilts toward +Z and the pinky
+#     tip toward -Z -- away from each other, matching a real hand's fan. Only
+#     ``ry`` drives the splay (every reference digit, thumb included, specifies
+#     only ``ry``); a zero-angle digit reduces to ``default_finger_base_pose()``
+#     translated to ``o_mm``, i.e. the legacy single-finger mount.
+#     """
+#     _, ry, _ = (np.deg2rad(v) for v in a_deg)
+#     palm = np.eye(4)
+#     palm[:3, :3] = _Rx(-ry)
+#     palm[:3, 3] = np.asarray(o_mm, dtype=float) / 1000.0
+#     return palm @ default_finger_base_pose()
 
 
 def get_default_hand_configs(dims=None):

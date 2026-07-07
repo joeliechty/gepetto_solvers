@@ -331,6 +331,13 @@ def get_6tendon_per_disc_input(bone_joint_spec, disc_positions, num_discs,
             angles.append(angle)
         hole_angles.append(angles)
 
+    # Rotate the whole tendon set 180 deg about the finger long axis so the active
+    # flexor (index 5) sits on the palmar/curl side, matching the gepetto_core CAD
+    # routing convention. Adding pi to every hole angle maps (x,y)->(-x,-y) at each
+    # disc; NaN (terminated) holes are left untouched.
+    hole_angles = [[a if np.isnan(a) else a + np.pi for a in row]
+                   for row in hole_angles]
+
     # Expand to per-disc radii (only if per-tendon radii are specified)
     hole_radii = []
     if tendon_routing_radii is not None:

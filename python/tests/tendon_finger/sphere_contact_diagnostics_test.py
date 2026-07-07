@@ -38,7 +38,9 @@ def _make_3d_plotter(config, sphere_center, sphere_radius, tip_radius):
 def _build_solver(record_iterations: bool, sample_interval: int):
     config = get_6tendon_config()
 
-    sphere_center = np.array([6.02088876e-02, 3.77734425e-02, 0.0])
+    # Mirrored across x=0 (X negated): the 180-deg CAD tendon-routing flip curls the
+    # flexor toward world -X, so the target sphere moves to the -X side too.
+    sphere_center = np.array([-6.02088876e-02, 3.77734425e-02, 0.0])
     sphere_radius = 0.025
     tip_radius = 0.003
 

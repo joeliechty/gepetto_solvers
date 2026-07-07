@@ -28,7 +28,9 @@ import crest_sparse
 from .config import get_6tendon_config
 
 
-SPHERE_CENTER = np.array([6.02088876e-02, 3.77734425e-02, 0.0])
+# Mirrored across x=0 (X negated): the 180-deg CAD tendon-routing flip curls the
+# flexor toward world -X, so the target sphere moves to the -X side too.
+SPHERE_CENTER = np.array([-6.02088876e-02, 3.77734425e-02, 0.0])
 SPHERE_RADIUS = 0.025
 TIP_RADIUS = 0.003
 

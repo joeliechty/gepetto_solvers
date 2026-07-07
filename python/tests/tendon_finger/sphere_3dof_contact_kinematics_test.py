@@ -17,8 +17,10 @@ def main():
     num_nodes = config.num_discs + (config.num_discs - 1) * config.num_between_nodes
     tip_node_index = num_nodes - 1
 
-    # Sphere primitive at the p2p goal position used in point_to_point_planning.py.
-    sphere_center = np.array([6.02088876e-02, 3.77734425e-02, 0.0])
+    # Sphere primitive at the p2p goal position used in point_to_point_planning.py,
+    # mirrored across x=0 (X negated): the 180-deg CAD tendon-routing flip curls the
+    # flexor toward world -X, so the target sphere moves to the -X side too.
+    sphere_center = np.array([-6.02088876e-02, 3.77734425e-02, 0.0])
     sphere_radius = 0.025
     tip_radius = 0.003
 

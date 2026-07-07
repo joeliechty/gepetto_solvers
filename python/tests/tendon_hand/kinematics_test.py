@@ -46,11 +46,12 @@ def _wrist_pose(i):
 
     c, s = np.cos(tilt), np.sin(tilt)
     T = np.eye(4)
-    # Tilt about the world X axis.
-    T[:3, :3] = np.array([[1.0, 0.0, 0.0],
-                          [0.0, c, -s],
-                          [0.0, s,  c]])
-    T[:3, 3] = [tx, 0.0, tz]
+
+    # # Tilt about the world X axis.
+    # T[:3, :3] = np.array([[1.0, 0.0, 0.0],
+    #                       [0.0, c, -s],
+    #                       [0.0, s,  c]])
+    # T[:3, 3] = [tx, 0.0, tz]
     return T
 
 
@@ -109,8 +110,7 @@ def main():
         flexors = []
         for phase in finger_phases:
             tensions_mean = np.full(num_tendons, background_tension)
-            flexor = background_tension + flexor_amplitude * (
-                np.cos(0.01 * i - np.pi + phase) + 1.0)
+            flexor = background_tension + 4.0#flexor_amplitude * (np.cos(0.01 * i - np.pi + phase) + 1.0)
             tensions_mean[5] = flexor
             flexors.append(flexor)
             all_tensions.append(

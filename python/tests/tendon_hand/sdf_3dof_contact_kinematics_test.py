@@ -10,10 +10,12 @@ from ..tendon_finger.config import get_6tendon_config
 
 
 # Object center, shared by all primitives: the p2p goal position used in
-# point_to_point_planning.py. The SDF lives at the VDB local origin (see the
-# _objects/make_*.py generators); we place it in the world by translating the
-# object pose to this center.
-OBJECT_CENTER = np.array([6.02088876e-02, 3.77734425e-02, 0.0])
+# point_to_point_planning.py, mirrored across x=0 (X negated). The 6-tendon
+# routing was rotated 180 deg about the finger axis to match the gepetto_core CAD
+# convention, which flips the flexor curl from world +X to -X; the object moves
+# with it. The SDF lives at the VDB local origin (see the _objects/make_*.py
+# generators); we place it in the world by translating the object pose to this center.
+OBJECT_CENTER = np.array([-6.02088876e-02, 3.77734425e-02, 0.0])
 
 
 def Rx(theta):
