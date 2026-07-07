@@ -348,31 +348,32 @@ def load_hand_dimensions():
         return DEFAULT_HAND_DIMENSIONS
 
 
-def bone_joint_spec_from_bones(bone_lengths_mm):
+def bone_joint_spec_from_bones(bone_lengths_mm, joint_lengths_mm=None):
     """Interleave 4 physical bone lengths (mm) with the 3 standard joint lengths.
-
-    Produces the 7-segment ``[(type, length_m), ...]`` spec (4 bones + 3 joints)
-    that ``get_6tendon_config`` requires. ``bone_lengths_mm`` must have length 4.
-
-    Each raw bone length is the full rigid CAD length between joint centers;
-    half of each bordering joint's length (see ``_STANDARD_JOINT_LENGTHS``) is
-    carved off the adjacent bone ends into that joint's flexible segment, so
-    the metacarpal and distal phalanx (one bordering joint each) lose half of
-    that one joint, and the proximal/middle phalanges (a joint at each end)
-    lose half of each of their two bordering joints.
-    """
+    Updated to accept dynamic CAD joint dimensions."""
     if len(bone_lengths_mm) != 4:
         raise ValueError(
             f"expected 4 bone lengths, got {len(bone_lengths_mm)}: {bone_lengths_mm}")
-    mcp_e, pip_e, dip_e = (j * 1000.0 / 2.0 for j in _STANDARD_JOINT_LENGTHS)
+
+    # Use CAD joint diameters if provided, otherwise fallback to standard
+    if joint_lengths_mm is not None and len(joint_lengths_mm) >= 3:
+        # Assuming the 3 middle elements of the jd array correspond to the MCP, PIP, DIP joints
+        j_mm = joint_lengths_mm[1:4]
+    else:
+        j_mm = [j * 1000.0 for j in _STANDARD_JOINT_LENGTHS]
+
+    mcp_e, pip_e, dip_e = (j / 2.0 for j in j_mm)
+
     adjusted_mm = [
         bone_lengths_mm[0] - mcp_e,
         bone_lengths_mm[1] - mcp_e - pip_e,
         bone_lengths_mm[2] - pip_e - dip_e,
         bone_lengths_mm[3] - dip_e,
     ]
+
     bones = [b / 1000.0 for b in adjusted_mm]
-    j = _STANDARD_JOINT_LENGTHS
+    j = [x / 1000.0 for x in j_mm]
+
     return [
         ("bone", bones[0]),   # metacarpal
         ("joint", j[0]),      # MCP
@@ -382,6 +383,41 @@ def bone_joint_spec_from_bones(bone_lengths_mm):
         ("joint", j[2]),      # DIP
         ("bone", bones[3]),   # distal phalanx
     ]
+
+# def bone_joint_spec_from_bones(bone_lengths_mm):
+#     """Interleave 4 physical bone lengths (mm) with the 3 standard joint lengths.
+
+#     Produces the 7-segment ``[(type, length_m), ...]`` spec (4 bones + 3 joints)
+#     that ``get_6tendon_config`` requires. ``bone_lengths_mm`` must have length 4.
+
+#     Each raw bone length is the full rigid CAD length between joint centers;
+#     half of each bordering joint's length (see ``_STANDARD_JOINT_LENGTHS``) is
+#     carved off the adjacent bone ends into that joint's flexible segment, so
+#     the metacarpal and distal phalanx (one bordering joint each) lose half of
+#     that one joint, and the proximal/middle phalanges (a joint at each end)
+#     lose half of each of their two bordering joints.
+#     """
+#     if len(bone_lengths_mm) != 4:
+#         raise ValueError(
+#             f"expected 4 bone lengths, got {len(bone_lengths_mm)}: {bone_lengths_mm}")
+#     mcp_e, pip_e, dip_e = (j * 1000.0 / 2.0 for j in _STANDARD_JOINT_LENGTHS)
+#     adjusted_mm = [
+#         bone_lengths_mm[0] - mcp_e,
+#         bone_lengths_mm[1] - mcp_e - pip_e,
+#         bone_lengths_mm[2] - pip_e - dip_e,
+#         bone_lengths_mm[3] - dip_e,
+#     ]
+#     bones = [b / 1000.0 for b in adjusted_mm]
+#     j = _STANDARD_JOINT_LENGTHS
+#     return [
+#         ("bone", bones[0]),   # metacarpal
+#         ("joint", j[0]),      # MCP
+#         ("bone", bones[1]),   # proximal phalanx
+#         ("joint", j[1]),      # PIP
+#         ("bone", bones[2]),   # middle phalanx
+#         ("joint", j[2]),      # DIP
+#         ("bone", bones[3]),   # distal phalanx
+#     ]
 
 
 def finger_base_offset(o_mm, a_deg, a_print_deg=45.0):
@@ -452,29 +488,66 @@ def finger_base_offset(o_mm, a_deg, a_print_deg=45.0):
 #     return palm @ default_finger_base_pose()
 
 
-def get_default_hand_configs(dims=None):
-    """Build ``[(name, cfg), ...]`` for a 4-finger + thumb hand from morphology.
+# def get_default_hand_configs(dims=None):
+#     """Build ``[(name, cfg), ...]`` for a 4-finger + thumb hand from morphology.
 
-    Each digit is a standard 6-tendon finger sized from its physical bone lengths
-    and placed via ``hand_base_offset`` from its palm origin/angle. ``dims`` defaults
-    to :func:`load_hand_dimensions` (gepetto_core, else fallback). No contact is
-    attached, so the caller gets a pure-kinematics hand.
-    """
+#     Each digit is a standard 6-tendon finger sized from its physical bone lengths
+#     and placed via ``hand_base_offset`` from its palm origin/angle. ``dims`` defaults
+#     to :func:`load_hand_dimensions` (gepetto_core, else fallback). No contact is
+#     attached, so the caller gets a pure-kinematics hand.
+#     """
+#     if dims is None:
+#         dims = load_hand_dimensions()
+
+#     configs = []
+#     for i, name in enumerate(FINGER_NAMES):
+#         cfg = get_6tendon_config(
+#             bone_joint_spec=bone_joint_spec_from_bones(dims["bl_finger"][i]))
+#         cfg.hand_base_offset = finger_base_offset(
+#             dims["o_finger"][i], dims["a_finger"][i])
+#         configs.append((name, cfg))
+
+#     cfg_thumb = get_6tendon_config(
+#         bone_joint_spec=bone_joint_spec_from_bones(dims["bl_thumb"][0]))
+#     cfg_thumb.hand_base_offset = finger_base_offset(
+#         dims["o_thumb"][0], dims["a_thumb"][0])
+#     configs.append(("thumb", cfg_thumb))
+#
+#     return configs
+
+def get_default_hand_configs(dims=None):
     if dims is None:
         dims = load_hand_dimensions()
-
+        
     configs = []
     for i, name in enumerate(FINGER_NAMES):
-        cfg = get_6tendon_config(
-            bone_joint_spec=bone_joint_spec_from_bones(dims["bl_finger"][i]))
-        cfg.hand_base_offset = finger_base_offset(
-            dims["o_finger"][i], dims["a_finger"][i])
+        spec = bone_joint_spec_from_bones(
+            dims["bl_finger"][i], 
+            joint_lengths_mm=dims["jd_finger"][i]
+        )
+        cfg = get_6tendon_config(bone_joint_spec=spec)
+        cfg.hand_base_offset = finger_base_offset(dims["o_finger"][i], dims["a_finger"][i])
         configs.append((name, cfg))
-
-    cfg_thumb = get_6tendon_config(
-        bone_joint_spec=bone_joint_spec_from_bones(dims["bl_thumb"][0]))
-    cfg_thumb.hand_base_offset = finger_base_offset(
-        dims["o_thumb"][0], dims["a_thumb"][0])
+        
+    # Thumb configuration
+    spec_thumb = bone_joint_spec_from_bones(
+        dims["bl_thumb"][0],
+        joint_lengths_mm=dims["jd_thumb"][0]
+    )
+    cfg_thumb = get_6tendon_config(bone_joint_spec=spec_thumb)
+    cfg_thumb.hand_base_offset = finger_base_offset(dims["o_thumb"][0], dims["a_thumb"][0])
+    
     configs.append(("thumb", cfg_thumb))
-
     return configs
+
+def get_tip_radii(dims=None):
+    """Returns a dictionary mapping digit names to their CAD-defined tip radii in meters."""
+    if dims is None:
+        dims = load_hand_dimensions()
+        
+    radii = {}
+    for i, name in enumerate(FINGER_NAMES):
+        radii[name] = (dims["w_finger"][i][-1] / 2.0) / 1000.0
+        
+    radii["thumb"] = (dims["w_thumb"][0][-1] / 2.0) / 1000.0
+    return radii
