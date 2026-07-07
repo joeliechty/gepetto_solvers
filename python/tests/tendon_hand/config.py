@@ -29,6 +29,13 @@ def _Rx(theta):
                      [0.0, s,  c]])
 
 
+def _Ry(theta):
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, 0.0, s],
+                     [0.0, 1.0, 0.0],
+                     [-s, 0.0, c]])
+
+
 def default_base_rotation():
     """Rx(-pi/2) @ Rz(pi): maps local +z (rod growth) to world +y.
 
@@ -200,6 +207,146 @@ def get_five_finger_grasp_configs(object_center):
     cfg_thumb = get_6tendon_config(bone_joint_spec=_scaled_finger_spec(0.85))
     cfg_thumb.hand_base_offset = (
         cmc @ rotate_about_z_through(center, thumb_opposition) @ base @ roll)
+    configs.append(("thumb", cfg_thumb))
+
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# Anthropomorphic hand from physical (gepetto_core) dimensions
+# ---------------------------------------------------------------------------
+#
+# The four fingers + opposable thumb above are laid out around a grasp object
+# purely for a contact demo. The helpers below instead build a hand from the
+# *physical morphology* of a printed hand: per-digit bone lengths, palm origins,
+# and base angles. These come from ``gepetto_core``'s default hand configuration
+# (parsed from its bundled ``parameters.scad``) when that package is installed,
+# and fall back to the hard-coded ``DEFAULT_HAND_DIMENSIONS`` below so crest-sparse
+# still runs standalone.
+
+# Standard joint lengths (m) interleaved between the four physical bone lengths to
+# make the 7-segment (4 bone + 3 joint) spec the 6-tendon routing requires. Taken
+# from ``_STANDARD_FINGER_SPEC`` (MCP / PIP / DIP).
+_STANDARD_JOINT_LENGTHS = [0.01, 0.005, 0.005]
+
+# Fallback copy of the gepetto_core default hand (bundled parameters.scad),
+# used when gepetto_core is not importable. Fingers: index, middle, ring, pinky.
+# Only the first thumb is used (n_thumbs = 1). Lengths/origins in mm, angles in deg.
+DEFAULT_HAND_DIMENSIONS = {
+    "bl_finger": [[80, 38, 20, 20],
+                  [82, 41, 20.5, 20.5],
+                  [79, 38, 19, 19],
+                  [74, 35, 17, 17]],
+    "o_finger": [[0, 1.5, 0],
+                 [0, 0, -12],
+                 [0, 1, -24],
+                 [0, 3.5, -34]],
+    "a_finger": [[0, -10, 0],
+                 [0, 3, 0],
+                 [0, 16, 0],
+                 [0, 30, 0]],
+    "bl_thumb": [[25, 35, 25, 25]],
+    "o_thumb": [[-3, 5.5, 15]],
+    "a_thumb": [[0, -100, 0]],
+}
+
+FINGER_NAMES = ["index", "middle", "ring", "pinky"]
+
+
+def load_hand_dimensions():
+    """Return the hand morphology dict, preferring ``gepetto_core``.
+
+    Tries ``gepetto_core.geometry.HandGeometry.default()`` and reads the
+    per-digit bone lengths / origins / angles from it. Any import failure
+    (notably ``dynamixel_sdk`` missing, which ``gepetto_core.__init__`` imports)
+    falls back to :data:`DEFAULT_HAND_DIMENSIONS` so this works standalone.
+
+    Returns a dict with the same keys as :data:`DEFAULT_HAND_DIMENSIONS`.
+    """
+    try:
+        from gepetto_core.geometry import HandGeometry
+        g = HandGeometry.default()
+        dims = {
+            "bl_finger": g.bl_finger,
+            "o_finger": g.o_finger,
+            "a_finger": g.a_finger,
+            "bl_thumb": g.bl_thumb[:1],
+            "o_thumb": g.o_thumb[:1],
+            "a_thumb": g.a_thumb[:1],
+        }
+        print("[hand dims] loaded from gepetto_core HandGeometry.default()")
+        return dims
+    except Exception as exc:  # noqa: BLE001 - any import/parse failure -> fallback
+        print(f"[hand dims] gepetto_core unavailable ({exc.__class__.__name__}: "
+              f"{exc}); using DEFAULT_HAND_DIMENSIONS")
+        return DEFAULT_HAND_DIMENSIONS
+
+
+def bone_joint_spec_from_bones(bone_lengths_mm):
+    """Interleave 4 physical bone lengths (mm) with the 3 standard joint lengths.
+
+    Produces the 7-segment ``[(type, length_m), ...]`` spec (4 bones + 3 joints)
+    that ``get_6tendon_config`` requires. ``bone_lengths_mm`` must have length 4.
+    """
+    bones = [b / 1000.0 for b in bone_lengths_mm]
+    if len(bones) != 4:
+        raise ValueError(
+            f"expected 4 bone lengths, got {len(bones)}: {bone_lengths_mm}")
+    j = _STANDARD_JOINT_LENGTHS
+    return [
+        ("bone", bones[0]),   # metacarpal
+        ("joint", j[0]),      # MCP
+        ("bone", bones[1]),   # proximal phalanx
+        ("joint", j[1]),      # PIP
+        ("bone", bones[2]),   # middle phalanx
+        ("joint", j[2]),      # DIP
+        ("bone", bones[3]),   # distal phalanx
+    ]
+
+
+def finger_base_offset(o_mm, a_deg):
+    """SE(3) ``hand_base_offset`` placing a digit on the palm.
+
+    ``o_mm`` is the digit's (x, y, z) base origin in mm; ``a_deg`` is its
+    (rx, ry, rz) base rotation in degrees (gepetto_core ``o_finger`` / ``a_finger``
+    convention). The offset is ``T(o) @ R(a) @ default_finger_base_pose()`` so the
+    finger keeps the legacy rod-growth-along-+y orientation, then is repositioned
+    and reoriented on the palm.
+
+    NOTE: the exact mapping from gepetto's palm frame to the rod frame here is a
+    first-pass best guess (rotation composed Rz@Ry@Rx); expect to tune it visually.
+    """
+    rx, ry, rz = (np.deg2rad(v) for v in a_deg)
+    R = _Rz(rz) @ _Ry(ry) @ _Rx(rx)
+    palm = np.eye(4)
+    palm[:3, :3] = R
+    palm[:3, 3] = np.asarray(o_mm, dtype=float) / 1000.0
+    return palm @ default_finger_base_pose()
+
+
+def get_default_hand_configs(dims=None):
+    """Build ``[(name, cfg), ...]`` for a 4-finger + thumb hand from morphology.
+
+    Each digit is a standard 6-tendon finger sized from its physical bone lengths
+    and placed via ``hand_base_offset`` from its palm origin/angle. ``dims`` defaults
+    to :func:`load_hand_dimensions` (gepetto_core, else fallback). No contact is
+    attached, so the caller gets a pure-kinematics hand.
+    """
+    if dims is None:
+        dims = load_hand_dimensions()
+
+    configs = []
+    for i, name in enumerate(FINGER_NAMES):
+        cfg = get_6tendon_config(
+            bone_joint_spec=bone_joint_spec_from_bones(dims["bl_finger"][i]))
+        cfg.hand_base_offset = finger_base_offset(
+            dims["o_finger"][i], dims["a_finger"][i])
+        configs.append((name, cfg))
+
+    cfg_thumb = get_6tendon_config(
+        bone_joint_spec=bone_joint_spec_from_bones(dims["bl_thumb"][0]))
+    cfg_thumb.hand_base_offset = finger_base_offset(
+        dims["o_thumb"][0], dims["a_thumb"][0])
     configs.append(("thumb", cfg_thumb))
 
     return configs
