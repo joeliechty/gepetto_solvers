@@ -33,6 +33,11 @@ void bind_tendon_hand(py::module& m) {
              py::arg("finger_configs"), py::arg("config"))
         .def("solve", &TendonHandSolver::solve,
              py::arg("tensions"), py::arg("tip_wrenches"))
+        .def("set_wrist_pose", &TendonHandSolver::set_wrist_pose,
+             py::arg("wrist_pose"),
+             "Re-aim the shared wrist prior between solves (4x4, world frame) "
+             "without rebuilding the solver. solve() then warm-starts from the "
+             "previous solution instead of cold-starting from a straight hand.")
         .def("num_fingers", &TendonHandSolver::num_fingers)
         .def("get_factor_error_summary", &TendonHandSolver::get_factor_error_summary);
 }

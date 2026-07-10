@@ -55,6 +55,18 @@ public:
     // exactly once, plus the contact object pose and per-finger witness seeds.
     gtsam::Values get_initial_values() const;
 
+    // Re-aim the shared wrist prior at a new pose *without* rebuilding the model.
+    // Only the wrist-prior mean depends on wrist_pose_ (the finger offsets and
+    // the root reparameterization factors are anchored to the shared wrist key,
+    // independent of its target), so updating it here is all that build_graph()
+    // needs to command a new wrist pose. Intended for warm-started sweeps: keep
+    // one solver instance, call set_wrist_pose() + solve() each step, and the
+    // solve seeds from the previous solution instead of a straight-hand cold
+    // start. Does NOT re-seed get_initial_values() (which still reflects the
+    // construction-time wrist), so the first solve after construction is the
+    // only cold one.
+    void set_wrist_pose(const gtsam::Pose3& wrist_pose) { wrist_pose_ = wrist_pose; }
+
     TendonHandMarginals get_marginals(
         const gtsam::Values& values,
         const gtsam::Marginals& marginals) const;

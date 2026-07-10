@@ -10,17 +10,13 @@ Finger morphology (bone lengths, palm origins/angles) comes from the
 falls back to hard-coded ``DEFAULT_HAND_DIMENSIONS`` otherwise, so this runs
 standalone. No contact is attached -> a pure-kinematics solve driven by tensions.
 
-The wrist prior mean (``TendonHandSolverConfig.wrist_pose``) is baked into the
-solver at construction, so we rebuild the solver each frame to command a new
-wrist pose while keeping a tight prior (the whole hand rigidly follows it).
-
-Because the solver is rebuilt each frame it *cold-starts* from a straight hand
-(there is no warm-start / set-initial-values entry point on the pybound
-``TendonHandSolver``), so each frame is a full independent solve. We keep the
-flexor tension range moderate and raise ``base.max_iterations`` so every frame
-converges; expect a few frames-per-second (higher flexor tension = more curl =
-slower). A warm-started, smoother version would need a small C++ API addition to
-seed the solver from the previous solution.
+The wrist prior mean starts at ``TendonHandSolverConfig.wrist_pose`` but is
+re-commanded each frame through ``solver.set_wrist_pose(T)``, which re-aims the
+shared wrist prior *without* rebuilding the solver. Because the solver retains
+its ``values_`` across ``solve()`` calls, each frame **warm-starts** from the
+previous solution rather than cold-starting from a straight hand — only the
+first solve pays the cold-start cost, and every subsequent frame is a small
+nudge that converges in a handful of iterations even at high flexor tension.
 
 Run (from the ``python/`` directory):
     python -m tests.tendon_hand.kinematics_test
@@ -67,10 +63,13 @@ def main():
 
     hand_config = crest_sparse.TendonHandSolverConfig()
     hand_config.base.linear_solver_type = "MULTIFRONTAL_QR"
-    # Cold-start every frame (see module docstring) needs headroom to converge a
-    # curled finger from straight.
+    # Only the first frame is a cold start (straight hand -> curled at full
+    # tension); every frame after warm-starts from the previous solution, so this
+    # headroom is really only needed once.
     hand_config.base.max_iterations = 500
-    hand_config.wrist_pose = np.eye(4)
+    # Start the wrist prior at the frame-0 commanded pose; subsequent frames
+    # re-aim it via solver.set_wrist_pose() without rebuilding.
+    hand_config.wrist_pose = _wrist_pose(0)
     # Tight prior: the wrist rigidly follows the commanded pose.
     hand_config.sigma_wrist_pos = 1e-4
     hand_config.sigma_wrist_rot = 1e-3
@@ -97,20 +96,25 @@ def main():
     flexor_amplitude = 0.75  # peak flexor ~= background + 2*amplitude = 2.0 N
     finger_phases = np.linspace(0.0, np.pi, len(configs))
 
+    # Build the solver ONCE. Rebuilding each frame would discard the retained
+    # solution and force a straight-hand cold start every time; instead we keep
+    # this instance and re-command the wrist each frame (warm-started sweep).
+    solver = crest_sparse.TendonHandSolver(configs, hand_config)
+
     start_time = time.time()
     num_iters = 10000
 
     for i in range(num_iters):
-        # --- Command the shared wrist pose (rebuild solver so it takes effect) ---
-        hand_config.wrist_pose = _wrist_pose(i)
-        solver = crest_sparse.TendonHandSolver(configs, hand_config)
+        # --- Command the shared wrist pose (warm-start; no solver rebuild) ---
+        wrist_pose = _wrist_pose(i)
+        solver.set_wrist_pose(wrist_pose)
 
         # --- Per-finger tendon tensions (staggered flexor sweep) ---
         all_tensions = []
         flexors = []
         for phase in finger_phases:
             tensions_mean = np.full(num_tendons, background_tension)
-            flexor = background_tension #+ flexor_amplitude * (np.cos(0.01 * i - np.pi + phase) + 1.0)
+            flexor = background_tension + flexor_amplitude * (np.cos(0.01 * i - np.pi + phase) + 1.0)
             tensions_mean[5] = flexor
             flexors.append(flexor)
             all_tensions.append(
@@ -134,7 +138,7 @@ def main():
             print(f"Iteration {i}/{num_iters} | iters={solution.meta.iterations} "
                   f"err={solution.meta.error:.3g}")
             print(f"  Flexor tensions: {np.round(flexors, 2)}")
-            print(f"  Wrist pos: {hand_config.wrist_pose[:3, 3]}")
+            print(f"  Wrist pos: {wrist_pose[:3, 3]}")
             print(f"  {finger_names[0]} tip pos: {tip[:3, 3]}")
 
     end_time = time.time()

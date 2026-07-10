@@ -62,6 +62,12 @@ struct TendonFingerSolverConfig{
     // If empty, discs are uniformly spaced.
     std::vector<double> disc_positions_normalized;
 
+    // Radius (m) of the fingertip contact sphere, from the digit's CAD tip
+    // width. Carried on the config so it travels with the finger; used to
+    // populate the contact node radius (SpherePrimitiveContactConfig::
+    // finger_node_radius / EnvironmentConfig::contact_node_radius). 0 => unset.
+    double tip_radius = 0.0;
+
     double sigma_twist_rot;
     double sigma_twist_pos;
     double sigma_stress_force;

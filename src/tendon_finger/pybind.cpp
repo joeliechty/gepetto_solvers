@@ -24,6 +24,7 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("K_inv", &TendonFingerSolverConfig::K_inv)
         .def_readwrite("K_inv_per_segment", &TendonFingerSolverConfig::K_inv_per_segment)
         .def_readwrite("disc_positions_normalized", &TendonFingerSolverConfig::disc_positions_normalized)
+        .def_readwrite("tip_radius", &TendonFingerSolverConfig::tip_radius)
         .def_readwrite("sigma_twist_rot", &TendonFingerSolverConfig::sigma_twist_rot)
         .def_readwrite("sigma_twist_pos", &TendonFingerSolverConfig::sigma_twist_pos)
         .def_readwrite("sigma_stress_force", &TendonFingerSolverConfig::sigma_stress_force)

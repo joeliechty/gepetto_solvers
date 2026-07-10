@@ -43,6 +43,16 @@ public:
         const std::vector<VectorXGaussian>& tensions,
         const std::vector<Vector6Gaussian>& tip_wrenches);
 
+    // Command a new shared wrist pose (world frame, 4x4) between solves without
+    // reconstructing the solver. Because solve() reuses the retained values_ as
+    // its initial guess, a set_wrist_pose() + solve() sweep warm-starts each step
+    // from the previous solution — far fewer iterations than rebuilding the
+    // solver (which cold-starts from a straight hand every frame). Only the first
+    // solve after construction pays the cold-start cost.
+    void set_wrist_pose(const gtsam::Matrix4& wrist_pose) {
+        hand_->set_wrist_pose(gtsam::Pose3(wrist_pose));
+    }
+
     int num_fingers() const { return hand_->num_fingers(); }
 
     // Re-expose SolverBase diagnostics (privately inherited).

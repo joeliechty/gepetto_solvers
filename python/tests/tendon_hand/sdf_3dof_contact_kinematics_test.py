@@ -38,6 +38,16 @@ def get_primitive_specs():
             "radius": 0.025,
             "plot": lambda c: {"type": "sphere", "center": c, "radius": 0.025},
         },
+        "big_sphere": {
+            # Larger sphere sized+located for the full anatomical-hand grasp: at
+            # the flexed-fingertip locus (flexor ~2 N) all five tips land on its
+            # surface. See _objects/make_big_sphere.py (radius 0.05). The grasp
+            # test places it at its own GRASP_SPHERE_CENTER, not OBJECT_CENTER.
+            "type": "sphere",
+            "vdb": "big_sphere.vdb",
+            "radius": 0.05,
+            "plot": lambda c: {"type": "sphere", "center": c, "radius": 0.05},
+        },
         "cylinder": {
             "type": "cylinder",
             "vdb": "cylinder.vdb",       # make_cylinder.py (radius 0.025, height 0.04, local Y axis)
