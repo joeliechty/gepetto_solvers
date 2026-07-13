@@ -58,6 +58,17 @@ struct EnvironmentConfig {
     // is governed by the AL parameters on SolverBaseConfig, not a covariance.
     std::optional<int> target_contact_node;
     double contact_node_radius = 0.0;
+
+    // Optional explicit initial value for this contact's witness point, given
+    // in the object-local frame. When unset (the default), the witness is
+    // seeded by ray-marching from the object-local origin toward the finger tip
+    // until the SDF crosses zero (see TendonHandModel::get_initial_values). Set
+    // it to override that heuristic -- e.g. to seed an opposing thumb's witness
+    // on the far side of the object so the solver starts in the enclosing grasp
+    // configuration instead of collapsing every witness onto one side. Only an
+    // initial guess; the Augmented-Lagrangian solve still drives it onto the
+    // true surface.
+    std::optional<gtsam::Point3> witness_point_seed;
 };
 
 

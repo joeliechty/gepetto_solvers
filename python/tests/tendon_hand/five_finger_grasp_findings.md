@@ -12,6 +12,10 @@ wiring and running controlled experiments.
 - **`cube`** — bends backwards, does not solve.
 - Loosening the wrist prior "didn't help" (see below — it was overridden and
   too tight).
+- Earlier, `big_sphere` didn't just stall — it **crashed** with
+  `IndeterminantLinearSystem (Symbol: Q0)`. That was a separate,
+  now-fixed conditioning bug in the tension prior; see
+  [The `IndeterminantLinearSystem` crash](#the-indeterminantlinearsystem-crash-separate-from-the-stalls-above).
 
 ## How contact is actually wired (what's true)
 
@@ -27,9 +31,12 @@ constraint — they are *not* competing for one shared point:
   `c_N = 1 + N_i·N_obj` is satisfiable for **any** finger bend direction. There
   is no factor that prefers a physical curl over hyperextension, and no joint
   limit forbidding backward bending.
-- The wrist is a real optimization variable (`root_base_key`); node 0 =
-  `wrist ∘ offset` feeds the first Cosserat factor, so a fingertip contact
-  *does* have a Jacobian path back to the wrist.
+- The wrist is a real optimization variable — the single shared `wrist_key()`
+  = `Symbol('W', 0)`. Each finger's Cosserat chain roots at it: the finger's
+  `root_base_key_` is pointed at the shared wrist via `set_hand_base()`
+  (`TendonHandModel.cpp`), so node 0 = `T_wrist ∘ T_offset` feeds the first
+  Cosserat factor and a fingertip contact *does* have a Jacobian path back to
+  the wrist.
 
 ## The wrist prior idea — it works, but was mis-set
 
@@ -126,6 +133,98 @@ stall, not infeasibility for those four.
    sphere normal). Also note the doc's collision/`f_run` term is unimplemented
    (`= 1`), so nothing keeps a large object out of the palm.
 
+## The `IndeterminantLinearSystem` crash (separate from the stalls above)
+
+Before any of the geometric stalls, `big_sphere` **crashed** with
+`gtsam::IndeterminantLinearSystemException ... near variable ... (Symbol: Q0)`.
+This is a distinct failure from the "stall with a gap" cases and has a distinct
+cause: it is **not** contact, placement, the object shape, or the AL parameters
+— it is the **tension prior itself being numerically ill-conditioned**.
+
+The per-finger tension prior was `diag([1e-8]*5, 1e-1)`: the five passive
+tendons pinned at variance `1e-8` and the flexor left loose at `1e-1`. That is
+**seven orders of magnitude of variance inside one 6-dim `Q` variable**. When
+GTSAM eliminates that block, the flexor's (relatively tiny) information is
+subtracted against the passive rows' ~`1e8` weight and the stiff rod/stress
+factors; the flexor's conditional information vanishes into floating-point
+cancellation, the `R` diagonal collapses, and the variable is reported as
+underconstrained.
+
+Note on the key name: the tension key is `Symbol('Q', 1000*id)` where `id` is a
+**global** finger counter across *all* solver instances in the process. So
+`Q0` is the first finger of the first solver built; `Q5000` in a later run is
+that run's finger 0, etc. — the number is not a finger index.
+
+### Evidence (controlled sweep, `big_sphere`)
+
+| case | result |
+|------|--------|
+| solo index / middle / ring / pinky (with contact) | **FAIL** near own `Q` |
+| solo thumb | OK (gap 0) — happened to be geometry-marginal |
+| all 5, **no contact at all** (free space) | **FAIL in 0.5 s** near `Q` |
+| legacy mount / zero splay / loose wrist | all **FAIL** — placement irrelevant |
+| `al_iters` 10 / 20 / 40, `al_rate` 1.5 | all **FAIL** — AL params irrelevant |
+| passive var **`1e-6`**, flexor `1e-1` | **OK**, all gaps 0 |
+| passive var **`1e-4`** | **OK**, all gaps 0 |
+| flexor var `1e-2` | **OK** |
+| all tendons loose (`1e-2` uniform) | **OK** |
+
+The **no-contact free-space failure is the smoking gun**: it fails in 0.5 s with
+no object in the graph, so contact and the AL optimizer are ruled out entirely.
+It is purely the prior's variance spread. (This is the same reason
+`kinematics_test.py` uses a *uniform* `1e-2` prior — it hit this first.)
+
+### Fix (applied)
+
+Loosen the passive variance so it no longer spans the cliff — keep the flexor
+loose as before:
+
+```python
+tensions_cov = np.diag([1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-1])
+```
+
+`1e-6` variance is ~1 mN std — still effectively "pinned by springs," but 100×
+more numerical headroom. The full five-finger `big_sphere` grasp then converges
+to gap ≈ 0 on all five tips. Deeper fix (optional): don't model near-constants as
+`~0`-variance Gaussians — fold the passive `Q·SpatialWrench` into the disc-factor
+constant, or split `Q` into separate passive/active variable blocks so one block
+never spans both scales.
+
+Two adjacent fragile spots worth knowing if `Q` crashes recur despite a sane
+prior: `SolverBase::optimize()` builds `Marginals` with GTSAM's default
+**Cholesky** even when `linear_solver_type = MULTIFRONTAL_QR`, and on the AL path
+it re-adds each constraint as `penaltyFactor(final_mu)` where `mu` can reach
+`2^al_iters` if the contact never converged — both raise the effective
+conditioning demand at the very end of the solve.
+
+## Cold-start vs. warm-start (the "slow high-tension solves")
+
+`kinematics_test.py` was slow because it **rebuilt the solver every frame** to
+change the wrist pose (which was baked in at construction). A fresh solver
+re-seeds its initial guess to a *straight* hand, so every frame cold-started and
+had to drive the rod from straight to a deep curl — and the higher the flexor
+tension, the farther that equilibrium sits from the straight-rod linearization
+point, so it took progressively more iterations (58–100+ at high tension vs ~30
+warm).
+
+Key realization: `SolverBase::optimize()` **never resets `values_`** — it is
+seeded once in the constructor and thereafter holds the previous solution. So
+warm-starting is automatic *as long as you keep one solver instance*. The only
+thing forcing the rebuild was the construction-time wrist pose.
+
+**Change made:** added `TendonHandSolver::set_wrist_pose(Matrix4)` (pybind:
+`solver.set_wrist_pose(T)`) that re-aims the shared wrist prior without
+rebuilding. Only `wrist_pose_` feeds that prior; the finger offsets and the
+root-reparameterization factors are anchored to the shared wrist *key*,
+independent of where it points — so updating the mean is all `build_graph()`
+needs. `kinematics_test.py` now builds the solver **once** and calls
+`set_wrist_pose()` + `solve()` each frame, so only the first frame is a cold
+start and every subsequent frame is a small nudge that converges in a handful of
+iterations even at full tension. Caveat: `set_wrist_pose()` deliberately does
+*not* re-seed `get_initial_values()`, so a large discontinuous jump in the
+commanded wrist from a near-straight state can still be slow — fine for a smooth
+sweep, worth knowing for scripted jumps.
+
 ## Reproduction
 
 ```
@@ -136,4 +235,8 @@ python -m tests.tendon_hand.five_finger_hand_grasp_test cube        # stalls (it
 
 # single finger reaches every primitive (gap 0.000):
 python -m tests.tendon_hand.sdf_3dof_contact_kinematics_test cube
+
+# warm-started wrist sweep (build once, set_wrist_pose per frame) — iters= drops
+# from the cold-start count to a handful after the first frame:
+python -m tests.tendon_hand.kinematics_test
 ```

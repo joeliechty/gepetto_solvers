@@ -53,6 +53,9 @@ def get_primitive_specs():
             "vdb": "cylinder.vdb",       # make_cylinder.py (radius 0.025, height 0.04, local Y axis)
             "radius": 0.025,
             "height": 0.04,
+            # Rims filleted by this radius in the baked SDF (see make_cylinder.py)
+            # so the gradient solver doesn't stick on the cap/side crease.
+            "edge_radius": 0.005,
             # Rotate the (local Y-aligned) cylinder 90 deg about X so its axis is
             # vertical (world +Z). The finger moves in the z~0 plane, so it
             # contacts the curved side of this upright cylinder (radius 0.025 from
@@ -62,6 +65,21 @@ def get_primitive_specs():
                                "radius": 0.025, "height": 0.04,
                                "direction": (0.0, 0.0, 1.0)},
         },
+        "capsule": {
+            # Capsule = cylinder with hemispherical caps; graspable-sized for
+            # the full five-finger grasp (see make_capsule.py, radius 0.04,
+            # cylinder length 0.07). Like the cylinder its local axis is Y, so
+            # rotate 90 deg about X to stand it up along world +Z: the four
+            # fingers wrap the curved side and the thumb opposes.
+            "type": "capsule",
+            "vdb": "capsule.vdb",        # make_capsule.py (radius 0.04, height 0.07, local Y axis)
+            "radius": 0.04,
+            "height": 0.07,
+            "rotation": Rx(np.pi / 2),
+            "plot": lambda c: {"type": "capsule", "center": c,
+                               "radius": 0.04, "height": 0.07,
+                               "direction": (0.0, 0.0, 1.0)},
+        },
         "cube": {
             "type": "cube",
             # half_extents match the cylinder's footprint (radius 0.025 in X/Z,
@@ -69,6 +87,9 @@ def get_primitive_specs():
             # same way it does the cylinder's flat cap.
             "vdb": "cube.vdb",           # make_cube.py (half_extents 0.025, 0.02, 0.025)
             "half_extents": (0.025, 0.02, 0.025),
+            # Edges/corners filleted by this radius in the baked SDF (see
+            # make_cube.py) so the gradient solver doesn't stick on the creases.
+            "edge_radius": 0.005,
             "plot": lambda c: {"type": "cube", "center": c,
                                "extents": (0.05, 0.04, 0.05)},
         },
@@ -83,21 +104,31 @@ def primitive_surface_gap(p_local, spec):
     if ptype == "sphere":
         return float(np.linalg.norm(p_local) - spec["radius"])
     if ptype == "cylinder":
-        # Axis along Y.
-        r = spec["radius"]
-        half_h = spec["height"] / 2.0
+        # Axis along Y, rims filleted by edge_radius (shrink bounds, offset out).
+        er = spec.get("edge_radius", 0.0)
+        r = spec["radius"] - er
+        half_h = spec["height"] / 2.0 - er
         dist_xz = np.hypot(p_local[0], p_local[2])
         dx = dist_xz - r
         dy = abs(p_local[1]) - half_h
         out_dist = np.hypot(max(dx, 0.0), max(dy, 0.0))
         in_dist = min(max(dx, dy), 0.0)
-        return float(out_dist + in_dist)
+        return float(out_dist + in_dist - er)
+    if ptype == "capsule":
+        # Distance to the Y-axis segment [-half_h, half_h] minus the radius.
+        r = spec["radius"]
+        half_h = spec["height"] / 2.0
+        dy = p_local[1] - np.clip(p_local[1], -half_h, half_h)
+        dist = np.sqrt(p_local[0] ** 2 + dy ** 2 + p_local[2] ** 2)
+        return float(dist - r)
     if ptype == "cube":
+        # Edges/corners filleted by edge_radius (shrink bounds, offset out).
+        er = spec.get("edge_radius", 0.0)
         hx, hy, hz = spec["half_extents"]
-        d = np.abs(p_local) - np.array([hx, hy, hz])
+        d = np.abs(p_local) - (np.array([hx, hy, hz]) - er)
         out_dist = np.linalg.norm(np.maximum(d, 0.0))
         in_dist = min(max(d[0], max(d[1], d[2])), 0.0)
-        return float(out_dist + in_dist)
+        return float(out_dist + in_dist - er)
     raise ValueError(f"Unknown primitive type: {ptype!r}")
 
 

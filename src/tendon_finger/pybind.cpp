@@ -94,6 +94,7 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("collision_node_radii",   &crest_sparse::EnvironmentConfig::collision_node_radii)
         .def_readwrite("target_contact_node", &crest_sparse::EnvironmentConfig::target_contact_node)
         .def_readwrite("contact_node_radius", &crest_sparse::EnvironmentConfig::contact_node_radius)
+        .def_readwrite("witness_point_seed",  &crest_sparse::EnvironmentConfig::witness_point_seed)
         .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);

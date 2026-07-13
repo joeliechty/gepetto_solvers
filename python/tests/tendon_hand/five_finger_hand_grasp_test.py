@@ -54,6 +54,9 @@ def _add_object_mesh(pv_plotter, spec, center):
     elif t == "cylinder":
         mesh = pv.Cylinder(center=center, direction=(0, 0, 1),
                            radius=spec["radius"], height=spec["height"])
+    elif t == "capsule":
+        mesh = pv.Capsule(center=center, direction=(0, 0, 1),
+                          radius=spec["radius"], cylinder_length=spec["height"])
     elif t == "cube":
         hx, hy, hz = spec["half_extents"]
         mesh = pv.Cube(center=center, x_length=2 * hx, y_length=2 * hy, z_length=2 * hz)
@@ -67,7 +70,7 @@ def main():
         description="Solve a five-finger tendon hand (four fingers + opposable "
                     "thumb, shared floating wrist) grasping a primitive object.")
     parser.add_argument("primitive", nargs="?", default="big_sphere",
-                        choices=["big_sphere", "sphere", "cylinder", "cube"])
+                        choices=["big_sphere", "capsule", "sphere", "cylinder", "cube"])
     parser.add_argument("--no-viz", action="store_true",
                         help="Skip the interactive 3D view (headless / tuning).")
     parser.add_argument("--al-mu", type=float, default=1.0, help="AL initial penalty mu")
@@ -82,9 +85,10 @@ def main():
     args = parser.parse_args()
 
     spec = get_primitive_specs()[args.primitive]
-    # The big grasp sphere sits at the flexed-fingertip locus; other primitives
-    # stay at the shared single-finger OBJECT_CENTER.
-    object_center = (GRASP_SPHERE_CENTER if args.primitive == "big_sphere"
+    # The big grasp sphere and the capsule sit at the flexed-fingertip locus;
+    # the other (single-finger-scale) primitives stay at OBJECT_CENTER.
+    object_center = (GRASP_SPHERE_CENTER
+                     if args.primitive in ("big_sphere", "capsule")
                      else OBJECT_CENTER)
     object_rotation = np.asarray(spec.get("rotation", np.eye(3)), dtype=float)
     object_pose = np.eye(4)

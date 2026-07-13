@@ -235,38 +235,46 @@ Values TendonHandModel::get_initial_values() const {
                 Pose3 obj_mean(env.object_pose_mean);
                 if (!object_seeded) { values.insert(object_key(), obj_mean); object_seeded = true; }
 
-                // Ray-march in the object-local frame from the local origin toward
-                // the tip until the SDF crosses zero (mirrors TendonFingerSolver).
-                int i_node = *env.target_contact_node;
-                Point3 tip_world = values.at<Pose3>(fp->rod_->get_pose_key(i_node)).translation();
-                Point3 tip_local = obj_mean.transformTo(tip_world);
-                double tip_local_norm = tip_local.norm();
-                Point3 dir_local = (tip_local_norm > 1e-8)
-                                       ? Point3(tip_local / tip_local_norm)
-                                       : Point3(0.0, 0.0, 1.0);
+                Point3 seed_local;
+                if (env.witness_point_seed) {
+                    // Caller-provided seed (object-local frame); skip the march.
+                    seed_local = *env.witness_point_seed;
+                } else {
+                    // Ray-march in the object-local frame from the local origin
+                    // toward the tip until the SDF crosses zero (mirrors
+                    // TendonFingerSolver).
+                    int i_node = *env.target_contact_node;
+                    Point3 tip_world = values.at<Pose3>(fp->rod_->get_pose_key(i_node)).translation();
+                    Point3 tip_local = obj_mean.transformTo(tip_world);
+                    double tip_local_norm = tip_local.norm();
+                    Point3 dir_local = (tip_local_norm > 1e-8)
+                                           ? Point3(tip_local / tip_local_norm)
+                                           : Point3(0.0, 0.0, 1.0);
 
-                openvdb::tools::GridSampler<openvdb::FloatGrid, openvdb::tools::BoxSampler>
-                    sampler(*env.sdf_grid);
-                const double step = 5e-4;
-                const int max_it = 4000;
-                double t = 0.0;
-                double prev_sdf = sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0));
-                double t_surface = -1.0;
-                for (int it = 1; it <= max_it; ++it) {
-                    double tt = it * step;
-                    Point3 q = tt * dir_local;
-                    double sdf = sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z()));
-                    if (std::isfinite(prev_sdf) && std::isfinite(sdf) && prev_sdf * sdf < 0.0) {
-                        double alpha = prev_sdf / (prev_sdf - sdf);
-                        t_surface = t + alpha * step;
-                        break;
+                    openvdb::tools::GridSampler<openvdb::FloatGrid, openvdb::tools::BoxSampler>
+                        sampler(*env.sdf_grid);
+                    const double step = 5e-4;
+                    const int max_it = 4000;
+                    double t = 0.0;
+                    double prev_sdf = sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0));
+                    double t_surface = -1.0;
+                    for (int it = 1; it <= max_it; ++it) {
+                        double tt = it * step;
+                        Point3 q = tt * dir_local;
+                        double sdf = sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z()));
+                        if (std::isfinite(prev_sdf) && std::isfinite(sdf) && prev_sdf * sdf < 0.0) {
+                            double alpha = prev_sdf / (prev_sdf - sdf);
+                            t_surface = t + alpha * step;
+                            break;
+                        }
+                        prev_sdf = sdf;
+                        t = tt;
                     }
-                    prev_sdf = sdf;
-                    t = tt;
+                    if (t_surface < 0.0)
+                        t_surface = std::abs(sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0)));
+                    seed_local = Point3(t_surface * dir_local);
                 }
-                if (t_surface < 0.0)
-                    t_surface = std::abs(sampler.wsSample(openvdb::Vec3R(0.0, 0.0, 0.0)));
-                Point3 seed_world = obj_mean.transformFrom(Point3(t_surface * dir_local));
+                Point3 seed_world = obj_mean.transformFrom(seed_local);
                 values.insert(witness_key(static_cast<int>(i)), seed_world);
             } else {
                 const auto& sc = *sphere_contacts_[i];
