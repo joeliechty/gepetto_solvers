@@ -206,6 +206,71 @@ def plot_trajectory(result, tendon_names=None, show=True, save_path=None):
     return fig
 
 
+def plot_hand_wrist_trajectory(result, hand_base_offset, dt=None,
+                               show=True, save_path=None):
+    """Plot the shared wrist pose across a hand trajectory.
+
+    The wrist variable is not exposed directly in the per-finger marginals, so we
+    recover it from finger 0's base node (rod state 0), whose world pose is
+    ``T_wrist o hand_base_offset``. Inverting the fixed offset gives ``T_wrist``.
+
+    Parameters
+    ----------
+    result : hand trajectory planner result
+        ``result.trajectory`` is a list of TendonHandMarginals (one per step),
+        each with a ``.fingers`` list of per-finger marginals.
+    hand_base_offset : (4, 4) array
+        Finger 0's ``hand_base_offset`` (config.hand_base_offset), the fixed SE(3)
+        transform from the wrist to that finger's base node.
+    dt : float, optional
+        Step duration; when given the x-axis is time (s) rather than step index.
+    """
+    offset_inv = np.linalg.inv(np.asarray(hand_base_offset, dtype=float))
+    K1 = len(result.trajectory)
+
+    pos = np.zeros((K1, 3))
+    eul = np.zeros((K1, 3))
+    for k, hand_m in enumerate(result.trajectory):
+        base0 = np.asarray(hand_m.fingers[0].rod.states[0].pose.mean, dtype=float)
+        T_wrist = base0 @ offset_inv
+        pos[k] = T_wrist[:3, 3]
+        eul[k] = Rotation.from_matrix(T_wrist[:3, :3]).as_euler("xyz", degrees=True)
+
+    x = np.arange(K1) * (dt if dt else 1.0)
+    xlabel = "Time (s)" if dt else "Step"
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    pos_labels = ["x", "y", "z"]
+    eul_labels = ["roll", "pitch", "yaw"]
+    cmap = plt.cm.tab10(np.linspace(0, 1, 3))
+
+    for i, lbl in enumerate(pos_labels):
+        axes[0].plot(x, pos[:, i], "-o", color=cmap[i], markersize=4, label=lbl)
+    axes[0].set_title("Wrist Position")
+    axes[0].set_ylabel("Position (m)")
+    axes[0].legend(loc="best", fontsize=8)
+    axes[0].grid(True, alpha=0.3)
+
+    for i, lbl in enumerate(eul_labels):
+        axes[1].plot(x, eul[:, i], "-o", color=cmap[i], markersize=4, label=lbl)
+    axes[1].set_title("Wrist Orientation")
+    axes[1].set_ylabel("Angle (°)")
+    axes[1].set_xlabel(xlabel)
+    axes[1].legend(loc="best", fontsize=8)
+    axes[1].grid(True, alpha=0.3)
+
+    fig.suptitle("Hand Wrist Trajectory", fontsize=13, fontweight="bold")
+    fig.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved wrist trajectory plot to: {save_path}")
+    if show:
+        plt.show()
+
+    return fig
+
+
 def plot_trajectory_comparison(result, control_traj, planner_config, tendon_names=None, show=True, save_path=None):
     """
     Compare GP-interpolated tendon lengths against the discrete planned trajectory.

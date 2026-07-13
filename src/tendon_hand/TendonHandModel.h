@@ -40,10 +40,17 @@ struct TendonHandMarginals {
 // so the owning solver routes the solve through the Augmented Lagrangian path.
 class TendonHandModel {
 public:
+    // step / emit_wrist_prior default to the single-shot behavior (one wrist
+    // variable Symbol('W',0), always anchored). The trajectory planner passes a
+    // per-step index so each timestep owns a distinct wrist variable, and
+    // suppresses the prior on all but the start step (the GP chain + finger
+    // kinematics pin the interior wrists).
     TendonHandModel(
         const std::vector<std::pair<std::string, TendonFingerSolverConfig>>& finger_configs,
         const gtsam::Pose3& wrist_pose,
-        gtsam::SharedDiagonal wrist_noise);
+        gtsam::SharedDiagonal wrist_noise,
+        int step = 0,
+        bool emit_wrist_prior = true);
 
     // Combined graph: each finger's rod+tendon factors, interior/tip wrench
     // priors, the single shared wrist prior, and per-finger contact constraints.
@@ -76,9 +83,32 @@ public:
     // True if any finger has a contact constraint configured (=> AL path).
     bool has_contact() const { return has_contact_; }
 
-    static gtsam::Key wrist_key()          { return gtsam::Symbol('W', 0); }
+    // Wrist variable key. step defaults to 0 (the single-shot key), so existing
+    // callers are unchanged; the trajectory planner uses per-step keys.
+    static gtsam::Key wrist_key(int step = 0) { return gtsam::Symbol('W', step); }
     static gtsam::Key object_key()         { return gtsam::Symbol('O', 0); }
     static gtsam::Key witness_key(int i)   { return gtsam::Symbol('Y', i); }
+
+    // This model's own wrist key (step-indexed). Used by the trajectory planner
+    // to wire the wrist GP BetweenFactor between consecutive timesteps.
+    gtsam::Key wrist_key_instance() const { return wrist_key(step_); }
+
+    // N-agnostic per-finger control keys (visit the finger variant). The
+    // trajectory planner uses these to add the tension/length GP BetweenFactors.
+    gtsam::Key finger_tension_key(int i) const;
+    gtsam::Key finger_length_key(int i) const;
+
+    // Add the temporal GP priors (Eq 1.11 tensions, Eq 1.13 lengths) linking this
+    // model's per-finger tension/length variables to the corresponding variables
+    // in the next timestep's model. The per-finger tendon count N is resolved
+    // inside the variant visit (where the BetweenFactor<Vector<N>> dimension is
+    // known). The length GP is added only when gp_len_Qc is non-empty.
+    void add_temporal_gp(
+        gtsam::NonlinearFactorGraph& graph,
+        const TendonHandModel& next,
+        const Eigen::MatrixXd& gp_tense_Qc,
+        const Eigen::MatrixXd& gp_len_Qc,
+        double dt) const;
 
 private:
     // We use a variant to handle different numbers of tendons per finger.
@@ -104,6 +134,13 @@ private:
 
     gtsam::Pose3          wrist_pose_;
     gtsam::SharedDiagonal wrist_noise_;
+
+    // Timestep index (0 for the single-shot solve). Selects this model's wrist
+    // key Symbol('W', step_) so per-step wrists don't collide in a trajectory.
+    int  step_ = 0;
+    // Whether build_graph() emits the wrist PriorFactor. True for the single-shot
+    // solve and for the trajectory start step; false for interior/terminal steps.
+    bool emit_wrist_prior_ = true;
 
     // Per-finger interior/tip external-wrench prior noise, derived from each
     // finger's sigma_stress_moment/force (as TendonFingerSolver does). Using the

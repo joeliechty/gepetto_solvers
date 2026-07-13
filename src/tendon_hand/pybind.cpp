@@ -4,6 +4,7 @@
 
 #include "TendonHandModel.h"
 #include "TendonHandSolver.h"
+#include "TendonHandTrajectoryPlanner.h"
 
 namespace py = pybind11;
 
@@ -40,4 +41,35 @@ void bind_tendon_hand(py::module& m) {
              "previous solution instead of cold-starting from a straight hand.")
         .def("num_fingers", &TendonHandSolver::num_fingers)
         .def("get_factor_error_summary", &TendonHandSolver::get_factor_error_summary);
+
+    // --- Trajectory Planner (Section 1.4) ---
+
+    py::class_<TendonHandTrajectoryPlannerConfig>(m, "TendonHandTrajectoryPlannerConfig")
+        .def(py::init<>())
+        .def_readwrite("base", &TendonHandTrajectoryPlannerConfig::base)
+        .def_readwrite("K", &TendonHandTrajectoryPlannerConfig::K)
+        .def_readwrite("dt", &TendonHandTrajectoryPlannerConfig::dt)
+        .def_readwrite("wrist_pose", &TendonHandTrajectoryPlannerConfig::wrist_pose)
+        .def_readwrite("sigma_wrist_pos", &TendonHandTrajectoryPlannerConfig::sigma_wrist_pos)
+        .def_readwrite("sigma_wrist_rot", &TendonHandTrajectoryPlannerConfig::sigma_wrist_rot)
+        .def_readwrite("gp_wrist_Qc", &TendonHandTrajectoryPlannerConfig::gp_wrist_Qc)
+        .def_readwrite("gp_tense_Qc", &TendonHandTrajectoryPlannerConfig::gp_tense_Qc)
+        .def_readwrite("gp_len_Qc", &TendonHandTrajectoryPlannerConfig::gp_len_Qc);
+
+    py::class_<TendonHandTrajectoryResult>(m, "TendonHandTrajectoryResult")
+        .def(py::init<>())
+        .def_readwrite("trajectory", &TendonHandTrajectoryResult::trajectory)
+        .def_readwrite("meta", &TendonHandTrajectoryResult::meta);
+
+    py::class_<TendonHandTrajectoryPlanner>(m, "TendonHandTrajectoryPlanner")
+        .def(py::init<
+                const std::vector<std::pair<std::string, TendonFingerSolverConfig>>&,
+                const TendonHandTrajectoryPlannerConfig&>(),
+             py::arg("finger_configs"), py::arg("config"))
+        .def("plan", &TendonHandTrajectoryPlanner::plan,
+             py::arg("tensions"), py::arg("tip_wrenches"),
+             py::arg("start_tensions") = std::vector<VectorXGaussian>{})
+        .def("num_fingers", &TendonHandTrajectoryPlanner::num_fingers)
+        .def("get_factor_error_summary",
+             &TendonHandTrajectoryPlanner::get_factor_error_summary);
 }

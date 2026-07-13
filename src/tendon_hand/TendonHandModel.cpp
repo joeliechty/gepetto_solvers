@@ -3,6 +3,7 @@
 #include "utils/MiscInline.h"
 
 #include <gtsam/constrained/NonlinearEqualityConstraint.h>
+#include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/slam/PriorFactor.h>
 
 #include <openvdb/tools/Interpolation.h>
@@ -56,12 +57,16 @@ std::unique_ptr<TendonFingerModel<N>> make_finger_impl(
 TendonHandModel::TendonHandModel(
     const std::vector<std::pair<std::string, TendonFingerSolverConfig>>& finger_configs,
     const Pose3& wrist_pose,
-    SharedDiagonal wrist_noise)
+    SharedDiagonal wrist_noise,
+    int step,
+    bool emit_wrist_prior)
 :
     wrist_pose_(wrist_pose),
-    wrist_noise_(wrist_noise)
+    wrist_noise_(wrist_noise),
+    step_(step),
+    emit_wrist_prior_(emit_wrist_prior)
 {
-    const Key shared_wrist_key = wrist_key();
+    const Key shared_wrist_key = wrist_key(step_);
 
     fingers_.reserve(finger_configs.size());
     finger_names_.reserve(finger_configs.size());
@@ -159,8 +164,11 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         }, fingers_[i]);
     }
 
-    // Single shared floating-wrist prior (rigidly anchors the gauge).
-    graph.add(PriorFactor<Pose3>(wrist_key(), wrist_pose_, wrist_noise_));
+    // Single shared floating-wrist prior (rigidly anchors the gauge). In a
+    // trajectory only the start step emits it (as the loose hand-pose prior,
+    // Eq 1.40); interior/terminal wrists are pinned by the GP chain + kinematics.
+    if (emit_wrist_prior_)
+        graph.add(PriorFactor<Pose3>(wrist_key(step_), wrist_pose_, wrist_noise_));
 
     // Per-finger tip contact against one shared object. The object pose is
     // anchored once; each finger drives its own witness point onto the surface.
@@ -220,7 +228,7 @@ Values TendonHandModel::get_initial_values() const {
     for (size_t i = 0; i < fingers_.size(); ++i) {
         std::visit([&](const auto& fp) {
             Values fv = fp->get_initial_values();
-            if (i > 0) fv.erase(wrist_key());
+            if (i > 0) fv.erase(wrist_key(step_));
             values.insert(fv);
         }, fingers_[i]);
     }
@@ -296,6 +304,53 @@ Values TendonHandModel::get_initial_values() const {
     }
 
     return values;
+}
+
+
+Key TendonHandModel::finger_tension_key(int i) const {
+    return std::visit(
+        [](const auto& fp) { return fp->get_tensions_key(); }, fingers_.at(i));
+}
+
+
+Key TendonHandModel::finger_length_key(int i) const {
+    return std::visit(
+        [](const auto& fp) { return fp->get_lengths_key(); }, fingers_.at(i));
+}
+
+
+void TendonHandModel::add_temporal_gp(
+    NonlinearFactorGraph& graph,
+    const TendonHandModel& next,
+    const Eigen::MatrixXd& gp_tense_Qc,
+    const Eigen::MatrixXd& gp_len_Qc,
+    double dt) const
+{
+    const bool has_len_gp = gp_len_Qc.size() > 0;
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        std::visit([&](const auto& fp) {
+            using FingerType = typename std::remove_reference_t<decltype(*fp)>;
+            constexpr int N = FingerType::NumTendons;
+
+            // Tension GP (Eq 1.11): identity transition, zero-mean between factor.
+            Eigen::Matrix<double, N, N> Qc = gp_tense_Qc.topLeftCorner<N, N>();
+            graph.add(BetweenFactor<Eigen::Vector<double, N>>(
+                fp->get_tensions_key(),
+                next.finger_tension_key(static_cast<int>(i)),
+                Eigen::Vector<double, N>::Zero(),
+                noiseModel::Gaussian::Covariance(Qc * dt)));
+
+            // Length GP (Eq 1.13), optional.
+            if (has_len_gp) {
+                Eigen::Matrix<double, N, N> Qc_len = gp_len_Qc.topLeftCorner<N, N>();
+                graph.add(BetweenFactor<Eigen::Vector<double, N>>(
+                    fp->get_lengths_key(),
+                    next.finger_length_key(static_cast<int>(i)),
+                    Eigen::Vector<double, N>::Zero(),
+                    noiseModel::Gaussian::Covariance(Qc_len * dt)));
+            }
+        }, fingers_[i]);
+    }
 }
 
 
