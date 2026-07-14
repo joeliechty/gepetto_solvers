@@ -98,6 +98,10 @@ public:
     gtsam::Key finger_tension_key(int i) const;
     gtsam::Key finger_length_key(int i) const;
 
+    // Tip (last rod node) pose key for finger i. Used by the trajectory planner
+    // to add a terminal PositionPriorFactor when a per-finger position goal is set.
+    gtsam::Key finger_tip_pose_key(int i) const;
+
     // Add the temporal GP priors (Eq 1.11 tensions, Eq 1.13 lengths) linking this
     // model's per-finger tension/length variables to the corresponding variables
     // in the next timestep's model. The per-finger tendon count N is resolved

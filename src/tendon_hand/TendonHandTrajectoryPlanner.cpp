@@ -1,10 +1,13 @@
 #include "TendonHandTrajectoryPlanner.h"
 
+#include "measurement/PositionPriorFactor.h"
 #include "utils/MiscInline.h"
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/slam/BetweenFactor.h>
+
+#include <stdexcept>
 
 using namespace gtsam;
 
@@ -72,6 +75,26 @@ void TendonHandTrajectoryPlanner::build_graph() {
         const auto& step_tensions =
             (k == 0 && !start_tensions_.empty()) ? start_tensions_ : tensions_;
         graph_.add(models_[k]->build_graph(step_tensions, tip_wrenches_));
+
+        // Terminal per-finger tip-position goals (point-to-point). Soft priors on
+        // each finger's tip node; only added when goal_positions is non-empty, so
+        // legacy contact-as-goal / no-goal runs are unaffected.
+        if (k == K && !config_.goal_positions.empty()) {
+            const int num_fingers = models_[K]->num_fingers();
+            if (static_cast<int>(config_.goal_positions.size()) != num_fingers) {
+                throw std::runtime_error(
+                    "TendonHandTrajectoryPlannerConfig::goal_positions size must "
+                    "equal the number of fingers when non-empty.");
+            }
+            auto goal_noise =
+                noiseModel::Gaussian::Covariance(config_.goal_position_cov);
+            for (int i = 0; i < num_fingers; ++i) {
+                graph_.add(PositionPriorFactor(
+                    models_[K]->finger_tip_pose_key(i),
+                    config_.goal_positions[i],
+                    goal_noise));
+            }
+        }
 
         if (k < K) {
             // Wrist-pose GP (Eq 1.41/1.42): identity transition, zero twist mean.

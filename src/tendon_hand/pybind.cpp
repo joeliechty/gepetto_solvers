@@ -54,7 +54,9 @@ void bind_tendon_hand(py::module& m) {
         .def_readwrite("sigma_wrist_rot", &TendonHandTrajectoryPlannerConfig::sigma_wrist_rot)
         .def_readwrite("gp_wrist_Qc", &TendonHandTrajectoryPlannerConfig::gp_wrist_Qc)
         .def_readwrite("gp_tense_Qc", &TendonHandTrajectoryPlannerConfig::gp_tense_Qc)
-        .def_readwrite("gp_len_Qc", &TendonHandTrajectoryPlannerConfig::gp_len_Qc);
+        .def_readwrite("gp_len_Qc", &TendonHandTrajectoryPlannerConfig::gp_len_Qc)
+        .def_readwrite("goal_positions", &TendonHandTrajectoryPlannerConfig::goal_positions)
+        .def_readwrite("goal_position_cov", &TendonHandTrajectoryPlannerConfig::goal_position_cov);
 
     py::class_<TendonHandTrajectoryResult>(m, "TendonHandTrajectoryResult")
         .def(py::init<>())

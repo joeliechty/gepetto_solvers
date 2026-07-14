@@ -319,6 +319,12 @@ Key TendonHandModel::finger_length_key(int i) const {
 }
 
 
+Key TendonHandModel::finger_tip_pose_key(int i) const {
+    return std::visit(
+        [](const auto& fp) { return fp->rod_->get_pose_key(-1); }, fingers_.at(i));
+}
+
+
 void TendonHandModel::add_temporal_gp(
     NonlinearFactorGraph& graph,
     const TendonHandModel& next,

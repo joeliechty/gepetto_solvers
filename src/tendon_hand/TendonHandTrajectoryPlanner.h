@@ -6,6 +6,7 @@
 #include "utils/SolverBase.h"
 
 #include <gtsam/base/Matrix.h>
+#include <gtsam/base/Vector.h>
 #include <gtsam/geometry/Pose3.h>
 
 #include <memory>
@@ -52,6 +53,16 @@ struct TendonHandTrajectoryPlannerConfig {
     gtsam::Matrix6  gp_wrist_Qc = gtsam::Matrix6::Identity();  // wrist pose (6x6)
     Eigen::MatrixXd gp_tense_Qc;                               // tensions (NxN, per finger)
     Eigen::MatrixXd gp_len_Qc;                                 // lengths (NxN); empty => disabled
+
+    // Optional per-finger terminal tip-position goals (world frame), same order
+    // as finger_configs. Empty => no goal priors (legacy behavior). When
+    // non-empty, size must equal the number of fingers; each adds a soft
+    // PositionPriorFactor on that finger's tip node at k=K -- the point-to-point
+    // analogue of contact-as-goal. Because it is a soft prior (not a hard
+    // constraint) the solve stays on the plain, non-AL path when no finger has a
+    // contact configured.
+    std::vector<gtsam::Vector3> goal_positions;
+    Eigen::Matrix3d goal_position_cov = 1e-5 * Eigen::Matrix3d::Identity();
 };
 
 
