@@ -95,7 +95,7 @@ def parse_args():
     parser.add_argument("--gp-wrist", type=float, default=1e-2,
                         help="Wrist-pose GP process-noise scale (diag of gp_wrist_Qc). "
                              "Smaller => smoother/less wrist motion between steps.")
-    parser.add_argument("--gp-tense", type=float, default=1e-2,
+    parser.add_argument("--gp-tense", type=float, default=1.0,
                         help="Tension GP process-noise scale (diag of gp_tense_Qc).")
     parser.add_argument("--gp-len", type=float, default=0.0,
                         help="Length GP process-noise scale; 0 disables the length GP.")

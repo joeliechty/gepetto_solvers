@@ -34,7 +34,10 @@ void bind_utils(py::module& m) {
         .def_readwrite("error", &SolutionMetadata::error)
         .def_readwrite("iteration_errors", &SolutionMetadata::iteration_errors)
         .def_readwrite("iteration_trust_region", &SolutionMetadata::iteration_trust_region)
-        .def_readwrite("iteration_step_norms", &SolutionMetadata::iteration_step_norms);
+        .def_readwrite("iteration_step_norms", &SolutionMetadata::iteration_step_norms)
+        .def_readwrite("al_iteration_costs", &SolutionMetadata::al_iteration_costs)
+        .def_readwrite("al_iteration_violations", &SolutionMetadata::al_iteration_violations)
+        .def_readwrite("al_iteration_mus", &SolutionMetadata::al_iteration_mus);
 
     py::class_<Vector6Gaussian>(m, "Vector6Gaussian")
         .def(py::init<>())

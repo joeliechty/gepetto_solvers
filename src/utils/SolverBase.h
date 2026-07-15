@@ -25,6 +25,14 @@ struct SolutionMetadata {
     std::vector<double> iteration_errors;        // error after each iterate() call
     std::vector<double> iteration_trust_region;  // Dogleg delta or LM lambda after each iterate()
     std::vector<double> iteration_step_norms;    // ||Δx|| in localCoordinates after each iterate()
+
+    // Populated on the Augmented Lagrangian path when record_iterations == true,
+    // one entry per AL outer iteration (from AugmentedLagrangianOptimizer::progress()).
+    // The LM/Dogleg iterate-loop above is skipped on the AL path, so these are the
+    // AL analogues of that trace.
+    std::vector<double> al_iteration_costs;       // objective cost per AL outer iter
+    std::vector<double> al_iteration_violations;  // constraint violation (eq+ineq) per AL outer iter
+    std::vector<double> al_iteration_mus;         // penalty weight muEq per AL outer iter
 };
 
 

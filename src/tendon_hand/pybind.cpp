@@ -73,5 +73,14 @@ void bind_tendon_hand(py::module& m) {
              py::arg("start_tensions") = std::vector<VectorXGaussian>{})
         .def("num_fingers", &TendonHandTrajectoryPlanner::num_fingers)
         .def("get_factor_error_summary",
-             &TendonHandTrajectoryPlanner::get_factor_error_summary);
+             &TendonHandTrajectoryPlanner::get_factor_error_summary)
+        .def("get_intermediate_solutions",
+             &TendonHandTrajectoryPlanner::get_intermediate_solutions,
+             "Per-iteration trajectory snapshots from the last plan(); requires "
+             "config.base.record_iterations = True. One entry per AL outer "
+             "iteration (subject to iteration_sample_interval).")
+        .def("get_initial_solution",
+             &TendonHandTrajectoryPlanner::get_initial_solution,
+             "The initial-guess trajectory (start of the last plan()), for the "
+             "first frame of a step animation.");
 }

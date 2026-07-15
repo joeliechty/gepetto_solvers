@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <type_traits>
 
 using namespace gtsam;
 
@@ -370,6 +371,31 @@ TendonHandMarginals TendonHandModel::get_marginals(
     for (const auto& finger : fingers_) {
         std::visit([&](const auto& fp) {
             out.fingers.push_back(fp->get_marginals(values, marginals));
+        }, finger);
+    }
+    return out;
+}
+
+
+TendonHandMarginals TendonHandModel::get_marginals_means_only(
+    const Values& values) const
+{
+    TendonHandMarginals out;
+    out.fingers.reserve(fingers_.size());
+    out.finger_names = finger_names_;
+    // Zero-returning functors: extract means only, skipping the Marginals solve.
+    // cov_of returns a 6x6 (pose block; the tension cov it also feeds is unused
+    // for visualization). joint_of must be sized (6+N)x(6+N) per finger because
+    // TendonFingerModel::get_J_pose_tensions reads block<6,N>(0,6)/block<N,N>(6,6),
+    // so it is built inside the visit where the finger's N (NumTendons) is known.
+    auto zero_cov = [](gtsam::Key) { return gtsam::Matrix::Zero(6, 6); };
+    for (const auto& finger : fingers_) {
+        std::visit([&](const auto& fp) {
+            constexpr int N = std::remove_reference_t<decltype(*fp)>::NumTendons;
+            auto zero_joint = [N](gtsam::Key, gtsam::Key) {
+                return gtsam::Matrix::Zero(6 + N, 6 + N);
+            };
+            out.fingers.push_back(fp->get_marginals(values, zero_cov, zero_joint));
         }, finger);
     }
     return out;

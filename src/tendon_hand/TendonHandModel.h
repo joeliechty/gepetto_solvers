@@ -78,6 +78,15 @@ public:
         const gtsam::Values& values,
         const gtsam::Marginals& marginals) const;
 
+    // Means-only marginals (zero covariance / zero Jacobians). Extracts the same
+    // per-finger state as get_marginals() but skips the expensive gtsam::Marginals
+    // factorization, so it is cheap enough to call once per solver-iteration
+    // snapshot. Used for debug visualization of the optimizer's intermediate
+    // states (get_intermediate_solutions()); mirrors TendonFingerModel's
+    // functor overload, building the zero functors per finger so each gets its
+    // own (6+N)-sized joint block.
+    TendonHandMarginals get_marginals_means_only(const gtsam::Values& values) const;
+
     int num_fingers() const { return static_cast<int>(fingers_.size()); }
 
     // True if any finger has a contact constraint configured (=> AL path).

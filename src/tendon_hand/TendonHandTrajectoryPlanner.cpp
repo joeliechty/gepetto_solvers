@@ -123,6 +123,32 @@ void TendonHandTrajectoryPlanner::extract_solution() {
 }
 
 
+TendonHandTrajectoryResult
+TendonHandTrajectoryPlanner::extract_trajectory_means_only(const Values& values) const {
+    TendonHandTrajectoryResult r;
+    r.trajectory.reserve(models_.size());
+    for (const auto& model : models_)
+        r.trajectory.push_back(model->get_marginals_means_only(values));
+    return r;
+}
+
+
+std::vector<TendonHandTrajectoryResult>
+TendonHandTrajectoryPlanner::get_intermediate_solutions() const {
+    std::vector<TendonHandTrajectoryResult> out;
+    out.reserve(intermediate_values_.size());
+    for (const auto& vals : intermediate_values_)
+        out.push_back(extract_trajectory_means_only(vals));
+    return out;
+}
+
+
+TendonHandTrajectoryResult
+TendonHandTrajectoryPlanner::get_initial_solution() const {
+    return extract_trajectory_means_only(initial_values_);
+}
+
+
 TendonHandTrajectoryResult TendonHandTrajectoryPlanner::plan(
     const std::vector<VectorXGaussian>& tensions,
     const std::vector<Vector6Gaussian>& tip_wrenches,

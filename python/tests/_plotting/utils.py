@@ -204,12 +204,16 @@ class PlotterBase:
 
         self.frame += 1
 
-    def save_video(self, fps=10, name=None, output_dir=None):
+    def save_video(self, fps=10, name=None, output_dir=None, frame_range=None):
         """Assemble the saved PNG frames into an animated GIF.
 
         Frames must have been captured during update() (save_frames_dir_name set).
         The GIF is written as <output_dir>/<name>.gif, defaulting to a file named
         after the frames subdirectory, placed alongside that subdirectory.
+
+        ``frame_range`` optionally restricts the GIF to frames whose integer file
+        stem satisfies ``start <= idx < end`` -- lets one shared frames/ dir (the
+        monotonic frame counter is never reset) be sliced into several GIFs.
 
         Returns the GIF path, or None if no frames were captured.
         """
@@ -221,6 +225,10 @@ class PlotterBase:
         frame_files = sorted(
             self.frames_path.glob("*.png"),
             key=lambda p: int(p.stem) if p.stem.isdigit() else p.stem)
+        if frame_range is not None:
+            start, end = frame_range
+            frame_files = [f for f in frame_files
+                           if f.stem.isdigit() and start <= int(f.stem) < end]
         if not frame_files:
             print(f"save_video: no frames found in {self.frames_path}")
             return None

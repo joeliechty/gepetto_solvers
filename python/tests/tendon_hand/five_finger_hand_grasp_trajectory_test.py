@@ -38,6 +38,7 @@ from .config import (
 from .sdf_3dof_contact_kinematics_test import (
     OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
 from .._plotting.trajectory_plotter import plot_trajectory, plot_hand_wrist_trajectory
+from .._plotting.al_convergence_plotter import plot_al_convergence
 from ..tendon_finger.utils import PlannerLogger, log_planner_parameters
 
 # Same grasp geometry constants as the static test so results are comparable.
@@ -88,6 +89,33 @@ class _FingerTraj:
         self.trajectory = trajectory
 
 
+def _report_al_iterations(result, results_dir, exp_label):
+    """Print the per-outer-iteration AL trace and save the convergence figure.
+
+    Headless-safe (only saves the PNG). Returns True if a trace was present.
+    """
+    costs = list(result.meta.al_iteration_costs)
+    viols = list(result.meta.al_iteration_violations)
+    mus = list(result.meta.al_iteration_mus)
+    if not costs:
+        print("\n[debug-iterations] no AL iteration trace was recorded "
+              "(record_iterations off, or the solve took the non-AL path).")
+        return False
+
+    print("\nAL outer-iteration trace:")
+    print(" iter |      cost |  violation |        mu")
+    print("------+-----------+------------+-----------")
+    for i, (c, v, mu) in enumerate(zip(costs, viols, mus)):
+        print(f"  {i:>3} | {c:9.4g} | {v:10.4g} | {mu:9.4g}")
+
+    save_path = os.path.join(results_dir, f"{exp_label}_al_convergence.png")
+    plot_al_convergence(costs, viols, mus,
+                        title=f"{exp_label} — AL convergence",
+                        save_path=save_path, show=False)
+    print(f"Saved AL convergence figure to {save_path}")
+    return True
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Plan a K-step five-finger tendon-hand grasp trajectory with "
@@ -100,7 +128,7 @@ def parse_args():
     parser.add_argument("--gp-wrist", type=float, default=1e-2,
                         help="Wrist-pose GP process-noise scale (diag of gp_wrist_Qc). "
                              "Smaller => smoother/less wrist motion between steps.")
-    parser.add_argument("--gp-tense", type=float, default=1e-2,
+    parser.add_argument("--gp-tense", type=float, default=1.0,
                         help="Tension GP process-noise scale (diag of gp_tense_Qc).")
     parser.add_argument("--gp-len", type=float, default=0.0,
                         help="Length GP process-noise scale; 0 disables the length GP.")
@@ -116,6 +144,15 @@ def parse_args():
     parser.add_argument("--al-mu", type=float, default=1.0, help="AL initial penalty mu")
     parser.add_argument("--al-rate", type=float, default=2.0, help="AL mu increase rate")
     parser.add_argument("--al-iters", type=int, default=40, help="AL max outer iterations")
+    parser.add_argument("--debug-iterations", action="store_true",
+                        help="Record and visualize the solver's per-iteration progress "
+                             "(one snapshot per Augmented-Lagrangian outer iteration): "
+                             "prints a cost/violation/mu table, saves an AL-convergence "
+                             "figure, and (unless --no-viz) animates the terminal grasp "
+                             "converging onto the object across iterations.")
+    parser.add_argument("--sample-interval", type=int, default=1,
+                        help="With --debug-iterations, keep a trajectory snapshot every N "
+                             "outer iterations (default 1 = every iteration).")
     parser.add_argument("--no-viz", action="store_true",
                         help="Skip the interactive 3D view (figures are still saved).")
     parser.add_argument("--save-figures", "-SF", action="store_true",
@@ -193,6 +230,11 @@ def _main(args, results_dir):
     plan_config.base.al_initial_mu = args.al_mu
     plan_config.base.al_mu_increase_rate = args.al_rate
     plan_config.base.al_max_iterations = args.al_iters
+    # Capture each AL outer iteration (full-trajectory snapshot + cost/violation/mu
+    # trace) so we can visualize what the solver is doing step by step.
+    if args.debug_iterations:
+        plan_config.base.record_iterations = True
+        plan_config.base.iteration_sample_interval = args.sample_interval
 
     log_planner_parameters(plan_config, extras={
         "primitive": args.primitive,
@@ -270,6 +312,10 @@ def _main(args, results_dir):
     for name, count, err in planner.get_factor_error_summary()[:8]:
         print(f"  {err:12.4g}  x{count:<4} {name}")
 
+    # --- Solver-iteration diagnostics (only when --debug-iterations). ---
+    if args.debug_iterations:
+        _report_al_iterations(result, results_dir, exp_label)
+
     # --- Save the state / trajectory figures (headless-safe; always saved). ---
     # One rich per-finger state plot each (tensions, lengths, disc kinematics,
     # internal/external wrenches) reusing the single-finger plot_trajectory, plus
@@ -303,21 +349,67 @@ def _main(args, results_dir):
         plotter_kwargs["save_frames_dir_name"] = "frames"
         plotter_kwargs["frames_base_dir"] = results_dir
 
+    def _show_hand(hand_m):
+        plotter.update({name: _FingerSol(fm, result.meta)
+                        for name, fm in zip(finger_names, hand_m.fingers)})
+
     plotter = TendonHandPlotter(finger_names, **plotter_kwargs)
-    plotter.plotter.plotter.add_text(f"{args.primitive} grasp trajectory",
-                                     position="upper_left", font_size=12)
+    title = (f"{args.primitive} solver iterations (terminal grasp)"
+             if args.debug_iterations else f"{args.primitive} grasp trajectory")
+    plotter.plotter.plotter.add_text(title, position="upper_left", font_size=12,
+                                     name="title")
     _add_object_mesh(plotter.plotter.plotter, spec, object_center)
 
-    for k, hand_m in enumerate(result.trajectory):
-        solutions = {name: _FingerSol(fm, result.meta)
-                     for name, fm in zip(finger_names, hand_m.fingers)}
-        print(f"Displaying step {k}/{K}")
-        plotter.update(solutions)
-        if not args.save_figures:
-            time.sleep(args.dt)
+    # Segment boundaries into the shared frames/ stream: (gif_name, start, end).
+    # The plotter's monotonic frame counter is never reset (mesh actors build
+    # only on frame==0), so we slice one flat frame stream into several GIFs.
+    segments = []
+
+    if args.debug_iterations:
+        # Watch the solver converge: for every trajectory step k, animate that
+        # step across the recorded AL outer iterations (initial guess first).
+        # Each snapshot is that iteration's full trajectory; we show step k of
+        # it. One GIF per step, plus a final converged-trajectory playback.
+        snapshots = [planner.get_initial_solution()]
+        snapshots += list(planner.get_intermediate_solutions())
+
+        for k in range(K + 1):
+            print(f"Animating {len(snapshots)} solver snapshots (step {k}/{K})...")
+            plotter.plotter.plotter.add_text(
+                f"{args.primitive} step {k}/{K} convergence",
+                position="upper_left", font_size=12, name="title")
+            start = plotter.plotter.frame
+            for snap in snapshots:
+                _show_hand(snap.trajectory[k])
+                if not args.save_figures:
+                    time.sleep(max(args.dt, 0.15))
+            _show_hand(result.trajectory[k])  # settle on converged step state
+            segments.append((f"{exp_label}_step{k}", start, plotter.plotter.frame))
+
+        # Final converged trajectory playback (steps 0..K over time).
+        print(f"Animating converged trajectory ({K + 1} steps)...")
+        plotter.plotter.plotter.add_text(
+            f"{args.primitive} converged trajectory",
+            position="upper_left", font_size=12, name="title")
+        start = plotter.plotter.frame
+        for hand_m in result.trajectory:
+            _show_hand(hand_m)
+            if not args.save_figures:
+                time.sleep(args.dt)
+        segments.append((f"{exp_label}_trajectory", start, plotter.plotter.frame))
+    else:
+        start = plotter.plotter.frame
+        for k, hand_m in enumerate(result.trajectory):
+            print(f"Displaying step {k}/{K}")
+            _show_hand(hand_m)
+            if not args.save_figures:
+                time.sleep(args.dt)
+        segments.append((exp_label, start, plotter.plotter.frame))
 
     if args.save_figures:
-        plotter.plotter.save_video(fps=args.fps, name=exp_label)
+        for name, start, end in segments:
+            plotter.plotter.save_video(fps=args.fps, name=name,
+                                       frame_range=(start, end))
         print(f"Saved experiment results to {results_dir}/")
         return
 

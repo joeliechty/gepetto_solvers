@@ -131,6 +131,22 @@ SolutionMetadata SolverBase::optimize() {
             meta.iterations = progress.back().iteration;
             if (progress.back().muEq > 0.0) al_final_mu_ = progress.back().muEq;
         }
+        // Surface the per-outer-iteration trace for debug visualization. The
+        // LM/Dogleg iterate-loop below is skipped on the AL path, so we mirror
+        // it here from progress(): scalar convergence curves (cost / constraint
+        // violation / penalty mu) plus full-trajectory Values snapshots for
+        // step-by-step replay (see get_intermediate_solutions()).
+        if (config_.record_iterations) {
+            for (size_t i = 0; i < progress.size(); ++i) {
+                const auto& st = progress[i];
+                meta.al_iteration_costs.push_back(st.cost);
+                meta.al_iteration_violations.push_back(st.violation());
+                meta.al_iteration_mus.push_back(st.muEq);
+                if (config_.iteration_sample_interval <= 0 ||
+                    i % config_.iteration_sample_interval == 0)
+                    intermediate_values_.push_back(st.values);
+            }
+        }
         // meta.error is set below from the cost-only graph; the full-graph
         // error would be dominated by the (large) hard-constraint penalty.
     } else if (config_.use_dense) {

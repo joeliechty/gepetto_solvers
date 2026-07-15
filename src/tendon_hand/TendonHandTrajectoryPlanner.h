@@ -100,10 +100,26 @@ public:
     std::vector<std::tuple<std::string, int, double>>
         get_factor_error_summary() const { return SolverBase::get_factor_error_summary(); }
 
+    // Per-iteration snapshots for debug visualization of the solve. Populated
+    // only when config.base.record_iterations == true (each Augmented Lagrangian
+    // outer iteration is one snapshot; see SolverBase::optimize()). Each entry is
+    // a full K+1-step trajectory reconstructed from that iteration's Values using
+    // means-only marginals (cheap; no covariance factorization). Empty otherwise.
+    std::vector<TendonHandTrajectoryResult> get_intermediate_solutions() const;
+
+    // The initial guess (start of the last plan()) as a trajectory, for the first
+    // frame of a step animation. Mirrors get_intermediate_solutions()'s extraction.
+    TendonHandTrajectoryResult get_initial_solution() const;
+
 private:
     void build_graph() override;
     void extract_solution() override;
     void get_initial_values() override;
+
+    // Reconstruct a full trajectory result from a Values snapshot using means-only
+    // marginals. Shared by get_intermediate_solutions()/get_initial_solution().
+    TendonHandTrajectoryResult
+        extract_trajectory_means_only(const gtsam::Values& values) const;
 
     TendonHandTrajectoryPlannerConfig config_;
 
