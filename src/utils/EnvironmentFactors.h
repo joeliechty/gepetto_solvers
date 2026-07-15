@@ -4,6 +4,7 @@
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/Point3.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
+#include <gtsam/constrained/NonlinearInequalityConstraint.h>
 #include <openvdb/openvdb.h>
 #include <openvdb/tools/Interpolation.h>
 
@@ -44,7 +45,13 @@ struct EnvironmentConfig {
     gtsam::Matrix6 object_pose_cov  = 1e-8 * gtsam::Matrix6::Identity();
     bool object_pose_per_step = false;
 
-    // Collision running cost (Eq 28/29): e = (eps - Phi_D)^3 if Phi_D <= eps, else 0.
+    // Collision avoidance (Section 1.5). The finger nodes listed in
+    // collision_node_indices (with radii collision_node_radii) are kept out of
+    // the object by sphere-to-SDF inequality constraints c_pen <= 0, built from
+    // SdfCollisionGapFactor wrapped in a CollisionInequalityConstraint and
+    // driven to feasibility by the Augmented Lagrangian optimizer.
+    // collision_sigma scales the constraint. collision_epsilon is retained for
+    // backward compatibility and is unused by the AL inequality formulation.
     double collision_epsilon = 0.0;
     double collision_sigma   = 1e-3;
     std::vector<int>    collision_node_indices;
@@ -72,24 +79,207 @@ struct EnvironmentConfig {
 };
 
 
-// C^2 cubic-polynomial barrier collision factor (Eq 27, 28, 29).
+// ---------------------------------------------------------------------------
+// Collision-avoidance factors (Section 1.5).
+//
+// Collision is modeled as a hard inequality constraint c_pen(x) <= 0 handled
+// natively by GTSAM's AugmentedLagrangianOptimizer -- NOT as a soft cubic /
+// quadratic penalty (the old SdfCollisionFactor). Each geometry pair is split
+// into two pieces:
+//   * a "gap factor" (a plain NoiseModelFactor) whose *unwhitened* error is the
+//     raw signed penetration depth c_pen(x) with analytical Jacobians, and
+//   * a CollisionInequalityConstraint wrapper that presents that gap factor to
+//     the AL solver as the one-sided constraint c_pen(x) <= 0.
+//
+// Under the AL two-loop formulation:
+//   Free space  (c_pen <  0): inactive -- the constraint ramps to zero error
+//                             and zero Jacobian, adding nothing to the linear
+//                             system and preserving graph sparsity.
+//   Collision   (c_pen >= 0): active -- the inner loop applies a smooth
+//                             quadratic penalty pushing the sphere back to the
+//                             surface; mu / lambda are updated in the outer loop.
+// This mirrors gtsam::ZeroCostConstraint (which does the equality analogue for
+// the terminal contact factors) but for the one-sided collision case.
+// ---------------------------------------------------------------------------
+
+// Wraps a scalar "gap factor" -- any NoiseModelFactor whose unwhitened error is
+// a penetration depth c_pen(x) -- into the inequality constraint c_pen(x) <= 0
+// consumed by GTSAM's AugmentedLagrangianOptimizer. The constraint's sigma and
+// keys are inherited from the wrapped factor, exactly as gtsam::ZeroCostConstraint
+// does for equality constraints. The base class supplies the ramp (inactive
+// branch), the active() test, and the L2 penalty; we additionally expose the
+// g(x)=0 equality form used to build the Lagrange-multiplier term.
+class CollisionInequalityConstraint : public gtsam::NonlinearInequalityConstraint {
+private:
+    gtsam::NoiseModelFactor::shared_ptr gap_factor_;
+
+public:
+    explicit CollisionInequalityConstraint(const gtsam::NoiseModelFactor::shared_ptr& gap_factor)
+        : gtsam::NonlinearInequalityConstraint(
+              constrainedNoise(gap_factor->noiseModel()->sigmas()), gap_factor->keys()),
+          gap_factor_(gap_factor) {}
+
+    // g(x) = raw penetration depth; the base class ramps this to enforce <= 0.
+    gtsam::Vector unwhitenedExpr(const gtsam::Values& x,
+                                 gtsam::OptionalMatrixVecType H = nullptr) const override {
+        return gap_factor_->unwhitenedError(x, H);
+    }
+
+    // The corresponding g(x) = 0 equality constraint, used by the AL optimizer
+    // to build the Lagrange-multiplier (linear) term for this inequality.
+    gtsam::NonlinearEqualityConstraint::shared_ptr createEqualityConstraint() const override {
+        return std::make_shared<gtsam::ZeroCostConstraint>(gap_factor_);
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new CollisionInequalityConstraint(*this)));
+    }
+};
+
+
+// Finger-object (sphere-to-SDF) penetration gap (Section 1.5):
+//   c_pen(p_i, T_obj) = r_i - SDF(T_obj^{-1} p_i)
+// where p_i is the world-frame center of the collision sphere on the finger
+// node and r_i its radius. c_pen > 0 means the sphere penetrates the object
+// surface. The analytical Jacobian follows the writeup:
+//   d c_pen / d p_i = -grad SDF(T_obj^{-1} p_i),
+// chained through node_pose.translation() and object_pose.transformTo(). Wrap
+// an instance in a CollisionInequalityConstraint to enforce c_pen <= 0.
+class SdfCollisionGapFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
+private:
+    double radius_;
+    openvdb::FloatGrid::Ptr sdf_grid_;
+
+public:
+    SdfCollisionGapFactor(gtsam::Key node_pose_key, gtsam::Key object_key,
+                          double radius, const openvdb::FloatGrid::Ptr& sdf_grid,
+                          const gtsam::SharedNoiseModel& noise_model)
+        : NoiseModelFactorN(noise_model, node_pose_key, object_key),
+          radius_(radius), sdf_grid_(sdf_grid) {}
+
+    gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
+                                const gtsam::Pose3& object_pose,
+                                gtsam::OptionalMatrixType H1,
+                                gtsam::OptionalMatrixType H2) const override
+    {
+        gtsam::Matrix36 D_pworld_finger;
+        gtsam::Point3 p_world = node_pose.translation(H1 ? &D_pworld_finger : nullptr);
+
+        gtsam::Matrix36 D_plocal_obj;
+        gtsam::Matrix33 D_plocal_pworld;
+        gtsam::Point3 p_local = object_pose.transformTo(p_world,
+            H2 ? &D_plocal_obj    : nullptr,
+            H1 ? &D_plocal_pworld : nullptr);
+
+        openvdb::tools::GridSampler<openvdb::FloatGrid, openvdb::tools::BoxSampler> sampler(*sdf_grid_);
+        openvdb::Vec3R q(p_local.x(), p_local.y(), p_local.z());
+        double sdf = sampler.wsSample(q);
+        double c_pen = radius_ - sdf;   // > 0  <=>  penetration
+
+        if (H1 || H2) {
+            // Central-difference SDF gradient in the object-local frame.
+            double h = 1e-4;
+            double dx = sampler.wsSample(openvdb::Vec3R(q.x() + h, q.y(), q.z())) -
+                        sampler.wsSample(openvdb::Vec3R(q.x() - h, q.y(), q.z()));
+            double dy = sampler.wsSample(openvdb::Vec3R(q.x(), q.y() + h, q.z())) -
+                        sampler.wsSample(openvdb::Vec3R(q.x(), q.y() - h, q.z()));
+            double dz = sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z() + h)) -
+                        sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z() - h));
+            gtsam::Vector3 grad(dx, dy, dz);
+            grad /= (2.0 * h);
+
+            // d c_pen / d p_local = -grad^T (dc_pen/dsdf = -1, dsdf/dp = grad^T)
+            gtsam::Matrix13 dcpen_dplocal = -grad.transpose();
+            if (H1) *H1 = dcpen_dplocal * D_plocal_pworld * D_pworld_finger;
+            if (H2) *H2 = dcpen_dplocal * D_plocal_obj;
+        }
+
+        return gtsam::Vector1(c_pen);
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new SdfCollisionGapFactor(*this)));
+    }
+};
+
+
+// Finger-finger (sphere-to-sphere) penetration gap (Section 1.5):
+//   c_pen(p_i, p_j) = (r_i + r_j) - ||p_i - p_j||
+// where p_i, p_j are the world-frame centers of the two collision spheres
+// (the translations of the two Pose3 variables) and r_i, r_j their radii.
+// c_pen > 0 means the two spheres overlap. Analytical Jacobians (writeup):
+//   d c_pen / d p_i = -(p_i - p_j)/||p_i - p_j||,
+//   d c_pen / d p_j = +(p_i - p_j)/||p_i - p_j||.
+// Only the translations enter the residual; the rotation Jacobian blocks are
+// zero. Wrap an instance in a CollisionInequalityConstraint to enforce
+// c_pen <= 0.
+class SphereSphereCollisionGapFactor
+    : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3>
+{
+private:
+    double r_a_, r_b_;
+
+public:
+    SphereSphereCollisionGapFactor(gtsam::Key pose_a_key, gtsam::Key pose_b_key,
+                                   double r_a, double r_b,
+                                   const gtsam::SharedNoiseModel& noise_model)
+        : NoiseModelFactorN(noise_model, pose_a_key, pose_b_key),
+          r_a_(r_a), r_b_(r_b) {}
+
+    gtsam::Vector evaluateError(const gtsam::Pose3& pose_a,
+                                const gtsam::Pose3& pose_b,
+                                gtsam::OptionalMatrixType H1,
+                                gtsam::OptionalMatrixType H2) const override
+    {
+        gtsam::Matrix36 D_ca_pose, D_cb_pose;
+        gtsam::Point3 c_a = pose_a.translation(H1 ? &D_ca_pose : nullptr);
+        gtsam::Point3 c_b = pose_b.translation(H2 ? &D_cb_pose : nullptr);
+
+        gtsam::Vector3 d = c_a - c_b;
+        double dn = d.norm();
+        if (dn < 1e-7) dn = 1e-7;
+        gtsam::Vector3 n = d / dn;      // unit vector from c_b toward c_a
+
+        double c_pen = (r_a_ + r_b_) - dn;   // > 0  <=>  overlap
+
+        // d c_pen / d c_a = -n^T ,  d c_pen / d c_b = +n^T
+        if (H1) *H1 = -n.transpose() * D_ca_pose;   // 1x6
+        if (H2) *H2 =  n.transpose() * D_cb_pose;   // 1x6
+
+        return gtsam::Vector1(c_pen);
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new SphereSphereCollisionGapFactor(*this)));
+    }
+};
+
+
+// DEPRECATED (pre-Section-1.5). Soft C^2 cubic-polynomial barrier collision
+// factor, superseded by the AL inequality-constraint formulation above
+// (SdfCollisionGapFactor + CollisionInequalityConstraint). Kept, renamed with a
+// Deprecated prefix, only so existing call sites still compile and are easy to
+// grep for and migrate later -- do not use it for new code.
 //   Phi_D(p, T_obj) = SDF(T_obj^{-1} p) - radius
 //   e(Phi_D)        = (eps - Phi_D)^3   if Phi_D <= eps, else 0
 //
 // Inactive branch (Phi_D > eps) returns exactly zero with zero Jacobians.
 // Because value, first, and second derivative all vanish at the boundary,
 // the transition is smooth and Gauss-Newton-friendly.
-class SdfCollisionFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
+class DeprecatedSdfCollisionFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
 private:
     double radius_;
     double epsilon_;
     openvdb::FloatGrid::Ptr sdf_grid_;
 
 public:
-    SdfCollisionFactor(gtsam::Key node_pose_key, gtsam::Key object_key,
-                       double radius, double epsilon,
-                       const openvdb::FloatGrid::Ptr& sdf_grid,
-                       const gtsam::SharedNoiseModel& noise_model)
+    DeprecatedSdfCollisionFactor(gtsam::Key node_pose_key, gtsam::Key object_key,
+                                 double radius, double epsilon,
+                                 const openvdb::FloatGrid::Ptr& sdf_grid,
+                                 const gtsam::SharedNoiseModel& noise_model)
         : NoiseModelFactorN(noise_model, node_pose_key, object_key),
           radius_(radius), epsilon_(epsilon), sdf_grid_(sdf_grid) {}
 
@@ -144,7 +334,7 @@ public:
 
     gtsam::NonlinearFactor::shared_ptr clone() const override {
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
-            gtsam::NonlinearFactor::shared_ptr(new SdfCollisionFactor(*this)));
+            gtsam::NonlinearFactor::shared_ptr(new DeprecatedSdfCollisionFactor(*this)));
     }
 };
 
@@ -256,8 +446,8 @@ public:
             if (H3) H3->row(1) = de2_dplocal * D_plocal_point;
 
             // Row 2: e3. Chain rule with the locally-constant-gradient
-            // approximation -- treat n_obj_local as p_c-independent (same
-            // convention used by SdfCollisionFactor).
+            // approximation -- treat n_obj_local as p_c-independent (the
+            // standard locally-constant-gradient contact convention).
             // n_i = (p_c - c_i)/d, projector P = (I - n_i n_i^T)/d.
             // dn_i/dc_i = -P,   dn_i/dp_c = P.
             const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();

@@ -12,7 +12,7 @@
 #include <iostream>
 
 using namespace gtsam;
-using crest_sparse::SdfCollisionFactor;
+using crest_sparse::DeprecatedSdfCollisionFactor;
 using crest_sparse::SdfWitnessContactFactor;
 using crest_sparse::SphereWitnessContactFactor;
 using crest_sparse::SphereSphereContactFactor;
@@ -360,7 +360,7 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
                     models_[k]->rod_->get_pose_key(i_node) ==
                         models_[k]->rod_->get_pose_key(*contact_node_idx))
                     continue;
-                graph_.add(SdfCollisionFactor(
+                graph_.add(DeprecatedSdfCollisionFactor(
                     collision_pose_key(i_node),
                     object_key(k),
                     r, env.collision_epsilon, env.sdf_grid, col_noise));
