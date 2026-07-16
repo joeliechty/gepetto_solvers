@@ -19,9 +19,10 @@ TendonHandSolver::TendonHandSolver(
     hand_ = std::make_unique<TendonHandModel>(
         finger_configs, Pose3(config.wrist_pose), wrist_noise);
 
-    // A configured per-finger contact is a hard equality constraint, so route
-    // the solve through SolverBase's Augmented Lagrangian path.
-    use_augmented_lagrangian_ = hand_->has_contact();
+    // A configured per-finger contact is a hard equality constraint and
+    // collision avoidance is a hard inequality constraint (Section 1.5), so
+    // either routes the solve through SolverBase's Augmented Lagrangian path.
+    use_augmented_lagrangian_ = hand_->has_contact() || hand_->has_collision();
 
     get_initial_values();
 }

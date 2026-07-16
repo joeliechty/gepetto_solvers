@@ -443,3 +443,67 @@ def get_default_hand_configs(dims=None):
 
     configs.append(("thumb", cfg_thumb))
     return configs
+
+
+# ---------------------------------------------------------------------------
+# Collision avoidance (Section 1.5)
+# ---------------------------------------------------------------------------
+
+
+def disc_node_indices(config):
+    """Rod node index of each disc, proximal (0) -> distal (tip)."""
+    return [i * (config.num_between_nodes + 1) for i in range(config.num_discs)]
+
+
+def proximal_disc_flags(config, num_proximal_discs=2):
+    """Parallel to :func:`disc_node_indices`: 1 for disc nodes on the rigidly-
+    attached proximal (metacarpal) bone, else 0.
+
+    The metacarpal is the first bone in the ``bone_joint`` spec and spans discs
+    0 and 1, so ``num_proximal_discs`` defaults to 2. Finger-finger collision in
+    the hand skips a sphere pair iff *both* spheres are proximal, so marking the
+    metacarpal discs proximal keeps the rigidly-attached bases from being checked
+    against each other (they cannot move relative to one another).
+    """
+    return [1 if d < num_proximal_discs else 0 for d in range(config.num_discs)]
+
+
+def attach_collision(configs, vdb_path, object_pose, *,
+                     radius=0.003, sigma=1e-4, num_proximal_discs=2,
+                     object_pose_cov=None):
+    """Enable Section 1.5 AL collision avoidance on every finger of a hand config
+    list, in place. Returns ``configs`` for chaining.
+
+    Each finger gets collision spheres on its disc nodes (radius ``radius``),
+    with the metacarpal discs flagged proximal. If a finger already has an
+    ``sdf_contact`` env (e.g. a terminal tip contact), the collision fields are
+    added to that same env so contact and collision share one object; otherwise
+    a fresh collision-only env is created and the SDF loaded.
+
+    The C++ hand builder then adds, at every trajectory step, sphere-to-SDF
+    inequalities keeping each finger out of the object and sphere-to-sphere
+    inequalities keeping distinct fingers apart (skipping proximal-proximal
+    pairs).
+    """
+    import crest_sparse
+
+    if object_pose_cov is None:
+        object_pose_cov = 1e-8 * np.eye(6)
+
+    for _, cfg in configs:
+        env = cfg.sdf_contact            # copy (or None) via the optional binding
+        if env is None:
+            env = crest_sparse.EnvironmentConfig()
+            env.load_sdf(vdb_path)
+            env.object_pose_mean = object_pose
+            env.object_pose_cov = object_pose_cov
+            env.object_pose_per_step = False
+
+        nodes = disc_node_indices(cfg)
+        env.collision_avoidance = True
+        env.collision_sigma = sigma
+        env.collision_node_indices = nodes
+        env.collision_node_radii = [radius] * len(nodes)
+        env.collision_node_is_proximal = proximal_disc_flags(cfg, num_proximal_discs)
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs

@@ -134,6 +134,7 @@ class TendonHandPlotter:
                  plot_backbone_ellipsoids=True,
                  plot_world_axes=True,
                  world_axes_scale=0.03,
+                 primitives=None,
                  **kwargs):
 
         if camera_focal_point is None:
@@ -146,6 +147,15 @@ class TendonHandPlotter:
             camera_distance=camera_distance,
             **kwargs,
         )
+
+        # Static scene objects (the grasp/collision object). Same spec format
+        # as TendonFingerPlotter / get_primitive_specs()'s "plot" lambdas.
+        # Added immediately: they never move, so no per-frame update needed.
+        for spec in (primitives or []):
+            mesh = utils.build_primitive_mesh(spec)
+            self.plotter.plotter.add_mesh(
+                mesh, color=spec.get("color", "goldenrod"),
+                opacity=float(spec.get("opacity", 0.3)), smooth_shading=True)
 
         self.finger_names = list(finger_names)
         self.plot_world_axes = plot_world_axes
@@ -209,3 +219,48 @@ class TendonHandPlotter:
 
         first_solution = next(iter(solutions_dict.values()))
         self.plotter.update(first_solution)
+
+
+class TendonHandMultiViewPlotter:
+    """N simultaneous TendonHandPlotter windows, one per camera view.
+
+    Each view gets its own OS window (pyvista render windows cannot share
+    actors), tiled in a 2-column grid. ``views`` is a list of
+    (azimuth_deg, elevation_deg) pairs; every other constructor kwarg is
+    forwarded to each TendonHandPlotter unchanged. ``update()`` fans the same
+    solutions out to every window.
+
+    Default views: three azimuths 90 deg apart at working elevation, plus one
+    near-top-down — enough to disambiguate finger/object interpenetration.
+    """
+
+    DEFAULT_VIEWS = [(165, 20), (255, 20), (345, 20), (165, 70)]
+
+    def __init__(self, finger_names, views=None,
+                 window_size=(700, 700), window_gap=40, **kwargs):
+        views = list(views) if views is not None else list(self.DEFAULT_VIEWS)
+
+        self.plotters = []
+        for i, (azimuth, elevation) in enumerate(views):
+            p = TendonHandPlotter(
+                finger_names,
+                camera_azimuth=azimuth,
+                camera_elevation=elevation,
+                window_size=window_size,
+                **kwargs,
+            )
+            # Tile 2 columns x N rows so the windows don't stack exactly on
+            # top of each other. Position is best-effort (window managers may
+            # override); ignore backends that don't expose the render window.
+            try:
+                col, row = i % 2, i // 2
+                p.plotter.plotter.ren_win.SetPosition(
+                    col * (window_size[0] + window_gap),
+                    row * (window_size[1] + window_gap))
+            except AttributeError:
+                pass
+            self.plotters.append(p)
+
+    def update(self, solutions_dict):
+        for p in self.plotters:
+            p.update(solutions_dict)

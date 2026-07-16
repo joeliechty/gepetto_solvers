@@ -165,6 +165,10 @@ def _main(args, results_dir):
         # planner auto-skips the collision factor on the terminal contact node at
         # k=K so it can't fight the contact factor; intermediate steps still keep
         # the finger out of the object.
+        # collision_avoidance = False keeps this demo on the legacy soft cubic-
+        # barrier (DeprecatedSdfCollisionFactor) path, so its converged trajectory
+        # is unchanged by the Section 1.5 AL collision work (default is True).
+        env.collision_avoidance = False
         env.collision_epsilon = 0.002             # 2 mm safety margin
         env.collision_sigma = 1e-4
         env.collision_node_indices = disc_node_indices

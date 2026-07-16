@@ -92,10 +92,21 @@ public:
     // True if any finger has a contact constraint configured (=> AL path).
     bool has_contact() const { return has_contact_; }
 
+    // True if any finger has collision avoidance configured (=> AL path). A
+    // collision-only hand (no contact) must still route through the Augmented
+    // Lagrangian optimizer for the inequality constraints to take effect.
+    bool has_collision() const { return has_collision_; }
+
     // Wrist variable key. step defaults to 0 (the single-shot key), so existing
     // callers are unchanged; the trajectory planner uses per-step keys.
     static gtsam::Key wrist_key(int step = 0) { return gtsam::Symbol('W', step); }
-    static gtsam::Key object_key()         { return gtsam::Symbol('O', 0); }
+    // Object pose variable for THIS model's step. Per-step (Symbol('O', step_))
+    // so a trajectory — where collision avoidance anchors the object at EVERY
+    // step — gets one object variable per step instead of duplicate insertions
+    // of a single shared key. The object is static (same tight prior each step),
+    // so per-step variables are equivalent to one shared variable. For the
+    // single-shot solve (step_ = 0) this is Symbol('O', 0), unchanged.
+    gtsam::Key object_key() const          { return gtsam::Symbol('O', step_); }
     static gtsam::Key witness_key(int i)   { return gtsam::Symbol('Y', i); }
 
     // This model's own wrist key (step-indexed). Used by the trajectory planner
@@ -163,4 +174,5 @@ private:
     std::vector<gtsam::SharedDiagonal> small_wrench_noises_;
 
     bool has_contact_ = false;
+    bool has_collision_ = false;
 };

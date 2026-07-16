@@ -79,8 +79,19 @@ TendonHandModel::TendonHandModel(
         finger_names_.push_back(name);
         sdf_contacts_.push_back(c.sdf_contact);
         sphere_contacts_.push_back(c.sphere_contact);
-        if (c.sdf_contact.has_value() || c.sphere_contact.has_value())
+        // Contact => a terminal witness contact factor (target_contact_node for
+        // the SDF path, or any sphere_contact). A collision-only env (collision
+        // spheres but no target_contact_node) is NOT contact — it routes through
+        // has_collision() instead, so guard on target_contact_node here.
+        if ((c.sdf_contact.has_value() && c.sdf_contact->target_contact_node.has_value())
+            || c.sphere_contact.has_value())
             has_contact_ = true;
+        // Collision => AL inequality constraints on this finger's spheres.
+        if (c.sdf_contact.has_value() &&
+            c.sdf_contact->collision_avoidance &&
+            c.sdf_contact->sdf_grid &&
+            !c.sdf_contact->collision_node_indices.empty())
+            has_collision_ = true;
 
         SharedDiagonal twist_noise = get_noise_model_rot_pos(
             c.sigma_twist_rot, c.sigma_twist_pos);
@@ -173,12 +184,16 @@ NonlinearFactorGraph TendonHandModel::build_graph(
 
     // Per-finger tip contact against one shared object. The object pose is
     // anchored once; each finger drives its own witness point onto the surface.
+    // A collision-only sdf env (collision spheres but no target_contact_node)
+    // adds no contact factor here — the collision blocks below handle it (and
+    // anchor the shared object if no contacting finger did).
     bool object_anchored = false;
     for (size_t i = 0; i < fingers_.size(); ++i) {
         if (!sdf_contacts_[i] && !sphere_contacts_[i]) continue;
         std::visit([&](auto& fp) {
             if (sdf_contacts_[i]) {
                 const auto& env = *sdf_contacts_[i];
+                if (!env.target_contact_node.has_value()) return;  // collision-only
                 Key tip_key = fp->rod_->get_pose_key(*env.target_contact_node);
                 if (!object_anchored) {
                     graph.add(PriorFactor<Pose3>(
@@ -217,6 +232,88 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         }, fingers_[i]);
     }
 
+    // --- Collision avoidance (Section 1.5) -------------------------------
+    // Gather each finger's collision spheres once (world-frame pose key, radius,
+    // proximal flag). The base disc (node 0) has no free pose variable under the
+    // hand-base reparameterization (is_root); it is excluded from BOTH collision
+    // passes: the gap factors read the key's translation, which for the shared
+    // wrist/root key is the wrist origin — not node-0's position (wrist ∘
+    // offset) — and the base disc is rigidly placed by the wrist anyway.
+    // is_contact: the tip node that also carries the terminal witness contact
+    // factor for this finger (only when this model has target_contact_node, i.e.
+    // the terminal step). Its object-collision sphere is skipped so it can't
+    // oppose the contact factor — but it is KEPT for finger-finger collision
+    // (the contacting tip must still avoid other fingers).
+    struct CollSphere { Key key; double radius; bool proximal; bool is_root; bool is_contact; };
+    std::vector<std::vector<CollSphere>> finger_spheres(fingers_.size());
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        if (!sdf_contacts_[i]) continue;
+        const auto& env = *sdf_contacts_[i];
+        if (!env.collision_avoidance || !env.sdf_grid ||
+            env.collision_node_indices.empty())
+            continue;
+        std::visit([&](auto& fp) {
+            for (size_t j = 0; j < env.collision_node_indices.size(); ++j) {
+                int idx = env.collision_node_indices[j];
+                bool is_root = fp->rod_->uses_root() &&
+                               fp->rod_->get_pose_key(idx) == fp->rod_->get_pose_key(0);
+                Key key = is_root ? fp->rod_->get_root_base_key()
+                                  : fp->rod_->get_pose_key(idx);
+                double r = env.collision_node_radii[j];
+                bool prox = (j < env.collision_node_is_proximal.size())
+                                ? (env.collision_node_is_proximal[j] != 0) : false;
+                bool is_contact = env.target_contact_node.has_value() &&
+                    fp->rod_->get_pose_key(idx) ==
+                        fp->rod_->get_pose_key(*env.target_contact_node);
+                finger_spheres[i].push_back({key, r, prox, is_root, is_contact});
+            }
+        }, fingers_[i]);
+    }
+
+    // Finger-object: keep every collision sphere out of the shared object SDF,
+    // except the terminal contact node (its collision would oppose the contact
+    // factor; the contact factor already pins it tangent to the surface).
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        if (finger_spheres[i].empty()) continue;
+        const auto& env = *sdf_contacts_[i];
+        if (!object_anchored) {
+            graph.add(PriorFactor<Pose3>(
+                object_key(), Pose3(env.object_pose_mean),
+                noiseModel::Gaussian::Covariance(env.object_pose_cov)));
+            object_anchored = true;
+        }
+        auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
+        for (const auto& s : finger_spheres[i]) {
+            if (s.is_contact || s.is_root) continue;
+            auto gap = std::make_shared<crest_sparse::SdfCollisionGapFactor>(
+                s.key, object_key(), s.radius, env.sdf_grid, col_noise);
+            graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+        }
+    }
+
+    // Finger-finger: keep collision spheres of distinct fingers apart. Skip a
+    // pair iff BOTH spheres are proximal (rigidly-attached base bones), and skip
+    // any base-disc (root) sphere (no distinct per-finger pose variable). This
+    // leaves distal-distal and distal-proximal cross-finger pairs.
+    for (size_t a = 0; a < fingers_.size(); ++a) {
+        if (finger_spheres[a].empty()) continue;
+        auto col_noise = noiseModel::Isotropic::Sigma(
+            1, sdf_contacts_[a]->collision_sigma);
+        for (size_t b = a + 1; b < fingers_.size(); ++b) {
+            if (finger_spheres[b].empty()) continue;
+            for (const auto& sa : finger_spheres[a]) {
+                if (sa.is_root) continue;
+                for (const auto& sb : finger_spheres[b]) {
+                    if (sb.is_root) continue;
+                    if (sa.proximal && sb.proximal) continue;
+                    auto gap = std::make_shared<crest_sparse::SphereSphereCollisionGapFactor>(
+                        sa.key, sb.key, sa.radius, sb.radius, col_noise);
+                    graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+                }
+            }
+        }
+    }
+
     return graph;
 }
 
@@ -241,8 +338,20 @@ Values TendonHandModel::get_initial_values() const {
         std::visit([&](const auto& fp) {
             if (sdf_contacts_[i]) {
                 const auto& env = *sdf_contacts_[i];
+                // Only seed the shared object when this env actually contributes
+                // a factor in build_graph: a terminal contact and/or active
+                // collision. An inert sdf env seeds nothing (avoids an orphan
+                // object variable with no factors).
+                bool has_col = env.collision_avoidance && env.sdf_grid &&
+                               !env.collision_node_indices.empty();
+                if (!env.target_contact_node.has_value() && !has_col) return;
+
                 Pose3 obj_mean(env.object_pose_mean);
                 if (!object_seeded) { values.insert(object_key(), obj_mean); object_seeded = true; }
+
+                // Collision-only env (no target_contact_node): the object is
+                // seeded above; there is no witness point to seed.
+                if (!env.target_contact_node.has_value()) return;
 
                 Point3 seed_local;
                 if (env.witness_point_seed) {

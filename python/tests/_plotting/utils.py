@@ -35,6 +35,50 @@ def setup_plt(width=3.0, height=5.0, grid=False):
     })
 
 
+def build_primitive_mesh(spec):
+    """Build a pyvista mesh from an object-primitive spec dict.
+
+    ``spec`` has a "type" key ("sphere", "cylinder", or "cube"/"box") plus the
+    geometry fields used by the ``get_primitive_specs()`` "plot" lambdas:
+    sphere -> center/radius; cylinder -> center/direction/radius/height;
+    cube/box -> center/extents (full side lengths). Shared by the finger and
+    hand plotters so both render the same scene objects.
+    """
+    ptype = spec.get("type", "sphere")
+    center = np.asarray(spec["center"], dtype=float)
+
+    if ptype == "sphere":
+        return pv.Sphere(radius=float(spec["radius"]), center=center)
+    if ptype == "cylinder":
+        # Axis defaults to Y to match _objects/make_cylinder.py.
+        direction = spec.get("direction", (0.0, 1.0, 0.0))
+        return pv.Cylinder(
+            center=center, direction=direction,
+            radius=float(spec["radius"]), height=float(spec["height"]))
+    if ptype == "capsule":
+        # Cylinder of length "height" with hemispherical caps, matching
+        # _objects/make_capsule.py. Composed rather than pv.Capsule so it works
+        # across pyvista versions. The tube is uncapped and each cap is a true
+        # hemisphere (pole aimed outward along the axis), so the translucent
+        # surface has no interior faces showing through.
+        direction = np.asarray(spec.get("direction", (0.0, 1.0, 0.0)), dtype=float)
+        direction = direction / np.linalg.norm(direction)
+        radius, height = float(spec["radius"]), float(spec["height"])
+        cylinder = pv.Cylinder(center=center, direction=direction,
+                               radius=radius, height=height, capping=False)
+        caps = [pv.Sphere(radius=radius,
+                          center=center + s * direction * (height / 2.0),
+                          direction=s * direction, end_phi=90)
+                for s in (+1.0, -1.0)]
+        return cylinder.merge(caps)
+    if ptype in ("cube", "box"):
+        ex, ey, ez = spec["extents"]
+        return pv.Cube(center=center,
+                       x_length=float(ex), y_length=float(ey),
+                       z_length=float(ez))
+    raise ValueError(f"Unknown primitive type: {ptype!r}")
+
+
 def get_tube_from_points(points, radius):
     spline = pv.Spline(points, n_points=200)
     tube = spline.tube(radius=radius)

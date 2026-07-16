@@ -6,10 +6,12 @@
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/constrained/AugmentedLagrangianOptimizer.h>
 #include <gtsam/constrained/NonlinearConstraint.h>
+#include <gtsam/constrained/NonlinearInequalityConstraint.h>
 
 #include <gtsam/base/types.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <map>
 #include <typeinfo>
@@ -116,9 +118,44 @@ SolutionMetadata SolverBase::optimize() {
         auto p = std::make_shared<AugmentedLagrangianParams>();
         p->initialMuEq      = config_.al_initial_mu;
         p->muEqIncreaseRate = config_.al_mu_increase_rate;
+        // Inequality constraints (Section 1.5 collision avoidance) get the same
+        // outer-loop penalty schedule as the equality constraints; GTSAM's
+        // defaults (1.0 / 2.0) leave the collision penalty orders of magnitude
+        // weaker than the contact penalty otherwise.
+        p->initialMuIneq      = config_.al_initial_mu;
+        p->muIneqIncreaseRate = config_.al_mu_increase_rate;
         p->maxIterations    = config_.al_max_iterations;
         p->storeOptProgress = true;  // populate progress() for iteration count
-        p->lm_params.setLinearSolverType(config_.linear_solver_type);
+        // Outer-loop trace (iter | muEq | muIneq | cost | eq/ineq violation |
+        // inner LM iters) straight from GTSAM, for debugging AL stalls.
+        if (std::getenv("CREST_AL_VERBOSE")) p->verbose = true;
+
+        // Inequality constraints require a Cholesky-based inner linear solver.
+        // GTSAM's AL optimizer builds the inequality Lagrange-multiplier term
+        // as a BiasedFactor/AntiFactor pair, and AntiFactor linearizes to a
+        // NEGATED HessianFactor; QR elimination cannot consume negative
+        // information, so the inner LM silently makes no progress and the
+        // outer loop "converges" at the initial values. Cholesky elimination
+        // sums information matrices natively and handles the pair exactly.
+        std::string linear_solver_type = config_.linear_solver_type;
+        bool has_inequality = false;
+        for (const auto& f : graph_) {
+            if (std::dynamic_pointer_cast<gtsam::NonlinearInequalityConstraint>(f)) {
+                has_inequality = true;
+                break;
+            }
+        }
+        if (has_inequality && linear_solver_type.find("QR") != std::string::npos) {
+            std::string cholesky =
+                (linear_solver_type.find("SEQUENTIAL") != std::string::npos)
+                    ? "SEQUENTIAL_CHOLESKY" : "MULTIFRONTAL_CHOLESKY";
+            std::cerr << "[SolverBase] inequality constraints present; switching "
+                      << "linear solver " << linear_solver_type << " -> "
+                      << cholesky << " (QR cannot eliminate the AL optimizer's "
+                      << "negated-Hessian AntiFactors)." << std::endl;
+            linear_solver_type = cholesky;
+        }
+        p->lm_params.setLinearSolverType(linear_solver_type);
         p->lm_params.lambdaInitial    = config_.lambda_initial;
         p->lm_params.lambdaUpperBound = config_.lambda_upper_bound;
         p->lm_params.diagonalDamping  = config_.diagonal_damping;

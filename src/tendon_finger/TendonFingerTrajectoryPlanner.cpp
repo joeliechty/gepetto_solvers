@@ -13,6 +13,8 @@
 
 using namespace gtsam;
 using crest_sparse::DeprecatedSdfCollisionFactor;
+using crest_sparse::SdfCollisionGapFactor;
+using crest_sparse::CollisionInequalityConstraint;
 using crest_sparse::SdfWitnessContactFactor;
 using crest_sparse::SphereWitnessContactFactor;
 using crest_sparse::SphereSphereContactFactor;
@@ -75,11 +77,18 @@ TendonFingerTrajectoryPlanner<N>::TendonFingerTrajectoryPlanner(
     // equality constraint, so route plan() through SolverBase's Augmented
     // Lagrangian path. This covers both the SDF surface contact
     // (environment->target_contact_node) and the analytic sphere-primitive
-    // contact (sphere_contact). Pure free-space planning stays on Dogleg/LM.
+    // contact (sphere_contact). AL collision avoidance (Section 1.5) is also a
+    // constraint (an inequality), so a collision-only run must route through AL
+    // too — the inequality constraints are ignored by Dogleg/LM. Pure free-space
+    // planning stays on Dogleg/LM.
     use_augmented_lagrangian_ =
         (config.environment.has_value() &&
          config.environment->target_contact_node.has_value()) ||
-        config.sphere_contact.has_value();
+        config.sphere_contact.has_value() ||
+        (config.environment.has_value() &&
+         config.environment->collision_avoidance &&
+         config.environment->sdf_grid &&
+         !config.environment->collision_node_indices.empty());
 
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
         mc.sigma_twist_rot, mc.sigma_twist_pos);
@@ -360,10 +369,18 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
                     models_[k]->rod_->get_pose_key(i_node) ==
                         models_[k]->rod_->get_pose_key(*contact_node_idx))
                     continue;
-                graph_.add(DeprecatedSdfCollisionFactor(
-                    collision_pose_key(i_node),
-                    object_key(k),
-                    r, env.collision_epsilon, env.sdf_grid, col_noise));
+                if (env.collision_avoidance) {
+                    // Section 1.5: AL inequality constraint c_pen <= 0.
+                    auto gap = std::make_shared<SdfCollisionGapFactor>(
+                        collision_pose_key(i_node), object_key(k),
+                        r, env.sdf_grid, col_noise);
+                    graph_.add(CollisionInequalityConstraint(gap));
+                } else {
+                    // Legacy path: soft cubic-barrier penalty.
+                    graph_.add(DeprecatedSdfCollisionFactor(
+                        collision_pose_key(i_node), object_key(k),
+                        r, env.collision_epsilon, env.sdf_grid, col_noise));
+                }
             }
         }
 

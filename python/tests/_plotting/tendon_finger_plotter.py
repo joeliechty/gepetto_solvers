@@ -241,30 +241,10 @@ class TendonFingerPlotter:
         if self.plotter.frame != 0:
             return
         for spec in self.primitives:
-            ptype = spec.get("type", "sphere")
-            center = np.asarray(spec["center"], dtype=float)
-            color = spec.get("color", "goldenrod")
-            opacity = float(spec.get("opacity", 0.3))
-
-            if ptype == "sphere":
-                mesh = pv.Sphere(radius=float(spec["radius"]), center=center)
-            elif ptype == "cylinder":
-                # Axis defaults to Y to match _objects/make_cylinder.py.
-                direction = spec.get("direction", (0.0, 1.0, 0.0))
-                mesh = pv.Cylinder(
-                    center=center, direction=direction,
-                    radius=float(spec["radius"]), height=float(spec["height"]))
-            elif ptype in ("cube", "box"):
-                # extents = full side lengths (x, y, z).
-                ex, ey, ez = spec["extents"]
-                mesh = pv.Cube(center=center,
-                               x_length=float(ex), y_length=float(ey),
-                               z_length=float(ez))
-            else:
-                raise ValueError(f"Unknown primitive type: {ptype!r}")
-
+            mesh = utils.build_primitive_mesh(spec)
             self.plotter.plotter.add_mesh(
-                mesh, color=color, opacity=opacity, smooth_shading=True)
+                mesh, color=spec.get("color", "goldenrod"),
+                opacity=float(spec.get("opacity", 0.3)), smooth_shading=True)
 
     def update_p_desired(self, p):
         if self.plotter.frame == 0:

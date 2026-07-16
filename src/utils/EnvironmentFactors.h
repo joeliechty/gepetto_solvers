@@ -52,10 +52,27 @@ struct EnvironmentConfig {
     // driven to feasibility by the Augmented Lagrangian optimizer.
     // collision_sigma scales the constraint. collision_epsilon is retained for
     // backward compatibility and is unused by the AL inequality formulation.
+    //
+    // collision_avoidance is the master switch (default true). When true, the
+    // planners add the AL inequality collision factors (finger-object, and
+    // finger-finger in the hand). When false, they reproduce the pre-Section-1.5
+    // behavior exactly: the single-finger planner falls back to the deprecated
+    // soft cubic-barrier DeprecatedSdfCollisionFactor, and the hand adds no
+    // collision factors. Every legacy test/demo sets this false so its converged
+    // solution is unchanged.
+    //
+    // collision_node_is_proximal is a parallel vector to collision_node_indices
+    // (1 = proximal, 0 = distal). It only matters for finger-finger collision in
+    // the hand: a sphere pair is skipped iff BOTH spheres are proximal (the
+    // metacarpal/base bones are rigidly attached to the shared hand base, so a
+    // constraint between them is constant and useless). An empty vector means
+    // every node is treated as non-proximal (no pair excluded).
+    bool collision_avoidance = true;
     double collision_epsilon = 0.0;
     double collision_sigma   = 1e-3;
     std::vector<int>    collision_node_indices;
     std::vector<double> collision_node_radii;
+    std::vector<int>    collision_node_is_proximal;
 
     // Contact-as-goal terminal constraint (Eq 33-35). When target_contact_node
     // is set, the planner adds a hard equality constraint on that node — the
