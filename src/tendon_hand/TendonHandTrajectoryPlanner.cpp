@@ -26,26 +26,49 @@ TendonHandTrajectoryPlanner::TendonHandTrajectoryPlanner(
     SharedDiagonal start_wrist_noise = get_noise_model_rot_pos(
         config_.sigma_wrist_rot, config_.sigma_wrist_pos);
 
-    // Contact lives only at the terminal step, so strip the per-finger contact
-    // configs for every other step. Everything else about each finger is shared.
+    // Contact-as-goal lives only at the terminal step, so strip the terminal
+    // contact from every other step. Collision avoidance (Section 1.5), however,
+    // applies at every *plannable* step, so preserve the sdf env's collision
+    // fields (sdf_grid, object_pose_*, collision_*) and clear only the contact
+    // aspect (target_contact_node / witness_point_seed). A contact-only sdf env
+    // becomes inert after stripping (no grid factors) — handled by the
+    // build_graph / get_initial_values guards in TendonHandModel.
     auto free_space_configs = finger_configs;
     for (auto& [name, c] : free_space_configs) {
-        c.sdf_contact.reset();
+        if (c.sdf_contact.has_value()) {
+            c.sdf_contact->target_contact_node.reset();
+            c.sdf_contact->witness_point_seed.reset();
+        }
         c.sphere_contact.reset();
+    }
+
+    // The start step k=0 additionally gets NO collision constraints: it is a
+    // measurement pinned by tight start priors (start tensions, wrist prior).
+    // If the measured start is already in collision, a k=0 constraint is
+    // infeasible by construction — the AL outer loop grinds mu up against the
+    // measurement priors and distorts the whole solve instead of planning a
+    // way out from where the hand actually is.
+    auto start_configs = free_space_configs;
+    for (auto& [name, c] : start_configs) {
+        if (c.sdf_contact.has_value())
+            c.sdf_contact->collision_avoidance = false;
     }
 
     models_.reserve(K + 1);
     for (int k = 0; k <= K; ++k) {
         const bool is_start = (k == 0);
         const bool is_goal  = (k == K);
-        const auto& step_configs = is_goal ? finger_configs : free_space_configs;
+        const auto& step_configs = is_goal ? finger_configs
+                                 : is_start ? start_configs
+                                 : free_space_configs;
         models_.push_back(std::make_unique<TendonHandModel>(
             step_configs, wrist_pose, start_wrist_noise,
             /*step=*/k, /*emit_wrist_prior=*/is_start));
     }
 
-    // A configured contact at k=K is a hard equality constraint => AL path.
-    use_augmented_lagrangian_ = models_[K]->has_contact();
+    // A configured contact at k=K (hard equality) or collision avoidance at any
+    // step (hard inequality, Section 1.5) routes the solve through the AL path.
+    use_augmented_lagrangian_ = models_[K]->has_contact() || models_[K]->has_collision();
 
     get_initial_values();
 }

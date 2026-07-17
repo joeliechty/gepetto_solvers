@@ -12,7 +12,6 @@
 #include <iostream>
 
 using namespace gtsam;
-using crest_sparse::DeprecatedSdfCollisionFactor;
 using crest_sparse::SdfCollisionGapFactor;
 using crest_sparse::CollisionInequalityConstraint;
 using crest_sparse::SdfWitnessContactFactor;
@@ -257,12 +256,12 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
 
     Eigen::Matrix<double, N, N> Qc = config_.gp_tense_Qc.topLeftCorner<N, N>();
 
-    // Terminal contact node (if any), used to skip the collision running cost on
-    // that node at k=K — the collision hinge (which keeps the node *outside* the
-    // surface by collision_epsilon) would otherwise fight the terminal contact
-    // factor (which pulls the node *tangent* to the surface). Resolved to an
-    // explicit index here so the k=K skip below can compare pose keys (handles
-    // the -1 tip alias).
+    // Terminal contact node (if any), used to skip the collision constraint on
+    // that node at k=K — the collision inequality (which keeps the node *outside*
+    // the surface) would otherwise fight the terminal contact factor (which
+    // pulls the node *tangent* to the surface). Resolved to an explicit index
+    // here so the k=K skip below can compare pose keys (handles the -1 tip
+    // alias).
     std::optional<int> contact_node_idx;
     if (config_.environment && config_.environment->target_contact_node.has_value())
         contact_node_idx = *config_.environment->target_contact_node;
@@ -342,9 +341,16 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
         //     }
         // }
 
-        // 5.4 SDF collision running cost (Eq 28/29). Cubic barrier on each
-        // configured node sphere against the object SDF.
-        if (config_.environment && config_.environment->sdf_grid &&
+        // 5.4 SDF collision constraints (Section 1.5). AL inequality
+        // constraint c_pen <= 0 on each configured node sphere against the
+        // object SDF, at every *plannable* step k >= 1. The start step k=0 is
+        // a measurement pinned by tight start priors: if the measured start is
+        // already in collision, a k=0 constraint is infeasible by construction
+        // and the AL outer loop grinds mu up against the measurement priors,
+        // distorting the whole solve instead of planning a way out.
+        if (k > 0 &&
+            config_.environment && config_.environment->collision_avoidance &&
+            config_.environment->sdf_grid &&
             !config_.environment->collision_node_indices.empty()) {
             const auto& env = *config_.environment;
             auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
@@ -369,18 +375,10 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
                     models_[k]->rod_->get_pose_key(i_node) ==
                         models_[k]->rod_->get_pose_key(*contact_node_idx))
                     continue;
-                if (env.collision_avoidance) {
-                    // Section 1.5: AL inequality constraint c_pen <= 0.
-                    auto gap = std::make_shared<SdfCollisionGapFactor>(
-                        collision_pose_key(i_node), object_key(k),
-                        r, env.sdf_grid, col_noise);
-                    graph_.add(CollisionInequalityConstraint(gap));
-                } else {
-                    // Legacy path: soft cubic-barrier penalty.
-                    graph_.add(DeprecatedSdfCollisionFactor(
-                        collision_pose_key(i_node), object_key(k),
-                        r, env.collision_epsilon, env.sdf_grid, col_noise));
-                }
+                auto gap = std::make_shared<SdfCollisionGapFactor>(
+                    collision_pose_key(i_node), object_key(k),
+                    r, env.sdf_grid, col_noise);
+                graph_.add(CollisionInequalityConstraint(gap));
             }
         }
 

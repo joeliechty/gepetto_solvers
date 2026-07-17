@@ -174,16 +174,13 @@ def _main(args, results_dir):
         env.object_pose_mean = object_pose
         env.object_pose_cov = 1e-8 * np.eye(6)   # rigidly anchored
         env.object_pose_per_step = False
-        # Collision running cost on the disc nodes (disc 7 == the tip node). The
-        # planner auto-skips the collision factor on the terminal contact node at
-        # k=K so it can't fight the contact factor; intermediate steps still keep
-        # the finger out of the object.
-        # collision_avoidance = False keeps this demo on the legacy soft cubic-
-        # barrier (DeprecatedSdfCollisionFactor) path, so its converged trajectory
-        # is unchanged by the Section 1.5 AL collision work (default is True).
-        env.collision_avoidance = False
-        env.collision_epsilon = 0.002             # 2 mm safety margin
-        env.collision_sigma = 1e-4
+        # Collision constraints on the disc nodes (disc 7 == the tip node), as
+        # Section 1.5 AL inequalities (c_pen <= 0) at every step. The planner
+        # auto-skips the constraint on the terminal contact node at k=K so it
+        # can't fight the contact factor; intermediate steps still keep the
+        # finger out of the object. Sigma 1.0 whitens the collision rows the
+        # same as the contact constraint rows.
+        env.collision_sigma = 1.0
         env.collision_node_indices = disc_node_indices
         env.collision_node_radii = [0.003] * len(disc_node_indices)
         # Terminal contact: tip sphere lands tangent to the SDF surface. Hard AL

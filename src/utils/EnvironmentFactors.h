@@ -50,16 +50,13 @@ struct EnvironmentConfig {
     // the object by sphere-to-SDF inequality constraints c_pen <= 0, built from
     // SdfCollisionGapFactor wrapped in a CollisionInequalityConstraint and
     // driven to feasibility by the Augmented Lagrangian optimizer.
-    // collision_sigma scales the constraint. collision_epsilon is retained for
-    // backward compatibility and is unused by the AL inequality formulation.
+    // collision_sigma scales the constraint rows (1.0 = same whitening as the
+    // contact constraint rows).
     //
-    // collision_avoidance is the master switch (default true). When true, the
-    // planners add the AL inequality collision factors (finger-object, and
-    // finger-finger in the hand). When false, they reproduce the pre-Section-1.5
-    // behavior exactly: the single-finger planner falls back to the deprecated
-    // soft cubic-barrier DeprecatedSdfCollisionFactor, and the hand adds no
-    // collision factors. Every legacy test/demo sets this false so its converged
-    // solution is unchanged.
+    // collision_avoidance is the master on/off switch (default true). When
+    // true, the planners add the AL inequality collision factors (finger-object
+    // at every trajectory step, plus finger-finger in the hand). When false, no
+    // collision factors are added at all.
     //
     // collision_node_is_proximal is a parallel vector to collision_node_indices
     // (1 = proximal, 0 = distal). It only matters for finger-finger collision in
@@ -68,7 +65,6 @@ struct EnvironmentConfig {
     // constraint between them is constant and useless). An empty vector means
     // every node is treated as non-proximal (no pair excluded).
     bool collision_avoidance = true;
-    double collision_epsilon = 0.0;
     double collision_sigma   = 1e-3;
     std::vector<int>    collision_node_indices;
     std::vector<double> collision_node_radii;
@@ -271,87 +267,6 @@ public:
     gtsam::NonlinearFactor::shared_ptr clone() const override {
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
             gtsam::NonlinearFactor::shared_ptr(new SphereSphereCollisionGapFactor(*this)));
-    }
-};
-
-
-// DEPRECATED (pre-Section-1.5). Soft C^2 cubic-polynomial barrier collision
-// factor, superseded by the AL inequality-constraint formulation above
-// (SdfCollisionGapFactor + CollisionInequalityConstraint). Kept, renamed with a
-// Deprecated prefix, only so existing call sites still compile and are easy to
-// grep for and migrate later -- do not use it for new code.
-//   Phi_D(p, T_obj) = SDF(T_obj^{-1} p) - radius
-//   e(Phi_D)        = (eps - Phi_D)^3   if Phi_D <= eps, else 0
-//
-// Inactive branch (Phi_D > eps) returns exactly zero with zero Jacobians.
-// Because value, first, and second derivative all vanish at the boundary,
-// the transition is smooth and Gauss-Newton-friendly.
-class DeprecatedSdfCollisionFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
-private:
-    double radius_;
-    double epsilon_;
-    openvdb::FloatGrid::Ptr sdf_grid_;
-
-public:
-    DeprecatedSdfCollisionFactor(gtsam::Key node_pose_key, gtsam::Key object_key,
-                                 double radius, double epsilon,
-                                 const openvdb::FloatGrid::Ptr& sdf_grid,
-                                 const gtsam::SharedNoiseModel& noise_model)
-        : NoiseModelFactorN(noise_model, node_pose_key, object_key),
-          radius_(radius), epsilon_(epsilon), sdf_grid_(sdf_grid) {}
-
-    gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
-                                const gtsam::Pose3& object_pose,
-                                gtsam::OptionalMatrixType H1,
-                                gtsam::OptionalMatrixType H2) const override
-    {
-        gtsam::Matrix36 D_pworld_finger;
-        gtsam::Point3 p_world = node_pose.translation(H1 ? &D_pworld_finger : nullptr);
-
-        gtsam::Matrix36 D_plocal_obj;
-        gtsam::Matrix33 D_plocal_pworld;
-        gtsam::Point3 p_local = object_pose.transformTo(p_world,
-            H2 ? &D_plocal_obj    : nullptr,
-            H1 ? &D_plocal_pworld : nullptr);
-
-        openvdb::tools::GridSampler<openvdb::FloatGrid, openvdb::tools::BoxSampler> sampler(*sdf_grid_);
-        openvdb::Vec3R q(p_local.x(), p_local.y(), p_local.z());
-        double sdf = sampler.wsSample(q);
-        double phi = sdf - radius_;
-        double gap = epsilon_ - phi;
-
-        if (gap <= 0.0) {
-            if (H1) *H1 = gtsam::Matrix::Zero(1, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(1, 6);
-            return gtsam::Vector1(0.0);
-        }
-
-        double e = gap * gap * gap;
-
-        if (H1 || H2) {
-            double h = 1e-4;
-            double dx = sampler.wsSample(openvdb::Vec3R(q.x() + h, q.y(), q.z())) -
-                        sampler.wsSample(openvdb::Vec3R(q.x() - h, q.y(), q.z()));
-            double dy = sampler.wsSample(openvdb::Vec3R(q.x(), q.y() + h, q.z())) -
-                        sampler.wsSample(openvdb::Vec3R(q.x(), q.y() - h, q.z()));
-            double dz = sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z() + h)) -
-                        sampler.wsSample(openvdb::Vec3R(q.x(), q.y(), q.z() - h));
-            gtsam::Vector3 grad(dx, dy, dz);
-            double norm = grad.norm();
-            if (norm > 1e-8) grad /= norm;
-
-            // de/dphi = -3 * gap^2 ;  dphi/dp_local = grad^T
-            gtsam::Matrix13 de_dplocal = (-3.0 * gap * gap) * grad.transpose();
-            if (H1) *H1 = de_dplocal * D_plocal_pworld * D_pworld_finger;
-            if (H2) *H2 = de_dplocal * D_plocal_obj;
-        }
-
-        return gtsam::Vector1(e);
-    }
-
-    gtsam::NonlinearFactor::shared_ptr clone() const override {
-        return std::static_pointer_cast<gtsam::NonlinearFactor>(
-            gtsam::NonlinearFactor::shared_ptr(new DeprecatedSdfCollisionFactor(*this)));
     }
 };
 
