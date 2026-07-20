@@ -100,6 +100,27 @@ public:
     std::vector<std::tuple<std::string, int, double>>
         get_factor_error_summary() const { return SolverBase::get_factor_error_summary(); }
 
+    // Per-factor-type residual lists at the final values_ (graph-traversal order).
+    std::vector<std::pair<std::string, std::vector<double>>>
+        get_factor_errors_by_type() const {
+        return SolverBase::get_factor_errors_by_type();
+    }
+
+    // Same grouping as get_factor_error_summary(), but evaluated at the initial
+    // guess (initial_values_) so we can see how poor the seed was per factor type.
+    std::vector<std::tuple<std::string, int, double>>
+        get_initial_factor_error_summary() const {
+        return SolverBase::get_initial_factor_error_summary();
+    }
+
+    // Dense Hessian H and gradient g of the graph linearized at the final values_.
+    // For conditioning diagnostics (condition number, near-null eigenvalues that
+    // flag gauge freedom / ill-conditioning of the trajectory solve space).
+    std::pair<Eigen::MatrixXd, Eigen::VectorXd>
+        get_hessian_and_gradient() const {
+        return SolverBase::get_hessian_and_gradient();
+    }
+
     // Per-iteration snapshots for debug visualization of the solve. Populated
     // only when config.base.record_iterations == true (each Augmented Lagrangian
     // outer iteration is one snapshot; see SolverBase::optimize()). Each entry is

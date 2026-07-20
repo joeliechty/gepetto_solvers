@@ -15,7 +15,9 @@ void bind_tendon_hand(py::module& m) {
         .def_readwrite("base", &TendonHandSolverConfig::base)
         .def_readwrite("wrist_pose", &TendonHandSolverConfig::wrist_pose)
         .def_readwrite("sigma_wrist_pos", &TendonHandSolverConfig::sigma_wrist_pos)
-        .def_readwrite("sigma_wrist_rot", &TendonHandSolverConfig::sigma_wrist_rot);
+        .def_readwrite("sigma_wrist_rot", &TendonHandSolverConfig::sigma_wrist_rot)
+        .def_readwrite("goal_positions", &TendonHandSolverConfig::goal_positions)
+        .def_readwrite("goal_position_cov", &TendonHandSolverConfig::goal_position_cov);
 
     py::class_<TendonHandMarginals>(m, "TendonHandMarginals")
         .def(py::init<>())
@@ -74,6 +76,17 @@ void bind_tendon_hand(py::module& m) {
         .def("num_fingers", &TendonHandTrajectoryPlanner::num_fingers)
         .def("get_factor_error_summary",
              &TendonHandTrajectoryPlanner::get_factor_error_summary)
+        .def("get_factor_errors_by_type",
+             &TendonHandTrajectoryPlanner::get_factor_errors_by_type)
+        .def("get_initial_factor_error_summary",
+             &TendonHandTrajectoryPlanner::get_initial_factor_error_summary,
+             "Factor-error summary evaluated at the initial guess (before the "
+             "solve), to gauge how poor the seed is per factor type.")
+        .def("get_hessian_and_gradient",
+             &TendonHandTrajectoryPlanner::get_hessian_and_gradient,
+             "Dense (Hessian, gradient) of the graph linearized at the final "
+             "solution, for conditioning diagnostics (condition number, "
+             "near-null eigenvalues flagging gauge freedom).")
         .def("get_intermediate_solutions",
              &TendonHandTrajectoryPlanner::get_intermediate_solutions,
              "Per-iteration trajectory snapshots from the last plan(); requires "

@@ -144,6 +144,15 @@ def parse_args():
     parser.add_argument("--al-mu", type=float, default=1.0, help="AL initial penalty mu")
     parser.add_argument("--al-rate", type=float, default=2.0, help="AL mu increase rate")
     parser.add_argument("--al-iters", type=int, default=40, help="AL max outer iterations")
+    parser.add_argument("--al-inner-tol", type=float, default=1e-2,
+                        help="Initial inner-LM relative tolerance (inexact AL); "
+                             "tightens ~1/mu down to 1e-5. 0 = full-precision "
+                             "inner solves every outer iteration (slow).")
+    parser.add_argument("--al-abs-cost-tol", type=float, default=1e12,
+                        help="Outer AL absolute cost threshold. Default (huge) "
+                             "stops once the contact violation is small; set "
+                             "1e-5 (GTSAM default) to keep polishing the "
+                             "soft-prior cost until stagnation (~2x slower).")
     parser.add_argument("--debug-iterations", action="store_true",
                         help="Record and visualize the solver's per-iteration progress "
                              "(one snapshot per Augmented-Lagrangian outer iteration): "
@@ -230,6 +239,8 @@ def _main(args, results_dir):
     plan_config.base.al_initial_mu = args.al_mu
     plan_config.base.al_mu_increase_rate = args.al_rate
     plan_config.base.al_max_iterations = args.al_iters
+    plan_config.base.al_inner_rel_tol_initial = args.al_inner_tol
+    plan_config.base.al_abs_cost_tol = args.al_abs_cost_tol
     # Capture each AL outer iteration (full-trajectory snapshot + cost/violation/mu
     # trace) so we can visualize what the solver is doing step by step.
     if args.debug_iterations:

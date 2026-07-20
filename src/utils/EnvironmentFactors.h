@@ -70,6 +70,22 @@ struct EnvironmentConfig {
     std::vector<double> collision_node_radii;
     std::vector<int>    collision_node_is_proximal;
 
+    // Finger-finger pair culling (>= 0 enables). A cross-finger sphere pair is
+    // skipped when its gap at the INITIAL values exceeds this margin (m).
+    // Profiling showed ~half the 5-finger trajectory graph is inequality
+    // constraints that stay inactive (error ~1e-16) through the whole solve,
+    // yet each one adds three factors (penalty + BiasedFactor + AntiFactor) to
+    // every AL merit graph. Heuristic, not sound: fingers curling toward a
+    // shared object roughly preserve their lateral separation, but a culled
+    // pair is unprotected if the solve does bring it together — pick a margin
+    // comfortably above the expected relative motion, and rely on the tests'
+    // independent all-pairs penetration report to catch a cull that was too
+    // aggressive. Finger-OBJECT constraints are never culled: every step's
+    // initial guess starts far from the object by construction, so an
+    // initial-gap cull would strip exactly the protection the trajectory
+    // needs. Disabled (< 0) by default.
+    double collision_cull_margin = -1.0;
+
     // Contact-as-goal terminal constraint (Eq 33-35). When target_contact_node
     // is set, the planner adds a hard equality constraint on that node — the
     // 5-residual SdfWitnessContactFactor [c_R, c_O, c_N, c_T1, c_T2] wrapped in

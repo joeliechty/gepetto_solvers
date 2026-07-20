@@ -20,6 +20,12 @@ void bind_utils(py::module& m) {
         .def_readwrite("al_initial_mu", &SolverBaseConfig::al_initial_mu)
         .def_readwrite("al_mu_increase_rate", &SolverBaseConfig::al_mu_increase_rate)
         .def_readwrite("al_max_iterations", &SolverBaseConfig::al_max_iterations)
+        .def_readwrite("al_max_dual_step", &SolverBaseConfig::al_max_dual_step)
+        .def_readwrite("al_inner_rel_tol_initial", &SolverBaseConfig::al_inner_rel_tol_initial)
+        .def_readwrite("al_abs_violation_tol", &SolverBaseConfig::al_abs_violation_tol)
+        .def_readwrite("al_abs_cost_tol", &SolverBaseConfig::al_abs_cost_tol)
+        .def_readwrite("al_rel_violation_tol", &SolverBaseConfig::al_rel_violation_tol)
+        .def_readwrite("al_rel_cost_tol", &SolverBaseConfig::al_rel_cost_tol)
         .def_readwrite("record_iterations", &SolverBaseConfig::record_iterations)
         .def_readwrite("iteration_sample_interval", &SolverBaseConfig::iteration_sample_interval);
 

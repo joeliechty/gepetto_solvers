@@ -6,6 +6,7 @@
 #include "utils/SolverBase.h"
 
 #include <gtsam/base/Matrix.h>
+#include <gtsam/base/Vector.h>
 
 #include <memory>
 #include <string>
@@ -23,6 +24,17 @@ struct TendonHandSolverConfig {
     // anchored gauge; loosen for a more free-floating wrist.
     double sigma_wrist_pos = 1e-4;
     double sigma_wrist_rot = 1e-3;
+
+    // Optional per-finger world-frame tip-position goals (point-to-point). One
+    // Vector3 per finger, in config order. Empty (default) => no position goals,
+    // so the solve is driven purely by the tendon-tension priors (legacy
+    // behavior, unchanged). When non-empty each becomes a soft PositionPriorFactor
+    // on that finger's tip node -- the single-shot analogue of
+    // TendonHandTrajectoryPlannerConfig::goal_positions. Because these are soft
+    // priors (not hard constraints), they do not affect the AL/plain routing:
+    // collision/contact still decide whether the Augmented Lagrangian path runs.
+    std::vector<gtsam::Vector3> goal_positions;
+    Eigen::Matrix3d goal_position_cov = 1e-5 * Eigen::Matrix3d::Identity();
 
     // (Interior/tip external-wrench prior noise is taken per finger from each
     // finger's sigma_stress_moment/force, matching TendonFingerSolver.)
@@ -63,6 +75,8 @@ private:
     void build_graph() override;
     void extract_solution() override;
     void get_initial_values() override;
+
+    TendonHandSolverConfig config_;
 
     std::unique_ptr<TendonHandModel> hand_;
 

@@ -9,6 +9,7 @@
 #include <openvdb/tools/Interpolation.h>
 
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -295,10 +296,20 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     // pair iff BOTH spheres are proximal (rigidly-attached base bones), and skip
     // any base-disc (root) sphere (no distinct per-finger pose variable). This
     // leaves distal-distal and distal-proximal cross-finger pairs.
+    // When collision_cull_margin >= 0, additionally skip pairs whose gap at the
+    // initial values already exceeds the margin (see the caveats on
+    // EnvironmentConfig::collision_cull_margin — heuristic, verified by the
+    // tests' independent all-pairs penetration report).
+    std::optional<Values> init_vals;
+    auto initial_position = [&](Key key) {
+        if (!init_vals) init_vals = get_initial_values();
+        return init_vals->at<Pose3>(key).translation();
+    };
     for (size_t a = 0; a < fingers_.size(); ++a) {
         if (finger_spheres[a].empty()) continue;
         auto col_noise = noiseModel::Isotropic::Sigma(
             1, sdf_contacts_[a]->collision_sigma);
+        const double cull_margin = sdf_contacts_[a]->collision_cull_margin;
         for (size_t b = a + 1; b < fingers_.size(); ++b) {
             if (finger_spheres[b].empty()) continue;
             for (const auto& sa : finger_spheres[a]) {
@@ -306,6 +317,12 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 for (const auto& sb : finger_spheres[b]) {
                     if (sb.is_root) continue;
                     if (sa.proximal && sb.proximal) continue;
+                    if (cull_margin >= 0.0) {
+                        const double gap0 =
+                            (initial_position(sa.key) - initial_position(sb.key))
+                                .norm() - sa.radius - sb.radius;
+                        if (gap0 > cull_margin) continue;
+                    }
                     auto gap = std::make_shared<crest_sparse::SphereSphereCollisionGapFactor>(
                         sa.key, sb.key, sa.radius, sb.radius, col_noise);
                     graph.add(crest_sparse::CollisionInequalityConstraint(gap));

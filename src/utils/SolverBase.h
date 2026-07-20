@@ -75,6 +75,33 @@ struct SolverBaseConfig {
     double al_mu_increase_rate = 2.0;  // muEqIncreaseRate: outer-loop growth
     int    al_max_iterations   = 20;   // maxIterations: outer AL loop steps
 
+    // Dual-ascent step cap (maxDualStepSize{Eq,Ineq}). The proper AL
+    // multiplier update is lambda += mu * violation; GTSAM's default cap of 10
+    // freezes the multipliers once mu grows past ~10, silently degrading the
+    // method to a pure quadratic penalty that needs mu ~ 1e8+ (and ~30 outer
+    // iterations of mu-doubling) to reach small violations. Default here is
+    // effectively uncapped so the multipliers can do their job.
+    double al_max_dual_step = 1e12;
+
+    // Inexact inner solves: when > 0, the inner LM's relativeErrorTol starts
+    // here on the first outer iteration and tightens ~ (initial mu / mu) down
+    // to lm relativeErrorTol (1e-5). Early merit functions are about to change
+    // anyway; solving them to 1e-5 wastes inner iterations. 0 disables.
+    double al_inner_rel_tol_initial = 0.0;
+
+    // Outer-loop stopping tolerances (ConstrainedOptimizerParams). The loop
+    // stops when (violation < al_abs_violation_tol && cost < al_abs_cost_tol)
+    // or (|d violation| < al_rel_violation_tol && |d cost| < al_rel_cost_tol).
+    // Note al_abs_cost_tol is an ABSOLUTE cost threshold: with the GTSAM
+    // default (1e-5) the first test never fires for problems whose converged
+    // cost is O(1), so the loop only stops on stagnation — long after the
+    // violation is already tiny. Set al_abs_cost_tol large (e.g. 1e12) to
+    // stop on violation alone.
+    double al_abs_violation_tol = 1e-5;
+    double al_abs_cost_tol      = 1e-5;
+    double al_rel_violation_tol = 1e-5;
+    double al_rel_cost_tol      = 1e-5;
+
     // When true, optimize() uses a manual iterate() loop instead of
     // optimizer.optimize(). Populates SolutionMetadata::iteration_errors and
     // ::iteration_trust_region. Required for get_intermediate_solutions().

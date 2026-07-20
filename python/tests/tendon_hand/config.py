@@ -470,7 +470,7 @@ def proximal_disc_flags(config, num_proximal_discs=2):
 
 def attach_collision(configs, vdb_path, object_pose, *,
                      radius=0.003, sigma=1e-4, num_proximal_discs=2,
-                     object_pose_cov=None):
+                     object_pose_cov=None, cull_margin=None):
     """Enable Section 1.5 AL collision avoidance on every finger of a hand config
     list, in place. Returns ``configs`` for chaining.
 
@@ -484,6 +484,13 @@ def attach_collision(configs, vdb_path, object_pose, *,
     inequalities keeping each finger out of the object and sphere-to-sphere
     inequalities keeping distinct fingers apart (skipping proximal-proximal
     pairs).
+
+    ``cull_margin`` (m, None = keep all pairs): drop finger-finger sphere pairs
+    whose gap at the initial values exceeds this margin. Heuristic speedup —
+    roughly half the 5-finger trajectory graph is inequality constraints that
+    never activate — but a culled pair is unprotected, so rely on the tests'
+    all-pairs penetration report to validate the chosen margin. Finger-object
+    constraints are never culled.
     """
     import crest_sparse
 
@@ -505,5 +512,7 @@ def attach_collision(configs, vdb_path, object_pose, *,
         env.collision_node_indices = nodes
         env.collision_node_radii = [radius] * len(nodes)
         env.collision_node_is_proximal = proximal_disc_flags(cfg, num_proximal_discs)
+        if cull_margin is not None:
+            env.collision_cull_margin = cull_margin
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs
