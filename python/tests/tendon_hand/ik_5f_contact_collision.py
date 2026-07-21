@@ -1,6 +1,6 @@
 """Five-finger tendon *hand* grasp WITH Section 1.5 collision avoidance enabled.
 
-This is ``five_finger_hand_grasp_test.py`` plus ``config.attach_collision``: every
+This is ``ik_5f_contact.py`` plus ``config.attach_collision``: every
 finger gets sphere-to-SDF inequality constraints keeping its disc spheres out of
 the object, and sphere-to-sphere inequality constraints keeping distinct fingers
 apart. Both are hard inequality constraints (``c_pen <= 0``) handled by the
@@ -18,7 +18,7 @@ The script reports, from the converged solution:
   * the worst cross-finger sphere gap over all checked pairs (should be >= 0)
 
 Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.five_finger_hand_collision_test big_sphere --no-viz
+    python -m tests.tendon_hand.ik_5f_contact_collision big_sphere --no-viz
 """
 
 import os
@@ -33,9 +33,8 @@ import crest_sparse
 from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     tip_node_index, attach_collision, disc_node_indices, proximal_disc_flags)
-from .sdf_3dof_contact_kinematics_test import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
-from .five_finger_hand_grasp_test import (
+from .scene import (
+    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
     GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER)
 
 

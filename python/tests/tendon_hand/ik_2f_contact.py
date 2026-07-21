@@ -1,13 +1,13 @@
 """Two opposed fingers sharing one floating wrist base, each landing its tip on a
 shared object.
 
-This is the multi-finger counterpart of ``sdf_3dof_contact_kinematics_test.py``:
+This is the multi-finger counterpart of ``ik_1f_contact.py``:
 both fingers are part of ONE factor graph, share ONE wrist variable ``T_base``
 (with different ``hand_base_offset`` transforms), and each fingertip is driven onto
 the object surface by its own hard SDF contact constraint (an opposition grasp).
 
 Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.two_finger_hand_contact_test sphere
+    python -m tests.tendon_hand.ik_2f_contact sphere
 """
 
 import os
@@ -19,10 +19,8 @@ import numpy as np
 import crest_sparse
 
 from .config import get_two_finger_opposition_configs, tip_node_index
-# Reuse the exact primitive geometry + analytic surface-gap helper from the
-# single-finger contact test so results are directly comparable.
-from .sdf_3dof_contact_kinematics_test import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
+# Shared primitive geometry + analytic surface-gap helper (see scene.py).
+from .scene import OBJECT_CENTER, get_primitive_specs, primitive_surface_gap
 
 
 def _add_object_mesh(pv_plotter, spec, center):

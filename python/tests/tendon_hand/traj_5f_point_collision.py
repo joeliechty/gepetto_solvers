@@ -1,7 +1,7 @@
 """Plan a *collision-free point-to-point* five-finger hand trajectory.
 
-This is the collision-aware sibling of ``five_finger_hand_point_to_point_test.py``
-and the point-goal sibling of ``five_finger_hand_collision_trajectory_test.py``.
+This is the collision-aware sibling of ``traj_5f_point.py``
+and the point-goal sibling of ``traj_5f_contact_collision.py``.
 The hand starts open at an identity wrist and is planned over K steps with:
 
   * per-finger world-frame **tip-position goals** at k=K -- soft
@@ -16,7 +16,7 @@ Because collision turns the solve onto the Augmented-Lagrangian path, the linear
 solver MUST be Cholesky (QR stalls on the AntiFactor's negated Hessian) -- unlike
 the no-collision point-to-point test, which uses QR.
 
-The goal points (``GRASP_GOALS``, imported from the kinematic test) are the
+The goal points (``GRASP_GOALS``, shared via scene.py) are the
 *collision-free* terminal fingertip positions from the collision+contact grasp
 solve on the big sphere -- the hand wraps the sphere with every backbone node
 held outside it, so these points are reachable with the whole finger clear of the
@@ -28,8 +28,8 @@ figure, AL-convergence figure, animation frames + GIF) lands in
 ``results/<experiment>/``.
 
 Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.five_finger_hand_collision_point_to_point_test -SF
-    python -m tests.tendon_hand.five_finger_hand_collision_point_to_point_test --no-viz
+    python -m tests.tendon_hand.traj_5f_point_collision -SF
+    python -m tests.tendon_hand.traj_5f_point_collision --no-viz
 """
 
 import os
@@ -42,17 +42,13 @@ import crest_sparse
 
 from .config import (
     get_default_hand_configs, load_hand_dimensions, attach_collision)
-from .sdf_3dof_contact_kinematics_test import (
-    get_primitive_specs, primitive_surface_gap)
-from .five_finger_hand_grasp_test import GRASP_SPHERE_CENTER
-from .collision_kinematics_test import collision_report
-from .collision_point_to_point_kinematics_test import GRASP_GOALS
+from .scene import (
+    get_primitive_specs, primitive_surface_gap, GRASP_SPHERE_CENTER,
+    GRASP_GOALS, TENDON_NAMES)
+from .utils import collision_report, FingerTraj
 from .._plotting.trajectory_plotter import (
     plot_trajectory, plot_hand_wrist_trajectory)
 from ..tendon_finger.utils import PlannerLogger, log_planner_parameters
-
-# Anatomical 6-tendon finger routing (index 5 = flexor).
-TENDON_NAMES = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
 
 # Target flexor tension at k>=1 (loose prior; the goal priors do the closing).
 BACKGROUND_FLEXOR = 2.0
@@ -63,12 +59,6 @@ class _FingerSol:
     def __init__(self, marginals, meta):
         self.marginals = marginals
         self.meta = meta
-
-
-class _FingerTraj:
-    """Adapter exposing one finger's per-step marginals as .trajectory."""
-    def __init__(self, trajectory):
-        self.trajectory = trajectory
 
 
 class _HandStepShim:
@@ -266,7 +256,7 @@ def _main(args, results_dir):
     # --- Save state / wrist figures (headless-safe; always saved). ---
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = _FingerTraj([hm.fingers[i] for hm in result.trajectory])
+        finger_traj = FingerTraj([hm.fingers[i] for hm in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))

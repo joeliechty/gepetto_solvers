@@ -1,7 +1,7 @@
 """Collision-free *point-to-point* kinematic solve of the five-finger hand.
 
-This is the position-goal counterpart of ``collision_kinematics_test.py`` and the
-single-shot analogue of ``five_finger_hand_collision_point_to_point_test.py``.
+This is the position-goal counterpart of ``ik_5f_collision.py`` and the
+single-shot analogue of ``traj_5f_point_collision.py``.
 A single ``TendonHandSolver`` solve (tensions in, poses out) is driven by two
 things at once:
 
@@ -33,12 +33,12 @@ inner LM returns the same penetrating point every outer iteration and the AL
 multiplier grows with the solution never moving. Forcing the AL tolerances
 (al_abs_cost_tol=1e12, al_rel_*_tol->0) does not help -- there is no
 binding-and-reaching regime single-shot. Even collision-ONLY single-shot
-(collision_kinematics_test, no goals) only relieves a fraction of the
+(ik_5f_collision, no goals) only relieves a fraction of the
 penetration.
 
 The *trajectory* planner does not have this problem because it enforces
 collision incrementally from a collision-free k=0 and never enters the
-penetrating basin -- see five_finger_hand_collision_point_to_point_test.py,
+penetrating basin -- see traj_5f_point_collision.py,
 which PASSES (collision-free + reaches these same goals). Making the single-shot
 solver enforce collision would need a real fix: a mu schedule that keeps
 collision active against the goal prior, or warm-starting the single-shot from
@@ -47,7 +47,7 @@ across solve() calls and exposes set_wrist_pose for exactly this).
 ======================================================================
 
 Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.collision_point_to_point_kinematics_test --no-viz
+    python -m tests.tendon_hand.ik_5f_point_collision --no-viz
 """
 
 import os
@@ -60,32 +60,10 @@ import crest_sparse
 
 from .config import (
     get_default_hand_configs, load_hand_dimensions, attach_collision)
-from .sdf_3dof_contact_kinematics_test import (
-    get_primitive_specs, primitive_surface_gap)
-from .five_finger_hand_grasp_test import GRASP_SPHERE_CENTER
+from .scene import (
+    get_primitive_specs, primitive_surface_gap, GRASP_SPHERE_CENTER, GRASP_GOALS)
 # Reuse the collision-clearance report (worst finger-object / finger-finger gap).
-from .collision_kinematics_test import collision_report
-
-# Anatomical 6-tendon finger routing (index 5 = flexor). Kept for reference / any
-# tension-prior tweaks; the closing motion here is driven by the goal priors.
-TENDON_NAMES = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
-
-# Per-finger world-frame tip-position goals (order = config order: index, middle,
-# ring, pinky, thumb). These are the *collision-free* terminal fingertip positions
-# from the collision+contact grasp solve on the big sphere (see
-# _extract_grasp_goals / five_finger_hand_collision_trajectory_test): the hand
-# wraps the sphere with every backbone node held outside it, so unlike a free-space
-# flexor curl (whose main fingers spear straight through the sphere) these points
-# ARE reachable with the whole finger collision-free. This is the analogue of the
-# hardcoded GOAL_POSITIONS in five_finger_hand_point_to_point_test.py.
-GRASP_GOALS = np.array([
-    [+0.01058010, +0.10938996, +0.02336805],  # index
-    [+0.01125694, +0.12307751, +0.01202090],  # middle
-    [+0.01993645, +0.12410185, -0.01172549],  # ring
-    [+0.02291420, +0.11488003, -0.03186456],  # pinky
-    [+0.01562034, +0.08011573, +0.02589826],  # thumb
-])
-
+from .utils import collision_report
 
 def solve_hand(configs, args, goal_positions=None):
     """Single-shot hand solve. When ``goal_positions`` is given (one Vector3 per

@@ -1,6 +1,6 @@
 # Five-Finger Grasp — Why the Small Objects Don't Solve
 
-Investigation notes for `five_finger_hand_grasp_test.py`. Summarizes why the
+Investigation notes for `ik_5f_contact.py`. Summarizes why the
 sphere grasp works but the cylinder/cube fail, based on reading the factor
 wiring and running controlled experiments.
 
@@ -172,7 +172,7 @@ that run's finger 0, etc. — the number is not a finger index.
 The **no-contact free-space failure is the smoking gun**: it fails in 0.5 s with
 no object in the graph, so contact and the AL optimizer are ruled out entirely.
 It is purely the prior's variance spread. (This is the same reason
-`kinematics_test.py` uses a *uniform* `1e-2` prior — it hit this first.)
+`fk_5f_sweep.py` uses a *uniform* `1e-2` prior — it hit this first.)
 
 ### Fix (applied)
 
@@ -199,7 +199,7 @@ conditioning demand at the very end of the solve.
 
 ## Cold-start vs. warm-start (the "slow high-tension solves")
 
-`kinematics_test.py` was slow because it **rebuilt the solver every frame** to
+`fk_5f_sweep.py` was slow because it **rebuilt the solver every frame** to
 change the wrist pose (which was baked in at construction). A fresh solver
 re-seeds its initial guess to a *straight* hand, so every frame cold-started and
 had to drive the rod from straight to a deep curl — and the higher the flexor
@@ -217,7 +217,7 @@ thing forcing the rebuild was the construction-time wrist pose.
 rebuilding. Only `wrist_pose_` feeds that prior; the finger offsets and the
 root-reparameterization factors are anchored to the shared wrist *key*,
 independent of where it points — so updating the mean is all `build_graph()`
-needs. `kinematics_test.py` now builds the solver **once** and calls
+needs. `fk_5f_sweep.py` now builds the solver **once** and calls
 `set_wrist_pose()` + `solve()` each frame, so only the first frame is a cold
 start and every subsequent frame is a small nudge that converges in a handful of
 iterations even at full tension. Caveat: `set_wrist_pose()` deliberately does
@@ -229,14 +229,14 @@ sweep, worth knowing for scripted jumps.
 
 ```
 # from crest-sparse/python, in the crest_py11 env
-python -m tests.tendon_hand.five_finger_hand_grasp_test sphere      # solves with loose wrist
-python -m tests.tendon_hand.five_finger_hand_grasp_test cylinder    # 4 fingers close, thumb ~0.10 m
-python -m tests.tendon_hand.five_finger_hand_grasp_test cube        # stalls (iters=3)
+python -m tests.tendon_hand.ik_5f_contact sphere      # solves with loose wrist
+python -m tests.tendon_hand.ik_5f_contact cylinder    # 4 fingers close, thumb ~0.10 m
+python -m tests.tendon_hand.ik_5f_contact cube        # stalls (iters=3)
 
 # single finger reaches every primitive (gap 0.000):
-python -m tests.tendon_hand.sdf_3dof_contact_kinematics_test cube
+python -m tests.tendon_hand.ik_1f_contact cube
 
 # warm-started wrist sweep (build once, set_wrist_pose per frame) — iters= drops
 # from the cold-start count to a handful after the first frame:
-python -m tests.tendon_hand.kinematics_test
+python -m tests.tendon_hand.fk_5f_sweep
 ```

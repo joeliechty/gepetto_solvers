@@ -1,7 +1,7 @@
 """Collision-only kinematic solve of the five-finger hand (no contact).
 
 The simplest exercise of Section 1.5 collision avoidance: a single-shot
-``TendonHandSolver`` kinematic solve (as in ``kinematics_test.py`` -- tensions
+``TendonHandSolver`` kinematic solve (as in ``fk_5f_sweep.py`` -- tensions
 in, poses out, no contact constraints anywhere), with the big grasp sphere
 placed at the flexed-fingertip locus and the flexor tension cranked high enough
 that the unconstrained hand curls *through* the sphere.
@@ -17,13 +17,12 @@ path end-to-end: has_collision() routing to the AL solver, the collision-only
 EnvironmentConfig guards, and both collision factor types.
 
 Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.collision_kinematics_test --no-viz
+    python -m tests.tendon_hand.ik_5f_collision --no-viz
 """
 
 import os
 import argparse
 import time
-import itertools
 
 import numpy as np
 
@@ -31,10 +30,9 @@ import crest_sparse
 
 from .config import (
     get_default_hand_configs, load_hand_dimensions,
-    attach_collision, disc_node_indices, proximal_disc_flags, tip_node_index)
-from .sdf_3dof_contact_kinematics_test import (
-    get_primitive_specs, primitive_surface_gap)
-from .five_finger_hand_grasp_test import GRASP_SPHERE_CENTER
+    attach_collision, tip_node_index)
+from .scene import get_primitive_specs, primitive_surface_gap, GRASP_SPHERE_CENTER
+from .utils import collision_report
 
 # Above GRASP_FLEXOR_TENSION (2 N, tips exactly on the sphere): curl the
 # unconstrained fingers well into the sphere so collision has work to do.
@@ -84,40 +82,6 @@ def solve_hand(configs, args):
     print(f"  solved in {dt_ms:.1f} ms | iters={solution.meta.iterations} | "
           f"error={solution.meta.error:.4g}")
     return solution
-
-
-def collision_report(configs, solution, spec, object_pose, radius):
-    """Worst finger-object clearance and cross-finger gap over the collision
-    spheres (same exclusions as the C++ factors: no node-0 pairs, no
-    proximal-proximal pairs; no contact node here since there is no contact)."""
-    object_rotation = object_pose[:3, :3]
-    object_center = object_pose[:3, 3]
-
-    spheres = []
-    for (_, cfg), fm in zip(configs, solution.marginals.fingers):
-        entries = []
-        for n, p in zip(disc_node_indices(cfg), proximal_disc_flags(cfg)):
-            pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
-            entries.append((n, pos, bool(p)))
-        spheres.append(entries)
-
-    worst_obj = np.inf
-    for entries in spheres:
-        for n, pos, _p in entries:
-            local = object_rotation.T @ (pos - object_center)
-            worst_obj = min(worst_obj, primitive_surface_gap(local, spec) - radius)
-
-    worst_ff = np.inf
-    for ia, ib in itertools.combinations(range(len(spheres)), 2):
-        for na, pa, proxa in spheres[ia]:
-            if na == 0:
-                continue
-            for nb, pb, proxb in spheres[ib]:
-                if nb == 0 or (proxa and proxb):
-                    continue
-                worst_ff = min(worst_ff, np.linalg.norm(pa - pb) - 2.0 * radius)
-
-    return worst_obj, worst_ff
 
 
 def main():

@@ -6,10 +6,8 @@ from .._plotting.tendon_finger_plotter import TendonFingerPlotter
 from .._plotting.trajectory_plotter import plot_trajectory
 from ..tendon_finger.config import get_6tendon_config
 from .utils import PlannerLogger, log_planner_parameters
-# Reuse the primitive registry + analytic surface-gap helper from the kinematic
-# contact test so the planner is verified against exactly the same geometry.
-from .sdf_3dof_contact_kinematics_test import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
+# Shared primitive registry + analytic surface-gap helper (see scene.py).
+from .scene import OBJECT_CENTER, get_primitive_specs, primitive_surface_gap
 import argparse
 
 

@@ -2,12 +2,12 @@
 one shared floating wrist — closing every fingertip onto a single shared object
 (a full-hand grasp).
 
-This is the five-finger generalization of ``two_finger_hand_contact_test.py``:
+This is the five-finger generalization of ``ik_2f_contact.py``:
 all fingers are part of ONE factor graph, share ONE wrist variable ``T_base``
 (with different ``hand_base_offset`` transforms), and each fingertip is driven
 onto the shared SDF object surface by its own hard SDF contact constraint.
 
-The hand is the *anatomical* hand used by ``kinematics_test.py`` —
+The hand is the *anatomical* hand used by ``fk_5f_sweep.py`` —
 ``config.get_default_hand_configs()`` — whose per-digit bone/joint lengths, palm
 origins and base angles come from ``gepetto_core``'s ``parameters.scad`` (with a
 hard-coded fallback). Each finger's contact sphere uses that digit's
@@ -15,7 +15,7 @@ CAD-derived ``cfg.tip_radius`` (from the distal tip width), not a single
 hard-coded radius.
 
 Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.five_finger_hand_grasp_test sphere
+    python -m tests.tendon_hand.ik_5f_contact sphere
 """
 
 import os
@@ -29,20 +29,10 @@ import crest_sparse
 from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     tip_node_index)
-# Reuse the exact primitive geometry + analytic surface-gap helper from the
-# single-finger contact test so results are directly comparable.
-from .sdf_3dof_contact_kinematics_test import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
-
-# Flexor tension (N) the grasp closes to; the big sphere is sized/placed at the
-# fingertip locus this flexion produces, so contact is reachable by construction.
-GRASP_FLEXOR_TENSION = 2.0
-
-# Center of the big grasp sphere: the least-squares fit through the five
-# anatomical fingertips at GRASP_FLEXOR_TENSION with an identity wrist (see
-# make_big_sphere.py). Radius 0.05 m then lands every tip on the surface within
-# ~3 mm. Only used for the "big_sphere" primitive; the others keep OBJECT_CENTER.
-GRASP_SPHERE_CENTER = np.array([-0.0221, 0.0885, -0.0160])
+# Shared primitive geometry + grasp scene constants (see scene.py).
+from .scene import (
+    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
+    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER)
 
 
 def _add_object_mesh(pv_plotter, spec, center):

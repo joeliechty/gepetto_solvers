@@ -1,5 +1,6 @@
 import os
 import sys
+import itertools
 from datetime import datetime
 from collections import deque
 
@@ -8,6 +9,8 @@ import matplotlib.pyplot as plt
 
 import crest_sparse
 from ..tendon_finger.config import get_base_config
+from .config import disc_node_indices, proximal_disc_flags
+from .scene import primitive_surface_gap
 
 
 class _Tee:
@@ -359,5 +362,46 @@ def waypoint_trajectory(t, waypoints, time_per_waypoint=3.0):
     next_index = min(segment_index + 1, len(waypoints) - 1)
 
     alpha = (t % time_per_waypoint) / time_per_waypoint
-    return (1 - alpha) * waypoints[segment_index] + alpha * waypoints[next_index]    
+    return (1 - alpha) * waypoints[segment_index] + alpha * waypoints[next_index]
+
+
+class FingerTraj:
+    """Adapter exposing a single finger's per-step marginals as .trajectory, so
+    the per-finger plot_trajectory() can be reused on one finger of the hand."""
+    def __init__(self, trajectory):
+        self.trajectory = trajectory
+
+
+def collision_report(configs, solution, spec, object_pose, radius):
+    """Worst finger-object clearance and cross-finger gap over the collision
+    spheres (same exclusions as the C++ factors: no node-0 pairs, no
+    proximal-proximal pairs; no contact node here since there is no contact)."""
+    object_rotation = object_pose[:3, :3]
+    object_center = object_pose[:3, 3]
+
+    spheres = []
+    for (_, cfg), fm in zip(configs, solution.marginals.fingers):
+        entries = []
+        for n, p in zip(disc_node_indices(cfg), proximal_disc_flags(cfg)):
+            pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
+            entries.append((n, pos, bool(p)))
+        spheres.append(entries)
+
+    worst_obj = np.inf
+    for entries in spheres:
+        for n, pos, _p in entries:
+            local = object_rotation.T @ (pos - object_center)
+            worst_obj = min(worst_obj, primitive_surface_gap(local, spec) - radius)
+
+    worst_ff = np.inf
+    for ia, ib in itertools.combinations(range(len(spheres)), 2):
+        for na, pa, proxa in spheres[ia]:
+            if na == 0:
+                continue
+            for nb, pb, proxb in spheres[ib]:
+                if nb == 0 or (proxa and proxb):
+                    continue
+                worst_ff = min(worst_ff, np.linalg.norm(pa - pb) - 2.0 * radius)
+
+    return worst_obj, worst_ff
         

@@ -1,6 +1,6 @@
 """Plan a *trajectory* of five-finger grasps (PDF Section 1.4).
 
-This is the trajectory-planning counterpart of ``five_finger_hand_grasp_test.py``.
+This is the trajectory-planning counterpart of ``ik_5f_contact.py``.
 Where that test does a single kinematic solve, here we plan a K+1-step trajectory
 whose control actions are the shared wrist pose and each finger's tendon tensions.
 The steps are tied together with Gaussian-process temporal priors:
@@ -19,9 +19,9 @@ figure, animation frames + GIF) lands in ``results/<experiment>/``.
 
 Run (from the ``python/`` directory):
     # interactive 3D animation + saved state/wrist figures
-    python -m tests.tendon_hand.five_finger_hand_grasp_trajectory_test big_sphere
+    python -m tests.tendon_hand.traj_5f_contact big_sphere
     # headless: render the animation off-screen to a GIF and save all figures
-    python -m tests.tendon_hand.five_finger_hand_grasp_trajectory_test big_sphere -SF
+    python -m tests.tendon_hand.traj_5f_contact big_sphere -SF
 """
 
 import os
@@ -35,18 +35,13 @@ import crest_sparse
 from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     tip_node_index)
-from .sdf_3dof_contact_kinematics_test import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
+from .scene import (
+    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
+    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER, TENDON_NAMES)
+from .utils import FingerTraj
 from .._plotting.trajectory_plotter import plot_trajectory, plot_hand_wrist_trajectory
 from .._plotting.al_convergence_plotter import plot_al_convergence
 from ..tendon_finger.utils import PlannerLogger, log_planner_parameters
-
-# Same grasp geometry constants as the static test so results are comparable.
-GRASP_FLEXOR_TENSION = 2.0
-GRASP_SPHERE_CENTER = np.array([-0.0221, 0.0885, -0.0160])
-
-# Anatomical 6-tendon finger routing (same order as the single-finger planner).
-TENDON_NAMES = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
 
 
 def experiment_label(args):
@@ -80,13 +75,6 @@ class _FingerSol:
     def __init__(self, marginals, meta):
         self.marginals = marginals
         self.meta = meta
-
-
-class _FingerTraj:
-    """Adapter exposing a single finger's per-step marginals as .trajectory, so
-    the per-finger plot_trajectory() can be reused on one finger of the hand."""
-    def __init__(self, trajectory):
-        self.trajectory = trajectory
 
 
 def _report_al_iterations(result, results_dir, exp_label):
@@ -333,7 +321,7 @@ def _main(args, results_dir):
     # one shared wrist-pose trajectory figure.
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = _FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
+        finger_traj = FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))

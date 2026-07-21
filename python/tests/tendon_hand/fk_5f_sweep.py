@@ -19,7 +19,7 @@ first solve pays the cold-start cost, and every subsequent frame is a small
 nudge that converges in a handful of iterations even at high flexor tension.
 
 Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.kinematics_test
+    python -m tests.tendon_hand.fk_5f_sweep
 """
 
 import time

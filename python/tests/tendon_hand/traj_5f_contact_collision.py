@@ -1,8 +1,8 @@
 """Five-finger hand grasp *trajectory* WITH Section 1.5 collision avoidance.
 
-The trajectory analogue of ``five_finger_hand_collision_test.py``: plan a
+The trajectory analogue of ``ik_5f_contact_collision.py``: plan a
 K+1-step grasp trajectory (terminal tip contact, GP priors on wrist pose and
-tendon tensions — the ``five_finger_hand_grasp_trajectory_test`` setup) with
+tendon tensions — the ``traj_5f_contact`` setup) with
 ``config.attach_collision`` layered on, so every plannable step k >= 1 carries
 the AL inequality constraints (Eq 1.57-1.58): sphere-to-SDF keeping each
 finger's disc spheres out of the object, and sphere-to-sphere keeping distinct
@@ -20,9 +20,9 @@ Optionally solves the same trajectory with collision OFF first (--baseline) to
 show what the constraints actually prevented.
 
 Run (from the ``crest-sparse/`` directory):
-    python -m python.tests.tendon_hand.five_finger_hand_collision_trajectory_test big_sphere --no-viz
+    python -m python.tests.tendon_hand.traj_5f_contact_collision big_sphere --no-viz
     # small/fast: one finger, five steps
-    python -m python.tests.tendon_hand.five_finger_hand_collision_trajectory_test big_sphere --no-viz --num-fingers 1 -K 5
+    python -m python.tests.tendon_hand.traj_5f_contact_collision big_sphere --no-viz --num-fingers 1 -K 5
 """
 
 import os
@@ -37,10 +37,10 @@ import crest_sparse
 from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     tip_node_index, attach_collision, disc_node_indices, proximal_disc_flags)
-from .sdf_3dof_contact_kinematics_test import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap)
-from .five_finger_hand_grasp_trajectory_test import (
-    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER, TENDON_NAMES, _FingerTraj)
+from .scene import (
+    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
+    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER, TENDON_NAMES)
+from .utils import FingerTraj
 from .._plotting.trajectory_plotter import (
     plot_trajectory, plot_hand_wrist_trajectory)
 from ..tendon_finger.utils import (
@@ -470,7 +470,7 @@ def _main(args, results_dir):
     finger_names = [name for name, _ in configs]
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = _FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
+        finger_traj = FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))
