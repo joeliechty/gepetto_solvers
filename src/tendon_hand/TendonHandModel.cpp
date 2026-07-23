@@ -93,6 +93,14 @@ TendonHandModel::TendonHandModel(
             c.sdf_contact->sdf_grid &&
             !c.sdf_contact->collision_node_indices.empty())
             has_collision_ = true;
+        // Support plane (Section 1.6). A configured plane (non-zero normal) with
+        // a table_contact_node is a hard equality (sliding contact => AL); with
+        // plane_avoidance it is a hard inequality (table collision => AL).
+        if (c.sdf_contact.has_value() &&
+            c.sdf_contact->plane_normal.norm() > 0.0) {
+            if (c.sdf_contact->table_contact_node.has_value()) has_contact_   = true;
+            if (c.sdf_contact->plane_avoidance)                has_collision_ = true;
+        }
 
         SharedDiagonal twist_noise = get_noise_model_rot_pos(
             c.sigma_twist_rot, c.sigma_twist_pos);
@@ -331,6 +339,52 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         }
     }
 
+    // --- Support plane / "table" (Section 1.6) ---------------------------
+    // A world-fixed analytic half-space (env.plane_origin, env.plane_normal). It
+    // is independent of the object SDF machinery above (no object variable), so
+    // gather its spheres here rather than reusing finger_spheres, which is gated
+    // on the object collision fields.
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        if (!sdf_contacts_[i]) continue;
+        const auto& env = *sdf_contacts_[i];
+        if (env.plane_normal.norm() <= 0.0) continue;   // no table configured
+        std::visit([&](auto& fp) {
+            // Table sliding equality (Eq 1.60-1.64): place the contact node's
+            // sphere on the plane and let it slide. 5-residual witness factor —
+            // full-rank, no stabilizing prior (see PlaneWitnessContactFactor).
+            if (env.table_contact_node.has_value()) {
+                Key tip_key = fp->rod_->get_pose_key(*env.table_contact_node);
+                auto contact = std::make_shared<crest_sparse::PlaneWitnessContactFactor>(
+                    tip_key, table_witness_key(static_cast<int>(i)),
+                    env.table_contact_radius, env.plane_origin, env.plane_normal,
+                    noiseModel::Isotropic::Sigma(5, 1.0));
+                graph.add(gtsam::ZeroCostConstraint(contact));
+            }
+
+            // Table collision (Eq 1.59): keep every non-root collision sphere out
+            // of the half-space, except the table contact node (its collision
+            // would oppose the sliding equality that already pins it to the plane).
+            if (env.plane_avoidance && !env.collision_node_indices.empty()) {
+                auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
+                for (size_t j = 0; j < env.collision_node_indices.size(); ++j) {
+                    int idx = env.collision_node_indices[j];
+                    bool is_root = fp->rod_->uses_root() &&
+                        fp->rod_->get_pose_key(idx) == fp->rod_->get_pose_key(0);
+                    if (is_root) continue;
+                    if (env.table_contact_node.has_value() &&
+                        fp->rod_->get_pose_key(idx) ==
+                            fp->rod_->get_pose_key(*env.table_contact_node))
+                        continue;
+                    double r = env.collision_node_radii[j];
+                    auto gap = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
+                        fp->rod_->get_pose_key(idx), r,
+                        env.plane_origin, env.plane_normal, col_noise);
+                    graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+                }
+            }
+        }, fingers_[i]);
+    }
+
     return graph;
 }
 
@@ -427,6 +481,24 @@ Values TendonHandModel::get_initial_values() const {
                                   Point3(sc.sphere_center + sc.sphere_radius * dir));
                 }
             }
+        }, fingers_[i]);
+    }
+
+    // Support-plane sliding witness seeds (Section 1.6). For each finger with a
+    // configured plane + table contact node, seed the witness at the tip node
+    // orthogonally projected onto the plane: w = c - ((c - p0).n_hat) n_hat.
+    // Matches the PlaneWitnessContactFactor added in build_graph.
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        if (!sdf_contacts_[i]) continue;
+        const auto& env = *sdf_contacts_[i];
+        if (env.plane_normal.norm() <= 0.0 || !env.table_contact_node.has_value())
+            continue;
+        std::visit([&](const auto& fp) {
+            Vector3 n_hat = env.plane_normal.normalized();
+            Point3 c = values.at<Pose3>(
+                fp->rod_->get_pose_key(*env.table_contact_node)).translation();
+            Point3 w = c - (c - env.plane_origin).dot(n_hat) * n_hat;
+            values.insert(table_witness_key(static_cast<int>(i)), w);
         }, fingers_[i]);
     }
 

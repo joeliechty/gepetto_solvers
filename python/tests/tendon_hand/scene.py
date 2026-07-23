@@ -150,6 +150,28 @@ GRASP_FLEXOR_TENSION = 2.0
 # other (single-finger-scale) primitives stay at OBJECT_CENTER.
 GRASP_SPHERE_CENTER = np.array([-0.0221, 0.0885, -0.0160])
 
+# Default outward normal of the Section 1.6 support plane ("table"): world +Z.
+# The slide-and-grasp script places the plane tangent to the object's underside
+# (origin = object_center - radius * TABLE_NORMAL) so the object rests on it and
+# the hand works in the free (+normal) half-space.
+TABLE_NORMAL = [0.0, 0.0, 1.0]
+
+
+def table_plot_spec(plane_origin, plane_normal, *, span=0.3, thickness=0.005):
+    """A thin axis-aligned slab primitive for rendering the support plane in the
+    trajectory viewer. Returns a ``build_primitive_mesh``-compatible dict
+    ({"type": "box", "center", "extents"}). The slab is thin along whichever
+    cardinal axis the normal is most aligned with (exact for the default +Z
+    table); it is only a visual aid — the solver uses the analytic half-space, not
+    this mesh."""
+    origin = np.asarray(plane_origin, dtype=float).reshape(3)
+    n = np.asarray(plane_normal, dtype=float).reshape(3)
+    axis = int(np.argmax(np.abs(n)))       # dominant normal axis
+    extents = [span, span, span]
+    extents[axis] = thickness
+    return {"type": "box", "center": origin, "extents": tuple(extents)}
+
+
 # Anatomical 6-tendon finger routing (index 5 = flexor), config order.
 TENDON_NAMES = ["Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexor"]
 

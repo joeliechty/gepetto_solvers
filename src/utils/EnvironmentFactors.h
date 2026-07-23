@@ -105,6 +105,32 @@ struct EnvironmentConfig {
     // initial guess; the Augmented-Lagrangian solve still drives it onto the
     // true surface.
     std::optional<gtsam::Point3> witness_point_seed;
+
+    // --- Support plane / "table" (Section 1.6) --------------------------
+    // A world-fixed analytic half-space support surface, defined by an origin
+    // point and an OUTWARD unit normal: SDF_table(p) = (p - plane_origin) .
+    // plane_normal. The plane is treated as "absent" whenever plane_normal has
+    // zero norm (the default), so an env with no table configured builds exactly
+    // the pre-existing graph.
+    //
+    // plane_avoidance (Eq 1.59): when true, every non-contact, non-root collision
+    // sphere gets a PlaneCollisionGapFactor wrapped in a CollisionInequalityConstraint
+    // (c_pen = r - SDF_table <= 0) -- the free-space approach that keeps the
+    // fingers off the table.
+    //
+    // table_contact_node (Eq 1.60-1.64): the finger node whose sphere is placed
+    // on the table and slid across it during the sliding phase. When set, that
+    // node gets a 5-residual PlaneWitnessContactFactor wrapped in a
+    // gtsam::ZeroCostConstraint (table sliding equality). table_contact_radius is
+    // that node's contact sphere radius. The trajectory planner schedules these
+    // fields per step around the k_touch touch step, so the same env is reused
+    // for approach (plane_avoidance on, table_contact_node cleared) and slide
+    // (plane_avoidance off, table_contact_node set).
+    gtsam::Vector3 plane_origin = gtsam::Vector3::Zero();
+    gtsam::Vector3 plane_normal = gtsam::Vector3::Zero();  // norm 0 => no table
+    bool plane_avoidance = false;
+    std::optional<int> table_contact_node;
+    double table_contact_radius = 0.0;
 };
 
 
@@ -230,6 +256,52 @@ public:
     gtsam::NonlinearFactor::shared_ptr clone() const override {
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
             gtsam::NonlinearFactor::shared_ptr(new SdfCollisionGapFactor(*this)));
+    }
+};
+
+
+// Finger-plane (sphere-to-half-space) penetration gap (Section 1.6, Eq 1.59).
+// The support surface ("table") is a world-fixed analytic half-space defined by
+// an origin point p_table and an OUTWARD unit normal n_table:
+//   SDF_table(p) = (p - p_table) . n_table   (>0 in the free half-space)
+//   c_pen(p_i)   = r_i - SDF_table(p_i)       (>0 <=> the sphere penetrates)
+// where p_i is the world-frame center of the collision sphere (the node pose's
+// translation). Closed-form Jacobian:
+//   d c_pen / d p_world = -n_table^T ,
+// chained through node_pose.translation(). No object pose variable -- the plane
+// is a constant. Wrap an instance in a CollisionInequalityConstraint to enforce
+// c_pen <= 0.
+class PlaneCollisionGapFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3> {
+private:
+    double radius_;
+    gtsam::Vector3 p_table_;
+    gtsam::Vector3 n_table_;
+
+public:
+    PlaneCollisionGapFactor(gtsam::Key node_pose_key, double radius,
+                            const gtsam::Vector3& p_table, const gtsam::Vector3& n_table,
+                            const gtsam::SharedNoiseModel& noise_model)
+        : NoiseModelFactorN(noise_model, node_pose_key),
+          radius_(radius), p_table_(p_table), n_table_(n_table.normalized()) {}
+
+    gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
+                                gtsam::OptionalMatrixType H1) const override
+    {
+        gtsam::Matrix36 D_pworld_pose;
+        gtsam::Point3 p_world = node_pose.translation(H1 ? &D_pworld_pose : nullptr);
+
+        double sdf = (p_world - p_table_).dot(n_table_);
+        double c_pen = radius_ - sdf;   // > 0  <=>  penetration
+
+        // d c_pen / d p_world = -n_table^T (dc_pen/dsdf = -1, dsdf/dp = n^T)
+        if (H1) *H1 = -n_table_.transpose() * D_pworld_pose;   // 1x6
+
+        return gtsam::Vector1(c_pen);
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new PlaneCollisionGapFactor(*this)));
     }
 };
 
@@ -430,6 +502,110 @@ public:
     gtsam::NonlinearFactor::shared_ptr clone() const override {
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
             gtsam::NonlinearFactor::shared_ptr(new SdfWitnessContactFactor(*this)));
+    }
+};
+
+
+// Surface-to-surface witness-point contact against a world-fixed analytic plane
+// (Section 1.6, Eq 1.60-1.64) -- the "table sliding equality". The analog of
+// SdfWitnessContactFactor for a constant half-space support surface.
+// Connects:
+//   - node_pose_key (Pose3)  : finger node whose sphere should rest on the plane
+//   - point_key     (Point3) : dummy contact point p_c in world frame
+// The plane (origin p_table, OUTWARD unit normal n_table) is a constant, so there
+// is no object-pose variable and n_table has no rotation Jacobian.
+//
+// 5D residual = [ ||p_c - c|| - R,               (c_R,  Eq 1.60)
+//                 (p_c - p_table) . n_table,      (c_O,  Eq 1.61)
+//                 1 + N_i . n_table,              (c_N,  Eq 1.62)
+//                 (p_c - c) . t1(n_table),        (c_T1, Eq 1.63)
+//                 (p_c - c) . t2(n_table) ].      (c_T2, Eq 1.64)
+// N_i = (p_c - c)/||.|| is the body-sphere outward normal; t1, t2 span the
+// plane's tangent (Frisvad basis of n_table). CRITICALLY we keep rows 3-4: they
+// pin p_c along the contact normal RELATIVE to the tip center, which makes the
+// witness full-rank ({n_table, t1, t2} spans R^3) WITHOUT locking the tip's
+// lateral position -- so the tip is still free to slide across the plane. This
+// is the correction over the earlier 3-residual form, whose missing tangent rows
+// left p_c rank-deficient (IndeterminantLinearSystem) and needed a Tikhonov prior.
+class PlaneWitnessContactFactor
+    : public gtsam::NoiseModelFactor2<gtsam::Pose3, gtsam::Point3>
+{
+private:
+    double R_;
+    gtsam::Vector3 p_table_;
+    gtsam::Vector3 n_table_;
+
+public:
+    PlaneWitnessContactFactor(gtsam::Key node_pose_key, gtsam::Key point_key,
+                              double radius, const gtsam::Vector3& p_table,
+                              const gtsam::Vector3& n_table,
+                              const gtsam::SharedNoiseModel& noise_model)
+        : NoiseModelFactor2(noise_model, node_pose_key, point_key),
+          R_(radius), p_table_(p_table), n_table_(n_table.normalized()) {}
+
+    gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
+                                const gtsam::Point3& dummy_point,
+                                gtsam::OptionalMatrixType H1,
+                                gtsam::OptionalMatrixType H2) const override
+    {
+        // --- e1 = ||p_c - c|| - R --------------------------------------
+        gtsam::Matrix36 D_center_pose;
+        gtsam::Point3 center = node_pose.translation(H1 ? &D_center_pose : nullptr);
+
+        gtsam::Vector3 diff = dummy_point - center;
+        double d = diff.norm();
+        if (d < 1e-7) d = 1e-7;
+        double e1 = d - R_;
+        gtsam::Vector3 n_i = diff / d;  // body-sphere outward normal (world frame)
+
+        // --- e2 = (p_c - p_table) . n_table ----------------------------
+        double e2 = (dummy_point - p_table_).dot(n_table_);
+
+        // --- e3 = 1 + N_i . n_table ------------------------------------
+        double e3 = 1.0 + n_i.dot(n_table_);
+
+        // --- e4, e5 = C-frame gauge fixing (Eq 1.63-1.64) --------------
+        // Tangent basis of the (constant) plane normal; t1, t2 held constant
+        // within the local Gauss-Newton step, so their Jacobian reduces to the
+        // tangent vectors themselves.
+        gtsam::Vector3 t1, t2;
+        frisvad_tangent_basis(n_table_, t1, t2);
+        double e4 = diff.dot(t1);
+        double e5 = diff.dot(t2);
+
+        if (H1 || H2) {
+            if (H1) *H1 = gtsam::Matrix::Zero(5, 6);
+            if (H2) *H2 = gtsam::Matrix::Zero(5, 3);
+
+            // Row 0: e1 -- de1/dp_c = n_i^T, de1/dc = -n_i^T.
+            if (H1) H1->row(0) = -n_i.transpose() * D_center_pose;
+            if (H2) H2->row(0) =  n_i.transpose();
+
+            // Row 1: e2 -- depends only on p_c (n_table constant).
+            if (H2) H2->row(1) = n_table_.transpose();
+
+            // Row 2: e3 -- n_table constant. n_i = diff/d, projector
+            // P = (I - n_i n_i^T)/d.  dn_i/dp_c = P, dn_i/dc = -P.
+            const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
+            gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
+            Eigen::RowVector3d ntabP = n_table_.transpose() * P;
+            if (H1) H1->row(2) = -ntabP * D_center_pose;
+            if (H2) H2->row(2) =  ntabP;
+
+            // Rows 3-4: e4, e5. With t1, t2 constant, de/dp_c = t^T and
+            // de/dc = -t^T (diff = p_c - c).
+            if (H2) H2->row(3) = t1.transpose();
+            if (H2) H2->row(4) = t2.transpose();
+            if (H1) H1->row(3) = -t1.transpose() * D_center_pose;
+            if (H1) H1->row(4) = -t2.transpose() * D_center_pose;
+        }
+
+        return (gtsam::Vector(5) << e1, e2, e3, e4, e5).finished();
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new PlaneWitnessContactFactor(*this)));
     }
 };
 

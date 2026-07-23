@@ -109,6 +109,16 @@ public:
     gtsam::Key object_key() const          { return gtsam::Symbol('O', step_); }
     static gtsam::Key witness_key(int i)   { return gtsam::Symbol('Y', i); }
 
+    // Support-plane sliding witness point for finger i at THIS model's step
+    // (Symbol('U', 1000*step_ + i)). Step-indexed (unlike the object witness
+    // Symbol('Y', i), which only the terminal step instantiates) because the
+    // table sliding contact fires at every slide-phase step, each needing its own
+    // dummy point. The 1000* stride keeps distinct steps' witnesses disjoint for
+    // any realistic finger count.
+    gtsam::Key table_witness_key(int i) const {
+        return gtsam::Symbol('U', 1000 * step_ + i);
+    }
+
     // This model's own wrist key (step-indexed). Used by the trajectory planner
     // to wire the wrist GP BetweenFactor between consecutive timesteps.
     gtsam::Key wrist_key_instance() const { return wrist_key(step_); }

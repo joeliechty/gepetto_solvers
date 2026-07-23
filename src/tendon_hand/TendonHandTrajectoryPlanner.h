@@ -10,6 +10,7 @@
 #include <gtsam/geometry/Pose3.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -63,6 +64,18 @@ struct TendonHandTrajectoryPlannerConfig {
     // contact configured.
     std::vector<gtsam::Vector3> goal_positions;
     Eigen::Matrix3d goal_position_cov = 1e-5 * Eigen::Matrix3d::Identity();
+
+    // Slide-and-grasp touch step (Section 1.6.2). Splits the horizon into the
+    // three phases about a contact-initialization step. When set (and a finger
+    // carries a support plane, see EnvironmentConfig::plane_*), each step's plane
+    // fields are scheduled per finger:
+    //   k = 0          : no table collision, no table contact (measured start).
+    //   1 <= k < k_touch (Phase 1): table collision only (free-space approach).
+    //   k >= k_touch     (Phase 2/3): table sliding equality on the tip; the
+    //                    terminal object grasp still fires at k=K (corner contact).
+    // Unset (default) => no sliding: a configured plane acts purely as collision
+    // at every plannable step, and a plane-free run is unchanged.
+    std::optional<int> k_touch;
 };
 
 

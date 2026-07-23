@@ -516,3 +516,52 @@ def attach_collision(configs, vdb_path, object_pose, *,
             env.collision_cull_margin = cull_margin
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs
+
+
+def attach_table(configs, plane_origin, plane_normal, *,
+                 avoidance=True, contact_node=None, radius=None,
+                 tip_radii=None, dims=None):
+    """Attach a Section 1.6 world-fixed analytic support plane ("table") to every
+    finger of a hand config list, in place. Returns ``configs`` for chaining.
+
+    The table is a half-space with origin ``plane_origin`` and OUTWARD unit normal
+    ``plane_normal`` (``SDF_table(p) = (p - origin) . normal``). The plane fields
+    are written onto each finger's existing ``sdf_contact`` env (created if absent)
+    so contact/collision/table share one env. Per finger this sets:
+      * ``plane_origin`` / ``plane_normal`` — the support surface,
+      * ``plane_avoidance`` = ``avoidance`` — the free-space approach collision
+        (Eq 1.59): every non-tip collision sphere is kept out of the half-space,
+      * ``table_contact_node`` — the fingertip node that slides on the plane
+        (defaults to ``tip_node_index(cfg)``); the C++ planner *schedules* this
+        field per step around ``k_touch`` (cleared during the approach phase, kept
+        during the slide phase), so it is safe to set it unconditionally here,
+      * ``table_contact_radius`` — that tip's contact sphere radius.
+
+    ``radius`` overrides the per-finger tip radius for all fingers; otherwise
+    ``tip_radii[i]`` (if given) or the env's existing ``contact_node_radius`` is
+    used. The plane is treated as absent by the C++ layer whenever the normal has
+    zero norm, so this is a no-op-safe opt-in that leaves plane-free runs unchanged.
+    """
+    import crest_sparse
+
+    origin = np.asarray(plane_origin, dtype=float).reshape(3)
+    normal = np.asarray(plane_normal, dtype=float).reshape(3)
+    normal = normal / np.linalg.norm(normal)
+
+    for i, (_, cfg) in enumerate(configs):
+        env = cfg.sdf_contact
+        if env is None:
+            env = crest_sparse.EnvironmentConfig()
+        env.plane_origin = origin
+        env.plane_normal = normal
+        env.plane_avoidance = avoidance
+        env.table_contact_node = (contact_node if contact_node is not None
+                                  else tip_node_index(cfg))
+        if radius is not None:
+            env.table_contact_radius = radius
+        elif tip_radii is not None:
+            env.table_contact_radius = tip_radii[i]
+        else:
+            env.table_contact_radius = env.contact_node_radius
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs

@@ -26,43 +26,66 @@ TendonHandTrajectoryPlanner::TendonHandTrajectoryPlanner(
     SharedDiagonal start_wrist_noise = get_noise_model_rot_pos(
         config_.sigma_wrist_rot, config_.sigma_wrist_pos);
 
-    // Contact-as-goal lives only at the terminal step, so strip the terminal
-    // contact from every other step. Collision avoidance (Section 1.5), however,
-    // applies at every *plannable* step, so preserve the sdf env's collision
-    // fields (sdf_grid, object_pose_*, collision_*) and clear only the contact
-    // aspect (target_contact_node / witness_point_seed). A contact-only sdf env
-    // becomes inert after stripping (no grid factors) — handled by the
-    // build_graph / get_initial_values guards in TendonHandModel.
-    auto free_space_configs = finger_configs;
-    for (auto& [name, c] : free_space_configs) {
-        if (c.sdf_contact.has_value()) {
-            c.sdf_contact->target_contact_node.reset();
-            c.sdf_contact->witness_point_seed.reset();
+    // Per-step config transform. Two independent constraint schedules ride on
+    // the same per-finger sdf env:
+    //
+    //  (a) Object contact-as-goal (Section 1.3) lives only at the terminal step,
+    //      so strip target_contact_node / witness_point_seed for k < K. Object
+    //      collision (Section 1.5) applies at every *plannable* step, so the
+    //      env's collision fields are preserved. A contact-only env becomes inert
+    //      after stripping (no grid factors) — handled by the build_graph /
+    //      get_initial_values guards in TendonHandModel.
+    //
+    //  (b) Support-plane phases (Section 1.6.2) about config_.k_touch, per finger
+    //      with a plane (plane_normal != 0). attach_table configures the env with
+    //      plane_avoidance=true and table_contact_node=<slide node>; the schedule
+    //      below overrides those two fields per step:
+    //        k == 0            : plane_avoidance off, table_contact_node cleared.
+    //        k_touch unset     : plane_avoidance on, table_contact_node cleared
+    //                            (free-space approach, table as pure collision).
+    //        1 <= k < k_touch  : plane_avoidance on,  table_contact_node cleared.
+    //        k >= k_touch      : plane_avoidance off, table_contact_node kept
+    //                            (table sliding equality on the tip).
+    //
+    // The start step k=0 additionally gets NO object collision: it is a
+    // measurement pinned by tight start priors (start tensions, wrist prior). If
+    // the measured start is already in collision a k=0 constraint is infeasible by
+    // construction — the AL outer loop grinds mu up against the measurement priors
+    // and distorts the whole solve instead of planning a way out from where the
+    // hand actually is.
+    const std::optional<int> k_touch = config_.k_touch;
+    auto make_step_configs = [&](int k) {
+        const bool is_start = (k == 0);
+        const bool is_goal  = (k == K);
+        auto step = finger_configs;
+        for (auto& [name, c] : step) {
+            if (c.sdf_contact.has_value()) {
+                auto& env = *c.sdf_contact;
+                // (a) object contact only at k=K.
+                if (!is_goal) {
+                    env.target_contact_node.reset();
+                    env.witness_point_seed.reset();
+                }
+                // start step: no object collision.
+                if (is_start)
+                    env.collision_avoidance = false;
+                // (b) support-plane phase schedule.
+                if (env.plane_normal.norm() > 0.0) {
+                    const bool sliding = !is_start && k_touch.has_value() && k >= *k_touch;
+                    env.plane_avoidance   = !is_start && !sliding;
+                    if (!sliding) env.table_contact_node.reset();
+                }
+            }
+            if (!is_goal) c.sphere_contact.reset();
         }
-        c.sphere_contact.reset();
-    }
-
-    // The start step k=0 additionally gets NO collision constraints: it is a
-    // measurement pinned by tight start priors (start tensions, wrist prior).
-    // If the measured start is already in collision, a k=0 constraint is
-    // infeasible by construction — the AL outer loop grinds mu up against the
-    // measurement priors and distorts the whole solve instead of planning a
-    // way out from where the hand actually is.
-    auto start_configs = free_space_configs;
-    for (auto& [name, c] : start_configs) {
-        if (c.sdf_contact.has_value())
-            c.sdf_contact->collision_avoidance = false;
-    }
+        return step;
+    };
 
     models_.reserve(K + 1);
     for (int k = 0; k <= K; ++k) {
         const bool is_start = (k == 0);
-        const bool is_goal  = (k == K);
-        const auto& step_configs = is_goal ? finger_configs
-                                 : is_start ? start_configs
-                                 : free_space_configs;
         models_.push_back(std::make_unique<TendonHandModel>(
-            step_configs, wrist_pose, start_wrist_noise,
+            make_step_configs(k), wrist_pose, start_wrist_noise,
             /*step=*/k, /*emit_wrist_prior=*/is_start));
     }
 
