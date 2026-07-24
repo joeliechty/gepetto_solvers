@@ -12,3 +12,10 @@ wheel.packages = ["python/crest_sparse"]
 [project]
 name = "crest_sparse"
 version = "0.0.1"
+
+# Optional extras for the interactive visualizer (tests/tendon_hand/viz_interactive.py
+# and tests/_plotting/viser_hand.py). Install with: pip install -e ".[viz]".
+# Kept optional so core solver installs stay lean; the demo scripts' PyVista viewers
+# are installed the same ad hoc way into the crest_py11 env.
+[project.optional-dependencies]
+viz = ["viser", "trimesh"]
