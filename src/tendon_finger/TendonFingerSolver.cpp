@@ -216,13 +216,25 @@ void TendonFingerSolver<N>::build_graph() {
         graph_.add(PriorFactor<Pose3>(
             sphere_object_key(), Pose3(env.object_pose_mean),
             noiseModel::Gaussian::Covariance(env.object_pose_cov)));
-        auto contact = std::make_shared<crest_sparse::SdfWitnessContactFactor>(
-            tip_key,
-            sphere_object_key(),
-            dummy_point_key(),
-            env.contact_node_radius,
-            env.sdf_grid,
-            noiseModel::Isotropic::Sigma(5, 1.0));
+        gtsam::NoiseModelFactor::shared_ptr contact;
+        if (env.ellipsoid_semi_axes.norm() > 0.0) {
+            // Analytic hyper-ellipsoid surface (Section 1.6.3).
+            contact = std::make_shared<crest_sparse::EllipsoidWitnessContactFactor>(
+                tip_key,
+                sphere_object_key(),
+                dummy_point_key(),
+                env.contact_node_radius,
+                env.ellipsoid_semi_axes,
+                noiseModel::Isotropic::Sigma(5, 1.0));
+        } else {
+            contact = std::make_shared<crest_sparse::SdfWitnessContactFactor>(
+                tip_key,
+                sphere_object_key(),
+                dummy_point_key(),
+                env.contact_node_radius,
+                env.sdf_grid,
+                noiseModel::Isotropic::Sigma(5, 1.0));
+        }
         graph_.add(gtsam::ZeroCostConstraint(contact));
         // The factor's C-frame tangent residuals ([c_T1, c_T2]) pin p_c's gauge
         // DOF, so the system is full rank without a stabilizing prior on the
@@ -273,6 +285,20 @@ void TendonFingerSolver<N>::get_initial_values() {
         const Pose3 tip_pose = values_.at<Pose3>(robot_->rod_->get_pose_key(i_node));
         Point3 tip_world = tip_pose.translation();
         Point3 tip_local = obj_mean.transformTo(tip_world);
+
+        // Analytic ellipsoid (Section 1.6.3): project the tip radially onto the
+        // surface x^T M x = 1. seed = tip_local / sqrt(tip^T M tip).
+        if (env.ellipsoid_semi_axes.norm() > 0.0) {
+            const Vector3& a = env.ellipsoid_semi_axes;
+            Vector3 m_diag(1.0 / (a.x() * a.x()), 1.0 / (a.y() * a.y()),
+                           1.0 / (a.z() * a.z()));
+            double q = tip_local.cwiseProduct(m_diag.cwiseProduct(tip_local)).sum();
+            Point3 seed_local = (q > 1e-12) ? Point3(tip_local / std::sqrt(q))
+                                            : Point3(a.x(), 0.0, 0.0);
+            values_.insert(dummy_point_key(), obj_mean.transformFrom(seed_local));
+            return;
+        }
+
         double tip_local_norm = tip_local.norm();
         Point3 dir_local = (tip_local_norm > 1e-8)
                                ? Point3(tip_local / tip_local_norm)

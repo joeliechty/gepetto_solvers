@@ -32,7 +32,7 @@ from .config import (
 # Shared primitive geometry + grasp scene constants (see scene.py).
 from .scene import (
     OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
-    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER)
+    configure_object_surface, GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER)
 
 
 def _add_object_mesh(pv_plotter, spec, center):
@@ -50,6 +50,9 @@ def _add_object_mesh(pv_plotter, spec, center):
     elif t == "cube":
         hx, hy, hz = spec["half_extents"]
         mesh = pv.Cube(center=center, x_length=2 * hx, y_length=2 * hy, z_length=2 * hz)
+    elif t == "ellipsoid":
+        a, b, c = (float(v) for v in spec["semi_axes"])
+        mesh = pv.ParametricEllipsoid(a, b, c).translate(center, inplace=False)
     else:
         return
     pv_plotter.add_mesh(mesh, color="goldenrod", opacity=0.35)
@@ -60,7 +63,8 @@ def main():
         description="Solve a five-finger tendon hand (four fingers + opposable "
                     "thumb, shared floating wrist) grasping a primitive object.")
     parser.add_argument("primitive", nargs="?", default="big_sphere",
-                        choices=["big_sphere", "capsule", "sphere", "cylinder", "cube"])
+                        choices=["big_sphere", "capsule", "sphere", "cylinder", "cube",
+                                 "coin", "credit_card", "pen"])
     parser.add_argument("--no-viz", action="store_true",
                         help="Skip the interactive 3D view (headless / tuning).")
     parser.add_argument("--al-mu", type=float, default=1.0, help="AL initial penalty mu")
@@ -75,23 +79,21 @@ def main():
     args = parser.parse_args()
 
     spec = get_primitive_specs()[args.primitive]
-    # The big grasp sphere and the capsule sit at the flexed-fingertip locus;
-    # the other (single-finger-scale) primitives stay at OBJECT_CENTER.
+    # The big grasp sphere, the capsule, and the analytic ellipsoids sit at the
+    # flexed-fingertip locus; the other (single-finger-scale) primitives stay at
+    # OBJECT_CENTER.
     object_center = (GRASP_SPHERE_CENTER
                      if args.primitive in ("big_sphere", "capsule")
+                     or spec["type"] == "ellipsoid"
                      else OBJECT_CENTER)
     object_rotation = np.asarray(spec.get("rotation", np.eye(3)), dtype=float)
     object_pose = np.eye(4)
     object_pose[0:3, 0:3] = object_rotation
     object_pose[0:3, 3] = object_center
 
-    # --- Shared SDF object (one asset, referenced by every finger) ---
+    # --- Shared object surface (one asset, referenced by every finger) ---
+    # An analytic hyper-ellipsoid (Section 1.6.3) or a baked SDF grid.
     objects_dir = os.path.join(os.path.dirname(__file__), "..", "_objects")
-    vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
-    if not os.path.exists(vdb_path):
-        raise FileNotFoundError(
-            f"{vdb_path} not found. Generate it with "
-            f"python -m tests._objects.make_{args.primitive} (run from the python/ dir).")
 
     # --- Five fingers (four + opposable thumb) on the shared wrist ---
     # Anatomical hand from gepetto_core / parameters.scad (same builder as
@@ -108,7 +110,7 @@ def main():
         # the (shared) object + this finger's tip node/radius; the C++ side keys
         # the contact to each finger's own tip pose, so one env per finger is fine.
         env_i = crest_sparse.EnvironmentConfig()
-        env_i.load_sdf(vdb_path)
+        configure_object_surface(env_i, spec, objects_dir, args.primitive)
         env_i.object_pose_mean = object_pose
         env_i.object_pose_cov = 1e-8 * np.eye(6)
         env_i.object_pose_per_step = False

@@ -44,8 +44,9 @@ from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     tip_node_index, disc_node_indices, attach_collision, attach_table)
 from .scene import (
-    OBJECT_CENTER, get_primitive_specs, GRASP_SPHERE_CENTER,
-    GRASP_FLEXOR_TENSION, TABLE_NORMAL, table_plot_spec, TENDON_NAMES)
+    OBJECT_CENTER, get_primitive_specs, configure_object_surface,
+    GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL, table_plot_spec,
+    TENDON_NAMES)
 from .utils import FingerTraj
 from .._plotting.trajectory_plotter import (
     plot_trajectory, plot_hand_wrist_trajectory)
@@ -62,7 +63,8 @@ SLIDE_TOL = 1e-3       # max allowed |fingertip distance-to-plane| in the slide 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("primitive", nargs="?", default="big_sphere",
-                        choices=["big_sphere", "capsule", "sphere", "cylinder", "cube"])
+                        choices=["big_sphere", "capsule", "sphere", "cylinder", "cube",
+                                 "coin", "credit_card", "pen"])
     parser.add_argument("-K", "--steps", type=int, default=10)
     parser.add_argument("--dt", type=float, default=0.1)
     parser.add_argument("--num-fingers", type=int, default=0,
@@ -138,6 +140,8 @@ def _object_radius(spec):
         return float(spec["radius"])
     if "half_extents" in spec:
         return float(max(spec["half_extents"]))
+    if "semi_axes" in spec:
+        return float(max(spec["semi_axes"]))
     return 0.05
 
 
@@ -155,10 +159,11 @@ def resolve_table(args, spec, object_center):
     return origin, normal
 
 
-def build_configs(args, dims, vdb_path, object_pose, tip_radii,
+def build_configs(args, dims, spec, objects_dir, object_pose, tip_radii,
                   plane_origin, plane_normal):
     """Object terminal contact + Section 1.5 collision + (optional) Section 1.6
-    table. Returns (configs, tip_radii) for this solve."""
+    table. The object surface is an analytic hyper-ellipsoid (Section 1.6.3) or a
+    baked SDF grid. Returns (configs, tip_radii) for this solve."""
     configs = get_default_hand_configs(dims)
     radii = list(tip_radii)
     if args.num_fingers > 0:
@@ -169,7 +174,7 @@ def build_configs(args, dims, vdb_path, object_pose, tip_radii,
                               [args.sigma_object_pos ** 2] * 3)
     for (_, cfg), tip_radius in zip(configs, radii):
         env_i = crest_sparse.EnvironmentConfig()
-        env_i.load_sdf(vdb_path)
+        configure_object_surface(env_i, spec, objects_dir, args.primitive)
         env_i.object_pose_mean = object_pose
         env_i.object_pose_cov = object_pose_cov
         env_i.object_pose_per_step = False
@@ -177,7 +182,9 @@ def build_configs(args, dims, vdb_path, object_pose, tip_radii,
         env_i.target_contact_node = tip_node_index(cfg)
         cfg.sdf_contact = env_i
 
-    attach_collision(configs, vdb_path, object_pose,
+    # attach_collision only sets the collision fields on the existing contact env
+    # (built above), so it never re-loads the surface; vdb_path is unused here.
+    attach_collision(configs, None, object_pose,
                      radius=args.collision_radius, sigma=args.collision_sigma,
                      cull_margin=args.cull_margin)
 
@@ -239,18 +246,16 @@ def _main(args, results_dir):
     spec = get_primitive_specs()[args.primitive]
     object_center = (GRASP_SPHERE_CENTER
                      if args.primitive in ("big_sphere", "capsule")
+                     or spec["type"] == "ellipsoid"
                      else OBJECT_CENTER)
     object_rotation = np.asarray(spec.get("rotation", np.eye(3)), dtype=float)
     object_pose = np.eye(4)
     object_pose[:3, :3] = object_rotation
     object_pose[:3, 3] = object_center
 
+    # Object surface: analytic hyper-ellipsoid (Section 1.6.3) or baked SDF grid
+    # (configure_object_surface, invoked in build_configs, validates the asset).
     objects_dir = os.path.join(os.path.dirname(__file__), "..", "_objects")
-    vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
-    if not os.path.exists(vdb_path):
-        raise FileNotFoundError(
-            f"{vdb_path} not found. Generate it with "
-            f"python -m tests._objects.make_{args.primitive} (run from python/).")
 
     dims = load_hand_dimensions()
     tip_radii = default_hand_tip_radii(dims)
@@ -267,7 +272,8 @@ def _main(args, results_dir):
               f"normal={np.round(plane_normal, 3)}")
 
     configs, radii = build_configs(
-        args, dims, vdb_path, object_pose, tip_radii, plane_origin, plane_normal)
+        args, dims, spec, objects_dir, object_pose, tip_radii,
+        plane_origin, plane_normal)
 
     planner, result = plan_trajectory(args, configs)
 

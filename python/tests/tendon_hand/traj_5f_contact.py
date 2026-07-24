@@ -37,7 +37,8 @@ from .config import (
     tip_node_index)
 from .scene import (
     OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
-    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER, TENDON_NAMES)
+    configure_object_surface, GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER,
+    TENDON_NAMES)
 from .utils import FingerTraj
 from .._plotting.trajectory_plotter import plot_trajectory, plot_hand_wrist_trajectory
 from .._plotting.al_convergence_plotter import plot_al_convergence
@@ -65,6 +66,9 @@ def _add_object_mesh(pv_plotter, spec, center):
     elif t == "cube":
         hx, hy, hz = spec["half_extents"]
         mesh = pv.Cube(center=center, x_length=2 * hx, y_length=2 * hy, z_length=2 * hz)
+    elif t == "ellipsoid":
+        a, b, c = (float(v) for v in spec["semi_axes"])
+        mesh = pv.ParametricEllipsoid(a, b, c).translate(center, inplace=False)
     else:
         return
     pv_plotter.add_mesh(mesh, color="goldenrod", opacity=0.35)
@@ -109,7 +113,8 @@ def parse_args():
         description="Plan a K-step five-finger tendon-hand grasp trajectory with "
                     "GP priors on the wrist pose and finger tensions.")
     parser.add_argument("primitive", nargs="?", default="big_sphere",
-                        choices=["big_sphere", "capsule", "sphere", "cylinder", "cube"])
+                        choices=["big_sphere", "capsule", "sphere", "cylinder", "cube",
+                                 "coin", "credit_card", "pen"])
     parser.add_argument("-K", "--steps", type=int, default=10,
                         help="Number of trajectory steps (creates K+1 states).")
     parser.add_argument("--dt", type=float, default=0.1, help="Step duration (s).")
@@ -180,6 +185,7 @@ def _main(args, results_dir):
     spec = get_primitive_specs()[args.primitive]
     object_center = (GRASP_SPHERE_CENTER
                      if args.primitive in ("big_sphere", "capsule")
+                     or spec["type"] == "ellipsoid"
                      else OBJECT_CENTER)
     object_rotation = np.asarray(spec.get("rotation", np.eye(3)), dtype=float)
     object_pose = np.eye(4)
@@ -187,11 +193,6 @@ def _main(args, results_dir):
     object_pose[0:3, 3] = object_center
 
     objects_dir = os.path.join(os.path.dirname(__file__), "..", "_objects")
-    vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
-    if not os.path.exists(vdb_path):
-        raise FileNotFoundError(
-            f"{vdb_path} not found. Generate it with "
-            f"python -m tests._objects.make_{args.primitive} (run from the python/ dir).")
 
     # --- Five fingers on the shared wrist (same builder + contact setup as the
     #     static grasp test). Each finger's tip node is driven onto the shared SDF. ---
@@ -202,7 +203,7 @@ def _main(args, results_dir):
 
     for (_, cfg), tip_radius in zip(configs, tip_radii):
         env_i = crest_sparse.EnvironmentConfig()
-        env_i.load_sdf(vdb_path)
+        configure_object_surface(env_i, spec, objects_dir, args.primitive)
         env_i.object_pose_mean = object_pose
         env_i.object_pose_cov = 1e-8 * np.eye(6)
         env_i.object_pose_per_step = False
@@ -239,7 +240,8 @@ def _main(args, results_dir):
         "primitive": args.primitive,
         "object_pose": object_pose,
         "num_tendons": num_tendons,
-        "vdb_path": vdb_path,
+        "object_surface": (f"ellipsoid semi_axes={spec['semi_axes']}"
+                           if spec["type"] == "ellipsoid" else spec["vdb"]),
     })
 
     planner = crest_sparse.TendonHandTrajectoryPlanner(configs, plan_config)

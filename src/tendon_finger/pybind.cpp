@@ -97,6 +97,7 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("target_contact_node", &crest_sparse::EnvironmentConfig::target_contact_node)
         .def_readwrite("contact_node_radius", &crest_sparse::EnvironmentConfig::contact_node_radius)
         .def_readwrite("witness_point_seed",  &crest_sparse::EnvironmentConfig::witness_point_seed)
+        .def_readwrite("ellipsoid_semi_axes", &crest_sparse::EnvironmentConfig::ellipsoid_semi_axes)
         .def_readwrite("plane_origin",        &crest_sparse::EnvironmentConfig::plane_origin)
         .def_readwrite("plane_normal",        &crest_sparse::EnvironmentConfig::plane_normal)
         .def_readwrite("plane_avoidance",     &crest_sparse::EnvironmentConfig::plane_avoidance)

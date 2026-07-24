@@ -12,6 +12,8 @@ scripts that *bake* the SDF ``.vdb`` level-set files. The specs here must stay
 consistent with the parameters those generators were run with.
 """
 
+import os
+
 import numpy as np
 
 
@@ -99,6 +101,32 @@ def get_primitive_specs():
             "plot": lambda c: {"type": "cube", "center": c,
                                "extents": (0.05, 0.04, 0.05)},
         },
+        # --- Analytic hyper-ellipsoid primitives (Section 1.6.3, Table 1.1) ---
+        # These have no baked SDF; they are evaluated by the C++ ellipsoid
+        # contact/collision factors. semi_axes = (a, b, c) => shape matrix
+        # M = diag(a^-2, b^-2, c^-2). Thin axis is local Z so they lie flat on a
+        # +Z table with no rotation. World orientation is carried by object_pose.
+        "coin": {
+            # Oblate spheroid (r >> h): a = b = r, c = h.
+            "type": "ellipsoid",
+            "semi_axes": (0.0121, 0.0121, 0.0009),
+            "plot": lambda c: {"type": "ellipsoid", "center": c,
+                               "semi_axes": (0.0121, 0.0121, 0.0009)},
+        },
+        "credit_card": {
+            # Scalene ellipsoid (l > w >> h): a = l, b = w, c = h.
+            "type": "ellipsoid",
+            "semi_axes": (0.0428, 0.0270, 0.0004),
+            "plot": lambda c: {"type": "ellipsoid", "center": c,
+                               "semi_axes": (0.0428, 0.0270, 0.0004)},
+        },
+        "pen": {
+            # Prolate spheroid (l >> r): a = l, b = c = r (long axis is local X).
+            "type": "ellipsoid",
+            "semi_axes": (0.0700, 0.0040, 0.0040),
+            "plot": lambda c: {"type": "ellipsoid", "center": c,
+                               "semi_axes": (0.0700, 0.0040, 0.0040)},
+        },
     }
 
 
@@ -135,7 +163,35 @@ def primitive_surface_gap(p_local, spec):
         out_dist = np.linalg.norm(np.maximum(d, 0.0))
         in_dist = min(max(d[0], max(d[1], d[2])), 0.0)
         return float(out_dist + in_dist - er)
+    if ptype == "ellipsoid":
+        # Taubin first-order distance to x^T M x = 1 (Section 1.6.3, Eq 1.91),
+        # matching the C++ EllipsoidCollisionGapFactor so the reported gap agrees
+        # with what the solver drives to zero. M = diag(a^-2, b^-2, c^-2).
+        a = np.asarray(spec["semi_axes"], dtype=float)
+        m_diag = 1.0 / (a * a)
+        x = np.asarray(p_local, dtype=float)
+        Mx = m_diag * x
+        g = np.linalg.norm(Mx)
+        if g < 1e-9:
+            g = 1e-9
+        return float((x @ Mx - 1.0) / (2.0 * g))
     raise ValueError(f"Unknown primitive type: {ptype!r}")
+
+
+def configure_object_surface(env, spec, objects_dir, primitive_name):
+    """Attach the object surface to a ``crest_sparse.EnvironmentConfig`` from a
+    primitive spec: an analytic hyper-ellipsoid (Section 1.6.3, no VDB) or a
+    baked SDF grid. Shared by the contact/collision demo scripts so both surface
+    kinds are set up identically; leaves all other env fields untouched."""
+    if spec["type"] == "ellipsoid":
+        env.ellipsoid_semi_axes = np.asarray(spec["semi_axes"], dtype=float)
+        return
+    vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
+    if not os.path.exists(vdb_path):
+        raise FileNotFoundError(
+            f"{vdb_path} not found. Generate it with "
+            f"python -m tests._objects.make_{primitive_name} (run from the python/ dir).")
+    env.load_sdf(vdb_path)
 
 
 # --- Full five-finger grasp scene (the "big_sphere" grasp target) ---

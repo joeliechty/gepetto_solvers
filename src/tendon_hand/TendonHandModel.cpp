@@ -88,9 +88,12 @@ TendonHandModel::TendonHandModel(
             || c.sphere_contact.has_value())
             has_contact_ = true;
         // Collision => AL inequality constraints on this finger's spheres.
+        // The object surface may be a baked SDF grid or an analytic ellipsoid
+        // (Section 1.6.3); either provides the finger-object penetration gap.
         if (c.sdf_contact.has_value() &&
             c.sdf_contact->collision_avoidance &&
-            c.sdf_contact->sdf_grid &&
+            (c.sdf_contact->sdf_grid ||
+             c.sdf_contact->ellipsoid_semi_axes.norm() > 0.0) &&
             !c.sdf_contact->collision_node_indices.empty())
             has_collision_ = true;
         // Support plane (Section 1.6). A configured plane (non-zero normal) with
@@ -210,10 +213,19 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         noiseModel::Gaussian::Covariance(env.object_pose_cov)));
                     object_anchored = true;
                 }
-                auto contact = std::make_shared<crest_sparse::SdfWitnessContactFactor>(
-                    tip_key, object_key(), witness_key(static_cast<int>(i)),
-                    env.contact_node_radius, env.sdf_grid,
-                    noiseModel::Isotropic::Sigma(5, 1.0));
+                gtsam::NoiseModelFactor::shared_ptr contact;
+                if (env.ellipsoid_semi_axes.norm() > 0.0) {
+                    // Analytic hyper-ellipsoid surface (Section 1.6.3).
+                    contact = std::make_shared<crest_sparse::EllipsoidWitnessContactFactor>(
+                        tip_key, object_key(), witness_key(static_cast<int>(i)),
+                        env.contact_node_radius, env.ellipsoid_semi_axes,
+                        noiseModel::Isotropic::Sigma(5, 1.0));
+                } else {
+                    contact = std::make_shared<crest_sparse::SdfWitnessContactFactor>(
+                        tip_key, object_key(), witness_key(static_cast<int>(i)),
+                        env.contact_node_radius, env.sdf_grid,
+                        noiseModel::Isotropic::Sigma(5, 1.0));
+                }
                 graph.add(gtsam::ZeroCostConstraint(contact));
             } else {
                 const auto& sc = *sphere_contacts_[i];
@@ -258,7 +270,9 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     for (size_t i = 0; i < fingers_.size(); ++i) {
         if (!sdf_contacts_[i]) continue;
         const auto& env = *sdf_contacts_[i];
-        if (!env.collision_avoidance || !env.sdf_grid ||
+        bool has_object_surface =
+            env.sdf_grid || env.ellipsoid_semi_axes.norm() > 0.0;
+        if (!env.collision_avoidance || !has_object_surface ||
             env.collision_node_indices.empty())
             continue;
         std::visit([&](auto& fp) {
@@ -292,10 +306,17 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             object_anchored = true;
         }
         auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
+        bool is_ellipsoid = env.ellipsoid_semi_axes.norm() > 0.0;
         for (const auto& s : finger_spheres[i]) {
             if (s.is_contact || s.is_root) continue;
-            auto gap = std::make_shared<crest_sparse::SdfCollisionGapFactor>(
-                s.key, object_key(), s.radius, env.sdf_grid, col_noise);
+            gtsam::NoiseModelFactor::shared_ptr gap;
+            if (is_ellipsoid) {
+                gap = std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
+                    s.key, object_key(), s.radius, env.ellipsoid_semi_axes, col_noise);
+            } else {
+                gap = std::make_shared<crest_sparse::SdfCollisionGapFactor>(
+                    s.key, object_key(), s.radius, env.sdf_grid, col_noise);
+            }
             graph.add(crest_sparse::CollisionInequalityConstraint(gap));
         }
     }
@@ -413,7 +434,9 @@ Values TendonHandModel::get_initial_values() const {
                 // a factor in build_graph: a terminal contact and/or active
                 // collision. An inert sdf env seeds nothing (avoids an orphan
                 // object variable with no factors).
-                bool has_col = env.collision_avoidance && env.sdf_grid &&
+                bool has_object_surface =
+                    env.sdf_grid || env.ellipsoid_semi_axes.norm() > 0.0;
+                bool has_col = env.collision_avoidance && has_object_surface &&
                                !env.collision_node_indices.empty();
                 if (!env.target_contact_node.has_value() && !has_col) return;
 
@@ -428,6 +451,18 @@ Values TendonHandModel::get_initial_values() const {
                 if (env.witness_point_seed) {
                     // Caller-provided seed (object-local frame); skip the march.
                     seed_local = *env.witness_point_seed;
+                } else if (env.ellipsoid_semi_axes.norm() > 0.0) {
+                    // Analytic ellipsoid (Section 1.6.3): project the tip radially
+                    // onto the surface x^T M x = 1. seed = tip_local / sqrt(tip^T M tip).
+                    int i_node = *env.target_contact_node;
+                    Point3 tip_world = values.at<Pose3>(fp->rod_->get_pose_key(i_node)).translation();
+                    Point3 tip_local = obj_mean.transformTo(tip_world);
+                    const Vector3& a = env.ellipsoid_semi_axes;
+                    Vector3 m_diag(1.0 / (a.x() * a.x()), 1.0 / (a.y() * a.y()),
+                                   1.0 / (a.z() * a.z()));
+                    double q = tip_local.cwiseProduct(m_diag.cwiseProduct(tip_local)).sum();
+                    if (q > 1e-12) seed_local = Point3(tip_local / std::sqrt(q));
+                    else           seed_local = Point3(a.x(), 0.0, 0.0);
                 } else {
                     // Ray-march in the object-local frame from the local origin
                     // toward the tip until the SDF crosses zero (mirrors

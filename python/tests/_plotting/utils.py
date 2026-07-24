@@ -76,6 +76,17 @@ def build_primitive_mesh(spec):
         return pv.Cube(center=center,
                        x_length=float(ex), y_length=float(ey),
                        z_length=float(ez))
+    if ptype == "ellipsoid":
+        # Analytic hyper-ellipsoid (Section 1.6.3). semi_axes = (a, b, c) in the
+        # object-local frame; optional "rotation" (3x3) orients it in the world.
+        a, b, c = (float(v) for v in spec["semi_axes"])
+        mesh = pv.ParametricEllipsoid(a, b, c)
+        R = spec.get("rotation")
+        if R is not None:
+            T = np.eye(4)
+            T[:3, :3] = np.asarray(R, dtype=float)
+            mesh = mesh.transform(T, inplace=False)
+        return mesh.translate(center, inplace=False)
     raise ValueError(f"Unknown primitive type: {ptype!r}")
 
 

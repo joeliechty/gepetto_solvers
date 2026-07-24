@@ -86,7 +86,8 @@ TendonFingerTrajectoryPlanner<N>::TendonFingerTrajectoryPlanner(
         config.sphere_contact.has_value() ||
         (config.environment.has_value() &&
          config.environment->collision_avoidance &&
-         config.environment->sdf_grid &&
+         (config.environment->sdf_grid ||
+          config.environment->ellipsoid_semi_axes.norm() > 0.0) &&
          !config.environment->collision_node_indices.empty());
 
     SharedDiagonal twist_noise = get_noise_model_rot_pos(
@@ -198,6 +199,20 @@ void TendonFingerTrajectoryPlanner<N>::get_initial_values() {
             models_[config_.K]->rod_->get_pose_key(i_node));
         Point3 tip_world = tip_pose.translation();
         Point3 tip_local = obj_mean.transformTo(tip_world);
+
+        // Analytic ellipsoid (Section 1.6.3): project the tip radially onto the
+        // surface x^T M x = 1. seed = tip_local / sqrt(tip^T M tip).
+        if (env.ellipsoid_semi_axes.norm() > 0.0) {
+            const Vector3& a = env.ellipsoid_semi_axes;
+            Vector3 m_diag(1.0 / (a.x() * a.x()), 1.0 / (a.y() * a.y()),
+                           1.0 / (a.z() * a.z()));
+            double q = tip_local.cwiseProduct(m_diag.cwiseProduct(tip_local)).sum();
+            Point3 seed_local = (q > 1e-12) ? Point3(tip_local / std::sqrt(q))
+                                            : Point3(a.x(), 0.0, 0.0);
+            values_.insert(dummy_point_key(), obj_mean.transformFrom(seed_local));
+            return;
+        }
+
         double tip_local_norm = tip_local.norm();
         Point3 dir_local = (tip_local_norm > 1e-8)
                                ? Point3(tip_local / tip_local_norm)
@@ -350,10 +365,12 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
         // distorting the whole solve instead of planning a way out.
         if (k > 0 &&
             config_.environment && config_.environment->collision_avoidance &&
-            config_.environment->sdf_grid &&
+            (config_.environment->sdf_grid ||
+             config_.environment->ellipsoid_semi_axes.norm() > 0.0) &&
             !config_.environment->collision_node_indices.empty()) {
             const auto& env = *config_.environment;
             auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
+            bool is_ellipsoid = env.ellipsoid_semi_axes.norm() > 0.0;
             // With the hand-base reparameterization the base disc (node 0) is no
             // longer a free variable; its pose is the hand base (T_0 = T_base for
             // offset = Identity). Route the base-disc collision sphere to the
@@ -375,9 +392,16 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
                     models_[k]->rod_->get_pose_key(i_node) ==
                         models_[k]->rod_->get_pose_key(*contact_node_idx))
                     continue;
-                auto gap = std::make_shared<SdfCollisionGapFactor>(
-                    collision_pose_key(i_node), object_key(k),
-                    r, env.sdf_grid, col_noise);
+                gtsam::NoiseModelFactor::shared_ptr gap;
+                if (is_ellipsoid) {
+                    gap = std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
+                        collision_pose_key(i_node), object_key(k),
+                        r, env.ellipsoid_semi_axes, col_noise);
+                } else {
+                    gap = std::make_shared<SdfCollisionGapFactor>(
+                        collision_pose_key(i_node), object_key(k),
+                        r, env.sdf_grid, col_noise);
+                }
                 graph_.add(CollisionInequalityConstraint(gap));
             }
         }
@@ -470,13 +494,25 @@ void TendonFingerTrajectoryPlanner<N>::build_graph() {
             // SdfWitnessContactFactor in a ZeroCostConstraint so the AL
             // optimizer drives [c_R, c_O, c_N, c_T1, c_T2] exactly to zero. The
             // unit noise model is only the per-row constraint scaling.
-            auto contact = std::make_shared<SdfWitnessContactFactor>(
-                models_[K]->rod_->get_pose_key(i_node),
-                object_key(K),
-                dummy_point_key(),
-                env.contact_node_radius,
-                env.sdf_grid,
-                noiseModel::Isotropic::Sigma(5, 1.0));
+            gtsam::NoiseModelFactor::shared_ptr contact;
+            if (env.ellipsoid_semi_axes.norm() > 0.0) {
+                // Analytic hyper-ellipsoid surface (Section 1.6.3).
+                contact = std::make_shared<crest_sparse::EllipsoidWitnessContactFactor>(
+                    models_[K]->rod_->get_pose_key(i_node),
+                    object_key(K),
+                    dummy_point_key(),
+                    env.contact_node_radius,
+                    env.ellipsoid_semi_axes,
+                    noiseModel::Isotropic::Sigma(5, 1.0));
+            } else {
+                contact = std::make_shared<SdfWitnessContactFactor>(
+                    models_[K]->rod_->get_pose_key(i_node),
+                    object_key(K),
+                    dummy_point_key(),
+                    env.contact_node_radius,
+                    env.sdf_grid,
+                    noiseModel::Isotropic::Sigma(5, 1.0));
+            }
             graph_.add(gtsam::ZeroCostConstraint(contact));
 
             // Eq 30-31's normal-alignment and C-frame tangent residuals fully
