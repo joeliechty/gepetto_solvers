@@ -38,6 +38,12 @@ _COLLISION_RGB = (230, 120, 60)
 _DISC_RGB = (100, 149, 237)
 _TABLE_RGB = (150, 150, 160)
 
+# Fingertip-to-object gap overlay: green within GAP_GREEN_MAX_M of the surface
+# (including interpenetration, which is simply "not far"), red beyond it.
+GAP_GREEN_MAX_M = 0.015
+_GAP_NEAR_RGB = (0, 190, 60)
+_GAP_FAR_RGB = (220, 40, 40)
+
 
 def _recenter(mesh):
     """Translate a trimesh primitive so its bounding box is centered on the origin
@@ -74,7 +80,7 @@ class ViserHandScene:
 
     def __init__(self, server, finger_names, *, backbone_width=4.0,
                  show_discs=False, show_contact_spheres=True,
-                 show_collision_spheres=True):
+                 show_collision_spheres=True, show_gap_lines=True):
         self.server = server
         self.scene = server.scene
         self.finger_names = list(finger_names)
@@ -82,6 +88,7 @@ class ViserHandScene:
         self.show_discs = show_discs
         self.show_contact_spheres = show_contact_spheres
         self.show_collision_spheres = show_collision_spheres
+        self.show_gap_lines = show_gap_lines
 
         # name -> handle, for dynamic (per-frame) geometry so we can prune it.
         self._dynamic = {}
@@ -157,9 +164,14 @@ class ViserHandScene:
     # -- per-frame hand ----------------------------------------------------
 
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
-               collision=False):
+               collision=False, gaps=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
-        an object exposing ``.marginals`` (a ``TendonFingerMarginals``)."""
+        an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
+
+        ``gaps`` is the optional fingertip-to-object overlay: a
+        ``{finger: (sphere_pt, surface_pt, gap_m)}`` map as returned by
+        ``HandResult.contact_witness``. Rendering only -- nothing here feeds the
+        solver."""
         keep = set()
         tip_radii = tip_radii or [None] * len(self.finger_names)
 
@@ -188,6 +200,12 @@ class ViserHandScene:
                     cn, radius=float(radius), color=_CONTACT_RGB, opacity=0.3,
                     position=tuple(positions[-1]))
                 keep.add(cn)
+
+            # Fingertip -> object-surface gap: a coloured line with the distance
+            # in mm labelled at its midpoint. viser labels carry no colour, so the
+            # near/far cue lives on the line.
+            if self.show_gap_lines and gaps and name in gaps:
+                keep |= self._update_gap(name, *gaps[name])
 
             # Collision spheres on the disc nodes.
             if collision and self.show_collision_spheres:
@@ -224,6 +242,21 @@ class ViserHandScene:
                 n, segs, colors=_TENDON_RGB[ti % len(_TENDON_RGB)], line_width=3.0)
             keep.add(n)
         return keep
+
+    def _update_gap(self, name, sphere_pt, surface_pt, gap):
+        p0 = np.asarray(sphere_pt, float).reshape(3)
+        p1 = np.asarray(surface_pt, float).reshape(3)
+        rgb = _GAP_NEAR_RGB if gap < GAP_GREEN_MAX_M else _GAP_FAR_RGB
+
+        ln = f"/hand/{name}/gap/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb, line_width=3.0)
+
+        lb = f"/hand/{name}/gap/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, f"{gap * 1000.0:.1f} mm", position=tuple(0.5 * (p0 + p1)),
+            anchor="center-center")
+        return {ln, lb}
 
     def _update_discs(self, name, fm, poses):
         keep = set()

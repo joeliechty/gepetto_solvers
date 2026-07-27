@@ -32,6 +32,12 @@ from .solvers import (
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
 
+# Display-only suffix for the baked-SDF spheres in the object dropdown, so they
+# read apart from the analytic ``*_sphere_ellipsoid`` look-alikes. The spec keys
+# (and the demo scripts' argparse choices) keep the un-suffixed names; only the
+# label the user picks from carries "_sdf".
+SDF_DROPDOWN_LABELS = {"sphere": "sphere_sdf", "big_sphere": "big_sphere_sdf"}
+
 
 def _euler_to_R(roll, pitch, yaw):
     """ZYX (yaw-pitch-roll) rotation matrix from radians."""
@@ -77,6 +83,10 @@ def _smoke():
 # ---------------------------------------------------------------------------
 
 class HandVizApp:
+    # Solid tint for the active FK/IK/Planner button (inactive ones stay the
+    # default subtle style) so the current solver mode is obvious at a glance.
+    _ACTIVE_MODE_COLOR = "blue"
+
     def __init__(self, server):
         import viser  # local import so --smoke needs no viser
         self.viser = viser
@@ -130,7 +140,7 @@ class HandVizApp:
 
     def _sync_params(self):
         p = self.params
-        p.primitive = self.g_object.value
+        p.primitive = self._label_to_key[self.g_object.value]
         # let center/rotation re-derive from the primitive
         p.object_center = None
         p.object_rotation = None
@@ -166,6 +176,7 @@ class HandVizApp:
         self.scene.show_discs = self.g_show_discs.value
         self.scene.show_contact_spheres = self.g_show_contact.value
         self.scene.show_collision_spheres = self.g_show_collision.value
+        self.scene.show_gap_lines = self.g_show_gaps.value
 
     def _table_origin(self):
         spec, center, _rot, _pose = resolve_scene(self.params)
@@ -191,18 +202,38 @@ class HandVizApp:
         self.scene.update(self.result.frames[k],
                           tip_radii=self.result.tip_radii,
                           collision_radius=self.params.collision_radius,
-                          collision=self.params.collision)
+                          collision=self.params.collision,
+                          gaps=self.result.contact_witness(k))
 
     def _set_status(self, text):
         self.g_status.content = text
 
     # -- solve --
 
+    def _set_mode(self, mode):
+        """Switch solver mode: recolor the buttons so only the active one is
+        tinted, then re-solve in the new mode."""
+        self.mode = mode
+        self._refresh_mode_buttons()
+        self._solve_and_render()
+
+    def _refresh_mode_buttons(self):
+        for m, btn in self.g_mode_btns.items():
+            btn.color = self._ACTIVE_MODE_COLOR if m == self.mode else None
+
+    def _set_solving(self, solving):
+        """Grey out the Solve button (and the mode buttons) while a solve runs so
+        it's clear the app is busy; restore them when it finishes."""
+        self.g_solve.disabled = solving
+        self.g_solve.label = "Solving..." if solving else "Solve"
+        for btn in self.g_mode_btns.values():
+            btn.disabled = solving
+
     def _solve_and_render(self, _=None):
         if self._solving:
             return
         self._solving = True
-        self.g_solve.disabled = True
+        self._set_solving(True)
         try:
             self._sync_params()
             self._refresh_object()
@@ -219,7 +250,7 @@ class HandVizApp:
             self._set_status(f"**Error:** {exc}")
             raise
         finally:
-            self.g_solve.disabled = False
+            self._set_solving(False)
             self._solving = False
 
     def _report(self):
@@ -258,12 +289,23 @@ class HandVizApp:
         gui = self.server.gui
         # Ellipsoid objects need the analytic-surface env fields; hide them on a
         # binding that lacks them.
-        specs = [k for k, v in get_primitive_specs().items()
-                 if v["type"] != "ellipsoid" or self.caps["ellipsoid"]]
+        keys = [k for k, v in get_primitive_specs().items()
+                if v["type"] != "ellipsoid" or self.caps["ellipsoid"]]
+        # Map the displayed dropdown label back to the real spec key (identity
+        # except for the "_sdf"-suffixed baked spheres).
+        self._label_to_key = {SDF_DROPDOWN_LABELS.get(k, k): k for k in keys}
+        labels = list(self._label_to_key)
 
         with gui.add_folder("Solver"):
-            self.g_mode = gui.add_button_group("mode", ["FK", "IK", "Planner"])
-            self.g_object = gui.add_dropdown("object", specs, initial_value="big_sphere")
+            # Individual mode buttons (not a button-group) so the active one can
+            # be tinted a solid color; the group can't highlight its selection.
+            self.g_mode_btns = {
+                m: gui.add_button(
+                    m, color=(self._ACTIVE_MODE_COLOR if m == self.mode else None))
+                for m in ("FK", "IK", "Planner")}
+            self.g_object = gui.add_dropdown(
+                "object", labels,
+                initial_value=SDF_DROPDOWN_LABELS["big_sphere"])
             self.g_solve = gui.add_button("Solve", icon=self.viser.Icon.PLAYER_PLAY)
             self.g_status = gui.add_markdown("")
 
@@ -317,18 +359,19 @@ class HandVizApp:
             self.g_show_contact = gui.add_checkbox("contact spheres", True)
             self.g_show_collision = gui.add_checkbox("collision spheres", True)
             self.g_show_discs = gui.add_checkbox("routing discs", False)
+            self.g_show_gaps = gui.add_checkbox(
+                "contact distance", True,
+                hint="Fingertip-to-object gap in mm; green under 15 mm, red over.")
 
         # -- callbacks --
         self.g_solve.on_click(self._solve_and_render)
 
-        @self.g_mode.on_click
-        def _(_):
-            self.mode = self.g_mode.value
-            self._solve_and_render()
+        for _m, _btn in self.g_mode_btns.items():
+            _btn.on_click(lambda _, m=_m: self._set_mode(m))
 
         @self.g_object.on_update
         def _(_):
-            self.params.primitive = self.g_object.value
+            self.params.primitive = self._label_to_key[self.g_object.value]
             self.params.object_center = None
             self.params.object_rotation = None
             self._rebuild_fk()      # FK solver carries the object for its result/spec
@@ -342,7 +385,8 @@ class HandVizApp:
             h.on_update(self._live_fk)
 
         # Display toggles re-render the current frame without re-solving.
-        for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs):
+        for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
+                  self.g_show_gaps):
             h.on_update(lambda _: (self._sync_params(),
                                    self._render_frame(self._current_step())))
         # Table toggle / height updates the static slab immediately.

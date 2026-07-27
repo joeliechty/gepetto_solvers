@@ -127,6 +127,29 @@ def get_primitive_specs():
             "plot": lambda c: {"type": "ellipsoid", "center": c,
                                "semi_axes": (0.0700, 0.0040, 0.0040)},
         },
+        # --- Analytic "spheres" (degenerate hyper-ellipsoids, a = b = c) ---
+        # Round objects handled by the C++ ellipsoid factors instead of a baked
+        # SDF, so they can be grasped without generating a .vdb. Sized to bracket
+        # the two SDF spheres: one matches big_sphere (0.05), one sits just under
+        # the small sphere (0.025 -> 0.02), and one splits the difference (0.035).
+        "big_sphere_ellipsoid": {
+            "type": "ellipsoid",
+            "semi_axes": (0.05, 0.05, 0.05),
+            "plot": lambda c: {"type": "ellipsoid", "center": c,
+                               "semi_axes": (0.05, 0.05, 0.05)},
+        },
+        "mid_sphere_ellipsoid": {
+            "type": "ellipsoid",
+            "semi_axes": (0.035, 0.035, 0.035),
+            "plot": lambda c: {"type": "ellipsoid", "center": c,
+                               "semi_axes": (0.035, 0.035, 0.035)},
+        },
+        "small_sphere_ellipsoid": {
+            "type": "ellipsoid",
+            "semi_axes": (0.02, 0.02, 0.02),
+            "plot": lambda c: {"type": "ellipsoid", "center": c,
+                               "semi_axes": (0.02, 0.02, 0.02)},
+        },
     }
 
 
@@ -178,6 +201,111 @@ def primitive_surface_gap(p_local, spec):
     raise ValueError(f"Unknown primitive type: {ptype!r}")
 
 
+def _primitive_surface_gradient(p_local, spec, h):
+    grad = np.empty(3)
+    for i in range(3):
+        step = np.zeros(3)
+        step[i] = h
+        grad[i] = (primitive_surface_gap(p_local + step, spec)
+                   - primitive_surface_gap(p_local - step, spec)) / (2.0 * h)
+    return grad
+
+
+def _primitive_surface_normal(p_local, spec, h=1e-6):
+    """Outward unit normal at ``p_local``: the central-difference gradient of
+    ``primitive_surface_gap``, which is a unit SDF gradient for every primitive here.
+
+    The gradient vanishes on the medial axis (e.g. the exact center of the box, where
+    opposite faces tie), so retry just off it before giving up: an equal nudge on all
+    three axes breaks the symmetry and picks the genuinely nearest face, which keeps
+    the projected foot point on the surface."""
+    grad = _primitive_surface_gradient(p_local, spec, h)
+    if np.linalg.norm(grad) < 1e-9:
+        grad = _primitive_surface_gradient(p_local + h, spec, h)
+    norm = np.linalg.norm(grad)
+    if norm < 1e-9:
+        return np.array([0.0, 0.0, 1.0])
+    return grad / norm
+
+
+def _ellipsoid_closest_point(x, semi_axes):
+    """Exact closest point on the ellipsoid ``sum((x_i/a_i)^2) = 1`` to ``x``.
+
+    Stationarity gives ``foot_i = a_i^2 x_i / (t + a_i^2)`` for the Lagrange
+    multiplier ``t``, which is the unique root of the decreasing function
+    ``f(t) = sum((a_i x_i / (t + a_i^2))^2) - 1`` on ``t > -min(a_i^2)``. Bisected
+    rather than Newton-solved: unconditionally convergent, and 5 points per frame
+    makes the cost irrelevant.
+
+    Exact to machine precision except for a point *inside* the ellipsoid that lies
+    exactly on a principal plane (some ``x_i == 0.0``), where the closest point is a
+    tie broken by the epsilon below: the foot can then be off by up to ~0.4 mm on the
+    flattest primitive here (``credit_card``). That needs a fingertip buried inside
+    the object at an exact coordinate zero, so it does not arise in practice."""
+    a2 = np.asarray(semi_axes, dtype=float) ** 2
+    x = np.asarray(x, dtype=float).reshape(3)
+
+    if np.linalg.norm(x) < 1e-12:
+        # Dead center: every direction ties, so pick the nearest surface point --
+        # the pole of the shortest semi-axis.
+        i = int(np.argmin(a2))
+        foot = np.zeros(3)
+        foot[i] = np.sqrt(a2[i])
+        return foot
+
+    # Nudge exact zeros so f(t) -> +inf at the bracket's left edge (the degenerate
+    # "point on a principal plane" case); 1e-12 m is far below any display scale.
+    # Used for the foot point too, so a point *on* an axis still projects to the
+    # correct pole instead of collapsing to the origin.
+    x = np.where(np.abs(x) < 1e-12, 1e-12, x)
+
+    def f(t):
+        return np.sum(a2 * x * x / (t + a2) ** 2) - 1.0
+
+    lo = -a2.min() + 1e-15
+    hi = lo + 1.0
+    while f(hi) > 0.0:
+        hi = lo + 2.0 * (hi - lo)
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if f(mid) > 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return a2 * x / (0.5 * (lo + hi) + a2)
+
+
+def primitive_surface_witness(p_local, spec, *, h=1e-6):
+    """``(signed distance, closest surface point, outward unit normal there)`` for a
+    point in the object's local frame -- ``primitive_surface_gap`` plus the *where*,
+    so a viewer can draw the gap as a line that lands on the surface.
+
+    Sphere / cylinder / capsule / cube: ``primitive_surface_gap`` is an exact SDF, so
+    the foot point is one step along its gradient.
+
+    Ellipsoid: ``primitive_surface_gap`` returns Taubin's *first-order* distance
+    (matching the C++ ``EllipsoidCollisionGapFactor`` residual), which is accurate at
+    contact but increasingly pessimistic further out -- a true 15 mm gap from the
+    ``coin`` reads ~8 mm. For a distance the user reads off the screen in mm that is
+    too wrong, so this solves for the exact closest point instead. The two agree to
+    <0.1 mm near contact, where the solver actually operates, and diverge only in the
+    far field. Reporting/rendering only: the solver's own witness points come from
+    the C++ contact factors."""
+    x = np.asarray(p_local, dtype=float).reshape(3)
+
+    if spec["type"] == "ellipsoid":
+        a = np.asarray(spec["semi_axes"], dtype=float)
+        foot = _ellipsoid_closest_point(x, a)
+        n = foot / (a * a)
+        n = n / (np.linalg.norm(n) or 1.0)
+        sign = 1.0 if np.sum((x / a) ** 2) > 1.0 else -1.0
+        return float(sign * np.linalg.norm(x - foot)), foot, n
+
+    d = primitive_surface_gap(x, spec)
+    n = _primitive_surface_normal(x, spec, h)
+    return float(d), x - d * n, n
+
+
 def configure_object_surface(env, spec, objects_dir, primitive_name):
     """Attach the object surface to a ``crest_sparse.EnvironmentConfig`` from a
     primitive spec: an analytic hyper-ellipsoid (Section 1.6.3, no VDB) or a
@@ -199,7 +327,7 @@ def configure_object_surface(env, spec, objects_dir, primitive_name):
 # Flexor tension (N) at which the anatomical fingertips land exactly on the big
 # grasp sphere with an identity wrist. The big sphere was sized/placed for this
 # flexion; the static and trajectory grasp scripts share it so results compare.
-GRASP_FLEXOR_TENSION = 2.0
+GRASP_FLEXOR_TENSION = 0.6
 
 # Center of the big grasp sphere: the flexed-fingertip locus at
 # GRASP_FLEXOR_TENSION. Used by the five-finger grasp/collision scripts; the

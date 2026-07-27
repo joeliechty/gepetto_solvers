@@ -41,7 +41,7 @@ from .config import (
     tip_node_index, disc_node_indices, attach_collision, attach_table)
 from .scene import (
     OBJECT_CENTER, GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL,
-    get_primitive_specs, configure_object_surface, primitive_surface_gap)
+    get_primitive_specs, configure_object_surface, primitive_surface_witness)
 
 
 # The _objects/ directory holding the baked .vdb SDF grids (relative to this file).
@@ -184,6 +184,13 @@ class HandSolveParams:
     al_inner_tol: float = 1e-2
     al_abs_cost_tol: float = 1e12
 
+    # --- Diagnostics (opt-in; off by default so normal solves are unchanged) ---
+    # When True the C++ side records the per-outer-iteration AL trace
+    # (al_iteration_mus / _costs / _violations on the result meta) plus
+    # step-by-step Values snapshots. Used by debug_al_trace.py; left off for the
+    # visualizer since it adds per-iteration bookkeeping.
+    record_iterations: bool = False
+
     # --- Collision avoidance (Section 1.5, opt-in; IK / planner) ---
     collision: bool = False
     collision_radius: float = 0.003
@@ -230,17 +237,34 @@ class HandResult:
     finger_names: List[str]
     tip_radii: List[float]
 
-    def surface_gaps(self, k=0):
-        """Per-finger fingertip surface gap (m, ~0 at contact) at frame ``k``,
-        reusing the analytic ``primitive_surface_gap`` the demos report with."""
+    def contact_witness(self, k=0):
+        """Per-finger ``{name: (sphere_surface_pt, object_surface_pt, gap_m)}`` in
+        world coordinates at frame ``k``: the shortest segment from each fingertip
+        contact sphere to the object surface, and its signed length (~0 at contact,
+        negative if the sphere interpenetrates).
+
+        Uses the analytic ``primitive_surface_witness``, so for the baked-SDF
+        primitives this measures against the analytic look-alike rather than the
+        .vdb grid -- the same approximation :meth:`surface_gaps` has always made,
+        differing only within the ``edge_radius`` fillets."""
         frame = self.frames[k]
-        gaps = {}
+        out = {}
+        R = self.object_rotation
         for name, radius in zip(self.finger_names, self.tip_radii):
             fm = frame[name].marginals
+            # Same node the renderer draws the contact sphere on (tip_node_index).
             tip = np.asarray(fm.rod.states[-1].pose.mean)[:3, 3]
-            local = self.object_rotation.T @ (tip - self.object_center)
-            gaps[name] = primitive_surface_gap(local, self.spec) - radius
-        return gaps
+            dist, foot_local, n_local = primitive_surface_witness(
+                R.T @ (tip - self.object_center), self.spec)
+            surface_pt = self.object_center + R @ foot_local
+            sphere_pt = tip - radius * (R @ n_local)
+            out[name] = (sphere_pt, surface_pt, dist - radius)
+        return out
+
+    def surface_gaps(self, k=0):
+        """Per-finger fingertip surface gap (m, ~0 at contact) at frame ``k``,
+        reusing the analytic surface distance the demos report with."""
+        return {name: gap for name, (_, _, gap) in self.contact_witness(k).items()}
 
     def worst_gap(self, k=0):
         gaps = self.surface_gaps(k)
@@ -370,6 +394,7 @@ class HandIKSolver(HandSolverBase):
         cfg.base.al_initial_mu = self.params.al_mu
         cfg.base.al_mu_increase_rate = self.params.al_rate
         cfg.base.al_max_iterations = self.params.al_iters
+        _set_if(cfg.base, "record_iterations", self.params.record_iterations)
 
         solver = crest_sparse.TendonHandSolver(self.configs, cfg)
         # Tight passive / loose flexor: the optimizer drives contact through the
@@ -409,6 +434,7 @@ class HandPlannerSolver(HandSolverBase):
         # Inexact-AL tuning and slide-grasp scheduling exist only on newer builds.
         _set_if(pc.base, "al_inner_rel_tol_initial", self.params.al_inner_tol)
         _set_if(pc.base, "al_abs_cost_tol", self.params.al_abs_cost_tol)
+        _set_if(pc.base, "record_iterations", self.params.record_iterations)
         if self.params.table and self.params.k_touch is not None:
             _set_if(pc, "k_touch", self.params.k_touch)
 
