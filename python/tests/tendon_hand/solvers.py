@@ -38,10 +38,10 @@ import crest_sparse
 
 from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
-    tip_node_index, disc_node_indices, attach_collision, attach_table)
+    disc_node_indices, attach_contact, attach_collision, attach_table)
 from .scene import (
     OBJECT_CENTER, GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL,
-    get_primitive_specs, configure_object_surface, primitive_surface_witness)
+    get_primitive_specs, primitive_surface_witness)
 
 
 # The _objects/ directory holding the baked .vdb SDF grids (relative to this file).
@@ -169,6 +169,15 @@ class HandSolveParams:
         default_factory=lambda: [GRASP_FLEXOR_TENSION] * NUM_FINGERS)
     tip_wrench_sigma: float = 1e-3
 
+    # --- Which fingertips are solved for contact (IK / planner; FK ignores it) ---
+    # One flag per finger, in ``configs`` order. A False finger contributes no
+    # contact constraint -- neither to the object nor to the table -- but keeps
+    # its collision spheres and plane avoidance, so it is still kept out of the
+    # object and (wherever avoidance is active) off the table. All-True is the
+    # legacy behavior: every fingertip driven onto the object.
+    contact_fingers: List[bool] = field(
+        default_factory=lambda: [True] * NUM_FINGERS)
+
     # --- Augmented Lagrangian (IK / planner) ---
     al_mu: float = 1.0
     al_rate: float = 2.0
@@ -236,6 +245,17 @@ class HandResult:
     object_rotation: np.ndarray
     finger_names: List[str]
     tip_radii: List[float]
+    # Which fingers this solve actually constrained to the object (None = all,
+    # which is also what FK reports since it constrains none of them).
+    contact_fingers: Optional[List[bool]] = None
+
+    def contact_names(self):
+        """The fingers this solve drove onto the object -- everything the gap
+        readouts should be judged on. All of them when unmasked."""
+        if self.contact_fingers is None:
+            return list(self.finger_names)
+        return [name for name, on in zip(self.finger_names, self.contact_fingers)
+                if on]
 
     def contact_witness(self, k=0):
         """Per-finger ``{name: (sphere_surface_pt, object_surface_pt, gap_m)}`` in
@@ -267,8 +287,11 @@ class HandResult:
         return {name: gap for name, (_, _, gap) in self.contact_witness(k).items()}
 
     def worst_gap(self, k=0):
+        """Largest |gap| over the fingers that were *asked* to touch, so a masked
+        subset grasp isn't scored on fingers left free."""
         gaps = self.surface_gaps(k)
-        return max(abs(g) for g in gaps.values()) if gaps else 0.0
+        names = self.contact_names()
+        return max((abs(gaps[n]) for n in names if n in gaps), default=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -293,17 +316,12 @@ class HandSolverBase:
 
     def _attach_contact(self):
         """Per-finger contact env: shared object surface + this finger's tip node
-        as the terminal contact (``ik_5f_contact.py`` block)."""
-        for (_, cfg), radius in zip(self.configs, self.tip_radii):
-            env = crest_sparse.EnvironmentConfig()
-            configure_object_surface(env, self.spec, _OBJECTS_DIR,
-                                     self.params.primitive)
-            env.object_pose_mean = self.object_pose
-            env.object_pose_cov = 1e-8 * np.eye(6)
-            env.object_pose_per_step = False
-            env.contact_node_radius = radius
-            env.target_contact_node = tip_node_index(cfg)
-            cfg.sdf_contact = env
+        as the terminal contact (``ik_5f_contact.py`` block). Fingers masked off
+        by ``params.contact_fingers`` get a collision-only env instead."""
+        attach_contact(self.configs, self.spec, _OBJECTS_DIR,
+                       self.params.primitive, self.object_pose,
+                       tip_radii=self.tip_radii,
+                       contact_fingers=self.params.contact_fingers)
 
     def _attach_collision(self):
         """Add Section 1.5 collision spheres onto each finger's (already attached)
@@ -322,7 +340,8 @@ class HandSolverBase:
         origin = resolve_table_origin(self.params, self.spec, self.object_center)
         attach_table(self.configs, origin, self.params.plane_normal,
                      avoidance=self.params.plane_avoidance,
-                     tip_radii=self.tip_radii)
+                     tip_radii=self.tip_radii,
+                     contact_fingers=self.params.contact_fingers)
 
     # -- prior builders --
 
@@ -340,9 +359,10 @@ class HandSolverBase:
         cov = self.params.tip_wrench_sigma ** 2 * np.eye(6)
         return [crest_sparse.Vector6Gaussian(np.zeros(6), cov) for _ in self.configs]
 
-    def _result(self, frames, meta):
+    def _result(self, frames, meta, contact_fingers=None):
         return HandResult(frames, meta, self.spec, self.object_center,
-                          self.object_rotation, self.finger_names, self.tip_radii)
+                          self.object_rotation, self.finger_names, self.tip_radii,
+                          contact_fingers)
 
     def solve(self) -> HandResult:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -402,7 +422,7 @@ class HandIKSolver(HandSolverBase):
         cov = np.diag([1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-1])
         sol = solver.solve(self._tension_priors(cov), self._tip_wrenches())
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)
-        return self._result([frame], sol.meta)
+        return self._result([frame], sol.meta, self.params.contact_fingers)
 
 
 class HandPlannerSolver(HandSolverBase):
@@ -455,7 +475,7 @@ class HandPlannerSolver(HandSolverBase):
                               start_tensions=starts)
         frames = [_make_frame(self.finger_names, hm, result.meta)
                   for hm in result.trajectory]
-        return self._result(frames, result.meta)
+        return self._result(frames, result.meta, self.params.contact_fingers)
 
 
 # Convenience registry the visualizer uses to switch modes.

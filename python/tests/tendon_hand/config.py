@@ -468,6 +468,67 @@ def proximal_disc_flags(config, num_proximal_discs=2):
     return [1 if d < num_proximal_discs else 0 for d in range(config.num_discs)]
 
 
+def _resolve_contact_mask(configs, contact_fingers):
+    """Validate a per-finger contact mask against ``configs`` and normalize it to
+    a list of bools (``None`` => every finger contacts, the legacy behavior)."""
+    if contact_fingers is None:
+        return [True] * len(configs)
+    mask = [bool(f) for f in contact_fingers]
+    if len(mask) != len(configs):
+        raise ValueError(
+            f"contact_fingers has {len(mask)} entries but there are "
+            f"{len(configs)} fingers; pass one flag per finger.")
+    return mask
+
+
+def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
+                   tip_radii=None, radius=None, contact_fingers=None,
+                   object_pose_cov=None):
+    """Attach the shared object surface + a terminal tip contact to every finger
+    of a hand config list, in place. Returns ``configs`` for chaining.
+
+    This is the block the contact demo scripts (``ik_5f_contact.py``,
+    ``traj_5f_contact.py``, ...) write inline, factored out so the solver classes
+    and any caller share one definition of "the fingertip touches the object".
+
+    ``contact_fingers`` (None = all, the legacy behavior) is a per-finger bool
+    mask: a finger whose flag is False still gets the env — so
+    :func:`attach_collision` / :func:`attach_table` can hang off it and keep that
+    finger out of the object — but *without* ``target_contact_node``, so the C++
+    layer treats it as a collision-only env: ``TendonHandModel::build_graph``
+    adds no witness contact factor for it and ``get_initial_values`` seeds no
+    witness point. That is the same shape the trajectory planner already builds
+    for every step before k=K, so it is a well-trodden path. Use it to solve for
+    a pinch/subset grasp instead of forcing all five fingertips onto the object.
+
+    ``radius`` overrides the contact sphere radius for all fingers; otherwise
+    ``tip_radii[i]`` is used. The radius is written even for a masked-off finger
+    (it is inert without a contact node, and keeps the env self-describing).
+    """
+    import crest_sparse
+
+    from .scene import configure_object_surface
+
+    mask = _resolve_contact_mask(configs, contact_fingers)
+    if object_pose_cov is None:
+        object_pose_cov = 1e-8 * np.eye(6)
+
+    for i, (_, cfg) in enumerate(configs):
+        env = crest_sparse.EnvironmentConfig()
+        configure_object_surface(env, spec, objects_dir, primitive)
+        env.object_pose_mean = object_pose
+        env.object_pose_cov = object_pose_cov
+        env.object_pose_per_step = False
+        if radius is not None:
+            env.contact_node_radius = radius
+        elif tip_radii is not None:
+            env.contact_node_radius = tip_radii[i]
+        if mask[i]:
+            env.target_contact_node = tip_node_index(cfg)
+        cfg.sdf_contact = env
+    return configs
+
+
 def attach_collision(configs, vdb_path, object_pose, *,
                      radius=0.003, sigma=1e-4, num_proximal_discs=2,
                      object_pose_cov=None, cull_margin=None):
@@ -520,7 +581,7 @@ def attach_collision(configs, vdb_path, object_pose, *,
 
 def attach_table(configs, plane_origin, plane_normal, *,
                  avoidance=True, contact_node=None, radius=None,
-                 tip_radii=None, dims=None):
+                 tip_radii=None, dims=None, contact_fingers=None):
     """Attach a Section 1.6 world-fixed analytic support plane ("table") to every
     finger of a hand config list, in place. Returns ``configs`` for chaining.
 
@@ -532,10 +593,22 @@ def attach_table(configs, plane_origin, plane_normal, *,
       * ``plane_avoidance`` = ``avoidance`` — the free-space approach collision
         (Eq 1.59): every non-tip collision sphere is kept out of the half-space,
       * ``table_contact_node`` — the fingertip node that slides on the plane
-        (defaults to ``tip_node_index(cfg)``); the C++ planner *schedules* this
-        field per step around ``k_touch`` (cleared during the approach phase, kept
-        during the slide phase), so it is safe to set it unconditionally here,
+        (defaults to ``tip_node_index(cfg)``, and see ``contact_fingers`` below);
+        the C++ planner *schedules* this field per step around ``k_touch``
+        (cleared during the approach phase, kept during the slide phase), so it
+        is safe to set it for every step here,
       * ``table_contact_radius`` — that tip's contact sphere radius.
+
+    ``contact_fingers`` (None = all, the legacy behavior) is the same per-finger
+    bool mask :func:`attach_contact` takes: a finger that is not solving for
+    contact gets the plane and its avoidance inequality but *no*
+    ``table_contact_node``, so nothing asks it to touch the table either. Where
+    ``avoidance`` is active that fingertip is then held *above* the plane rather
+    than pinned to it — the C++ layer exempts the table contact node from plane
+    avoidance (its collision would fight the sliding equality it is pinned by),
+    and a masked-off finger no longer has one. During the planner's slide phase
+    (k >= ``k_touch``) plane avoidance is off for every finger by design, so
+    there a masked-off fingertip is simply unconstrained by the plane.
 
     ``radius`` overrides the per-finger tip radius for all fingers; otherwise
     ``tip_radii[i]`` (if given) or the env's existing ``contact_node_radius`` is
@@ -544,6 +617,7 @@ def attach_table(configs, plane_origin, plane_normal, *,
     """
     import crest_sparse
 
+    mask = _resolve_contact_mask(configs, contact_fingers)
     origin = np.asarray(plane_origin, dtype=float).reshape(3)
     normal = np.asarray(plane_normal, dtype=float).reshape(3)
     normal = normal / np.linalg.norm(normal)
@@ -555,13 +629,18 @@ def attach_table(configs, plane_origin, plane_normal, *,
         env.plane_origin = origin
         env.plane_normal = normal
         env.plane_avoidance = avoidance
-        env.table_contact_node = (contact_node if contact_node is not None
-                                  else tip_node_index(cfg))
-        if radius is not None:
-            env.table_contact_radius = radius
-        elif tip_radii is not None:
-            env.table_contact_radius = tip_radii[i]
+        if not mask[i]:
+            # No sliding equality for this finger; clear rather than skip, in case
+            # the env already carried a contact node from an earlier attach.
+            env.table_contact_node = None
         else:
-            env.table_contact_radius = env.contact_node_radius
+            env.table_contact_node = (contact_node if contact_node is not None
+                                      else tip_node_index(cfg))
+            if radius is not None:
+                env.table_contact_radius = radius
+            elif tip_radii is not None:
+                env.table_contact_radius = tip_radii[i]
+            else:
+                env.table_contact_radius = env.contact_node_radius
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs

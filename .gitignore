@@ -39,3 +39,5 @@ setup_log*
 *.log
 
 *.gif
+
+results/

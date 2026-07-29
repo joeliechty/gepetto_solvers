@@ -80,6 +80,19 @@ def _coerce(name, raw):
     return float(raw)
 
 
+def _contact_mask(raw):
+    """Parse ``--contact-fingers 1,1,0,0,1`` into the per-finger bool list.
+
+    Not a --set/--sweep knob (those are scalars only); a masked-off finger simply
+    contributes no contact constraint, which is the cheapest way to ask whether a
+    stall is one unreachable finger dragging the whole AL solve down."""
+    flags = [f.strip() for f in raw.split(",") if f.strip()]
+    if len(flags) != 5:
+        raise SystemExit(
+            f"--contact-fingers: expected 5 comma-separated flags, got {len(flags)}")
+    return [f not in ("0", "false", "False", "off", "no") for f in flags]
+
+
 # ---------------------------------------------------------------------------
 # Trace formatting.
 # ---------------------------------------------------------------------------
@@ -192,6 +205,8 @@ def _build_params(args):
     p.passive_tension = args.passive
     if args.flexor is not None:
         p.flexor_tensions = [args.flexor] * 5
+    if args.contact_fingers is not None:
+        p.contact_fingers = _contact_mask(args.contact_fingers)
     p.al_mu, p.al_rate, p.al_iters = args.al_mu, args.al_rate, args.al_iters
     p.al_inner_tol = args.al_inner_tol
     p.K, p.dt, p.gp_wrist, p.gp_tense = args.K, args.dt, args.gp_wrist, args.gp_tense
@@ -292,6 +307,10 @@ def build_parser():
     ap.add_argument("--passive", type=float, default=0.5)
     ap.add_argument("--flexor", type=float, default=None,
                     help="uniform per-finger flexor tension (default: solver default)")
+    ap.add_argument("--contact-fingers", dest="contact_fingers", default=None,
+                    metavar="I,M,R,P,T",
+                    help="per-finger contact flags in index,middle,ring,pinky,thumb "
+                         "order (e.g. 1,0,0,0,1 for a pinch); default: all contact")
     # AL.
     ap.add_argument("--al-mu", dest="al_mu", type=float, default=1.0)
     ap.add_argument("--al-rate", dest="al_rate", type=float, default=2.0)

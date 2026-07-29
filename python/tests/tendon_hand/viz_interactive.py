@@ -2,10 +2,10 @@
 solvers.
 
 Exposes the solver knobs as live web GUI controls -- object picker, wrist start
-pose, per-finger flexor tensions, GP prior stiffness, collision / table options,
-AL settings -- with buttons to switch between the FK solver, the IK solver, and
-the trajectory planner. Set parameters, hit *Solve*, and inspect the result; the
-planner result is scrubbable step by step.
+pose, per-finger flexor tensions, per-finger contact toggles, GP prior stiffness,
+collision / table options, AL settings -- with buttons to switch between the FK
+solver, the IK solver, and the trajectory planner. Set parameters, hit *Solve*,
+and inspect the result; the planner result is scrubbable step by step.
 
 All three solvers are the reusable classes in ``tendon_hand/solvers.py``; the 3D
 scene is drawn by ``_plotting/viser_hand.ViserHandScene``. The existing demo
@@ -147,6 +147,7 @@ class HandVizApp:
         self._sync_wrist()
         p.passive_tension = self.g_passive.value
         p.flexor_tensions = [s.value for s in self.g_flexors]
+        p.contact_fingers = [c.value for c in self.g_contacts]
         p.sigma_wrist_pos = 10.0 ** self.g_sig_pos.value
         p.sigma_wrist_rot = 10.0 ** self.g_sig_rot.value
         # AL
@@ -199,11 +200,16 @@ class HandVizApp:
         if self.result is None:
             return
         k = int(np.clip(k, 0, len(self.result.frames) - 1))
+        # Only the fingers this solve drove onto the object get a gap line; a
+        # distance readout on a finger nothing asked to touch is just noise.
+        gaps = self.result.contact_witness(k)
+        names = set(self.result.contact_names())
+        gaps = {name: v for name, v in gaps.items() if name in names}
         self.scene.update(self.result.frames[k],
                           tip_radii=self.result.tip_radii,
                           collision_radius=self.params.collision_radius,
                           collision=self.params.collision,
-                          gaps=self.result.contact_witness(k))
+                          gaps=gaps)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -259,6 +265,11 @@ class HandVizApp:
                  f"err={m.error:.3g} &nbsp; {m.total_time_ms:.0f} ms",
                  f"frames: {len(self.result.frames)}"]
         if self.mode != "FK":
+            names = self.result.contact_names()
+            contacting = ("none" if not names
+                          else ", ".join(names) if len(names) < len(self.result.finger_names)
+                          else "all")
+            lines.append(f"contact: {contacting}")
             lines.append(f"terminal worst gap: {self.result.worst_gap(-1):+.5f} m")
         self._set_status("  \n".join(lines))
 
@@ -327,6 +338,17 @@ class HandVizApp:
                 gui.add_slider(lbl, 0.0, 3.0, 0.05, GRASP_FLEXOR_TENSION)
                 for lbl in FINGER_LABELS]
 
+        with gui.add_folder("Contact fingers"):
+            self.g_contacts = [
+                gui.add_checkbox(
+                    lbl, True,
+                    hint="Solve for this fingertip touching the object (IK / "
+                         "Planner; FK never uses contact). Unchecked fingers "
+                         "keep collision avoidance, so they stay out of the "
+                         "object without being driven onto it. Applies on the "
+                         "next Solve.")
+                for lbl in FINGER_LABELS]
+
         with gui.add_folder("Planner / GP priors"):
             self.g_K = gui.add_slider("K steps", 2, 30, 1, 10)
             self.g_dt = gui.add_slider("dt (s)", 0.02, 0.5, 0.02, 0.1)
@@ -384,9 +406,12 @@ class HandVizApp:
                    self.g_yaw, self.g_passive] + self.g_flexors):
             h.on_update(self._live_fk)
 
-        # Display toggles re-render the current frame without re-solving.
+        # Display toggles re-render the current frame without re-solving. The
+        # contact checkboxes ride along only to keep self.params in sync; like
+        # every other solver knob they take effect on the next Solve, and the gap
+        # lines keep describing the solve that is actually on screen until then.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
-                  self.g_show_gaps):
+                  self.g_show_gaps, *self.g_contacts):
             h.on_update(lambda _: (self._sync_params(),
                                    self._render_frame(self._current_step())))
         # Table toggle / height updates the static slab immediately.
