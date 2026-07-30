@@ -111,6 +111,15 @@ struct SolverBaseConfig {
     // every N iterations so intermediate solutions can be extracted afterwards.
     // 0 = disabled (no snapshots stored).
     int iteration_sample_interval = 0;
+
+    // Skip the gtsam::Marginals factorization at the end of optimize(). That
+    // factorization is the most expensive step after the optimizer itself, and
+    // the Section 1.8 real-time controller re-runs the whole loop every control
+    // tick while only ever consuming the MEANS. When true, marginals_ is left
+    // empty and extract_solution() must use a means-only path — reading a
+    // covariance from the resulting solution is invalid. Off by default, so
+    // every existing solver keeps returning full marginals.
+    bool skip_marginals = false;
 };
 
 

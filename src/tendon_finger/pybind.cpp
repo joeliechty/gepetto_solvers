@@ -103,6 +103,18 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("plane_avoidance",     &crest_sparse::EnvironmentConfig::plane_avoidance)
         .def_readwrite("table_contact_node",  &crest_sparse::EnvironmentConfig::table_contact_node)
         .def_readwrite("table_contact_radius",&crest_sparse::EnvironmentConfig::table_contact_radius)
+        // --- Section 1.8 phased controller ---
+        .def_readwrite("support_contact_node",   &crest_sparse::EnvironmentConfig::support_contact_node)
+        .def_readwrite("support_contact_radius", &crest_sparse::EnvironmentConfig::support_contact_radius)
+        .def_readwrite("half_space_enabled",     &crest_sparse::EnvironmentConfig::half_space_enabled)
+        .def_readwrite("half_space_split_point", &crest_sparse::EnvironmentConfig::half_space_split_point)
+        .def_readwrite("half_space_normal",      &crest_sparse::EnvironmentConfig::half_space_normal)
+        .def_readwrite("object_contact_center_direct",
+                       &crest_sparse::EnvironmentConfig::object_contact_center_direct)
+        .def_readwrite("contact_drop_normal_row",
+                       &crest_sparse::EnvironmentConfig::contact_drop_normal_row)
+        .def_readwrite("witness_target",     &crest_sparse::EnvironmentConfig::witness_target)
+        .def_readwrite("witness_target_cov", &crest_sparse::EnvironmentConfig::witness_target_cov)
         .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);

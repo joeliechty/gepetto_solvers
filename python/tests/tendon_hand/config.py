@@ -66,6 +66,56 @@ def point_reflection_about_z(center):
     return Tc @ Rz @ Tc_inv
 
 
+def rotation_from_two_axes(a_local, b_local, a_world, b_world, *, tol=1e-6):
+    """3x3 R mapping a local frame's (primary, secondary) axis pair onto a world
+    pair: ``R @ a_local == a_world`` exactly, ``R @ b_local`` as close to
+    ``b_world`` as the primary constraint allows.
+
+    Two vectors consume all three rotational degrees of freedom — the first fixes
+    two, the second fixes the remaining rotation about it — so this is the natural
+    way to state an orientation as "point THIS at THAT, and roll so THIS OTHER
+    lines up". Used by the Section 1.8 phase-0 pre-grasp pose, which aims the
+    palm-facing axis anti-parallel to the support normal and the thumb-ward
+    lateral axis along the opposition half-space normal.
+
+    Both pairs are Gram-Schmidt orthonormalized, so neither ``b`` need be
+    perpendicular to its ``a`` going in. Raises if either pair is (near-)parallel,
+    which would leave the third axis undetermined.
+    """
+    def _triad(u, v, what):
+        u = np.asarray(u, dtype=float).reshape(3)
+        v = np.asarray(v, dtype=float).reshape(3)
+        nu = np.linalg.norm(u)
+        if nu < tol:
+            raise ValueError(f"rotation_from_two_axes: {what} primary axis is zero")
+        u = u / nu
+        v = v - (v @ u) * u
+        nv = np.linalg.norm(v)
+        if nv < tol:
+            raise ValueError(
+                f"rotation_from_two_axes: {what} axes are parallel (residual "
+                f"{nv:.2e}), so the rotation about the primary axis is undefined")
+        v = v / nv
+        return np.column_stack([u, v, np.cross(u, v)])
+
+    return _triad(a_world, b_world, "world") @ _triad(a_local, b_local, "local").T
+
+
+def hand_growth_axis(configs):
+    """Mean rod-growth direction in the hand BASE frame, as a unit vector.
+
+    Each finger's rod grows along the local +z of its ``hand_base_offset``, so
+    this is ``mean_i(offset_i[:3,:3] @ [0,0,1])`` normalized. Purely analytic — no
+    solve — which makes it a cheap cross-check on the growth axis measured from a
+    forward-kinematics tip centroid (the two agree to ~9 deg on the default hand;
+    they differ because the fingers fan out and curl).
+    """
+    axes = [np.asarray(cfg.hand_base_offset, dtype=float)[:3, :3] @ np.array([0.0, 0.0, 1.0])
+            for _, cfg in configs]
+    g = np.mean(axes, axis=0)
+    return g / np.linalg.norm(g)
+
+
 def tip_node_index(config):
     """Index of the last rod node (the tip) for a finger config."""
     num_nodes = config.num_discs + (config.num_discs - 1) * config.num_between_nodes
@@ -483,7 +533,7 @@ def _resolve_contact_mask(configs, contact_fingers):
 
 def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
                    tip_radii=None, radius=None, contact_fingers=None,
-                   object_pose_cov=None):
+                   object_pose_cov=None, proxy_and_exact=False):
     """Attach the shared object surface + a terminal tip contact to every finger
     of a hand config list, in place. Returns ``configs`` for chaining.
 
@@ -504,18 +554,26 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     ``radius`` overrides the contact sphere radius for all fingers; otherwise
     ``tip_radii[i]`` is used. The radius is written even for a masked-off finger
     (it is inert without a contact node, and keeps the env self-describing).
+
+    ``proxy_and_exact`` (Section 1.8 controller) attaches the bounding-ellipsoid
+    proxy *and* the baked SDF, so the controller can swap from the proxy it
+    slides against in phase 2 to the exact geometry it servos on in phase 3.
+    Default False keeps the single-surface behavior every existing caller relies
+    on.
     """
     import crest_sparse
 
-    from .scene import configure_object_surface
+    from .scene import configure_object_proxy_and_exact, configure_object_surface
 
     mask = _resolve_contact_mask(configs, contact_fingers)
     if object_pose_cov is None:
         object_pose_cov = 1e-8 * np.eye(6)
+    setup_surface = (configure_object_proxy_and_exact if proxy_and_exact
+                     else configure_object_surface)
 
     for i, (_, cfg) in enumerate(configs):
         env = crest_sparse.EnvironmentConfig()
-        configure_object_surface(env, spec, objects_dir, primitive)
+        setup_surface(env, spec, objects_dir, primitive)
         env.object_pose_mean = object_pose
         env.object_pose_cov = object_pose_cov
         env.object_pose_per_step = False
@@ -642,5 +700,133 @@ def attach_table(configs, plane_origin, plane_normal, *,
                 env.table_contact_radius = tip_radii[i]
             else:
                 env.table_contact_radius = env.contact_node_radius
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# Section 1.8 phased controller.
+#
+# The controller derives each phase's environment in C++ (TendonHandController::
+# phase_env) from ONE pristine per-finger env, so Python's job is only to build
+# that base env: the object proxy + exact surface, the collision spheres, the
+# support plane, the designated contact node, and the per-finger opposition
+# direction. Nothing here sets support_contact_node / object_contact_center_direct
+# / contact_drop_normal_row — those are the phase schedule, and letting Python
+# write them too would give two sources of truth for the same thing.
+# ---------------------------------------------------------------------------
+
+def opposition_directions(configs, *, thumb_index=-1, axis=None):
+    """Per-finger in-plane unit vectors ``m_hat`` for the Eq 1.92 half-space split.
+
+    §1.8's heuristic: divide the support surface in half along the object's
+    longest in-plane axis and put the thumb on one half, the grasping fingers on
+    the other. This returns ``+axis`` for the thumb and ``-axis`` for every other
+    finger, so the two groups are driven to opposite halves.
+
+    ``axis`` (default world +X) must lie IN the support plane — the constraint is
+    only radius-independent when ``n_table . m_hat = 0``, which is what makes its
+    Jacobian constant. ``thumb_index`` defaults to the last config, matching
+    :func:`get_default_hand_configs` (four fingers, then the thumb).
+    """
+    if axis is None:
+        axis = np.array([1.0, 0.0, 0.0])
+    axis = np.asarray(axis, dtype=float).reshape(3)
+    axis = axis / np.linalg.norm(axis)
+    n = len(configs)
+    thumb = thumb_index % n
+    return [axis if i == thumb else -axis for i in range(n)]
+
+
+def opposition_axis_from_object(plane_normal, e_long):
+    """``m_hat = n_hat x e_long``: the opposition axis implied by splitting the
+    support surface ALONG the object's longest in-plane axis.
+
+    §1.8's heuristic puts the split *line* along ``e_long``, so the half-space
+    normal — the direction that actually separates thumb from fingers — is
+    perpendicular to it within the plane. That is exactly ``n_hat x e_long``.
+
+    This is also the axis the phase-0 pre-grasp yaw aligns the hand's thumb-ward
+    lateral axis to, so deriving both from one call keeps the pre-grasp posture
+    and the half-space split consistent by construction.
+
+    NOTE this generally differs from :func:`opposition_directions`' legacy default
+    of world +X (with ``n_hat = +Z`` and ``e_long = +X`` it returns +Y), which is
+    why it is opt-in rather than the default.
+    """
+    n = np.asarray(plane_normal, dtype=float).reshape(3)
+    n = n / np.linalg.norm(n)
+    e = np.asarray(e_long, dtype=float).reshape(3)
+    e = e - (e @ n) * n
+    ne = np.linalg.norm(e)
+    if ne < 1e-9:
+        raise ValueError(
+            "opposition_axis_from_object: e_long is parallel to the plane normal, "
+            "so it defines no in-plane split direction")
+    m = np.cross(n, e / ne)
+    return m / np.linalg.norm(m)
+
+
+def attach_half_space(configs, split_point, directions, *, contact_fingers=None):
+    """Attach the Eq 1.92 opposition half-space to every finger's env, in place.
+
+    ``split_point`` is a point on the splitting line (e.g. the object centroid
+    projected onto the support surface); ``directions`` is one in-plane unit
+    vector per finger, as produced by :func:`opposition_directions`. A finger
+    masked off by ``contact_fingers`` gets no half-space: it has no designated
+    contact sphere for the constraint to act on.
+
+    Only ``half_space_*`` is written — whether the constraint is actually built
+    is the controller's phase decision (phase 1 only).
+    """
+    mask = _resolve_contact_mask(configs, contact_fingers)
+    if len(directions) != len(configs):
+        raise ValueError(
+            f"directions has {len(directions)} entries but there are "
+            f"{len(configs)} fingers; pass one m_hat per finger.")
+    p_split = np.asarray(split_point, dtype=float).reshape(3)
+
+    for i, (_, cfg) in enumerate(configs):
+        env = cfg.sdf_contact
+        if env is None:
+            continue
+        if mask[i]:
+            m = np.asarray(directions[i], dtype=float).reshape(3)
+            env.half_space_enabled = True
+            env.half_space_split_point = p_split
+            env.half_space_normal = m / np.linalg.norm(m)
+        else:
+            env.half_space_enabled = False
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs
+
+
+def attach_witness_targets(configs, targets, *, cov=None, contact_fingers=None):
+    """Attach the Eq 1.111 soft witness-point targets (phase 3), in place.
+
+    ``targets`` is one world-frame point per finger, or ``None`` for a finger
+    with no preferred contact region. Because the AL equality constraints pin the
+    witness to the object surface, each prior acts as a geodesic pull that slides
+    the witness — and the finger attached to it — along the surface toward that
+    location. Omitting this entirely gives the "contact anywhere on the surface"
+    formulation of Eq 1.119-1.125.
+    """
+    mask = _resolve_contact_mask(configs, contact_fingers)
+    if len(targets) != len(configs):
+        raise ValueError(
+            f"targets has {len(targets)} entries but there are "
+            f"{len(configs)} fingers; pass one target (or None) per finger.")
+    if cov is None:
+        cov = 1e-4 * np.eye(3)
+
+    for i, (_, cfg) in enumerate(configs):
+        env = cfg.sdf_contact
+        if env is None:
+            continue
+        if mask[i] and targets[i] is not None:
+            env.witness_target = np.asarray(targets[i], dtype=float).reshape(3)
+            env.witness_target_cov = cov
+        else:
+            env.witness_target = None
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs

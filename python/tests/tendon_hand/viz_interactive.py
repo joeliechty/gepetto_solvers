@@ -26,7 +26,8 @@ import numpy as np
 
 from .scene import get_primitive_specs, GRASP_FLEXOR_TENSION, TABLE_NORMAL
 from .solvers import (
-    HandSolveParams, HandFKSolver, HandIKSolver, HandPlannerSolver, SOLVERS,
+    HandSolveParams, HandFKSolver, HandIKSolver, HandPlannerSolver,
+    HandControllerSolver, SOLVERS,
     NUM_FINGERS, resolve_scene, resolve_table_origin, capabilities)
 
 
@@ -57,10 +58,17 @@ def _euler_to_R(roll, pitch, yaw):
 def _smoke():
     print("Smoke-testing the hand solver classes (big_sphere, defaults)...")
     ok = True
-    for label, Solver, expect in [
-            ("FK", HandFKSolver, 1),
-            ("IK", HandIKSolver, 1),
-            ("Planner", HandPlannerSolver, None)]:
+    caps = capabilities()
+    cases = [("FK", HandFKSolver, 1),
+             ("IK", HandIKSolver, 1),
+             ("Planner", HandPlannerSolver, None)]
+    # Only on a binding that has the Section 1.8 controller; on an older one the
+    # smoke test still has to pass, it just covers less.
+    if caps["controller"]:
+        cases.append(("Controller", HandControllerSolver, 1))
+    else:
+        print("  [Controller] skipped -- binding has no TendonHandController")
+    for label, Solver, expect in cases:
         params = HandSolveParams()
         if label == "Planner":
             params.K = 6
@@ -95,6 +103,9 @@ class HandVizApp:
         self.mode = "FK"
         self.result = None
         self._solving = False
+        # Cached controller: ticks warm-start from the previous solution and
+        # phase switches keep the converged state, so it must outlive one solve.
+        self.controller = None
         # What this installed binding supports, so we can gate controls a stale
         # .so would crash on (ellipsoid objects, the table, cull margin).
         self.caps = capabilities()
@@ -130,6 +141,19 @@ class HandVizApp:
 
     def _rebuild_fk(self):
         self.fk_solver = HandFKSolver(self.params)
+        # The FK solver is rebuilt whenever the object changes, and the object is
+        # part of the controller's constraint set too.
+        self._invalidate_controller()
+
+    def _invalidate_controller(self):
+        """Drop the cached controller so the next step rebuilds it.
+
+        A controller instance owns its constraint set and warm-starts across
+        ticks; anything that changes that set (object, contact mask, collision,
+        table, anchor, half-space) has to rebuild rather than carry state that no
+        longer matches the graph. Phase switches are the exception — preserving
+        state across them is exactly what the phased formulation is for."""
+        self.controller = None
 
     def _sync_wrist(self):
         R = _euler_to_R(self.g_roll.value, self.g_pitch.value, self.g_yaw.value)
@@ -173,6 +197,11 @@ class HandVizApp:
         p.plane_avoidance = self.g_plane_avoid.value
         p.k_touch = int(self.g_k_touch.value) if p.table else None
         p.plane_origin = None  # auto (under object); offset applied below
+        # controller (Section 1.8)
+        p.phase = int(self.g_phase.value[0])
+        p.step_anchor = self.g_step_anchor.value
+        p.half_space = self.g_half_space.value
+        p.ctrl_al_iters = int(self.g_ctrl_iters.value)
         # display toggles
         self.scene.show_discs = self.g_show_discs.value
         self.scene.show_contact_spheres = self.g_show_contact.value
@@ -247,6 +276,12 @@ class HandVizApp:
             if self.mode == "FK":
                 # Reuse the cached FK solver (shares self.params) so this warm-starts.
                 self.result = self.fk_solver.solve()
+            elif self.mode == "Controller":
+                # Solve == one tick, from a freshly built controller: pressing
+                # Solve is the explicit "start this phase over" action, whereas
+                # Step continues from where the last tick left off.
+                self._invalidate_controller()
+                self.result = self._controller_tick()
             else:
                 self.result = SOLVERS[self.mode](self.params).solve()
             self._rebuild_step_slider()
@@ -272,6 +307,53 @@ class HandVizApp:
             lines.append(f"contact: {contacting}")
             lines.append(f"terminal worst gap: {self.result.worst_gap(-1):+.5f} m")
         self._set_status("  \n".join(lines))
+        self._report_violations()
+
+    # -- controller (Section 1.8) --
+
+    def _controller_tick(self):
+        """Build the controller if needed, then run one control tick."""
+        if self.controller is None:
+            self.controller = HandControllerSolver(self.params)
+        else:
+            self.controller.params.wrist_pose = self.params.wrist_pose
+        return self.controller.step()
+
+    def _controller_step(self, _=None):
+        """Advance the controller one tick and re-render, without rebuilding."""
+        if self._solving or not self.caps["controller"]:
+            return
+        self._solving = True
+        self._set_solving(True)
+        try:
+            self._sync_params()
+            self._refresh_object()
+            self.mode = "Controller"
+            self._refresh_mode_buttons()
+            self.result = self._controller_tick()
+            self._rebuild_step_slider()
+            self._render_frame(self._current_step())
+            self._report()
+        except Exception as exc:
+            self._set_status(f"**Error:** {exc}")
+            raise
+        finally:
+            self._set_solving(False)
+            self._solving = False
+
+    def _report_violations(self):
+        """Per-family constraint violations for the current phase, the numbers a
+        phase-advance decision is actually made on."""
+        if self.mode != "Controller" or self.controller is None:
+            self.g_ctrl_status.content = ""
+            return
+        rows = self.controller.phase_violations()
+        head = f"**phase {self.params.phase}** ({self.params.step_anchor} anchor)"
+        if not rows:
+            self.g_ctrl_status.content = f"{head}  \nno active constraints"
+            return
+        body = "  \n".join(f"{name}: {v:.2e} m" for name, v in rows)
+        self.g_ctrl_status.content = f"{head}  \n{body}"
 
     def _live_fk(self, _=None):
         """FK is fast and warm-starts, so re-solve live as sliders move."""
@@ -312,8 +394,15 @@ class HandVizApp:
             # be tinted a solid color; the group can't highlight its selection.
             self.g_mode_btns = {
                 m: gui.add_button(
-                    m, color=(self._ACTIVE_MODE_COLOR if m == self.mode else None))
-                for m in ("FK", "IK", "Planner")}
+                    m, color=(self._ACTIVE_MODE_COLOR if m == self.mode else None),
+                    # Section 1.8 controller needs the newer binding; disable
+                    # rather than crash on a stale one (as the table toggle does).
+                    disabled=(m == "Controller" and not self.caps["controller"]),
+                    hint=("Section 1.8 phased controller — requires a rebuilt "
+                          "extension with TendonHandController."
+                          if m == "Controller" and not self.caps["controller"]
+                          else None))
+                for m in ("FK", "IK", "Planner", "Controller")}
             self.g_object = gui.add_dropdown(
                 "object", labels,
                 initial_value=SDF_DROPDOWN_LABELS["big_sphere"])
@@ -372,6 +461,37 @@ class HandVizApp:
             self.g_plane_avoid = gui.add_checkbox("avoidance", True)
             self.g_k_touch = gui.add_slider("k_touch", 0, 30, 1, 5)
 
+        with gui.add_folder("Controller (Sec 1.8)"):
+            ctrl_hint = (None if self.caps["controller"]
+                         else "requires a rebuilt _crest_sparse with "
+                              "TendonHandController")
+            self.g_phase = gui.add_dropdown(
+                "phase", ["1 support contact", "2 object approach",
+                          "3 object servo"],
+                initial_value="1 support contact",
+                disabled=not self.caps["controller"],
+                hint=ctrl_hint or ("Which constraint set is active. Switching "
+                                   "keeps the converged state, so stepping "
+                                   "through 1 -> 2 -> 3 is the intended flow."))
+            self.g_step_anchor = gui.add_dropdown(
+                "step anchor", ["tension", "length", "both"],
+                initial_value="tension",
+                disabled=not self.caps["controller"],
+                hint=ctrl_hint or ("What anchors a tick to the measured state. "
+                                   "'length' is the hardware-faithful mode."))
+            self.g_half_space = gui.add_checkbox(
+                "half-space split", True, disabled=not self.caps["controller"],
+                hint=ctrl_hint or ("Phase 1 opposition: thumb to one half of the "
+                                   "table, fingers to the other."))
+            self.g_ctrl_iters = gui.add_slider(
+                "AL iters / tick", 1, 40, 1, 4, disabled=not self.caps["controller"],
+                hint=ctrl_hint or ("Small on purpose: the AL outer loop is "
+                                   "amortized across ticks."))
+            self.g_ctrl_step = gui.add_button(
+                "Step", icon=self.viser.Icon.PLAYER_TRACK_NEXT,
+                disabled=not self.caps["controller"], hint=ctrl_hint)
+            self.g_ctrl_status = gui.add_markdown("")
+
         with gui.add_folder("Augmented Lagrangian"):
             self.g_al_mu = gui.add_slider("mu", 0.1, 10.0, 0.1, 1.0)
             self.g_al_rate = gui.add_slider("rate", 1.1, 5.0, 0.1, 2.0)
@@ -387,6 +507,21 @@ class HandVizApp:
 
         # -- callbacks --
         self.g_solve.on_click(self._solve_and_render)
+        self.g_ctrl_step.on_click(lambda _: self._controller_step())
+
+        # Switching phase keeps the converged state (that is the point of the
+        # phased formulation), so it steps rather than rebuilding.
+        @self.g_phase.on_update
+        def _(_):
+            if self.mode == "Controller" and self.controller is not None:
+                self._sync_params()
+                self.controller.set_phase(self.params.phase)
+                self._controller_step()
+
+        # These change the CONSTRAINT SET, which a warm-started tick cannot
+        # absorb, so drop the cached controller and let the next step rebuild.
+        for h in (self.g_step_anchor, self.g_half_space, self.g_ctrl_iters):
+            h.on_update(lambda _: self._invalidate_controller())
 
         for _m, _btn in self.g_mode_btns.items():
             _btn.on_click(lambda _, m=_m: self._set_mode(m))
@@ -411,12 +546,25 @@ class HandVizApp:
         # every other solver knob they take effect on the next Solve, and the gap
         # lines keep describing the solve that is actually on screen until then.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
-                  self.g_show_gaps, *self.g_contacts):
+                  self.g_show_gaps):
             h.on_update(lambda _: (self._sync_params(),
+                                   self._render_frame(self._current_step())))
+        # The contact checkboxes ride along the same way, but they also change
+        # the controller's constraint set (a disabled finger drops its support,
+        # half-space and object constraints and falls back to collision-only),
+        # so the cached controller has to go.
+        for h in self.g_contacts:
+            h.on_update(lambda _: (self._sync_params(),
+                                   self._invalidate_controller(),
                                    self._render_frame(self._current_step())))
         # Table toggle / height updates the static slab immediately.
         for h in (self.g_table, self.g_plane_offset):
-            h.on_update(lambda _: (self._sync_params(), self._refresh_object()))
+            h.on_update(lambda _: (self._sync_params(), self._refresh_object(),
+                                   self._invalidate_controller()))
+        # Collision knobs are part of the constraint set too.
+        for h in (self.g_collision, self.g_coll_radius, self.g_coll_sigma,
+                  self.g_cull, self.g_plane_avoid):
+            h.on_update(lambda _: self._invalidate_controller())
 
 
 def main():

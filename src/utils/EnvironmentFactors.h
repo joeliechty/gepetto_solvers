@@ -143,6 +143,65 @@ struct EnvironmentConfig {
     bool plane_avoidance = false;
     std::optional<int> table_contact_node;
     double table_contact_radius = 0.0;
+
+    // --- Section 1.8 phased real-time controller -------------------------
+    // The §1.8 formulation drops the trajectory index k and solves a single-state
+    // constrained IK problem per control tick, switching the CONSTRAINT SET between
+    // three phases. Every field below is inert by default, so an env configured for
+    // the §1.3-1.6 solvers/planners builds exactly the pre-existing graph.
+
+    // Support-surface contact EQUALITY on the contact sphere CENTER (Eq 1.97),
+    // used in controller phases 1 and 2. Distinct from table_contact_node above,
+    // which builds the §1.6 five-residual witness form: here there is no witness
+    // point at all, just c_support(c) = Dist_plane(c) = 0 on the sphere center.
+    // The witness is unnecessary because a single scalar residual on the center
+    // leaves no rotational gauge freedom to brick the solver -- the null space
+    // §1.6 worried about only appears once a free p_c variable is introduced.
+    //
+    // NOTE on sign: the paper writes Dist_plane(c) = |(c - p).n| - r. We use the
+    // SIGNED form (which is what PlaneCollisionGapFactor already computes, wrapped
+    // in a gtsam::ZeroCostConstraint): it pins the sphere on the +n_table (free)
+    // side of the table and is smooth at the contact point, whereas the absolute
+    // value has a kink exactly where the solver operates.
+    std::optional<int> support_contact_node;
+    double support_contact_radius = 0.0;
+
+    // Opposition half-space (Eq 1.92), controller phase 1. Splits the support
+    // surface in half so the thumb lands opposite the fingers:
+    //   c_half(c) = -(c - p_split) . m_hat <= 0
+    // m_hat is a unit vector lying IN the support plane (n_table . m_hat = 0)
+    // pointing into the valid half-space for THIS finger, so each finger carries
+    // its own direction. Applied to support_contact_node's sphere. Inert unless
+    // half_space_enabled and half_space_normal has non-zero norm.
+    bool           half_space_enabled     = false;
+    gtsam::Vector3 half_space_split_point = gtsam::Vector3::Zero();
+    gtsam::Vector3 half_space_normal      = gtsam::Vector3::Zero();  // m_hat
+
+    // Controller phase 2 (Eq 1.101): constrain the contact sphere CENTER directly
+    // to the hyper-ellipsoid proxy instead of introducing a witness point --
+    //   c_obj(c) = Taubin(T_obj^-1 c) - r = 0
+    // -- which is EllipsoidCollisionGapFactor's residual (up to an irrelevant
+    // sign, since this is an equality) wrapped in a ZeroCostConstraint. Dropping
+    // the witness removes three variables and five residual rows per finger,
+    // which is the point of the real-time sliding phase. Requires
+    // ellipsoid_semi_axes to be set; ignored when target_contact_node is unset.
+    bool object_contact_center_direct = false;
+
+    // Controller phase 3 (Eq 1.107-1.110): drop the normal-alignment row c_N from
+    // the witness contact factor, leaving [c_R, c_O, c_T1, c_T2]. Justified in
+    // §1.8: with collision geometry modeled exclusively as spheres, the tangential
+    // slip rows already force the relative vector -- and hence the outward sphere
+    // normal -- collinear with the object surface normal, so c_N is redundant.
+    bool contact_drop_normal_row = false;
+
+    // Controller phase 3 soft witness target (Eq 1.111): a Gaussian prior pulling
+    // this finger's object witness point toward a nominal grasp location, given in
+    // the WORLD frame. Because the AL equality constraints restrict the witness to
+    // the object surface manifold, this acts as a geodesic pull that slides the
+    // witness (and the attached finger) along the surface. Unset => no prior, i.e.
+    // the "contact anywhere on the surface" formulation (Eq 1.119-1.125).
+    std::optional<gtsam::Point3> witness_target;
+    Eigen::Matrix3d witness_target_cov = 1e-4 * Eigen::Matrix3d::Identity();
 };
 
 
@@ -389,6 +448,58 @@ public:
 };
 
 
+// Opposition half-space constraint (Section 1.8, Eq 1.92). Keeps a finger's
+// contact sphere on its designated half of the support surface, so the thumb
+// opposes the other grasping fingers:
+//
+//   c_half(c) = -(c - p_split) . m_hat   <= 0
+//
+// where c is the world-frame center of the contact sphere (the node pose's
+// translation), p_split is a point on the splitting line (e.g. the object's
+// centroid projected onto the support surface), and m_hat is a unit vector lying
+// IN the support plane (n_table . m_hat = 0) pointing into the valid half-space
+// for this finger. Because m_hat is orthogonal to the plane normal, the sphere
+// radius cancels out entirely -- the constraint depends only on the center, and
+// the Jacobian is the CONSTANT row
+//
+//   d c_half / d c = -m_hat^T ,
+//
+// chained through node_pose.translation(). That constant Jacobian makes this the
+// cheapest constraint in the graph to evaluate. Wrap an instance in a
+// CollisionInequalityConstraint to enforce c_half <= 0.
+class HalfSpaceGapFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3> {
+private:
+    gtsam::Vector3 p_split_;
+    gtsam::Vector3 m_hat_;
+
+public:
+    HalfSpaceGapFactor(gtsam::Key node_pose_key,
+                       const gtsam::Vector3& p_split, const gtsam::Vector3& m_hat,
+                       const gtsam::SharedNoiseModel& noise_model)
+        : NoiseModelFactorN(noise_model, node_pose_key),
+          p_split_(p_split), m_hat_(m_hat.normalized()) {}
+
+    gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
+                                gtsam::OptionalMatrixType H1) const override
+    {
+        gtsam::Matrix36 D_pworld_pose;
+        gtsam::Point3 p_world = node_pose.translation(H1 ? &D_pworld_pose : nullptr);
+
+        // > 0  <=>  the center is on the WRONG side of the splitting line.
+        double c_half = -(p_world - p_split_).dot(m_hat_);
+
+        if (H1) *H1 = -m_hat_.transpose() * D_pworld_pose;   // 1x6, constant in p
+
+        return gtsam::Vector1(c_half);
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new HalfSpaceGapFactor(*this)));
+    }
+};
+
+
 // Finger-finger (sphere-to-sphere) penetration gap (Section 1.5):
 //   c_pen(p_i, p_j) = (r_i + r_j) - ||p_i - p_j||
 // where p_i, p_j are the world-frame centers of the two collision spheres
@@ -462,17 +573,26 @@ public:
 // (p_c - p_i) onto them pins p_c strictly along the contact normal axis. This
 // removes the residual gauge freedom of p_c and yields a full-rank gradient,
 // so no Tikhonov regularizer / stabilizing prior on p_c is required.
+//
+// drop_normal_row (Section 1.8, Eq 1.107-1.110): when true the c_N row is omitted
+// and the residual is the 4-vector [c_R, c_O, c_T1, c_T2]. Justified in §1.8:
+// because the robot's collision geometry is modeled exclusively as spheres, the
+// tangential-slip rows already force (p_c - p_i) -- and hence the outward sphere
+// normal -- collinear with the object surface normal, making c_N redundant. The
+// caller must size its noise model to match (Isotropic::Sigma(4, ...)).
 class SdfWitnessContactFactor : public gtsam::NoiseModelFactor3<gtsam::Pose3, gtsam::Pose3, gtsam::Point3> {
 private:
     double R_;
     openvdb::FloatGrid::Ptr sdf_grid_;
+    bool drop_normal_row_;
 
 public:
     SdfWitnessContactFactor(gtsam::Key node_pose_key, gtsam::Key object_key, gtsam::Key point_key,
                             double radius, const openvdb::FloatGrid::Ptr& sdf_grid,
-                            const gtsam::SharedNoiseModel& noise_model)
+                            const gtsam::SharedNoiseModel& noise_model,
+                            bool drop_normal_row = false)
         : NoiseModelFactor3(noise_model, node_pose_key, object_key, point_key),
-          R_(radius), sdf_grid_(sdf_grid) {}
+          R_(radius), sdf_grid_(sdf_grid), drop_normal_row_(drop_normal_row) {}
 
     gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
                                 const gtsam::Pose3& object_pose,
@@ -534,10 +654,15 @@ public:
         double e4 = v.dot(t1);
         double e5 = v.dot(t2);
 
+        // Row layout: [c_R, c_O, (c_N), c_T1, c_T2]. Dropping c_N shifts the two
+        // tangent rows up by one and shrinks the residual to 4.
+        const int dim = drop_normal_row_ ? 4 : 5;
+        const int rT1 = drop_normal_row_ ? 2 : 3;
+
         if (H1 || H2 || H3) {
-            if (H1) *H1 = gtsam::Matrix::Zero(5, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(5, 6);
-            if (H3) *H3 = gtsam::Matrix::Zero(5, 3);
+            if (H1) *H1 = gtsam::Matrix::Zero(dim, 6);
+            if (H2) *H2 = gtsam::Matrix::Zero(dim, 6);
+            if (H3) *H3 = gtsam::Matrix::Zero(dim, 3);
 
             // Row 0: e1 -- only c_i (via node_pose) and p_c.
             if (H1) H1->row(0) = -n_i.transpose() * D_center_pose;
@@ -553,32 +678,36 @@ public:
             // standard locally-constant-gradient contact convention).
             // n_i = (p_c - c_i)/d, projector P = (I - n_i n_i^T)/d.
             // dn_i/dc_i = -P,   dn_i/dp_c = P.
-            const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
-            gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
-            Eigen::RowVector3d nobjT = n_obj_world.transpose();
+            if (!drop_normal_row_) {
+                const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
+                gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
+                Eigen::RowVector3d nobjT = n_obj_world.transpose();
 
-            if (H1) H1->row(2) = -(nobjT * P) * D_center_pose;
-            if (H3) H3->row(2) =  nobjT * P;
+                if (H1) H1->row(2) = -(nobjT * P) * D_center_pose;
+                if (H3) H3->row(2) =  nobjT * P;
 
-            // d(n_obj_world)/d(xi_obj) under GTSAM's Pose3 tangent order
-            // [omega(3), upsilon(3)]:  d(R v)/d(omega) = -R * skew(v).
-            // Translation has no effect on the normal under the
-            // locally-constant-gradient approximation.
-            if (H2) {
-                gtsam::Matrix3 dRv_dxiR = -R_obj * gtsam::skewSymmetric(n_obj_local);
-                H2->block<1, 3>(2, 0) = n_i.transpose() * dRv_dxiR;
-                H2->block<1, 3>(2, 3) = Eigen::RowVector3d::Zero();
+                // d(n_obj_world)/d(xi_obj) under GTSAM's Pose3 tangent order
+                // [omega(3), upsilon(3)]:  d(R v)/d(omega) = -R * skew(v).
+                // Translation has no effect on the normal under the
+                // locally-constant-gradient approximation.
+                if (H2) {
+                    gtsam::Matrix3 dRv_dxiR = -R_obj * gtsam::skewSymmetric(n_obj_local);
+                    H2->block<1, 3>(2, 0) = n_i.transpose() * dRv_dxiR;
+                    H2->block<1, 3>(2, 3) = Eigen::RowVector3d::Zero();
+                }
             }
 
-            // Rows 3-4: e4, e5. With t1, t2 constant, de/dp_c = t^T and
+            // Tangent rows: e4, e5. With t1, t2 constant, de/dp_c = t^T and
             // de/dc_i = -t^T (v = p_c - c_i). Object pose has no effect on v
-            // under the fixed-C-frame approximation, so H2 rows 3-4 stay zero.
-            if (H3) H3->row(3) = t1.transpose();
-            if (H3) H3->row(4) = t2.transpose();
-            if (H1) H1->row(3) = -t1.transpose() * D_center_pose;
-            if (H1) H1->row(4) = -t2.transpose() * D_center_pose;
+            // under the fixed-C-frame approximation, so those H2 rows stay zero.
+            if (H3) H3->row(rT1)     = t1.transpose();
+            if (H3) H3->row(rT1 + 1) = t2.transpose();
+            if (H1) H1->row(rT1)     = -t1.transpose() * D_center_pose;
+            if (H1) H1->row(rT1 + 1) = -t2.transpose() * D_center_pose;
         }
 
+        if (drop_normal_row_)
+            return (gtsam::Vector(4) << e1, e2, e4, e5).finished();
         return (gtsam::Vector(5) << e1, e2, e3, e4, e5).finished();
     }
 
@@ -614,23 +743,29 @@ public:
 // rows reuse the standard locally-constant-gradient contact convention (N held
 // fixed within the Gauss-Newton step), matching SdfWitnessContactFactor /
 // PlaneWitnessContactFactor.
+//
+// drop_normal_row (Section 1.8, Eq 1.107-1.110): as on SdfWitnessContactFactor,
+// omits the c_N row and returns the 4-vector [c_R, c_O, c_T1, c_T2].
 class EllipsoidWitnessContactFactor
     : public gtsam::NoiseModelFactor3<gtsam::Pose3, gtsam::Pose3, gtsam::Point3>
 {
 private:
     double R_;
     gtsam::Vector3 m_diag_;   // (1/a^2, 1/b^2, 1/c^2)
+    bool drop_normal_row_;
 
 public:
     EllipsoidWitnessContactFactor(gtsam::Key node_pose_key, gtsam::Key object_key,
                                   gtsam::Key point_key, double radius,
                                   const gtsam::Vector3& semi_axes,
-                                  const gtsam::SharedNoiseModel& noise_model)
+                                  const gtsam::SharedNoiseModel& noise_model,
+                                  bool drop_normal_row = false)
         : NoiseModelFactor3(noise_model, node_pose_key, object_key, point_key),
           R_(radius),
           m_diag_(1.0 / (semi_axes.x() * semi_axes.x()),
                   1.0 / (semi_axes.y() * semi_axes.y()),
-                  1.0 / (semi_axes.z() * semi_axes.z())) {}
+                  1.0 / (semi_axes.z() * semi_axes.z())),
+          drop_normal_row_(drop_normal_row) {}
 
     gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
                                 const gtsam::Pose3& object_pose,
@@ -680,10 +815,15 @@ public:
         double e4 = v.dot(t1);
         double e5 = v.dot(t2);
 
+        // Row layout: [c_R, c_O, (c_N), c_T1, c_T2]. Dropping c_N shifts the two
+        // tangent rows up by one and shrinks the residual to 4.
+        const int dim = drop_normal_row_ ? 4 : 5;
+        const int rT1 = drop_normal_row_ ? 2 : 3;
+
         if (H1 || H2 || H3) {
-            if (H1) *H1 = gtsam::Matrix::Zero(5, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(5, 6);
-            if (H3) *H3 = gtsam::Matrix::Zero(5, 3);
+            if (H1) *H1 = gtsam::Matrix::Zero(dim, 6);
+            if (H2) *H2 = gtsam::Matrix::Zero(dim, 6);
+            if (H3) *H3 = gtsam::Matrix::Zero(dim, 3);
 
             // Row 0: e1 -- only c_i (via node_pose) and p_c.
             if (H1) H1->row(0) = -n_i.transpose() * D_center_pose;
@@ -703,30 +843,34 @@ public:
             // Row 2: e3 -- locally-constant-gradient normal convention
             // (n_obj_local treated as p_c-independent within the GN step).
             // n_i = (p_c - c_i)/d, projector P = (I - n_i n_i^T)/d.
-            const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
-            gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
-            Eigen::RowVector3d nobjT = n_obj_world.transpose();
+            if (!drop_normal_row_) {
+                const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
+                gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
+                Eigen::RowVector3d nobjT = n_obj_world.transpose();
 
-            if (H1) H1->row(2) = -(nobjT * P) * D_center_pose;
-            if (H3) H3->row(2) =  nobjT * P;
+                if (H1) H1->row(2) = -(nobjT * P) * D_center_pose;
+                if (H3) H3->row(2) =  nobjT * P;
 
-            // d(n_obj_world)/d(xi_obj): d(R v)/d(omega) = -R * skew(v);
-            // translation has no effect on the normal.
-            if (H2) {
-                gtsam::Matrix3 dRv_dxiR = -R_obj * gtsam::skewSymmetric(n_obj_local);
-                H2->block<1, 3>(2, 0) = n_i.transpose() * dRv_dxiR;
-                H2->block<1, 3>(2, 3) = Eigen::RowVector3d::Zero();
+                // d(n_obj_world)/d(xi_obj): d(R v)/d(omega) = -R * skew(v);
+                // translation has no effect on the normal.
+                if (H2) {
+                    gtsam::Matrix3 dRv_dxiR = -R_obj * gtsam::skewSymmetric(n_obj_local);
+                    H2->block<1, 3>(2, 0) = n_i.transpose() * dRv_dxiR;
+                    H2->block<1, 3>(2, 3) = Eigen::RowVector3d::Zero();
+                }
             }
 
-            // Rows 3-4: e4, e5. With t1, t2 constant, de/dp_c = t^T and
+            // Tangent rows: e4, e5. With t1, t2 constant, de/dp_c = t^T and
             // de/dc_i = -t^T. Object pose has no effect on v under the
-            // fixed-C-frame approximation, so H2 rows 3-4 stay zero.
-            if (H3) H3->row(3) = t1.transpose();
-            if (H3) H3->row(4) = t2.transpose();
-            if (H1) H1->row(3) = -t1.transpose() * D_center_pose;
-            if (H1) H1->row(4) = -t2.transpose() * D_center_pose;
+            // fixed-C-frame approximation, so those H2 rows stay zero.
+            if (H3) H3->row(rT1)     = t1.transpose();
+            if (H3) H3->row(rT1 + 1) = t2.transpose();
+            if (H1) H1->row(rT1)     = -t1.transpose() * D_center_pose;
+            if (H1) H1->row(rT1 + 1) = -t2.transpose() * D_center_pose;
         }
 
+        if (drop_normal_row_)
+            return (gtsam::Vector(4) << e1, e2, e4, e5).finished();
         return (gtsam::Vector(5) << e1, e2, e3, e4, e5).finished();
     }
 
@@ -758,6 +902,9 @@ public:
 // lateral position -- so the tip is still free to slide across the plane. This
 // is the correction over the earlier 3-residual form, whose missing tangent rows
 // left p_c rank-deficient (IndeterminantLinearSystem) and needed a Tikhonov prior.
+//
+// drop_normal_row (Section 1.8, Eq 1.107-1.110): as on SdfWitnessContactFactor,
+// omits the c_N row and returns the 4-vector [c_R, c_O, c_T1, c_T2].
 class PlaneWitnessContactFactor
     : public gtsam::NoiseModelFactor2<gtsam::Pose3, gtsam::Point3>
 {
@@ -765,14 +912,17 @@ private:
     double R_;
     gtsam::Vector3 p_table_;
     gtsam::Vector3 n_table_;
+    bool drop_normal_row_;
 
 public:
     PlaneWitnessContactFactor(gtsam::Key node_pose_key, gtsam::Key point_key,
                               double radius, const gtsam::Vector3& p_table,
                               const gtsam::Vector3& n_table,
-                              const gtsam::SharedNoiseModel& noise_model)
+                              const gtsam::SharedNoiseModel& noise_model,
+                              bool drop_normal_row = false)
         : NoiseModelFactor2(noise_model, node_pose_key, point_key),
-          R_(radius), p_table_(p_table), n_table_(n_table.normalized()) {}
+          R_(radius), p_table_(p_table), n_table_(n_table.normalized()),
+          drop_normal_row_(drop_normal_row) {}
 
     gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
                                 const gtsam::Point3& dummy_point,
@@ -804,9 +954,14 @@ public:
         double e4 = diff.dot(t1);
         double e5 = diff.dot(t2);
 
+        // Row layout: [c_R, c_O, (c_N), c_T1, c_T2]. Dropping c_N shifts the two
+        // tangent rows up by one and shrinks the residual to 4.
+        const int dim = drop_normal_row_ ? 4 : 5;
+        const int rT1 = drop_normal_row_ ? 2 : 3;
+
         if (H1 || H2) {
-            if (H1) *H1 = gtsam::Matrix::Zero(5, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(5, 3);
+            if (H1) *H1 = gtsam::Matrix::Zero(dim, 6);
+            if (H2) *H2 = gtsam::Matrix::Zero(dim, 3);
 
             // Row 0: e1 -- de1/dp_c = n_i^T, de1/dc = -n_i^T.
             if (H1) H1->row(0) = -n_i.transpose() * D_center_pose;
@@ -817,20 +972,24 @@ public:
 
             // Row 2: e3 -- n_table constant. n_i = diff/d, projector
             // P = (I - n_i n_i^T)/d.  dn_i/dp_c = P, dn_i/dc = -P.
-            const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
-            gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
-            Eigen::RowVector3d ntabP = n_table_.transpose() * P;
-            if (H1) H1->row(2) = -ntabP * D_center_pose;
-            if (H2) H2->row(2) =  ntabP;
+            if (!drop_normal_row_) {
+                const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
+                gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
+                Eigen::RowVector3d ntabP = n_table_.transpose() * P;
+                if (H1) H1->row(2) = -ntabP * D_center_pose;
+                if (H2) H2->row(2) =  ntabP;
+            }
 
-            // Rows 3-4: e4, e5. With t1, t2 constant, de/dp_c = t^T and
+            // Tangent rows: e4, e5. With t1, t2 constant, de/dp_c = t^T and
             // de/dc = -t^T (diff = p_c - c).
-            if (H2) H2->row(3) = t1.transpose();
-            if (H2) H2->row(4) = t2.transpose();
-            if (H1) H1->row(3) = -t1.transpose() * D_center_pose;
-            if (H1) H1->row(4) = -t2.transpose() * D_center_pose;
+            if (H2) H2->row(rT1)     = t1.transpose();
+            if (H2) H2->row(rT1 + 1) = t2.transpose();
+            if (H1) H1->row(rT1)     = -t1.transpose() * D_center_pose;
+            if (H1) H1->row(rT1 + 1) = -t2.transpose() * D_center_pose;
         }
 
+        if (drop_normal_row_)
+            return (gtsam::Vector(4) << e1, e2, e4, e5).finished();
         return (gtsam::Vector(5) << e1, e2, e3, e4, e5).finished();
     }
 

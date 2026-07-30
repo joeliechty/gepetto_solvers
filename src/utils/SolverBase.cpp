@@ -280,7 +280,27 @@ SolutionMetadata SolverBase::optimize() {
     // well-conditioned Gaussian (info ~ mu) that preserves the constraint's
     // information contribution. The free-space path has no constraints and so
     // builds marginals over the full graph unchanged.
-    if (use_augmented_lagrangian_) {
+    // skip_marginals: the factorization above is the single most expensive step
+    // after the optimizer itself, and a real-time controller (Section 1.8) re-runs
+    // this loop every control tick while only ever using the MEANS. Subclasses
+    // that honor this flag must extract means-only marginals in extract_solution()
+    // (e.g. TendonHandModel::get_marginals_means_only); marginals_ is left as the
+    // default-constructed empty object, so reading covariances from it is invalid.
+    if (config_.skip_marginals) {
+        // Still report the objective-only error, which is cheap and is what the
+        // caller's convergence reporting expects on the AL path.
+        if (use_augmented_lagrangian_) {
+            NonlinearFactorGraph err_graph;
+            for (const auto& factor : graph_) {
+                if (auto c = std::dynamic_pointer_cast<NonlinearConstraint>(factor)) {
+                    err_graph.add(c->penaltyFactor(al_final_mu_));
+                } else {
+                    err_graph.add(factor);
+                }
+            }
+            meta.error = err_graph.error(values_);
+        }
+    } else if (use_augmented_lagrangian_) {
         NonlinearFactorGraph marg_graph;
         for (const auto& factor : graph_) {
             if (auto c = std::dynamic_pointer_cast<NonlinearConstraint>(factor)) {

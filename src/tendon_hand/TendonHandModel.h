@@ -60,7 +60,16 @@ public:
 
     // Initial values for all fingers, with the shared wrist variable inserted
     // exactly once, plus the contact object pose and per-finger witness seeds.
-    gtsam::Values get_initial_values() const;
+    //
+    // warm (optional): a previous solution to take robot poses from instead of
+    // the cold-start straight hand. This matters for the witness seeds, which are
+    // derived by projecting the CONTACT NODE onto the object surface -- from a
+    // converged pose that projection lands where the finger actually is, whereas
+    // from the cold start it lands wherever a straight hand happened to point.
+    // The Section 1.8 controller passes its retained values here when switching
+    // phases. Keys absent from warm fall back to the cold-start value, so passing
+    // a partial (or empty) Values is safe.
+    gtsam::Values get_initial_values(const gtsam::Values* warm = nullptr) const;
 
     // Re-aim the shared wrist prior at a new pose *without* rebuilding the model.
     // Only the wrist-prior mean depends on wrist_pose_ (the finger offsets and
@@ -132,6 +141,12 @@ public:
     // to add a terminal PositionPriorFactor when a per-finger position goal is set.
     gtsam::Key finger_tip_pose_key(int i) const;
 
+    // Pose key of an arbitrary rod node on finger i (negative indices count from
+    // the tip, as CosseratRodModel::get_pose_key does). The Section 1.8 controller
+    // uses this to re-evaluate its constraint factors on the solved values when
+    // reporting per-family violations, without duplicating the geometry math.
+    gtsam::Key finger_node_pose_key(int i, int node) const;
+
     // Add the temporal GP priors (Eq 1.11 tensions, Eq 1.13 lengths) linking this
     // model's per-finger tension/length variables to the corresponding variables
     // in the next timestep's model. The per-finger tendon count N is resolved
@@ -143,6 +158,39 @@ public:
         const Eigen::MatrixXd& gp_tense_Qc,
         const Eigen::MatrixXd& gp_len_Qc,
         double dt) const;
+
+    // Direct priors on each finger's tendon-length variable (Section 1.8; the
+    // trajectory-free analogue of the Eq 1.13 length GP). The §1.8 controller
+    // anchors a control tick to the MEASURED state, and on the physical robot
+    // that state is the motor position — i.e. tendon length — not tension: the
+    // tendons are effectively inextensible so length is what the motor commands
+    // and what survives a tick, whereas a disturbance contact changes tension
+    // instantly without the robot having moved.
+    //
+    //   p_step(L^gamma | L^gamma_curr) ~ exp(-1/2 ||L - L_curr||^2_Sigma_L,step)
+    //
+    // One VectorXGaussian per finger, in config order; the per-finger tendon
+    // count N is resolved inside the variant visit (as add_temporal_gp does),
+    // which is why this cannot be a free function on the caller's side.
+    void add_length_priors(
+        gtsam::NonlinearFactorGraph& graph,
+        const std::vector<VectorXGaussian>& lengths) const;
+
+    // ADDITIONAL priors on each finger's tendon-tension variable, on top of the
+    // one build_graph() already emits from its `tensions` argument. This is the
+    // Section 1.8 phase-0 target Q^gamma_pre of Eq 1.95:
+    //
+    //   p_pre_tension(Q^gamma) ~ exp(-1/2 ||Q - Q_pre||^2_Sigma_pre,Q)
+    //
+    // Because the two Gaussians on the same variable multiply, the result is
+    // their precision-weighted mean -- a pull toward Q_pre bounded by the step
+    // prior, not a replacement for it. Structurally identical to
+    // add_length_priors: one VectorXGaussian per finger in config order, with
+    // the per-finger tendon count N resolved inside the variant visit (which is
+    // why this cannot be a free function on the caller's side).
+    void add_tension_priors(
+        gtsam::NonlinearFactorGraph& graph,
+        const std::vector<VectorXGaussian>& tensions) const;
 
 private:
     // We use a variant to handle different numbers of tendons per finger.

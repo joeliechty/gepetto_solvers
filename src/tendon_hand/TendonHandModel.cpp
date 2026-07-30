@@ -103,6 +103,17 @@ TendonHandModel::TendonHandModel(
             c.sdf_contact->plane_normal.norm() > 0.0) {
             if (c.sdf_contact->table_contact_node.has_value()) has_contact_   = true;
             if (c.sdf_contact->plane_avoidance)                has_collision_ = true;
+            // Section 1.8 controller phases 1-2: the support-surface equality is
+            // a ZeroCostConstraint (=> AL) and the opposition half-space is an
+            // inequality (=> AL). Phase 1 has no OBJECT contact at all, so
+            // without this the solve would miss the AL path entirely and the
+            // support constraint would silently do nothing.
+            if (c.sdf_contact->support_contact_node.has_value()) {
+                has_contact_ = true;
+                if (c.sdf_contact->half_space_enabled &&
+                    c.sdf_contact->half_space_normal.norm() > 0.0)
+                    has_collision_ = true;
+            }
         }
 
         SharedDiagonal twist_noise = get_noise_model_rot_pos(
@@ -213,20 +224,53 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         noiseModel::Gaussian::Covariance(env.object_pose_cov)));
                     object_anchored = true;
                 }
+                // Controller phase 2 (Section 1.8, Eq 1.101): constrain the tip
+                // sphere CENTER to the ellipsoid, with no witness point at all.
+                // EllipsoidCollisionGapFactor's residual is r - Taubin(x); as an
+                // EQUALITY the sign is irrelevant, so its zero set is exactly
+                // Eq 1.101. Dropping the witness removes three variables and four
+                // residual rows per finger — the point of the real-time phase.
+                if (env.object_contact_center_direct &&
+                    env.ellipsoid_semi_axes.norm() > 0.0) {
+                    auto center_contact =
+                        std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
+                            tip_key, object_key(), env.contact_node_radius,
+                            env.ellipsoid_semi_axes,
+                            noiseModel::Isotropic::Sigma(1, 1.0));
+                    graph.add(gtsam::ZeroCostConstraint(center_contact));
+                    return;
+                }
+
+                // Witness-point contact. drop_normal_row (controller phase 3,
+                // Eq 1.107-1.110) omits c_N, so the residual — and the noise
+                // model that must match it — is 4 rows instead of 5.
+                const bool drop_n = env.contact_drop_normal_row;
+                const int  n_rows = drop_n ? 4 : 5;
                 gtsam::NoiseModelFactor::shared_ptr contact;
                 if (env.ellipsoid_semi_axes.norm() > 0.0) {
                     // Analytic hyper-ellipsoid surface (Section 1.6.3).
                     contact = std::make_shared<crest_sparse::EllipsoidWitnessContactFactor>(
                         tip_key, object_key(), witness_key(static_cast<int>(i)),
                         env.contact_node_radius, env.ellipsoid_semi_axes,
-                        noiseModel::Isotropic::Sigma(5, 1.0));
+                        noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n);
                 } else {
                     contact = std::make_shared<crest_sparse::SdfWitnessContactFactor>(
                         tip_key, object_key(), witness_key(static_cast<int>(i)),
                         env.contact_node_radius, env.sdf_grid,
-                        noiseModel::Isotropic::Sigma(5, 1.0));
+                        noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n);
                 }
                 graph.add(gtsam::ZeroCostConstraint(contact));
+
+                // Soft witness target (Section 1.8, Eq 1.111). Because the AL
+                // equality constraints pin the witness to the object surface
+                // manifold, this prior acts as a geodesic pull that slides the
+                // witness — and the attached finger — along the surface toward a
+                // nominal grasp location. Unset => "contact anywhere" (Eq 1.119).
+                if (env.witness_target) {
+                    graph.add(PriorFactor<Point3>(
+                        witness_key(static_cast<int>(i)), *env.witness_target,
+                        noiseModel::Gaussian::Covariance(env.witness_target_cov)));
+                }
             } else {
                 const auto& sc = *sphere_contacts_[i];
                 Key finger_key = fp->rod_->get_pose_key(sc.finger_node_index);
@@ -382,9 +426,40 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 graph.add(gtsam::ZeroCostConstraint(contact));
             }
 
+            // --- Section 1.8 controller phases 1-2 ---------------------------
+            // Support-surface contact EQUALITY on the sphere CENTER (Eq 1.97),
+            // the witness-free counterpart of the §1.6 sliding equality above.
+            // PlaneCollisionGapFactor's residual is r - (c - p).n; as an EQUALITY
+            // the sign is irrelevant, so its zero set is exactly Dist_plane = 0 —
+            // in the signed form, which pins the sphere on the +n (free) side and
+            // stays smooth at the contact point (the paper's |.| has a kink
+            // exactly where the solver operates).
+            if (env.support_contact_node.has_value()) {
+                Key sup_key = fp->rod_->get_pose_key(*env.support_contact_node);
+                auto support = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
+                    sup_key, env.support_contact_radius,
+                    env.plane_origin, env.plane_normal,
+                    noiseModel::Isotropic::Sigma(1, 1.0));
+                graph.add(gtsam::ZeroCostConstraint(support));
+
+                // Opposition half-space (Eq 1.92): keep this finger's contact
+                // sphere on its designated half of the support surface, so the
+                // thumb lands opposite the fingers. Constant Jacobian.
+                if (env.half_space_enabled && env.half_space_normal.norm() > 0.0) {
+                    auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
+                        sup_key, env.half_space_split_point, env.half_space_normal,
+                        noiseModel::Isotropic::Sigma(1, env.collision_sigma));
+                    graph.add(crest_sparse::CollisionInequalityConstraint(half));
+                }
+            }
+
             // Table collision (Eq 1.59): keep every non-root collision sphere out
             // of the half-space, except the table contact node (its collision
             // would oppose the sliding equality that already pins it to the plane).
+            // The same exclusion applies to support_contact_node: §1.8 warns that
+            // stacking the inequality on a sphere that already carries the
+            // equality gives linearly dependent Jacobians once contact is met,
+            // artificially rank-deficient Hessian, destabilized inner LM.
             if (env.plane_avoidance && !env.collision_node_indices.empty()) {
                 auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
                 for (size_t j = 0; j < env.collision_node_indices.size(); ++j) {
@@ -395,6 +470,10 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     if (env.table_contact_node.has_value() &&
                         fp->rod_->get_pose_key(idx) ==
                             fp->rod_->get_pose_key(*env.table_contact_node))
+                        continue;
+                    if (env.support_contact_node.has_value() &&
+                        fp->rod_->get_pose_key(idx) ==
+                            fp->rod_->get_pose_key(*env.support_contact_node))
                         continue;
                     double r = env.collision_node_radii[j];
                     auto gap = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
@@ -410,7 +489,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
 }
 
 
-Values TendonHandModel::get_initial_values() const {
+Values TendonHandModel::get_initial_values(const Values* warm) const {
     Values values;
 
     // Merge each finger's values; the shared wrist variable appears in every
@@ -421,6 +500,14 @@ Values TendonHandModel::get_initial_values() const {
             if (i > 0) fv.erase(wrist_key(step_));
             values.insert(fv);
         }, fingers_[i]);
+    }
+
+    // Adopt any warm-start poses BEFORE the witness seeding below, so the
+    // projections that derive each witness from its contact node start from
+    // where the finger actually converged rather than from a straight hand.
+    if (warm) {
+        for (Key k : values.keys())
+            if (warm->exists(k)) values.update(k, warm->at(k));
     }
 
     // Contact object pose (once) + per-finger witness point seeds.
@@ -447,8 +534,19 @@ Values TendonHandModel::get_initial_values() const {
                 // seeded above; there is no witness point to seed.
                 if (!env.target_contact_node.has_value()) return;
 
+                // Controller phase 2 (Eq 1.101) constrains the sphere center
+                // directly, so build_graph creates no witness variable here —
+                // seeding one would leave an orphan value with no factors.
+                if (env.object_contact_center_direct &&
+                    env.ellipsoid_semi_axes.norm() > 0.0) return;
+
                 Point3 seed_local;
-                if (env.witness_point_seed) {
+                if (env.witness_target) {
+                    // Controller phase 3 (Eq 1.111): start the witness at its
+                    // nominal grasp target (given in the WORLD frame) so the
+                    // geodesic pull has a short way to travel.
+                    seed_local = obj_mean.transformTo(*env.witness_target);
+                } else if (env.witness_point_seed) {
                     // Caller-provided seed (object-local frame); skip the march.
                     seed_local = *env.witness_point_seed;
                 } else if (env.ellipsoid_semi_axes.norm() > 0.0) {
@@ -559,6 +657,12 @@ Key TendonHandModel::finger_tip_pose_key(int i) const {
 }
 
 
+Key TendonHandModel::finger_node_pose_key(int i, int node) const {
+    return std::visit(
+        [node](const auto& fp) { return fp->rod_->get_pose_key(node); }, fingers_.at(i));
+}
+
+
 void TendonHandModel::add_temporal_gp(
     NonlinearFactorGraph& graph,
     const TendonHandModel& next,
@@ -589,6 +693,62 @@ void TendonHandModel::add_temporal_gp(
                     Eigen::Vector<double, N>::Zero(),
                     noiseModel::Gaussian::Covariance(Qc_len * dt)));
             }
+        }, fingers_[i]);
+    }
+}
+
+
+void TendonHandModel::add_length_priors(
+    NonlinearFactorGraph& graph,
+    const std::vector<VectorXGaussian>& lengths) const
+{
+    if (lengths.size() != fingers_.size())
+        throw std::invalid_argument(
+            "add_length_priors: lengths size must match number of fingers");
+
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        std::visit([&](const auto& fp) {
+            using FingerType = typename std::remove_reference_t<decltype(*fp)>;
+            constexpr int N = FingerType::NumTendons;
+
+            if (lengths[i].mean.size() != N)
+                throw std::invalid_argument(
+                    "add_length_priors: finger " + std::to_string(i) + " expects " +
+                    std::to_string(N) + " tendon lengths, got " +
+                    std::to_string(lengths[i].mean.size()));
+
+            Eigen::Vector<double, N> mean = lengths[i].mean;
+            Eigen::Matrix<double, N, N> cov = lengths[i].cov.topLeftCorner<N, N>();
+            graph.add(PriorFactor<Eigen::Vector<double, N>>(
+                fp->get_lengths_key(), mean, noiseModel::Gaussian::Covariance(cov)));
+        }, fingers_[i]);
+    }
+}
+
+
+void TendonHandModel::add_tension_priors(
+    NonlinearFactorGraph& graph,
+    const std::vector<VectorXGaussian>& tensions) const
+{
+    if (tensions.size() != fingers_.size())
+        throw std::invalid_argument(
+            "add_tension_priors: tensions size must match number of fingers");
+
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        std::visit([&](const auto& fp) {
+            using FingerType = typename std::remove_reference_t<decltype(*fp)>;
+            constexpr int N = FingerType::NumTendons;
+
+            if (tensions[i].mean.size() != N)
+                throw std::invalid_argument(
+                    "add_tension_priors: finger " + std::to_string(i) + " expects " +
+                    std::to_string(N) + " tendon tensions, got " +
+                    std::to_string(tensions[i].mean.size()));
+
+            Eigen::Vector<double, N> mean = tensions[i].mean;
+            Eigen::Matrix<double, N, N> cov = tensions[i].cov.topLeftCorner<N, N>();
+            graph.add(PriorFactor<Eigen::Vector<double, N>>(
+                fp->get_tensions_key(), mean, noiseModel::Gaussian::Covariance(cov)));
         }, fingers_[i]);
     }
 }

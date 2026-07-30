@@ -322,6 +322,122 @@ def configure_object_surface(env, spec, objects_dir, primitive_name):
     env.load_sdf(vdb_path)
 
 
+def proxy_semi_axes(spec):
+    """Semi-axes (a, b, c) of a bounding hyper-ellipsoid for any primitive, in the
+    OBJECT-LOCAL frame — the Section 1.7/1.8 pre-grasp proxy.
+
+    §1.7 puts an ellipsoid *around* the object so the approach never sees a flat
+    face or a sharp edge to stall on, so these enclose the primitive rather than
+    hugging it. For the box that means the minimum-volume enclosing ellipsoid,
+    whose axis-aligned semi-axes are ``sqrt(3) * half_extents`` (each corner
+    ``(±hx, ±hy, ±hz)`` then satisfies ``x^T M x = 1``). Cylinder and capsule are
+    modeled about their LOCAL Y axis, matching the ``make_*.py`` generators; the
+    spec's ``rotation`` stands them up in the world afterwards.
+
+    An ``ellipsoid`` primitive is already its own proxy. Raises for a spec whose
+    type has no defined bound, rather than silently guessing.
+    """
+    t = spec["type"]
+    if t == "ellipsoid":
+        return np.asarray(spec["semi_axes"], dtype=float)
+    if t == "sphere":
+        r = float(spec["radius"])
+        return np.array([r, r, r])
+    if t == "cylinder":
+        r, h = float(spec["radius"]), float(spec["height"])
+        return np.array([r, 0.5 * h, r])
+    if t == "capsule":
+        # Hemispherical caps extend the local-Y half-length by one radius.
+        r, h = float(spec["radius"]), float(spec["height"])
+        return np.array([r, 0.5 * h + r, r])
+    if t == "cube":
+        return np.sqrt(3.0) * np.asarray(spec["half_extents"], dtype=float)
+    raise ValueError(f"no proxy ellipsoid defined for primitive type {t!r}")
+
+
+def object_principal_inplane_axis(spec, rotation, plane_normal, *,
+                                  degeneracy_ratio=1.05, fallback=None):
+    """Unit in-plane direction along which the object is longest, as
+    ``(e_long, ratio)``.
+
+    §1.8 splits the support surface along "the longest axis of the object that is
+    in-plane". This takes the proxy ellipsoid's semi-axes
+    (:func:`proxy_semi_axes`), maps each principal axis into the world with
+    ``rotation``, projects out ``plane_normal``, and returns the direction with
+    the largest surviving extent.
+
+    DEGENERACY IS THE COMMON CASE, so this returns the ratio rather than making
+    the caller guess. ``ratio`` is longest / second-longest in-plane extent;
+    measured over the demo primitives with ``n_hat = +Z``::
+
+        sphere, big_sphere, cylinder, capsule, coin,
+        big/mid/small_sphere_ellipsoid ....... 1.00   (degenerate)
+        cube ................................. 1.25
+        credit_card .......................... 1.59
+        pen .................................. 17.50
+
+    (Cylinder and capsule have their LONGEST axis out of plane — their spec
+    rotation stands the local Y axis along world Z — so projecting out ``n_hat``
+    correctly leaves them isotropic in-plane.) Below ``degeneracy_ratio`` the
+    argmax is numerical noise, so ``fallback`` is returned instead; it defaults to
+    world +X projected into the plane, matching
+    :func:`~.config.opposition_directions`' legacy default axis.
+    """
+    n = np.asarray(plane_normal, dtype=float).reshape(3)
+    n = n / np.linalg.norm(n)
+    R = np.asarray(rotation, dtype=float).reshape(3, 3)
+    semi = proxy_semi_axes(spec)
+
+    # Each principal axis, in the world, scaled by its semi-axis, with the
+    # out-of-plane part removed: what is left is that axis's reach in the plane.
+    inplane = [R[:, k] * float(semi[k]) for k in range(3)]
+    inplane = [v - (v @ n) * n for v in inplane]
+    extents = np.array([np.linalg.norm(v) for v in inplane])
+    order = np.argsort(extents)[::-1]
+    longest, second = extents[order[0]], extents[order[1]]
+    ratio = float(longest / second) if second > 1e-12 else np.inf
+
+    if ratio < degeneracy_ratio or longest < 1e-12:
+        if fallback is None:
+            fallback = np.array([1.0, 0.0, 0.0])
+        e = np.asarray(fallback, dtype=float).reshape(3)
+        e = e - (e @ n) * n
+        ne = np.linalg.norm(e)
+        if ne < 1e-9:
+            raise ValueError(
+                "object_principal_inplane_axis: the object is in-plane isotropic "
+                "and the fallback axis is parallel to the plane normal; pass a "
+                "fallback that lies in the support plane")
+        return e / ne, ratio
+
+    e = inplane[order[0]]
+    return e / np.linalg.norm(e), ratio
+
+
+def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name):
+    """Section 1.8 controller variant of :func:`configure_object_surface`: attach
+    BOTH the bounding-ellipsoid proxy (phase 2's sliding target) and, when the
+    primitive has one, the baked SDF of the exact geometry (phase 3's servoing
+    target).
+
+    The controller's C++ ``phase_env`` switches between them: phases 1-2 use the
+    ellipsoid, and phase 3 zeroes ``ellipsoid_semi_axes`` so the factors fall
+    through to ``sdf_grid``. An analytic-only primitive (coin, card, pen) has no
+    exact geometry to switch to, so it keeps the ellipsoid in phase 3 and only
+    the witness form changes — which is correct, since for those the ellipsoid
+    *is* the object.
+    """
+    env.ellipsoid_semi_axes = proxy_semi_axes(spec)
+    if spec["type"] == "ellipsoid":
+        return
+    vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
+    if not os.path.exists(vdb_path):
+        raise FileNotFoundError(
+            f"{vdb_path} not found. Generate it with "
+            f"python -m tests._objects.make_{primitive_name} (run from the python/ dir).")
+    env.load_sdf(vdb_path)
+
+
 # --- Full five-finger grasp scene (the "big_sphere" grasp target) ---
 
 # Flexor tension (N) at which the anatomical fingertips land exactly on the big
