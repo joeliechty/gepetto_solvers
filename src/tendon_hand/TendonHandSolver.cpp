@@ -65,7 +65,27 @@ void TendonHandSolver::build_graph() {
 
 
 void TendonHandSolver::extract_solution() {
-    extracted_ = hand_->get_marginals(values_, marginals_);
+    // skip_marginals leaves marginals_ empty, so take the means-only path. A
+    // caller that asked to skip the factorization cannot read covariances back.
+    if (config_.base.skip_marginals)
+        extracted_ = hand_->get_marginals_means_only(values_);
+    else
+        extracted_ = hand_->get_marginals(values_, marginals_);
+}
+
+
+std::vector<TendonHandMarginals>
+TendonHandSolver::get_intermediate_solutions() const {
+    std::vector<TendonHandMarginals> out;
+    out.reserve(intermediate_values_.size());
+    for (const auto& vals : intermediate_values_)
+        out.push_back(hand_->get_marginals_means_only(vals));
+    return out;
+}
+
+
+TendonHandMarginals TendonHandSolver::get_initial_solution() const {
+    return hand_->get_marginals_means_only(initial_values_);
 }
 
 

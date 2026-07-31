@@ -43,7 +43,21 @@ void bind_tendon_hand(py::module& m) {
              "without rebuilding the solver. solve() then warm-starts from the "
              "previous solution instead of cold-starting from a straight hand.")
         .def("num_fingers", &TendonHandSolver::num_fingers)
-        .def("get_factor_error_summary", &TendonHandSolver::get_factor_error_summary);
+        .def("get_factor_error_summary", &TendonHandSolver::get_factor_error_summary)
+        .def("get_intermediate_solutions",
+             &TendonHandSolver::get_intermediate_solutions,
+             "Per-iteration hand snapshots from the last solve(); requires "
+             "config.base.record_iterations = True. One entry per AL outer "
+             "iteration (subject to iteration_sample_interval). Means only -- "
+             "no covariance.")
+        .def("get_initial_solution", &TendonHandSolver::get_initial_solution,
+             "The initial-guess hand state (start of the last solve()), for the "
+             "first frame of a step animation.")
+        .def("reset_al_duals", &TendonHandSolver::reset_al_duals,
+             "Restart the Augmented Lagrangian homotopy from the current "
+             "posture: drops the carried multipliers and penalty weight but "
+             "keeps the solved values. Only meaningful under "
+             "config.base.al_warm_start_duals.");
 
     // --- Trajectory Planner (Section 1.4) ---
 
@@ -149,7 +163,14 @@ void bind_tendon_hand(py::module& m) {
         .def_readwrite("sigma_pregrasp_rot",
                        &TendonHandControllerConfig::sigma_pregrasp_rot)
         .def_readwrite("pregrasp_tensions",
-                       &TendonHandControllerConfig::pregrasp_tensions);
+                       &TendonHandControllerConfig::pregrasp_tensions)
+        .def_readwrite("initial_state",
+                       &TendonHandControllerConfig::initial_state,
+                       "Theta_curr's ROBOT STATE: the posture the first tick "
+                       "starts from, as the marginals of any solve on the same "
+                       "finger configs. None => the straight-hand, zero-tension "
+                       "cold start, which makes tick 1 travel from a straight "
+                       "hand back to wherever the robot actually is.");
 
     py::class_<TendonHandController>(m, "TendonHandController")
         .def(py::init<
@@ -198,6 +219,17 @@ void bind_tendon_hand(py::module& m) {
              "solution, as (name, max_abs) pairs. Covers the equality/goal "
              "families that drive phase advancement; collision penetration is a "
              "whole-hand safety property reported separately.")
+        .def("set_state", &TendonHandController::set_state, py::arg("state"),
+             "Re-seed the retained robot state from a solved posture mid-run -- "
+             "a teleport the step-prior trust region could never absorb in one "
+             "tick. Unlike set_wrist_pose (which only re-aims the step prior's "
+             "mean) this replaces the values, so it also drops the accumulated "
+             "AL duals.")
+        .def("reset_al_duals", &TendonHandController::reset_al_duals,
+             "Start the next tick's Augmented Lagrangian from a cold outer "
+             "loop. set_phase() and set_state() do this for you; call it "
+             "directly if you change the constrained problem another way (a "
+             "moved object, a new contact mask).")
         .def("num_fingers", &TendonHandController::num_fingers)
         .def("get_factor_error_summary",
              &TendonHandController::get_factor_error_summary);

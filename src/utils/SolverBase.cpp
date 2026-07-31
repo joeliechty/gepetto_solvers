@@ -1,5 +1,7 @@
 #include "SolverBase.h"
 
+#include "utils/WarmAugmentedLagrangian.h"
+
 #include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/linear/HessianFactor.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
@@ -169,8 +171,17 @@ SolutionMetadata SolverBase::optimize() {
         p->lm_params.diagonalDamping  = config_.diagonal_damping;
         p->lm_params.maxIterations    = config_.max_iterations;
 
-        AugmentedLagrangianOptimizer optimizer(graph_, values_, p);
-        values_ = optimizer.optimize();
+        // Warm-started outer loop (Section 1.8 controller): carry mu and the
+        // multipliers from the previous call so successive solves of the same
+        // constrained problem keep tightening it, instead of each restarting at
+        // al_initial_mu with zero duals. See SolverBaseConfig::al_warm_start_duals
+        // for why a short-budget loop cannot enforce anything without this.
+        crest_sparse::WarmAugmentedLagrangianOptimizer optimizer(graph_, values_, p);
+        if (config_.al_warm_start_duals) {
+            values_ = optimizer.optimizeWarm(al_warm_, config_.al_warm_mu_max);
+        } else {
+            values_ = optimizer.optimize();
+        }
         const auto& progress = optimizer.progress();
         if (!progress.empty()) {
             meta.iterations = progress.back().iteration;
@@ -334,6 +345,11 @@ SolutionMetadata SolverBase::optimize() {
 
 
     return meta;
+}
+
+
+void SolverBase::reset_al_duals() {
+    al_warm_.clear();
 }
 
 

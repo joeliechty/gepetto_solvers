@@ -71,6 +71,30 @@ public:
     std::vector<std::tuple<std::string, int, double>>
         get_factor_error_summary() const { return SolverBase::get_factor_error_summary(); }
 
+    // Per-iteration snapshots for debug visualization of the solve. Populated
+    // only when config.base.record_iterations == true (each Augmented Lagrangian
+    // outer iteration is one snapshot; see SolverBase::optimize()). Each entry is
+    // a hand state reconstructed from that iteration's Values using means-only
+    // marginals (cheap; no covariance factorization), so reading a covariance
+    // off one is invalid. Empty otherwise. Mirrors the trajectory planner's
+    // accessor of the same name.
+    std::vector<TendonHandMarginals> get_intermediate_solutions() const;
+
+    // The initial guess (start of the last solve()), for the first frame of a
+    // step animation. Mirrors get_intermediate_solutions()'s extraction.
+    TendonHandMarginals get_initial_solution() const;
+
+    // Restart the Augmented Lagrangian homotopy from the CURRENT posture: drops
+    // the carried multipliers and the penalty weight without touching values_.
+    //
+    // Only meaningful under config.base.al_warm_start_duals, which is what makes
+    // repeated solve() calls continue one outer loop instead of each running a
+    // fresh one (see SolverBaseConfig::al_warm_start_duals). A caller stepping
+    // the loop one outer iteration at a time uses this to re-run the penalty
+    // schedule against a pose it has already reached; reconstructing the solver
+    // is the stronger reset, since only that restores the initial values too.
+    void reset_al_duals() { SolverBase::reset_al_duals(); }
+
 private:
     void build_graph() override;
     void extract_solution() override;

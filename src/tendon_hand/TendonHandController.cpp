@@ -182,11 +182,38 @@ void TendonHandController::set_phase(ControllerPhase phase) {
     for (Key k : fresh.keys())
         next.insert(k, previous.exists(k) ? previous.at(k) : fresh.at(k));
     values_ = next;
+
+    // The constraint set just changed, so any accumulated AL duals are stale:
+    // lambda is indexed by a constraint's POSITION in the problem, and both the
+    // count and the ordering differ between phases. Carrying them would apply
+    // one phase's multipliers to another phase's residuals.
+    reset_al_duals();
 }
 
 
 void TendonHandController::get_initial_values() {
-    values_ = hand_->get_initial_values();
+    // Seed from Theta_curr's robot state when the caller supplied one, so the
+    // first tick starts where the hand actually is rather than at the
+    // straight-rod, zero-tension cold start (see config_.initial_state). The
+    // warm merge inside get_initial_values runs BEFORE witness seeding, so the
+    // phase-3 witnesses get projected from the committed posture for free.
+    if (config_.initial_state) {
+        const Values warm = hand_->values_from_marginals(*config_.initial_state);
+        values_ = hand_->get_initial_values(&warm);
+    } else {
+        values_ = hand_->get_initial_values();
+    }
+}
+
+
+void TendonHandController::set_state(const TendonHandMarginals& state) {
+    // Validate against the current model before mutating anything, so a
+    // mismatched bundle leaves the controller on its existing state rather than
+    // half-updated.
+    const Values warm = hand_->values_from_marginals(state);
+    config_.initial_state = state;
+    values_ = hand_->get_initial_values(&warm);
+    reset_al_duals();
 }
 
 

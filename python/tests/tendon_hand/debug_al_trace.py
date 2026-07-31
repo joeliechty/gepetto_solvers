@@ -326,7 +326,11 @@ def build_parser():
     ap.add_argument("--collision", action="store_true")
     ap.add_argument("--collision-sigma", dest="collision_sigma", type=float, default=1e-4)
     ap.add_argument("--cull-margin", dest="cull_margin", type=float, default=None)
-    ap.add_argument("--table", action="store_true")
+    ap.add_argument("--table", action="store_true",
+                    help="Attach the support plane. Seated per "
+                         "HandSolveParams.table_burial, which defaults to 0.5 "
+                         "-- the plane cuts the object at its centroid rather "
+                         "than resting it on top.")
     ap.add_argument("--no-plane-avoidance", dest="plane_avoidance",
                     action="store_false", default=True)
     ap.add_argument("--k-touch", dest="k_touch", type=int, default=None)

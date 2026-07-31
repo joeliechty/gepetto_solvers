@@ -639,6 +639,74 @@ Values TendonHandModel::get_initial_values(const Values* warm) const {
 }
 
 
+Values TendonHandModel::values_from_marginals(const TendonHandMarginals& state) const {
+    if (state.fingers.size() != fingers_.size())
+        throw std::invalid_argument(
+            "values_from_marginals: state has " +
+            std::to_string(state.fingers.size()) + " fingers, this model has " +
+            std::to_string(fingers_.size()));
+
+    Values values;
+
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        const TendonFingerMarginals& fm = state.fingers[i];
+        std::visit([&](const auto& fp) {
+            using FingerType = typename std::remove_reference_t<decltype(*fp)>;
+            constexpr int N = FingerType::NumTendons;
+
+            const int num_nodes = fp->get_num_nodes();
+            if (static_cast<int>(fm.rod.states.size()) != num_nodes)
+                throw std::invalid_argument(
+                    "values_from_marginals: finger " + std::to_string(i) +
+                    " has " + std::to_string(fm.rod.states.size()) +
+                    " rod states, this model has " + std::to_string(num_nodes) +
+                    " nodes");
+            if (fm.tensions.mean.size() != N)
+                throw std::invalid_argument(
+                    "values_from_marginals: finger " + std::to_string(i) +
+                    " has " + std::to_string(fm.tensions.mean.size()) +
+                    " tendons, this model has " + std::to_string(N));
+
+            // Rod chain. Node 0's pose is NOT a variable under the hand-base
+            // reparameterization (see the header note); its stress and wrench
+            // still are, so only the pose insert is skipped.
+            const bool skip_node0_pose = fp->rod_->uses_root();
+            for (int j = 0; j < num_nodes; ++j) {
+                const auto& s = fm.rod.states[j];
+                if (!(skip_node0_pose && j == 0))
+                    values.insert(fp->rod_->get_pose_key(j), Pose3(s.pose.mean));
+                values.insert(fp->rod_->get_stress_key(j), Vector6(s.stress.mean));
+                values.insert(fp->rod_->get_wrench_key(j), Vector6(s.wrench.mean));
+            }
+
+            // External disc wrenches. external_wrenches is indexed by NODE and
+            // resolves through get_external_wrench_key, which aliases the rod's
+            // own wrench key at non-disc nodes -- already written above. Only the
+            // genuine Symbol('D', ...) variables are left, so walk the discs.
+            const auto& disc_pose_idx = fp->get_tendon_config().disc_pose_idx;
+            for (size_t d = 1; d < disc_pose_idx.size(); ++d) {
+                const int node = disc_pose_idx[d];
+                if (node < 0 || node >= static_cast<int>(fm.external_wrenches.size()))
+                    continue;
+                values.insert(fp->get_disc_wrench_key(static_cast<int>(d)),
+                              Vector6(fm.external_wrenches[node].mean));
+            }
+
+            values.insert(fp->get_tensions_key(),
+                          Eigen::Vector<double, N>(fm.tensions.mean));
+
+            if (static_cast<int>(fm.tendon_lengths.size()) == N) {
+                Eigen::Vector<double, N> L;
+                for (int t = 0; t < N; ++t) L(t) = fm.tendon_lengths[t];
+                values.insert(fp->get_lengths_key(), L);
+            }
+        }, fingers_[i]);
+    }
+
+    return values;
+}
+
+
 Key TendonHandModel::finger_tension_key(int i) const {
     return std::visit(
         [](const auto& fp) { return fp->get_tensions_key(); }, fingers_.at(i));

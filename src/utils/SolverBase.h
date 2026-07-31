@@ -1,5 +1,7 @@
 #pragma once
 
+#include "utils/WarmAugmentedLagrangian.h"
+
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
@@ -102,6 +104,32 @@ struct SolverBaseConfig {
     double al_rel_violation_tol = 1e-5;
     double al_rel_cost_tol      = 1e-5;
 
+    // Carry the AL penalty weight and the Lagrange multipliers from one
+    // optimize() call to the next, instead of restarting the outer loop at
+    // al_initial_mu with zero multipliers every time.
+    //
+    // Off by default because it is only meaningful when successive solves pose
+    // the SAME constrained problem — which is exactly the Section 1.8
+    // controller (one graph, re-solved per control tick, warm-started from the
+    // last) and exactly not the one-shot solvers. Where it does apply it is not
+    // a tuning knob but a correctness fix: a tick capped at al_max_iterations
+    // outer steps can only reach al_initial_mu * al_mu_increase_rate^(n-1), so
+    // without carried duals the penalty resets before it is ever large enough
+    // to enforce anything.
+    //
+    // The caller is responsible for calling reset_al_duals() whenever the
+    // constraint set changes (see there).
+    bool al_warm_start_duals = false;
+
+    // Ceiling on the carried penalty weight. Applied every outer iteration once
+    // al_warm_start_duals is on. mu compounds across ticks by design, and
+    // unbounded it eventually dominates the whole graph: the step priors and
+    // the rod kinematics stop being able to influence the solution at all, and
+    // the linear system's conditioning degrades with it. With working
+    // multipliers feasibility does not need an enormous mu anyway — that is the
+    // point of the method — so this is a guard, not a limit to tune against.
+    double al_warm_mu_max = 1e4;
+
     // When true, optimize() uses a manual iterate() loop instead of
     // optimizer.optimize(). Populates SolutionMetadata::iteration_errors and
     // ::iteration_trust_region. Required for get_intermediate_solutions().
@@ -149,6 +177,18 @@ public:
     std::vector<std::tuple<std::string, int, double>>
         get_initial_factor_error_summary() const;
 
+    // Discard the AL penalty weight and Lagrange multipliers carried between
+    // optimize() calls, so the next one starts a fresh outer loop.
+    //
+    // Must be called whenever the CONSTRAINT SET changes — a different phase, a
+    // re-seeded state, a new object. lambda is indexed by a constraint's
+    // position in the problem, so applying one problem's multipliers to
+    // another's residuals is not a degraded warm start, it is wrong. (The
+    // optimizer also refuses duals whose count disagrees, but a set that
+    // changed CONTENT while keeping its size would slip past that check.)
+    // No-op unless al_warm_start_duals is set.
+    void reset_al_duals();
+
     // Linearize the factor graph at current values_ and return the dense
     // Hessian H and gradient g of the linearized quadratic.
     // For diagnostics: sparsity pattern, condition number, smallest singular
@@ -184,6 +224,12 @@ protected:
     // and get_hessian_and_gradient(); a raw linearization of a constrained-noise
     // factor cannot form a Hessian. Only meaningful when use_augmented_lagrangian_.
     double al_final_mu_ = 1.0;
+
+    // AL outer-loop state carried between optimize() calls when
+    // config_.al_warm_start_duals is set; see reset_al_duals(). Default
+    // constructed (empty multipliers) means "cold start", which is the state
+    // after construction and after a reset.
+    crest_sparse::WarmALState al_warm_;
 
     // Snapshot of values_ at the start of each optimize() call (the initial
     // guess for that solve). Used by get_initial_factor_error_summary() and

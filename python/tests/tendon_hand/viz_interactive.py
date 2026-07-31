@@ -5,7 +5,9 @@ Exposes the solver knobs as live web GUI controls -- object picker, wrist start
 pose, per-finger flexor tensions, per-finger contact toggles, GP prior stiffness,
 collision / table options, AL settings -- with buttons to switch between the FK
 solver, the IK solver, and the trajectory planner. Set parameters, hit *Solve*,
-and inspect the result; the planner result is scrubbable step by step.
+and inspect the result; the planner result is scrubbable step by step, and an IK
+solve with *record solve steps* on is scrubbable iteration by iteration (initial
+guess -> each Augmented Lagrangian outer iteration -> converged solution).
 
 All three solvers are the reusable classes in ``tendon_hand/solvers.py``; the 3D
 scene is drawn by ``_plotting/viser_hand.ViserHandScene``. The existing demo
@@ -21,13 +23,14 @@ Optional headless self-check of the solver classes (no browser):
 
 import argparse
 import sys
+import threading
 
 import numpy as np
 
 from .scene import get_primitive_specs, GRASP_FLEXOR_TENSION, TABLE_NORMAL
 from .solvers import (
-    HandSolveParams, HandFKSolver, HandIKSolver, HandPlannerSolver,
-    HandControllerSolver, SOLVERS,
+    HandSolveParams, HandFKSolver, HandIKSolver, HandIKStepper,
+    HandPlannerSolver, HandControllerSolver, SOLVERS,
     NUM_FINGERS, resolve_scene, resolve_table_origin, capabilities)
 
 
@@ -106,6 +109,11 @@ class HandVizApp:
         # Cached controller: ticks warm-start from the previous solution and
         # phase switches keep the converged state, so it must outlive one solve.
         self.controller = None
+        # Cached IK stepper: it owns the AL outer loop being advanced one
+        # iteration per Step, so it has to outlive a single step the same way.
+        self.stepper = None
+        self._auto_stop = threading.Event()
+        self._auto_thread = None
         # What this installed binding supports, so we can gate controls a stale
         # .so would crash on (ellipsoid objects, the table, cull margin).
         self.caps = capabilities()
@@ -142,8 +150,9 @@ class HandVizApp:
     def _rebuild_fk(self):
         self.fk_solver = HandFKSolver(self.params)
         # The FK solver is rebuilt whenever the object changes, and the object is
-        # part of the controller's constraint set too.
+        # part of the controller's and the stepper's constraint set too.
         self._invalidate_controller()
+        self._invalidate_stepper()
 
     def _invalidate_controller(self):
         """Drop the cached controller so the next step rebuilds it.
@@ -178,6 +187,7 @@ class HandVizApp:
         p.al_mu = self.g_al_mu.value
         p.al_rate = self.g_al_rate.value
         p.al_iters = self.g_al_iters.value
+        p.record_iterations = self.g_record.value and self.caps["solve_iterates"]
         # planner
         p.K = self.g_K.value
         p.dt = self.g_dt.value
@@ -228,14 +238,19 @@ class HandVizApp:
     def _render_frame(self, k):
         if self.result is None:
             return
-        k = int(np.clip(k, 0, len(self.result.frames) - 1))
+        # Render whichever solve snapshot the convergence scrubber selects; with
+        # no scrubber up this is the result itself, so the gap readouts below
+        # describe the intermediate state without knowing about iterates at all.
+        res = self._iter_view()
+        k = int(np.clip(k, 0, len(res.frames) - 1))
         # Only the fingers this solve drove onto the object get a gap line; a
         # distance readout on a finger nothing asked to touch is just noise.
-        gaps = self.result.contact_witness(k)
-        names = set(self.result.contact_names())
+        gaps = res.contact_witness(k)
+        names = set(res.contact_names())
         gaps = {name: v for name, v in gaps.items() if name in names}
-        self.scene.update(self.result.frames[k],
-                          tip_radii=self.result.tip_radii,
+        self._report_iterate()
+        self.scene.update(res.frames[k],
+                          tip_radii=res.tip_radii,
                           collision_radius=self.params.collision_radius,
                           collision=self.params.collision,
                           gaps=gaps)
@@ -263,6 +278,11 @@ class HandVizApp:
         self.g_solve.label = "Solving..." if solving else "Solve"
         for btn in self.g_mode_btns.values():
             btn.disabled = solving
+        # Step / Auto go grey too, so an auto-run cannot be re-entered; Stop is
+        # driven separately and stays live for exactly that run.
+        for btn in (getattr(self, "g_ik_step", None), getattr(self, "g_ik_auto", None)):
+            if btn is not None:
+                btn.disabled = solving or not self.caps["ik_stepping"]
 
     def _solve_and_render(self, _=None):
         if self._solving:
@@ -272,6 +292,9 @@ class HandVizApp:
         try:
             self._sync_params()
             self._refresh_object()
+            # A one-shot Solve is the explicit "start over" action, so it drops
+            # any partially stepped loop rather than leaving a stale one behind.
+            self._invalidate_stepper()
             self._set_status(f"Solving ({self.mode})...")
             if self.mode == "FK":
                 # Reuse the cached FK solver (shares self.params) so this warm-starts.
@@ -285,6 +308,7 @@ class HandVizApp:
             else:
                 self.result = SOLVERS[self.mode](self.params).solve()
             self._rebuild_step_slider()
+            self._rebuild_iter_slider()
             self._render_frame(self._current_step())
             self._report()
         except Exception as exc:  # surface solver errors in the GUI, keep serving
@@ -299,6 +323,10 @@ class HandVizApp:
         lines = [f"**{self.mode}** &nbsp; iters={m.iterations} &nbsp; "
                  f"err={m.error:.3g} &nbsp; {m.total_time_ms:.0f} ms",
                  f"frames: {len(self.result.frames)}"]
+        if self.params.record_iterations:
+            # Reported even at 0/1 so "recording is on but there is no slider"
+            # reads as an AL loop that quit immediately, not a broken control.
+            lines.append(f"solve steps recorded: {self.result.num_iterates()}")
         if self.mode != "FK":
             names = self.result.contact_names()
             contacting = ("none" if not names
@@ -332,6 +360,7 @@ class HandVizApp:
             self._refresh_mode_buttons()
             self.result = self._controller_tick()
             self._rebuild_step_slider()
+            self._rebuild_iter_slider()   # tears down any scrubber left by IK
             self._render_frame(self._current_step())
             self._report()
         except Exception as exc:
@@ -340,6 +369,116 @@ class HandVizApp:
         finally:
             self._set_solving(False)
             self._solving = False
+
+    # -- IK stepping: drive the AL outer loop one iteration at a time --
+
+    def _invalidate_stepper(self):
+        """Drop the cached stepper so the next Step cold-starts.
+
+        Only for changes to the CONSTRAINT SET (object, contact mask, collision,
+        table): the stepper carries Lagrange multipliers and a penalty weight
+        that describe the constraints it has been working on, and those mean
+        nothing against a different set. Tensions and the wrist pose are passed
+        fresh every step, so they deliberately do NOT invalidate -- nudging the
+        flexor mid-solve and continuing is the point."""
+        self.stepper = None
+
+    def _ensure_stepper(self):
+        if self.stepper is None:
+            self.stepper = HandIKStepper(self.params)
+        return self.stepper
+
+    def _show_step(self, result, status):
+        """Render one stepped state and update both status readouts. Called from
+        the auto-run thread as well as the Step button."""
+        self.result = result
+        self._render_frame(self._current_step())
+        # Deliberately not _report(): during stepping the AL numbers below are
+        # the interesting readout, and writing both just overwrites one with the
+        # other every frame.
+        self._report_step_status(status)
+
+    def _report_step_status(self, status):
+        # "stalled" is the solver's own stopping rule (a step that changed
+        # nothing), not a dead end: mu still grows, so pressing Auto solve again
+        # resumes and often unwedges. Say so, or it reads as a failure.
+        verdict = {"running": "stepping",
+                   "converged": "**converged**",
+                   "stalled": "**stalled** -- last step changed nothing; "
+                              "Auto solve again to continue, Solve to restart",
+                   }[status.state]
+        if self._auto_stop.is_set() and status.state == "running":
+            verdict = "**stopped**"
+        self._set_status(
+            f"**IK step {status.steps}** &nbsp; {verdict}  \n"
+            f"violation={status.violation:.3e} &nbsp; cost={status.cost:.4g} "
+            f"&nbsp; mu={status.mu:.3g}  \n"
+            f"worst gap: {self.result.worst_gap(0):+.5f} m")
+
+    def _ik_step(self, _=None):
+        """One Augmented Lagrangian outer iteration, continuing the last one."""
+        if self._solving or not self.caps["ik_stepping"]:
+            return
+        self._solving = True
+        self._set_solving(True)
+        try:
+            self._sync_params()
+            self._refresh_object()
+            # Switch modes without going through _set_mode, which would kick off
+            # a full re-solve and throw away the loop we are stepping.
+            self.mode = "IK"
+            self._refresh_mode_buttons()
+            self._auto_stop.clear()
+            stepper = self._ensure_stepper()
+            self._show_step(stepper.step(), stepper.status())
+            self._rebuild_iter_slider()
+        except Exception as exc:
+            self._set_status(f"**Error:** {exc}")
+            raise
+        finally:
+            self._set_solving(False)
+            self._solving = False
+
+    def _ik_auto(self, _=None):
+        """Step to convergence on a worker thread, redrawing after each iteration.
+
+        The loop has to leave viser's callback thread free: run inline and the
+        Stop click would sit in the queue until the whole solve finished, which
+        is precisely when it stops being useful."""
+        if self._solving or not self.caps["ik_stepping"]:
+            return
+        self._sync_params()
+        self._refresh_object()
+        self.mode = "IK"
+        self._refresh_mode_buttons()
+        self._auto_stop.clear()
+        self._solving = True
+        self._set_solving(True)
+        self.g_ik_stop.disabled = False
+        stepper = self._ensure_stepper()
+
+        def worker():
+            try:
+                status = stepper.run(max_steps=self.g_ik_max.value,
+                                     on_step=self._show_step,
+                                     should_stop=self._auto_stop.is_set)
+                self._report_step_status(status)
+                # Only now: rebuilding the slider once per frame mid-animation
+                # would tear a GUI handle down and re-add it every iteration.
+                self._rebuild_iter_slider()
+            except Exception as exc:
+                self._set_status(f"**Error:** {exc}")
+            finally:
+                self.g_ik_stop.disabled = True
+                self._set_solving(False)
+                self._solving = False
+
+        self._auto_thread = threading.Thread(target=worker, daemon=True)
+        self._auto_thread.start()
+
+    def _ik_stop(self, _=None):
+        """Ask a running auto-solve to stop; it breaks before the next step."""
+        self._auto_stop.set()
 
     def _report_violations(self):
         """Per-family constraint violations for the current phase, the numbers a
@@ -376,6 +515,98 @@ class HandVizApp:
                     "step", min=0, max=n - 1, step=1, initial_value=n - 1)
             self.step_slider.on_update(lambda _: self._render_frame(self.step_slider.value))
 
+    # -- solve-iteration scrubber (IK) --
+
+    def _current_iterate(self):
+        """The scrubbed iterate index, clamped to the CURRENT result.
+
+        The slider is rebuilt after the render that follows a step, so between
+        the two it can still hold an index from a longer history -- a cold
+        restart drops from ~30 snapshots to 2 and would otherwise index off the
+        end. Clamping mirrors what _render_frame already does for the step index."""
+        if getattr(self, "iter_slider", None) is None or self.result is None:
+            return 0
+        return int(np.clip(int(self.iter_slider.value), 0,
+                           max(self.result.num_iterates() - 1, 0)))
+
+    def _rebuild_iter_slider(self):
+        """Rebuild the convergence scrubber for the result just solved.
+
+        Torn down and re-created rather than resized because the iteration count
+        is whatever the AL outer loop happened to run -- and a solve that
+        recorded nothing (recording off, stale binding, or a loop that quit at
+        one iteration) must leave no slider at all."""
+        for name in ("iter_slider", "g_iter_status"):
+            handle = getattr(self, name, None)
+            if handle is not None:
+                handle.remove()
+            setattr(self, name, None)
+        n = self.result.num_iterates() if self.result else 0
+        if n <= 1:
+            # Say why the folder is empty rather than leaving a bare header the
+            # user has to guess at.
+            with self.iter_folder:
+                self.g_iter_status = self.server.gui.add_markdown(
+                    "tick **record solve steps** and solve in **IK** mode"
+                    if not self.params.record_iterations
+                    else f"*{self.mode}* recorded no steps "
+                         "(IK only; the AL loop may have quit immediately)")
+        else:
+            with self.iter_folder:
+                self.iter_slider = self.server.gui.add_slider(
+                    "iterate", min=0, max=n - 1, step=1, initial_value=n - 1,
+                    hint="0 is the initial guess, the last is the converged "
+                         "solution; in between, one Augmented Lagrangian outer "
+                         "iteration each.")
+                self.g_iter_status = self.server.gui.add_markdown("")
+            self.iter_slider.on_update(
+                lambda _: self._render_frame(self._current_step()))
+
+    def _iter_view(self):
+        """The result to render: the selected snapshot when the scrubber is up,
+        otherwise the solve's own final state."""
+        if self.result is None or getattr(self, "iter_slider", None) is None:
+            return self.result
+        return self.result.at_iterate(self._current_iterate())
+
+    def _report_iterate(self):
+        """The AL convergence numbers for the scrubbed iteration.
+
+        The trace arrays come from the same outer-loop progress the snapshots do,
+        but the scrubber prepends the initial guess and appends the final
+        solution, so only indices 1..len(trace) line up -- the two ends are
+        labelled instead of mis-indexed."""
+        # Gated on the SLIDER, not the markdown: with no slider up the markdown
+        # is carrying the "nothing recorded" note, which must survive re-renders.
+        if getattr(self, "iter_slider", None) is None:
+            return
+        i, n = self._current_iterate(), self.result.num_iterates()
+        # A stepped solve labels its own snapshots (its meta describes only the
+        # last step, so indexing that trace would be wrong); fall back to the
+        # trace only for a one-shot recorded solve.
+        if self.result.iterate_notes is not None:
+            self.g_iter_status.content = (
+                f"iterate {i} / {n - 1}  \n{self.result.iterate_notes[i]}")
+            return
+        m = self.result.meta
+        costs = list(getattr(m, "al_iteration_costs", []) or [])
+        viols = list(getattr(m, "al_iteration_violations", []) or [])
+        mus = list(getattr(m, "al_iteration_mus", []) or [])
+        head = f"iterate {i} / {n - 1}"
+        if i == 0:
+            body = "initial guess"
+        elif i - 1 < len(costs):
+            j = i - 1
+            body = (f"cost={costs[j]:.4g} &nbsp; violation={viols[j]:.3e} "
+                    f"&nbsp; mu={mus[j]:.3g}"
+                    if j < len(viols) and j < len(mus)
+                    else f"cost={costs[j]:.4g}")
+        else:
+            # Past the recorded trace: the appended converged solution (and, on
+            # the non-AL path, every iterate -- that trace is LM-only).
+            body = "converged solution"
+        self.g_iter_status.content = f"{head}  \n{body}"
+
     # -- GUI construction --
 
     def _build_gui(self):
@@ -407,9 +638,54 @@ class HandVizApp:
                 "object", labels,
                 initial_value=SDF_DROPDOWN_LABELS["big_sphere"])
             self.g_solve = gui.add_button("Solve", icon=self.viser.Icon.PLAYER_PLAY)
+            self.g_record = gui.add_checkbox(
+                "record solve steps", False,
+                disabled=not self.caps["solve_iterates"],
+                hint=("IK only. Keeps the hand state at every Augmented "
+                      "Lagrangian outer iteration so the *Solve steps* slider "
+                      "can scrub the solve's convergence. Off by default: it "
+                      "adds per-iteration bookkeeping, and on a contact-free "
+                      "solve it also switches the optimizer to a manual "
+                      "iterate loop that can converge slightly differently."
+                      if self.caps["solve_iterates"]
+                      else "requires a rebuilt _crest_sparse with "
+                           "TendonHandSolver.get_intermediate_solutions"))
             self.g_status = gui.add_markdown("")
 
         self.step_folder = gui.add_folder("Trajectory")
+
+        # Driving the IK solve one AL outer iteration at a time, plus the
+        # scrubber over the steps taken. The slider and its readout are built
+        # per solve by _rebuild_iter_slider() and appended below these controls.
+        self.iter_folder = gui.add_folder("Solve steps")
+        step_hint = (None if self.caps["ik_stepping"]
+                     else "requires a rebuilt _crest_sparse with "
+                          "TendonHandSolver.reset_al_duals")
+        with self.iter_folder:
+            self.g_ik_step = gui.add_button(
+                "Step", icon=self.viser.Icon.PLAYER_TRACK_NEXT,
+                disabled=not self.caps["ik_stepping"],
+                hint=step_hint or (
+                    "Advance the IK solve by exactly one Augmented Lagrangian "
+                    "outer iteration, continuing the previous one. Switches to "
+                    "IK mode. Tensions and the wrist pose are re-read every "
+                    "step, so you can nudge them mid-solve; changing the "
+                    "object, contacts, collision or table starts over."))
+            self.g_ik_auto = gui.add_button(
+                "Auto solve", icon=self.viser.Icon.PLAYER_PLAY,
+                disabled=not self.caps["ik_stepping"],
+                hint=step_hint or (
+                    "Keep stepping until the solve converges, stalls or hits "
+                    "the cap, redrawing after every iteration."))
+            self.g_ik_stop = gui.add_button(
+                "Stop", icon=self.viser.Icon.PLAYER_STOP, disabled=True,
+                hint="Break out of a running auto-solve before the next step; "
+                     "the steps already taken are kept.")
+            self.g_ik_max = gui.add_slider(
+                "max steps", 5, 300, 5, 200,
+                disabled=not self.caps["ik_stepping"],
+                hint="Backstop for Auto solve. A converging grasp takes ~30 "
+                     "iterations, so hitting this means it is not converging.")
 
         with gui.add_folder("Wrist start pose"):
             self.g_tx = gui.add_slider("x (m)", -0.1, 0.1, 0.001, 0.0)
@@ -457,6 +733,9 @@ class HandVizApp:
                 "enabled", False, disabled=not self.caps["table"],
                 hint=None if self.caps["table"]
                 else "requires a newer _crest_sparse build (plane env fields)")
+            # Offset from the scene's own seating, which now half-buries the
+            # object (HandSolveParams.table_burial = 0.5) rather than resting it
+            # on the plane. Dial in -half_extent to recover the old geometry.
             self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, 0.0)
             self.g_plane_avoid = gui.add_checkbox("avoidance", True)
             self.g_k_touch = gui.add_slider("k_touch", 0, 30, 1, 5)
@@ -508,6 +787,9 @@ class HandVizApp:
         # -- callbacks --
         self.g_solve.on_click(self._solve_and_render)
         self.g_ctrl_step.on_click(lambda _: self._controller_step())
+        self.g_ik_step.on_click(self._ik_step)
+        self.g_ik_auto.on_click(self._ik_auto)
+        self.g_ik_stop.on_click(self._ik_stop)
 
         # Switching phase keeps the converged state (that is the point of the
         # phased formulation), so it steps rather than rebuilding.
@@ -525,6 +807,15 @@ class HandVizApp:
 
         for _m, _btn in self.g_mode_btns.items():
             _btn.on_click(lambda _, m=_m: self._set_mode(m))
+
+        # Unlike the other solver knobs this one re-solves on the spot: it exists
+        # to produce the scrubber, and "tick it, then remember to press Solve"
+        # just reads as the checkbox doing nothing. Only in IK mode -- no other
+        # solver records.
+        @self.g_record.on_update
+        def _(_):
+            if self.mode == "IK":
+                self._solve_and_render()
 
         @self.g_object.on_update
         def _(_):
@@ -556,15 +847,22 @@ class HandVizApp:
         for h in self.g_contacts:
             h.on_update(lambda _: (self._sync_params(),
                                    self._invalidate_controller(),
+                                   self._invalidate_stepper(),
                                    self._render_frame(self._current_step())))
         # Table toggle / height updates the static slab immediately.
         for h in (self.g_table, self.g_plane_offset):
             h.on_update(lambda _: (self._sync_params(), self._refresh_object(),
-                                   self._invalidate_controller()))
+                                   self._invalidate_controller(),
+                                   self._invalidate_stepper()))
         # Collision knobs are part of the constraint set too.
         for h in (self.g_collision, self.g_coll_radius, self.g_coll_sigma,
                   self.g_cull, self.g_plane_avoid):
-            h.on_update(lambda _: self._invalidate_controller())
+            h.on_update(lambda _: (self._invalidate_controller(),
+                                   self._invalidate_stepper()))
+        # AL knobs are baked into the stepper's config at construction, unlike
+        # the tensions it re-reads every step, so they need a rebuild too.
+        for h in (self.g_al_mu, self.g_al_rate, self.g_sig_pos, self.g_sig_rot):
+            h.on_update(lambda _: self._invalidate_stepper())
 
 
 def main():

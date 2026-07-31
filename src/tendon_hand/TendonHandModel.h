@@ -71,6 +71,25 @@ public:
     // a partial (or empty) Values is safe.
     gtsam::Values get_initial_values(const gtsam::Values* warm = nullptr) const;
 
+    // Re-key a solved hand state onto THIS model's variables, producing a
+    // partial Values suitable as the `warm` argument above.
+    //
+    // Why marginals and not a gtsam::Values: CosseratRodModel hands out keys from
+    // a GLOBAL counter (inline static next_id_), so two separately-constructed
+    // TendonHandModels use different Symbols for the same physical variable and a
+    // Values from one cannot be merged into the other by key. TendonHandMarginals
+    // is the key-independent form -- everything in it is indexed by finger, node
+    // and disc -- and every solve already produces one (including the cheap
+    // get_marginals_means_only path), so a solver's output re-seeds another
+    // solver directly.
+    //
+    // Covers T/S/F per node, D per disc, Q and L. Node 0's pose is skipped: under
+    // the hand-base reparameterization it is not a variable (T_0 = T_base o
+    // offset), and T_base is already seeded from wrist_pose_ -- which the caller
+    // sets to the same base pose this state was solved at. Throws if the finger
+    // count, node count or tendon count disagrees with this model.
+    gtsam::Values values_from_marginals(const TendonHandMarginals& state) const;
+
     // Re-aim the shared wrist prior at a new pose *without* rebuilding the model.
     // Only the wrist-prior mean depends on wrist_pose_ (the finger offsets and
     // the root reparameterization factors are anchored to the shared wrist key,

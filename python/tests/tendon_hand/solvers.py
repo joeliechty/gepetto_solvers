@@ -30,7 +30,7 @@ kinematics solve (the renderer can still draw the spheres/table for reference).
 
 import os
 from dataclasses import dataclass, field, replace
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 import numpy as np
 
@@ -55,6 +55,19 @@ NUM_FINGERS = 5
 
 # The flexor tendon is index 5 in the 6-tendon anatomical routing (scene.TENDON_NAMES).
 FLEXOR_IDX = 5
+
+
+def tendon_diag(passive, active, n=6, idx=FLEXOR_IDX):
+    """Diagonal tendon covariance with a distinct entry for the ACTUATED tendon.
+
+    Every tendon prior in this hand is anisotropic in the same way: five
+    spring-backed passives that behave one way and one motor-driven flexor that
+    behaves another. Writing that as one helper keeps the split from drifting
+    apart between the priors that have to agree about it.
+    """
+    d = np.full(int(n), float(passive))
+    d[idx] = float(active)
+    return np.diag(d)
 
 
 def _set_if(obj, name, value):
@@ -101,6 +114,18 @@ def capabilities():
         # the variable the Eq 1.114-1.117 residuals act on.
         "witness": hasattr(getattr(crest_sparse, "TendonHandController", None),
                            "current_witness_points"),
+        # Per-iteration solve snapshots off the single-shot solver, so the
+        # visualizer can scrub an IK solve's convergence. The trajectory planner
+        # has had this for longer; TendonHandSolver only gained it with the
+        # iterate scrubber, so a stale binding must not offer the control.
+        "solve_iterates": hasattr(crest_sparse.TendonHandSolver,
+                                  "get_intermediate_solutions"),
+        # Driving the AL outer loop one iteration at a time (HandIKStepper).
+        # Probed via reset_al_duals because the other half of that build --
+        # TendonHandSolver honoring skip_marginals -- is a behavior change no
+        # hasattr can see, and setting the flag on a binding without it would
+        # read an empty marginals object. Both ship together.
+        "ik_stepping": hasattr(crest_sparse.TendonHandSolver, "reset_al_duals"),
     }
 
 
@@ -156,24 +181,36 @@ def resolve_scene(params):
 
 
 def auto_table_origin(params, spec, object_center):
-    """The support-plane origin implied by the scene alone: tangent to the
-    object's underside along ``params.plane_normal``, so the object rests on it.
+    """The support-plane origin implied by the scene alone: the object seated on
+    ``params.plane_normal`` at a burial fraction of ``params.table_burial``.
+
+    ``table_burial`` is the fraction of the object's FULL along-normal extent
+    lying below the plane, so the origin is
+
+        c - (1 - 2 * burial) * half_extent * n_hat
+
+    which is tangent to the underside at 0.0 (the object rests on the table) and
+    through the centroid at 0.5 (half-buried). See
+    :attr:`HandSolveParams.table_burial` for why half-buried is the default.
 
     Deliberately ignores ``params.plane_origin``. A GUI offering an ABSOLUTE
     plane height has to seed and re-seat its control from the scene's own answer;
     reading :func:`resolve_table_origin` for that would feed the control's own
     output back into itself, and any offset applied on top would compound on
     every call. Split out so both readings have exactly one definition of the
-    tangent rule.
+    seating rule.
     """
     n = np.asarray(params.plane_normal, float)
     n = n / (np.linalg.norm(n) or 1.0)
-    return np.asarray(object_center, float) - object_extent_along(spec, n) * n
+    # getattr: params-like objects predating table_burial keep the old geometry.
+    burial = float(getattr(params, "table_burial", 0.0))
+    depth = (1.0 - 2.0 * burial) * object_extent_along(spec, n)
+    return np.asarray(object_center, float) - depth * n
 
 
 def resolve_table_origin(params, spec, object_center):
     """Resolve the support-plane origin: explicit ``params.plane_origin`` if set,
-    else tangent to the object's underside along ``params.plane_normal``."""
+    else the scene's own seating rule (see :func:`auto_table_origin`)."""
     if params.plane_origin is not None:
         return np.asarray(params.plane_origin, float)
     return auto_table_origin(params, spec, object_center)
@@ -527,6 +564,13 @@ def pregrasp_wrist_pose(params, *, spec=None, object_center=None,
             "normal, so it defines no in-plane direction to align the thumb with")
     m = m / np.linalg.norm(m)
 
+    # Measured from the object CENTROID, deliberately independent of where the
+    # support plane sits: this is "hover clear of the object", and the guard
+    # below is a pure object-frame check. With params.table_burial > 0 the
+    # centroid is at or below the plane, so the clearance ABOVE THE TABLE comes
+    # out larger than pregrasp_margin alone -- see the table_burial note on
+    # HandSolveParams. Known and accepted; do not re-base this on the plane
+    # without re-tuning pregrasp_margin.
     h_clear = params.h_clear
     if h_clear is None:
         h_clear = object_extent_along(spec, n) + params.pregrasp_margin
@@ -821,7 +865,12 @@ class HandSolveParams:
     interactive visualizer mutates one instance of this from its GUI controls.
     """
     # --- Scene / object ---
-    primitive: str = "big_sphere"
+    # The Section 1.8 default scene: a 35 mm-radius analytic sphere, half-buried
+    # in the support plane (see table_burial). Resting ON the table its crown
+    # would sit 70 mm up, outside the ~50 mm the fingertips can reach off their
+    # ~55 mm shell; half-buried the exposed dome is 35 mm, which is both
+    # reachable and the low-profile-object case Section 1.8 is about.
+    primitive: str = "mid_sphere_ellipsoid"
     object_center: Optional[np.ndarray] = None      # None => derive from primitive
     object_rotation: Optional[np.ndarray] = None     # None => primitive's rotation
 
@@ -876,11 +925,28 @@ class HandSolveParams:
 
     # --- Support plane / "table" (Section 1.6, opt-in; IK / planner) ---
     table: bool = False
-    plane_origin: Optional[np.ndarray] = None       # None => under the object
+    plane_origin: Optional[np.ndarray] = None       # None => seat from the scene
     plane_normal: np.ndarray = field(
         default_factory=lambda: np.array(TABLE_NORMAL, float))
     plane_avoidance: bool = True
     k_touch: Optional[int] = None                    # planner slide-grasp schedule
+    # Fraction of the object's FULL along-normal extent sitting BELOW the plane.
+    # 0.0 = tangent to the underside, i.e. the object rests on the table (the
+    # Section 1.6 slide-and-grasp geometry); 0.5 = plane through the centroid,
+    # i.e. half-buried. Consumed by auto_table_origin(); ignored entirely when
+    # plane_origin is set explicitly.
+    #
+    # Default 0.5 because a whole object resting on the table puts its crown out
+    # of the hand's reach envelope (see the `primitive` note above), and because
+    # a half-buried proxy is how a genuinely low-profile object presents itself:
+    # a shallow dome above the surface with no undercut to reach around.
+    #
+    # NOTE this does NOT feed h_clear, which stays measured from the object
+    # CENTROID (see pregrasp_wrist_pose). Half-buried, the centroid lies on the
+    # plane, so the hand hovers pregrasp_margin + half_extent above the table
+    # over a half_extent dome -- a larger effective gap than pregrasp_margin
+    # nominally promises. That is known and accepted, not an oversight.
+    table_burial: float = 0.5
 
     # --- Phased controller (Section 1.8, Controller mode only) ---
     # Which constraint set is active: 0 = pre-grasp positioning, 1 = support
@@ -903,10 +969,69 @@ class HandSolveParams:
     # nor phase 0's pre-grasp target can move the hand at all, and the controller
     # silently solves with a frozen base. Measured: phase 1 descends only above
     # sigma_pos ~ 1.1e-2, exactly where 1/sigma^2 drops below that mu ceiling.
-    sigma_wrist_pos_step: float = 1e-2
-    sigma_wrist_rot_step: float = 1e-1
+    #
+    # Loosened again to 1e-1 / 1.0: the wrist is arm-mounted, so a control tick
+    # may legitimately command a macro repositioning, and 1e-2 was still an order
+    # of magnitude short of letting phase 1 use it. Measured over 40 phase-1 ticks
+    # (small sphere, index+thumb contact, plane through the object midpoint):
+    #
+    #   sigma_pos / sigma_rot | base travel | support violation
+    #   1e-2  / 1e-1          |     1.9 mm  | 0.085 -> 0.083 m
+    #   3.2e-2 / 3.2e-1       |     7.3 mm  | 0.085 -> 0.075 m
+    #   1e-1  / 1.0           |    32.2 mm  | 0.085 -> 0.048 m
+    #
+    # NOTE what this does NOT buy: the base still barely ROTATES (~3 deg at every
+    # setting above, since a loose prior only removes resistance -- it supplies no
+    # torque), so a phase whose residual needs the palm tilted is not fixed by
+    # loosening these. That is an al_mu / ctrl_al_iters question; see the AL
+    # penalty budget below.
+    #
+    # And what it COSTS: freeing the base also frees it to push the fingers into
+    # things, because the collision inequality resisting that is only as strong as
+    # the same weak per-tick penalty. On ctrl_5f_phases (which already failed its
+    # penetration check at the old default, in phase 1) the worst finger-object
+    # clearance goes -6.3 mm -> -6.5 mm in phase 1 and +3.5 mm -> -9.4 mm in phase
+    # 2. Raising al_mu to ~1e2 more than recovers it (+39 mm / +46 mm) but freezes
+    # the servo -- the inner LM then reports iters=1 from the second tick. There
+    # is no setting of this pair that does both, which points at the real problem
+    # being graph SCALING rather than the trust region: the passive-tension step
+    # priors (1e-6 variance, 150 of them) carry ~3.1e6 of error against ~3e-2 in
+    # the constraints, i.e. 99.9% of the graph, and that is what the inner LM is
+    # actually solving.
+    #
+    # Both are per-tick trust regions, so a caller that wants a slower hand should
+    # rate-limit the COMMAND (as phase 0 does with pregrasp_slew_*) rather than
+    # tighten these -- see the frozen-base note above.
+    sigma_wrist_pos_step: float = 1e-1
+    sigma_wrist_rot_step: float = 1.0
+
+    # --- Tendon step priors: ACTIVE and PASSIVE are different machines -------
+    # The controller has no BetweenFactor GP (that is the trajectory planner);
+    # p_step(Q | Q_curr) and p_step(L | L_curr) ARE its entire step-to-step
+    # regularization, so how they are split across the six tendons is what
+    # decides which parts of the hand can move in a tick.
+    #
+    # Only tendon 5 (FLEXOR_IDX) is actuated. The other five are spring-backed,
+    # and the two facts that follow are not symmetric:
+    #
+    #   TENSION  A spring holds roughly CONSTANT tension as it takes up slack,
+    #            so the passive tensions are pinned hard (1e-6) and stay pinned
+    #            under BOTH anchors -- that is their physics, not a modelling
+    #            convenience, and it does not depend on what the motor is doing.
+    #            Only the flexor's tension is free, at sigma_q_step.
+    #   LENGTH   The motor commands the ACTIVE tendon's length, so that is the
+    #            real measurement to anchor on (tight). A passive tendon's length
+    #            changes freely as the finger moves -- pinning it would be
+    #            pinning the joint angles, freezing the hand.
+    #
+    # sigma_l_step_active is a per-tick trust region on commanded tendon travel:
+    # 1e-3 allows ~1 mm of 1-sigma motion. It has to stay loose enough that the
+    # hand can actually get from one state to the next; if ticks stall with the
+    # flexor barely moving, this is the first thing to check against the real
+    # flexor excursion between an open and a closed hand.
     sigma_q_step: float = 1e-1
-    sigma_l_step: float = 1e-3
+    sigma_l_step_passive: float = 1e-1
+    sigma_l_step_active: float = 1e-3
     # Opposition half-space (Eq 1.92): the splitting point (None => the object
     # centroid projected onto the support plane) and the in-plane axis the split
     # runs along (None => world +X).
@@ -916,10 +1041,56 @@ class HandSolveParams:
     # Optional per-finger phase-3 witness targets (Eq 1.111); None entries mean
     # "contact anywhere on the surface" for that finger.
     witness_targets: Optional[List[Optional[np.ndarray]]] = None
-    # A control tick's AL budget. Small on purpose: the outer loop is amortized
-    # across ticks, since the constraint set is unchanged between them and each
-    # tick warm-starts from the last.
+    # A control tick's AL budget: outer iterations per tick. Small on purpose,
+    # because with ctrl_al_warm_duals below the outer loop genuinely IS amortized
+    # across ticks -- mu and the multipliers pick up where the last tick left off,
+    # so a tick only has to advance the homotopy a little.
+    #
+    # HISTORICAL NOTE, kept because the conclusion inverted. This used to be
+    # documented as amortized when it was not: SolverBase::optimize() built a
+    # fresh AugmentedLagrangianOptimizer every call, so mu restarted at al_mu and
+    # the duals at zero, capping a tick's penalty at
+    # al_mu * al_rate^(ctrl_al_iters - 1) -- mu ~ 8 at the defaults, against the
+    # mu ~ 8e3 an offline solve reaches. Measured on phase 1 then (small sphere,
+    # index+thumb, 30 ticks), raising the budget bought nothing:
+    #
+    #   iters/tick |  mu cap  | support viol | base rotation | AL iters RUN
+    #        4     |      8   |   0.0529 m   |    2.9 deg    |     2
+    #       20     |   5.2e5  |   0.0478 m   |    2.9 deg    |    1-5
+    #       40     |   5.5e11 |   0.0480 m   |    2.9 deg    |    1-5
+    #
+    # The outer loop never spent the budget it had: it exits on the stagnation
+    # test (|d violation| < al_rel_violation_tol && |d cost| < al_rel_cost_tol),
+    # which fires as soon as the inner LM rejects every step and both deltas are
+    # exactly zero. That is still true -- a bigger budget WITHIN a tick still
+    # buys mostly no-op outer iterations. What changed is that the progress a
+    # tick does make now survives into the next one, so the ladder is climbed
+    # across ticks instead of being rebuilt and abandoned on each.
     ctrl_al_iters: int = 4
+    # Carry mu and the Lagrange multipliers from tick to tick (see above). This
+    # is what makes the phased controller an Augmented Lagrangian method rather
+    # than a weak penalty method restarted 30 times.
+    ctrl_al_warm_duals: bool = True
+    # Ceiling on the carried mu. mu compounds across ticks by design, and this
+    # is what stops it running away -- but the value is NOT just a safety guard,
+    # it is the balance point between the two constraint families and it is
+    # sharp. Measured on ctrl_5f_phases (mid sphere, half-buried, all five
+    # fingers), sweeping only this:
+    #
+    #   mu_max |  2   4   8  | 16
+    #   result | PASS PASS PASS | FAIL (phase 1 penetrates)
+    #
+    # Above ~8 the support EQUALITY out-muscles the plane-avoidance
+    # INEQUALITIES: the contact tips are driven onto the plane hard enough to
+    # rotate the finger until a proximal sphere dips through it. Both families
+    # carry multipliers, but the equality is always active while an inequality
+    # only accumulates once violated, so a big shared mu favours the equality.
+    #
+    # Keeping mu small is the right shape for AL anyway -- lambda is supposed to
+    # do the feasibility work, and mu only has to be large enough to keep the
+    # subproblem convex. This is what a penalty method gets wrong, and why the
+    # fix here was carrying lambda rather than raising mu.
+    ctrl_al_mu_max: float = 8.0
     # Skip the Marginals factorization (a tick only consumes the means).
     ctrl_skip_marginals: bool = True
 
@@ -977,7 +1148,11 @@ class HandSolveParams:
     # spec-faithful two-prior form, which is what hardware (a genuinely measured
     # Q_curr) will need.
     pregrasp_tension_prior: bool = False
-    sigma_pregrasp_q: float = 1e-1
+    # Split passive/active for consistency with every other tendon prior, but
+    # equal by default: unlike the step priors, Q_pre names a target for all six
+    # tendons and there is no reason to pull on them with different authority.
+    sigma_pregrasp_q_passive: float = 1e-1
+    sigma_pregrasp_q_active: float = 1e-1
     # Derive the Eq 1.92 half-space axis from the object's longest in-plane axis
     # (m_hat = n_hat x e_long) instead of using half_space_axis. Off by default:
     # it changes the legacy world-+X default (to +Y for an in-plane-isotropic
@@ -1026,6 +1201,48 @@ class HandResult:
     # support-plane equalities -- describe the same finger set in the FK posing
     # state that the controller will enforce once a phase is picked.
     contact_fingers: Optional[List[bool]] = None
+    # The raw ``TendonHandMarginals`` behind each frame, same indexing as
+    # ``frames``. ``frames`` splits a solve up per finger for rendering, which
+    # loses the bundle the C++ side wants back: this is the form
+    # ``HandControllerSolver(initial_state=...)`` and ``set_theta_curr(state=...)``
+    # take to start a controller from a posture instead of a straight hand.
+    states: Optional[List[object]] = None
+    # Solver-convergence snapshots: one entry per recorded iteration, each a
+    # full ``frames``-shaped list (so an entry is indexed by trajectory step
+    # exactly like ``frames`` is). Populated only when the solve ran with
+    # ``HandSolveParams.record_iterations`` on a binding that exposes the
+    # snapshots; None otherwise. ``iterate_states`` is the raw-marginals
+    # parallel, the same relationship ``states`` has to ``frames``.
+    iterates: Optional[List[List[dict]]] = None
+    iterate_states: Optional[List[List[object]]] = None
+    # One short markdown line per iterate, supplied by whoever produced the
+    # snapshots. A stepped solve knows the cost/violation/mu behind each of its
+    # entries directly; a one-shot recorded solve leaves this None and the
+    # caller falls back to indexing ``meta``'s AL trace.
+    iterate_notes: Optional[List[str]] = None
+
+    def state(self, k=0):
+        """The solved hand state at frame ``k``, for seeding another solver.
+        None on a result built before this field existed."""
+        return None if self.states is None else self.states[k]
+
+    def num_iterates(self):
+        """How many solver-convergence snapshots this result carries (0 when the
+        solve did not record any)."""
+        return 0 if self.iterates is None else len(self.iterates)
+
+    def at_iterate(self, i):
+        """This result as it stood at recorded iteration ``i`` -- the same object
+        with ``frames``/``states`` swapped for that snapshot.
+
+        Everything downstream (the gap readouts, ``worst_gap``, the renderer)
+        works off ``frames``, so a swapped-frames view makes all of it describe
+        the intermediate state with no further plumbing. The view drops its own
+        ``iterates`` so it cannot be re-scrubbed recursively."""
+        return replace(self, frames=self.iterates[i],
+                       states=None if self.iterate_states is None
+                       else self.iterate_states[i],
+                       iterates=None, iterate_states=None, iterate_notes=None)
 
     def contact_names(self):
         """The fingers designated to touch the object -- everything the gap
@@ -1158,10 +1375,12 @@ class HandSolverBase:
         cov = self.params.tip_wrench_sigma ** 2 * np.eye(6)
         return [crest_sparse.Vector6Gaussian(np.zeros(6), cov) for _ in self.configs]
 
-    def _result(self, frames, meta, contact_fingers=None):
+    def _result(self, frames, meta, contact_fingers=None, states=None,
+                iterates=None, iterate_states=None, iterate_notes=None):
         return HandResult(frames, meta, self.spec, self.object_center,
                           self.object_rotation, self.finger_names, self.tip_radii,
-                          contact_fingers)
+                          contact_fingers, states, iterates, iterate_states,
+                          iterate_notes)
 
     def solve(self) -> HandResult:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -1195,7 +1414,15 @@ class HandFKSolver(HandSolverBase):
         # live off params (not baked in at construction), and the goal overlays
         # drawn over an FK pose -- p_bar, the opposition split, the support-plane
         # equalities -- are all statements about the DESIGNATED contact set.
-        return self._result([frame], sol.meta, self.params.contact_fingers)
+        return self._result([frame], sol.meta, self.params.contact_fingers,
+                            [sol.marginals])
+
+
+# Tight passive / loose flexor: the optimizer drives contact through the flexor
+# while the passives stay pinned. Shared by the one-shot IK solve and the stepper
+# so the two cannot drift into solving subtly different problems -- the whole
+# point of the stepper is that it advances *this* solve.
+_IK_TENSION_COV = np.diag([1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-1])
 
 
 class HandIKSolver(HandSolverBase):
@@ -1218,14 +1445,237 @@ class HandIKSolver(HandSolverBase):
         cfg.base.al_mu_increase_rate = self.params.al_rate
         cfg.base.al_max_iterations = self.params.al_iters
         _set_if(cfg.base, "record_iterations", self.params.record_iterations)
+        if self.params.record_iterations:
+            # On the AL path an interval of 0 already means "snapshot every outer
+            # iteration", but the plain LM/Dogleg path (a contact-free solve)
+            # stores nothing unless the interval is > 0. Setting 1 records every
+            # iteration either way.
+            _set_if(cfg.base, "iteration_sample_interval", 1)
 
         solver = crest_sparse.TendonHandSolver(self.configs, cfg)
-        # Tight passive / loose flexor: the optimizer drives contact through the
-        # flexor while the passives stay pinned.
-        cov = np.diag([1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-1])
-        sol = solver.solve(self._tension_priors(cov), self._tip_wrenches())
+        sol = solver.solve(self._tension_priors(_IK_TENSION_COV),
+                           self._tip_wrenches())
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)
-        return self._result([frame], sol.meta, self.params.contact_fingers)
+        iterates, iterate_states = self._collect_iterates(solver, sol)
+        return self._result([frame], sol.meta, self.params.contact_fingers,
+                            [sol.marginals], iterates, iterate_states)
+
+    def _collect_iterates(self, solver, sol):
+        """The solve's convergence snapshots as ``(iterates, iterate_states)``,
+        or ``(None, None)`` when nothing was recorded.
+
+        The sequence is initial guess, then one entry per recorded iteration,
+        then the final solution. That last entry is what ``sol.marginals``
+        already holds, so it may repeat the last AL iterate -- it is appended
+        anyway so the end of the scrubber always shows exactly the state the
+        rest of the result reports on."""
+        if not (self.params.record_iterations
+                and hasattr(solver, "get_intermediate_solutions")):
+            return None, None
+        states = ([solver.get_initial_solution()]
+                  + list(solver.get_intermediate_solutions())
+                  + [sol.marginals])
+        iterates = [[_make_frame(self.finger_names, hm, sol.meta)] for hm in states]
+        return iterates, [[hm] for hm in states]
+
+
+class StepStatus(NamedTuple):
+    """Where a stepped IK solve stands after the last outer iteration."""
+    state: str        # "running" | "converged" | "stalled"
+    violation: float  # worst constraint violation
+    cost: float       # objective (constraint penalty excluded)
+    mu: float         # current AL penalty weight
+    steps: int        # outer iterations taken so far
+
+    @property
+    def done(self):
+        return self.state != "running"
+
+
+class HandIKStepper(HandSolverBase):
+    """The IK solve of :class:`HandIKSolver`, advanced one Augmented Lagrangian
+    outer iteration per :meth:`step` call instead of run to convergence in one go.
+
+    Every step solves the *identical* graph the one-shot solve builds -- same
+    contact constraints, same priors (``_IK_TENSION_COV``), same tolerances. The
+    only difference is that the outer loop is told to stop after one iteration
+    and resume on the next call: ``al_max_iterations = 1`` with
+    ``al_warm_start_duals`` carries mu, the Lagrange multipliers and the values
+    across calls, so N steps are the N iterations the one-shot solve would have
+    run internally. Holding the loop counter is the whole trick.
+
+    Like :class:`HandFKSolver` this owns its ``crest_sparse.TendonHandSolver`` for
+    its lifetime -- that is what lets anything carry at all, since a solver
+    rebuilt per call cold-starts even its values. Tensions and the wrist pose are
+    passed per step, so they stay live between steps; anything that changes the
+    CONSTRAINT SET (object, contact mask, collision, table) needs :meth:`reset`,
+    because the carried duals describe the old constraints.
+    """
+
+    def __init__(self, params: Optional[HandSolveParams] = None):
+        super().__init__(params)
+        self._build()
+
+    # -- construction / restart --
+
+    def _build(self):
+        self._attach_contact()
+        if self.params.collision:
+            self._attach_collision()
+        if self.params.table:
+            self._attach_table()
+
+        cfg = crest_sparse.TendonHandSolverConfig()
+        cfg.wrist_pose = self.params.wrist_pose
+        cfg.sigma_wrist_pos = self.params.sigma_wrist_pos
+        cfg.sigma_wrist_rot = self.params.sigma_wrist_rot
+        cfg.base.linear_solver_type = "MULTIFRONTAL_QR"
+        cfg.base.al_initial_mu = self.params.al_mu
+        cfg.base.al_mu_increase_rate = self.params.al_rate
+        # One outer iteration per solve() call, resumed from the last one.
+        cfg.base.al_max_iterations = 1
+        _set_if(cfg.base, "al_warm_start_duals", True)
+        # Effectively uncapped mu, and it has to be. al_warm_mu_max exists for
+        # the Section 1.8 controller, where mu compounds forever across ticks of
+        # a MOVING problem and would eventually swamp the rod physics -- but the
+        # one-shot solve this stepper reproduces runs optimize() with no clamp at
+        # all, so its mu reaches ~2^28 by the time the contact closes. Leaving
+        # the 1e4 default in place stalls the stepped solve at a ~60 mm gap while
+        # the one-shot reaches 0.1 mm: the cap, not the method, is the difference.
+        _set_if(cfg.base, "al_warm_mu_max", 1e12)
+        # The al_iteration_* arrays are the only readout of what a step did, and
+        # they are populated only when recording is on -- so this is not optional
+        # here the way it is for the one-shot solve.
+        _set_if(cfg.base, "record_iterations", True)
+        # Means-only extraction: the covariance factorization is the most
+        # expensive step after the optimizer itself, and nothing downstream of a
+        # step reads a covariance. Gated, because a binding without the
+        # means-only branch would read an empty marginals object.
+        if capabilities()["ik_stepping"]:
+            _set_if(cfg.base, "skip_marginals", True)
+
+        # Read the stopping tolerances back off the config rather than keeping a
+        # second copy: status() has to mirror the C++ convergence test (which
+        # reports no stop reason of its own), and reading the same object it was
+        # configured from is the only way the two cannot drift.
+        self._tols = (cfg.base.al_abs_violation_tol, cfg.base.al_abs_cost_tol,
+                      cfg.base.al_rel_violation_tol, cfg.base.al_rel_cost_tol)
+
+        self._solver = crest_sparse.TendonHandSolver(self.configs, cfg)
+        self._history = []      # TendonHandMarginals per step (initial guess first)
+        self._frames = []       # the same states as render frames
+        self._notes = []        # one readout line per history entry
+        self._steps = 0
+        self._status = StepStatus("running", float("inf"), float("inf"),
+                                  self.params.al_mu, 0)
+        self._prev = None       # (violation, cost) of the previous step
+
+    def reset(self):
+        """Full cold start: straight-hand values, zero duals, mu back to
+        ``al_mu``, and the scene/envs re-derived from the current params.
+
+        Rebuilding is what makes it a *cold* start -- ``get_initial_values()``
+        runs only in the C++ constructor, so nothing short of a new solver
+        restores the initial posture. Re-running the base init also gives
+        :meth:`_build` clean finger configs, since ``_attach_*`` mutate them in
+        place and would otherwise stack a second environment on the first."""
+        super().__init__(self.params)
+        self._build()
+
+    def restart_al(self):
+        """Re-run the penalty schedule from the CURRENT posture: drops the duals
+        and mu but keeps the pose reached so far. The weaker sibling of
+        :meth:`reset`; no-op on a binding without the accessor."""
+        if hasattr(self._solver, "reset_al_duals"):
+            self._solver.reset_al_duals()
+            self._prev = None
+            self._status = self._status._replace(state="running",
+                                                 mu=self.params.al_mu)
+            return True
+        return False
+
+    # -- stepping --
+
+    def status(self) -> StepStatus:
+        return self._status
+
+    def step(self) -> HandResult:
+        """Advance the AL outer loop by exactly one iteration."""
+        # Re-aimed every step so the wrist slider stays live mid-solve; the
+        # tension priors are rebuilt from params for the same reason.
+        self._solver.set_wrist_pose(self.params.wrist_pose)
+        sol = self._solver.solve(self._tension_priors(_IK_TENSION_COV),
+                                 self._tip_wrenches())
+
+        if not self._history:
+            # The pre-step values of the first step: the true initial guess, and
+            # the only frame the history cannot get from a solve result.
+            self._append(self._solver.get_initial_solution(), sol.meta,
+                         "initial guess")
+        self._steps += 1
+        self._update_status(sol.meta)
+        s = self._status
+        self._append(sol.marginals, sol.meta,
+                     f"step {s.steps} &nbsp; violation={s.violation:.3e} "
+                     f"&nbsp; cost={s.cost:.4g} &nbsp; mu={s.mu:.3g}")
+
+        return self._result(
+            [self._frames[-1]], sol.meta, self.params.contact_fingers,
+            [self._history[-1]],
+            [[f] for f in self._frames], [[hm] for hm in self._history],
+            list(self._notes))
+
+    def _append(self, hand_marginals, meta, note):
+        self._history.append(hand_marginals)
+        self._frames.append(_make_frame(self.finger_names, hand_marginals, meta))
+        self._notes.append(note)
+
+    def _update_status(self, meta):
+        """Mirror ``ConstrainedOptimizer::checkConvergence`` on this step's trace.
+
+        With ``al_max_iterations = 1`` the C++ loop always exits on its iteration
+        test before evaluating the tolerances, and it records no stop reason, so
+        the caller has to apply the same two tests itself. Each call logs a seed
+        state plus the one iterate; the last entry is the state we just reached."""
+        def last(name, default=float("nan")):
+            arr = list(getattr(meta, name, []) or [])
+            return float(arr[-1]) if arr else default
+
+        viol, cost, mu = (last("al_iteration_violations"),
+                          last("al_iteration_costs"),
+                          last("al_iteration_mus", self._status.mu))
+        abs_v, abs_c, rel_v, rel_c = self._tols
+        if viol < abs_v and cost < abs_c:
+            state = "converged"
+        elif (self._prev is not None
+              and abs(viol - self._prev[0]) < rel_v
+              and abs(cost - self._prev[1]) < rel_c):
+            state = "stalled"
+        else:
+            state = "running"
+        self._prev = (viol, cost)
+        self._status = StepStatus(state, viol, cost, mu, self._steps)
+
+    def run(self, max_steps=200, on_step=None, should_stop=None) -> StepStatus:
+        """Step until the solve converges, stalls, is stopped, or hits the cap.
+
+        ``on_step(result, status)`` fires after every iteration (that is what
+        lets a caller animate the convergence) and ``should_stop()`` is polled
+        between iterations, so an interactive caller can break out without
+        waiting for the whole run."""
+        for _ in range(max_steps):
+            if should_stop is not None and should_stop():
+                break
+            result = self.step()
+            if on_step is not None:
+                on_step(result, self._status)
+            if self._status.done:
+                break
+        return self._status
+
+    # A single "solve" of a stepper is one iteration, mirroring the controller's
+    # solve == one tick, so it can stand in wherever a solver is expected.
+    solve = step
 
 
 class HandPlannerSolver(HandSolverBase):
@@ -1278,7 +1728,8 @@ class HandPlannerSolver(HandSolverBase):
                               start_tensions=starts)
         frames = [_make_frame(self.finger_names, hm, result.meta)
                   for hm in result.trajectory]
-        return self._result(frames, result.meta, self.params.contact_fingers)
+        return self._result(frames, result.meta, self.params.contact_fingers,
+                            list(result.trajectory))
 
 
 class HandControllerSolver(HandSolverBase):
@@ -1302,7 +1753,13 @@ class HandControllerSolver(HandSolverBase):
     """
 
     def __init__(self, params: Optional[HandSolveParams] = None,
-                 initial_lengths=None):
+                 initial_lengths=None, initial_state=None):
+        """``initial_state`` is Theta_curr's robot POSTURE -- the ``marginals`` of
+        any solve on the same finger configs (an FK pose, or another
+        controller's tick). Without it the controller cold-starts from a straight
+        hand with Q = 0, and tick 1 is spent travelling back to wherever the
+        robot actually is: the fingers visibly extend before they curl.
+        ``initial_lengths`` is the separate L_curr the length anchor needs."""
         super().__init__(params)
         p = self.params
 
@@ -1341,6 +1798,15 @@ class HandControllerSolver(HandSolverBase):
         cfg.base.al_abs_cost_tol = p.al_abs_cost_tol
         cfg.base.skip_marginals = p.ctrl_skip_marginals
         _set_if(cfg.base, "record_iterations", p.record_iterations)
+        # Carry mu and the multipliers across ticks. Not a tuning knob: without
+        # it a tick's penalty resets to al_mu every time and can only reach
+        # al_mu * al_rate^(ctrl_al_iters - 1) before the graph is thrown away,
+        # which is far too small to enforce the hard constraints.
+        _set_if(cfg.base, "al_warm_start_duals", p.ctrl_al_warm_duals)
+        _set_if(cfg.base, "al_warm_mu_max", p.ctrl_al_mu_max)
+        # Theta_curr's posture (see the constructor docstring).
+        if initial_state is not None:
+            _set_if(cfg, "initial_state", initial_state)
 
         self._controller = crest_sparse.TendonHandController(self.configs, cfg)
         # Measured tendon lengths L_curr. From a caller-supplied Theta_curr when
@@ -1416,21 +1882,32 @@ class HandControllerSolver(HandSolverBase):
         self._controller.set_phase(_CONTROLLER_PHASES[phase])
         self.params.phase = phase
 
-    def set_theta_curr(self, *, wrist_pose=None, lengths=None):
+    def set_theta_curr(self, *, wrist_pose=None, lengths=None, state=None):
         """Overwrite the measured state Theta_curr (Eq 1.93) the next tick anchors
-        on: the base pose and/or the per-finger tendon lengths.
+        on: the base pose, the per-finger tendon lengths, and/or the posture.
 
-        The retained ``values_`` are NOT touched -- this says "the robot is over
-        there now", and the next tick slews toward it inside the step-prior trust
-        region. For a wholesale teleport, build a new solver instead (passing
-        ``initial_lengths``): a warm controller cannot absorb an arbitrary jump in
-        one tick.
+        ``wrist_pose`` and ``lengths`` only move the step priors' MEANS -- they
+        say "the robot is over there now" and the next tick slews toward that
+        inside the trust region, leaving the retained values alone.
+
+        ``state`` (a solve's ``marginals``) is the stronger form: it replaces the
+        retained posture outright and drops the accumulated AL duals, for a jump
+        no trust region could absorb in one tick -- a re-posed hand in a GUI, or
+        a resync against the hardware after an unmodelled disturbance. Pair it
+        with ``wrist_pose`` so the base prior's mean agrees with the posture.
+        Returns False if the binding predates the accessor, in which case rebuild
+        the solver with ``initial_state`` instead.
         """
         if wrist_pose is not None:
             self._base_pose = np.asarray(wrist_pose, float).copy()
             self.params.wrist_pose = self._base_pose
+        if state is not None:
+            if not hasattr(self._controller, "set_state"):
+                return False
+            self._controller.set_state(state)
         if lengths is not None:
             self._lengths = [np.asarray(v, float) for v in lengths]
+        return True
 
     def phase_violations(self):
         """``[(family, max_abs_violation), ...]`` at the current solution -- what a
@@ -1510,11 +1987,16 @@ class HandControllerSolver(HandSolverBase):
 
         # Tension step prior. Tight passives / loose flexor: the optimizer drives
         # contact through the flexor while the passives stay pinned. Under the
-        # length anchor the tensions relax further still, since length is then
-        # what carries Theta_curr and tension must stay free to respond to a
-        # disturbance contact.
+        # length anchor the FLEXOR's tension relaxes further still, since length
+        # is then what carries Theta_curr and tension must stay free to respond
+        # to a disturbance contact.
+        #
+        # The passives stay at 1e-6 in BOTH anchor modes, deliberately. They are
+        # held by springs, not motors, so near-constant tension is their physical
+        # behaviour whatever the actuated tendon is being commanded to do --
+        # this is not a leftover from the tension anchor.
         q_sigma = p.sigma_q_step if p.step_anchor.lower() == "tension" else 1.0
-        cov = np.diag([1e-6] * FLEXOR_IDX + [q_sigma ** 2])
+        cov = tendon_diag(1e-6, q_sigma ** 2, n=self.configs[0][1].num_tendons)
 
         # Phase 0 COMMANDS Q_pre rather than relying on the Eq 1.95 target prior:
         # this mean is the commanded tension, not a measurement, so a second
@@ -1532,8 +2014,17 @@ class HandControllerSolver(HandSolverBase):
                 # have, which is a chicken-and-egg the C++ side rejects outright.
                 self._lengths = [np.asarray(v, float)
                                  for v in self._controller.current_tendon_lengths()]
+            # Loose passives / tight flexor -- the MIRROR of the tension prior
+            # above, not a copy of it. The motor commands the actuated tendon's
+            # length, so that is the measurement worth anchoring on; a passive
+            # tendon's length is free to change as the finger moves (the spring
+            # takes up the slack), and pinning it would pin the joint angles and
+            # freeze the hand. See HandSolveParams.sigma_l_step_*.
             lengths = self._length_priors(
-                self._lengths, (p.sigma_l_step ** 2) * np.eye(self.configs[0][1].num_tendons))
+                self._lengths,
+                tendon_diag(p.sigma_l_step_passive ** 2,
+                            p.sigma_l_step_active ** 2,
+                            n=self.configs[0][1].num_tendons))
 
         sol = self._controller.step(self._tension_priors(cov, means),
                                     self._tip_wrenches(), lengths)
@@ -1552,12 +2043,21 @@ class HandControllerSolver(HandSolverBase):
             p.wrist_pose = self._base_pose
 
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)
-        return self._result([frame], sol.meta, p.contact_fingers)
+        return self._result([frame], sol.meta, p.contact_fingers,
+                            [sol.marginals])
 
     def _pregrasp_tension_priors(self):
-        """Eq 1.95's target prior on Q, one ``VectorXGaussian`` per finger."""
-        cov = (self.params.sigma_pregrasp_q ** 2) * np.eye(
-            self.configs[0][1].num_tendons)
+        """Eq 1.95's target prior on Q, one ``VectorXGaussian`` per finger.
+
+        Split passive/active like every other tendon prior, though both halves
+        default to the same ``sigma_pregrasp_q``: Q_pre names a value for all six
+        tendons, so there is no a-priori reason to pull on them with different
+        authority. The split is here so retuning one does not silently retune
+        the other."""
+        p = self.params
+        cov = tendon_diag(p.sigma_pregrasp_q_passive ** 2,
+                          p.sigma_pregrasp_q_active ** 2,
+                          n=self.configs[0][1].num_tendons)
         return [crest_sparse.VectorXGaussian(m, cov)
                 for m in pregrasp_tension_means(self.params, self.configs)]
 

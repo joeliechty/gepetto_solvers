@@ -21,6 +21,15 @@ The app has two states:
     halves, phase 2 to slide onto the ellipsoid proxy, phase 3 to servo onto the
     exact geometry.
 
+Pinned to the left of the viewport is the running LOG: the same tick-by-tick text
+``ctrl_5f_phases.py`` prints -- phase rules, per-tick iteration counts and
+constraint violations, and on demand the independent geometric clearance check
+and the factor-error summary. The status readout tells you the current violation;
+the log is how you tell whether it is falling, stalling or oscillating, which for
+a servo is the whole question. The two reports are captured from
+``ctrl_5f_phases``' own functions rather than reimplemented, so the window and a
+headless run cannot disagree.
+
 Overlays specific to this app: the support plane (as in the other demos), plus
 the whole *constraint-goal* layer -- the pre-grasp target frame and the axes
 being aligned to it, the support-plane distances, the opposition split, the
@@ -44,12 +53,15 @@ from dataclasses import replace
 
 import numpy as np
 
+from .ctrl_5f_phases import (
+    PHASE_NAMES, geometric_report, report_pregrasp_target)
 from .scene import get_primitive_specs
 from .solvers import (
     HandControllerSolver, HandFKSolver, HandSolveParams, auto_table_origin,
     capabilities, free_space_start_pose, goal_geometry, opposition_axis,
     pregrasp_local_geometry, resolve_scene)
 from .viz_interactive import FINGER_LABELS, SDF_DROPDOWN_LABELS, _euler_to_R
+from .._plotting.viser_log import ViserLog
 from .._plotting.viser_overlays import OVERLAYS
 
 
@@ -268,7 +280,8 @@ def _check_base_moves(ticks=4, min_travel=1e-3):
     # Exactly what the GUI hands the controller, via the slider defaults.
     p.sigma_wrist_pos_step = 10.0 ** _log10_default("sigma_wrist_pos_step")
     p.sigma_q_step = 10.0 ** _log10_default("sigma_q_step")
-    p.sigma_l_step = 10.0 ** _log10_default("sigma_l_step")
+    p.sigma_l_step_active = 10.0 ** _log10_default("sigma_l_step_active")
+    p.sigma_l_step_passive = 10.0 ** _log10_default("sigma_l_step_passive")
     p.phase = 1
 
     solver = HandControllerSolver(p)
@@ -362,6 +375,7 @@ class ControllerVizApp:
         self.fk_result = None
         self.phase = None                 # None => the FK pose state
         self._theta_lengths = None        # L_curr handed to the next controller
+        self._theta_state = None          # the POSTURE handed to it alongside
         self._busy = False
         self._running = False
         # Set while widgets are written programmatically, so restoring defaults or
@@ -373,6 +387,10 @@ class ControllerVizApp:
         from .._plotting.viser_overlays import ConstraintOverlays
         self.scene = ViserHandScene(server, FINGER_LABELS)
         self.overlays = ConstraintOverlays(server)
+        # The ctrl_5f_phases-style running log, pinned to the left of the
+        # viewport. Built before the GUI so anything _build_gui or _reset_scene
+        # reports has somewhere to go.
+        self.log = ViserLog(server, title="controller log")
         server.on_client_connect(self._aim_camera)
 
         self._build_gui()
@@ -504,8 +522,11 @@ class ControllerVizApp:
         p.half_space = self.g_half_space.value
         p.ctrl_al_iters = int(self.g_al_iters.value)
         p.sigma_wrist_pos_step = 10.0 ** self.g_sig_wrist.value
+        p.sigma_wrist_rot_step = 10.0 ** self.g_sig_wrist_rot.value
         p.sigma_q_step = 10.0 ** self.g_sig_q.value
-        p.sigma_l_step = 10.0 ** self.g_sig_l.value
+        p.sigma_l_step_active = 10.0 ** self.g_sig_l_act.value
+        p.sigma_l_step_passive = 10.0 ** self.g_sig_l_pas.value
+        p.al_mu = 10.0 ** self.g_al_mu.value
         p.plane_origin = np.asarray(self._table_origin(), float)
 
         self.scene.show_discs = self.g_show_discs.value
@@ -582,8 +603,18 @@ class ControllerVizApp:
         self.g_auto.value = False
         self._fk_preview()
         self._theta_lengths = self.fk_result.tendon_lengths(0)
+        # The POSTURE, not just the lengths. Without it the controller would
+        # cold-start from a straight hand with Q = 0 and spend tick 1 travelling
+        # back to the pose just committed -- the fingers visibly extending before
+        # they curl, which is nothing the physical robot would ever do.
+        self._theta_state = self.fk_result.state(0)
         self._refresh_controls()
         t = self.params.wrist_pose[:3, 3]
+        self.log.rule("Theta_curr committed")
+        self.log.write(
+            f"  T_base t = [{t[0]:+.4f}, {t[1]:+.4f}, {t[2]:+.4f}] m   "
+            f"passive {self.params.passive_tension:.2f} N   flexors "
+            f"{', '.join(f'{v:.2f}' for v in self.params.flexor_tensions)} N")
         self._set_status(
             f"**Theta_curr set**  \n"
             f"T_base t = [{t[0]:+.3f}, {t[1]:+.3f}, {t[2]:+.3f}] m  \n"
@@ -632,12 +663,18 @@ class ControllerVizApp:
         the whole point of the phased formulation."""
         if self._suspend_live:
             return
+        had_controller = self.solver is not None
         self.solver = None
         self.phase = None
         self.tick_count = 0
         self._theta_lengths = None
+        self._theta_state = None
         self._running = False
         self._sync_params()
+        if had_controller:
+            self.log.write(
+                "  constraint set / solver config changed -- controller dropped, "
+                "back to FK posing", level="warn")
         self._rebuild_fk()
         self._refresh_scene()
         self._refresh_controls()
@@ -655,7 +692,8 @@ class ControllerVizApp:
             self._sync_params()
             if self.solver is None:
                 self.solver = HandControllerSolver(
-                    self.params, initial_lengths=self._theta_lengths)
+                    self.params, initial_lengths=self._theta_lengths,
+                    initial_state=self._theta_state)
                 self.tick_count = 0
             else:
                 # step() commands the base from the solver's own _base_pose (the
@@ -671,8 +709,10 @@ class ControllerVizApp:
             self.tick_count += 1
             self._render()
             self._report(dt_ms)
+            self._log_tick(dt_ms)
         except Exception as exc:
             self._set_status(f"**Error:** {exc}")
+            self.log.write(f"ERROR: {exc}", level="error")
             raise
         finally:
             self.g_step.disabled = False
@@ -687,7 +727,55 @@ class ControllerVizApp:
         self._refresh_controls()
         if self.solver is not None:
             self.solver.set_phase(phase)
+        self.log.rule(f"Phase {phase}: {PHASE_NAMES[phase]}")
         self._tick()
+        # AFTER the first tick, not before: entering phase 0 is what builds the
+        # target (it costs two FK solves and is skipped otherwise), so asking for
+        # it first would force the work on a controller that may never need it.
+        if phase == 0 and self.solver is not None:
+            self.log.capture(report_pregrasp_target, self.solver)
+
+    # -- log ---------------------------------------------------------------
+
+    def _log_tick(self, dt_ms):
+        """One line per tick, in ``ctrl_5f_phases``' format, plus the optional
+        per-tick geometry block."""
+        viol = "  ".join(
+            f"{n}={v:.2e}{VIOLATION_UNITS.get(n, 'm')}"
+            for n, v in self.solver.phase_violations()) or "(none)"
+        m = self.result.meta
+        self.log.write(f"  tick {self.tick_count:>3}  {dt_ms:7.1f} ms  "
+                       f"iters={m.iterations:<3} err={m.error:11.4g}  {viol}")
+        if self.g_log_geometry.value:
+            self._log_geometry()
+
+    def _log_geometry(self, _=None):
+        """The INDEPENDENT clearance check ``ctrl_5f_phases`` runs at the end of
+        each phase: gaps computed from the solved poses rather than read back out
+        of the solver, so a constraint the graph believes it satisfied cannot
+        hide a penetration.
+
+        Captured from the script's own function rather than reimplemented, so the
+        window and the headless run can never disagree.
+        """
+        if self.solver is None or self.result is None:
+            self.log.write("  (no controller: geometry check needs a solved "
+                           "tick)", level="warn")
+            return
+        self.log.capture(geometric_report, self.solver, self.result,
+                         self._table_origin(), self.params.plane_normal,
+                         self.params.contact_fingers)
+
+    def _log_factor_errors(self, _=None):
+        """The per-factor-type error summary -- the structural view of the graph
+        (which factor families exist, how many, and where the error sits)."""
+        if self.solver is None:
+            self.log.write("  (no controller yet)", level="warn")
+            return
+        self.log.write("  factor errors (type, count, total):")
+        for name, count, err in (
+                self.solver._controller.get_factor_error_summary()[:12]):
+            self.log.write(f"    {err:12.4g}  x{count:<5} {name}")
 
     def _refresh_controls(self):
         """Reconcile the GUI with the app state: which phase is active (none in
@@ -743,6 +831,7 @@ class ControllerVizApp:
         self.phase = None
         self.tick_count = 0
         self._theta_lengths = None
+        self._theta_state = None
         self.result = self.fk_result = None
 
         # Seat the plane under the object BEFORE anything reads it: the height is
@@ -755,6 +844,19 @@ class ControllerVizApp:
         self._refresh_scene()
         self._refresh_controls()
         self._fk_preview()
+        self.log.clear()
+        self.log.rule("free-space start")
+        self.log.write(
+            f"  object={self.params.primitive}  contact="
+            f"{[int(b) for b in self.params.contact_fingers]}  "
+            f"anchor={self.params.step_anchor}\n"
+            f"  lift {info['lift']:.4f} m along the support normal   "
+            f"table{info['table_clearance']:+.4f} m   "
+            f"object{info['object_clearance']:+.4f} m\n"
+            f"  wrist step prior: sigma_pos="
+            f"{self.params.sigma_wrist_pos_step:.3g} m  sigma_rot="
+            f"{self.params.sigma_wrist_rot_step:.3g} rad   "
+            f"al_mu={self.params.al_mu:.3g} x{self.params.ctrl_al_iters}")
         note = ("" if self.caps["controller"] else
                 "  \n**Controller unavailable** -- rebuild `_crest_sparse`.")
         self._set_status(
@@ -848,24 +950,49 @@ class ControllerVizApp:
             # base sigmas were retuned once already and a hardcoded slider
             # default silently re-imposed the old value on every tick through
             # _sync_params, which is exactly the frozen-base failure below.
+            # Position and rotation are SEPARATE sigmas on the Eq 1.94 prior, and
+            # for a long time only the position one was exposed -- so the
+            # rotational trust region silently sat at whatever the params default
+            # was, and "the wrist will not turn" had no control to reach for.
+            # Both ranges run past 1e0 because the wrist is arm-mounted: a tick
+            # is allowed to command a macro repositioning, not just a nudge.
             self.g_sig_wrist = self._remember(gui.add_slider(
-                "log10 sigma_T,step", -6, 0, 0.5,
+                "log10 sigma_T,step (m)", -6, 1, 0.5,
                 _log10_default("sigma_wrist_pos_step"),
-                hint="Eq 1.94: how far the hand base may move in one tick. "
-                     "Below ~1e-2 the prior is stiffer than the AL penalty "
-                     "ceiling (mu ~ 8e3) and the base FREEZES -- phases 1-3 "
-                     "then flex the fingers against a hand that cannot "
-                     "reposition. Changing this rebuilds the controller."))
+                hint="Eq 1.94: how far the hand base may TRANSLATE in one tick. "
+                     "Below ~1e-2 the prior is stiffer than the AL penalty and "
+                     "the base freezes -- phases 1-3 then flex the fingers "
+                     "against a hand that cannot reposition. Rebuilds the "
+                     "controller."))
+            self.g_sig_wrist_rot = self._remember(gui.add_slider(
+                "log10 sigma_R,step (rad)", -6, 1, 0.5,
+                _log10_default("sigma_wrist_rot_step"),
+                hint="Eq 1.94: how far the hand base may ROTATE in one tick. "
+                     "Loosening this only REMOVES resistance to a tilt -- it "
+                     "supplies no torque, so if the wrist still will not turn "
+                     "the constraint is too weak to turn it and the knob you "
+                     "want is the AL penalty below. Rebuilds the controller."))
             self.g_sig_q = self._remember(gui.add_slider(
                 "log10 sigma_Q,step", -4, 1, 0.5,
                 _log10_default("sigma_q_step"),
                 hint="Eq 1.95: how far the tendon tensions may move in one "
                      "tick. Changing this rebuilds the controller."))
-            self.g_sig_l = self._remember(gui.add_slider(
-                "log10 sigma_L,step", -6, 0, 0.5,
-                _log10_default("sigma_l_step"),
-                hint="Eq 1.13 analogue: how far the tendon lengths may move. "
+            self.g_sig_l_act = self._remember(gui.add_slider(
+                "log10 sigma_L,step (active)", -6, 0, 0.5,
+                _log10_default("sigma_l_step_active"),
+                hint="Eq 1.13 analogue, ACTUATED tendon: how far the motor may "
+                     "reel the flexor in one tick. This is the real trust "
+                     "region on commanded motion -- tighten it and the hand "
+                     "stops being able to get from one state to the next. "
                      "Changing this rebuilds the controller."))
+            self.g_sig_l_pas = self._remember(gui.add_slider(
+                "log10 sigma_L,step (passive)", -6, 0, 0.5,
+                _log10_default("sigma_l_step_passive"),
+                hint="Same, for the five SPRING-BACKED tendons. Should stay "
+                     "loose: their length is free to change as the finger "
+                     "moves (the spring takes up slack), so pinning it pins "
+                     "the joint angles and freezes the hand. Their TENSION is "
+                     "what is held constant, and that is not this knob."))
             self.g_anchor = self._remember(gui.add_dropdown(
                 "anchor", ["tension", "length", "both"],
                 initial_value="tension",
@@ -923,16 +1050,50 @@ class ControllerVizApp:
 
         with gui.add_folder("Augmented Lagrangian"):
             self.g_al_iters = self._remember(gui.add_slider(
-                "iters / tick", 1, 40, 1, 4,
-                hint="Small on purpose: the AL outer loop is amortized across "
-                     "ticks, since the constraint set is unchanged between them "
-                     "and each tick warm-starts from the last."))
+                "iters / tick", 1, 40, 1, HandSolveParams().ctrl_al_iters,
+                hint="Small on purpose, and raising it does not help: the outer "
+                     "loop already exits on stagnation after 1-5 iterations, so "
+                     "a bigger budget buys no-op iterations. If a constraint is "
+                     "not being met, the mu below is the knob, not this."))
+            # Exposed because mu resets every tick anyway (a fresh
+            # AugmentedLagrangianOptimizer per step()), which makes the starting
+            # penalty a genuine per-tick control rather than a warm-up value: at
+            # the defaults a tick's penalty never exceeds ~8, far too weak to
+            # torque the hand base against the rod-physics factors.
+            self.g_al_mu = self._remember(gui.add_slider(
+                "log10 initial mu", -2, 6, 0.5, _log10_default("al_mu"),
+                hint="How much authority the constraints have against the "
+                     "priors and the rod physics. Raise it when a constraint is "
+                     "clearly unsatisfied but nothing moves; back off when the "
+                     "inner LM starts reporting iters=1, which means the penalty "
+                     "has ill-scaled the linear system. Rebuilds the "
+                     "controller."))
 
         with gui.add_folder("Display"):
             self.g_show_collision = self._remember(
                 gui.add_checkbox("collision spheres", True))
             self.g_show_discs = self._remember(
                 gui.add_checkbox("routing discs", False))
+
+        with gui.add_folder("Log"):
+            self.g_log_show = self._remember(gui.add_checkbox(
+                "show log window", True,
+                hint="The running tick log, pinned to the left of the viewport "
+                     "-- the same text ctrl_5f_phases.py prints."))
+            self.g_log_geometry = self._remember(gui.add_checkbox(
+                "geometry every tick", False,
+                hint="Append the independent clearance check to every tick. "
+                     "Verbose; off by default, and available on demand below."))
+            self.g_log_geom_now = gui.add_button(
+                "log geometry now",
+                hint="Fingertip surface gaps and the worst finger-object, "
+                     "finger-finger and finger-table clearances, computed from "
+                     "the solved poses rather than read back out of the solver.")
+            self.g_log_factors = gui.add_button(
+                "log factor errors",
+                hint="Per-factor-type error summary: which families exist, how "
+                     "many, and where the error actually sits.")
+            self.g_log_clear = gui.add_button("clear log")
 
         # Constraint-goal overlays, one folder per phase, generated from the
         # renderer's OVERLAYS table so a new overlay needs no edit here. Grouped
@@ -955,6 +1116,11 @@ class ControllerVizApp:
         self.g_reset.on_click(self._reset_scene)
         self.g_set_theta.on_click(self._commit_theta_curr)
         self.g_free_start.on_click(self._apply_free_space_start)
+        self.g_log_geom_now.on_click(self._log_geometry)
+        self.g_log_factors.on_click(self._log_factor_errors)
+        self.g_log_clear.on_click(lambda _: self.log.clear())
+        self.g_log_show.on_update(
+            lambda _: setattr(self.log, "visible", self.g_log_show.value))
 
         for _ph, _btn in self.g_phase_btns.items():
             _btn.on_click(lambda _, ph=_ph: self._set_phase(ph))
@@ -980,8 +1146,10 @@ class ControllerVizApp:
 
         # Everything that changes the constraint set rebuilds the controller.
         for h in ([self.g_half_space, self.g_anchor, self.g_al_iters,
-                   self.g_table_height, self.g_sig_wrist, self.g_sig_q,
-                   self.g_sig_l] + self.g_contacts):
+                   self.g_al_mu, self.g_table_height, self.g_sig_wrist,
+                   self.g_sig_wrist_rot, self.g_sig_q,
+                   self.g_sig_l_act, self.g_sig_l_pas]
+                  + self.g_contacts):
             h.on_update(self._invalidate)
 
         # Theta_curr's own knobs: live FK while no controller owns the state.
