@@ -390,7 +390,7 @@ exactly the pre-existing graph.
 |---|---|---|
 | `sdf_grid` / `ellipsoid_semi_axes` | which object surface the factors evaluate | §1.3 / §1.6.3 |
 | `object_pose_mean` / `_cov` | the `O` prior (1e-8 = rigidly pinned) | — |
-| `target_contact_node`, `contact_node_radius` | terminal witness contact equality | Eq 1.35–1.39 |
+| `target_contact_node`, `contact_node_radius` | terminal contact equality (witness for an SDF, center-direct for an ellipsoid) | Eq 1.35–1.39 |
 | `witness_point_seed` | override the ray-march seed (object-local) | — |
 | `collision_avoidance`, `collision_node_indices/_radii`, `collision_sigma` | sphere–SDF and sphere–sphere inequalities | Eq 1.57–1.58 |
 | `collision_node_is_proximal` | skips proximal–proximal finger pairs | §1.5 |
@@ -400,7 +400,7 @@ exactly the pre-existing graph.
 | `table_contact_node/_radius` | 5-residual table sliding equality | Eq 1.60–1.64 |
 | `support_contact_node/_radius` | §1.8 center-direct support equality (no witness) | Eq 1.104 |
 | `half_space_enabled/_split_point/_normal` | opposition half-space inequality | Eq 1.99 |
-| `object_contact_center_direct` | phase-2 witness-free object equality | Eq 1.108 |
+| `object_contact_center_direct` | forces the witness-free object equality — already the **default** for any ellipsoid contact in `TendonHandModel` | Eq 1.108 |
 | `contact_drop_normal_row` | 4-row witness contact | Eq 1.114–1.117 |
 | `witness_target/_cov` | soft geodesic pull on the witness point | Eq 1.118 |
 

@@ -35,9 +35,11 @@ struct TendonHandMarginals {
 //
 // Contact: each finger may carry its own sdf_contact / sphere_contact (from its
 // TendonFingerSolverConfig). All contacting fingers touch one shared object
-// (Symbol('O', 0)); each gets its own witness point (Symbol('Y', i)). The
-// contact factors are wrapped as hard equality constraints (ZeroCostConstraint),
-// so the owning solver routes the solve through the Augmented Lagrangian path.
+// (Symbol('O', 0)); a finger using a witness contact factor also gets its own
+// witness point (Symbol('Y', i)) — see uses_center_direct_contact(), which is
+// what decides whether a witness exists at all. The contact factors are wrapped
+// as hard equality constraints (ZeroCostConstraint), so the owning solver routes
+// the solve through the Augmented Lagrangian path.
 class TendonHandModel {
 public:
     // step / emit_wrist_prior default to the single-shot behavior (one wrist
@@ -136,6 +138,20 @@ public:
     // single-shot solve (step_ = 0) this is Symbol('O', 0), unchanged.
     gtsam::Key object_key() const          { return gtsam::Symbol('O', step_); }
     static gtsam::Key witness_key(int i)   { return gtsam::Symbol('Y', i); }
+
+    // Whether this finger's OBJECT contact is expressed as the witness-free
+    // center-direct equality (Eq 1.101) — c_obj(c) = Taubin(T_obj^-1 c) - r = 0,
+    // i.e. EllipsoidCollisionGapFactor's residual as an equality — rather than a
+    // witness contact factor. Analytic-ellipsoid contact takes the center-direct
+    // form BY DEFAULT: it drops the witness variable and goes from 5 residual
+    // rows to 1 per finger, and nothing in the 5-row layout is load-bearing for
+    // a sphere-on-ellipsoid contact (see the definition for the exceptions).
+    //
+    // The single source of truth for that choice: build_graph() picks the factor
+    // with it and get_initial_values() decides whether to seed a witness point
+    // with it, and a disagreement between those two leaves either an orphan
+    // variable (indeterminate system) or an unseeded key.
+    static bool uses_center_direct_contact(const crest_sparse::EnvironmentConfig& env);
 
     // Support-plane sliding witness point for finger i at THIS model's step
     // (Symbol('U', 1000*step_ + i)). Step-indexed (unlike the object witness

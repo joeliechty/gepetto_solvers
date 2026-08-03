@@ -157,6 +157,26 @@ TendonHandModel::TendonHandModel(
 }
 
 
+bool TendonHandModel::uses_center_direct_contact(
+    const crest_sparse::EnvironmentConfig& env)
+{
+    // Collision-only env: no object contact of any kind to choose a form for.
+    if (!env.target_contact_node.has_value()) return false;
+    // A baked SDF has no closed-form distance to constrain the center against,
+    // so it can only be contacted through a witness point.
+    if (env.ellipsoid_semi_axes.norm() <= 0.0) return false;
+    // Explicit request (§1.8 controller phase 2 sets this).
+    if (env.object_contact_center_direct) return true;
+
+    // Default ON for an analytic ellipsoid. The exceptions are the two settings
+    // that are meaningless without a witness VARIABLE to attach to, so asking
+    // for either is how a caller opts back into the witness form:
+    //   contact_drop_normal_row  selects a witness-factor row layout (Eq 1.107-1.110);
+    //   witness_target           is a Gaussian prior ON the witness point (Eq 1.111).
+    return !env.contact_drop_normal_row && !env.witness_target;
+}
+
+
 NonlinearFactorGraph TendonHandModel::build_graph(
     const std::vector<VectorXGaussian>& tensions,
     const std::vector<Vector6Gaussian>& tip_wrenches)
@@ -224,14 +244,15 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         noiseModel::Gaussian::Covariance(env.object_pose_cov)));
                     object_anchored = true;
                 }
-                // Controller phase 2 (Section 1.8, Eq 1.101): constrain the tip
+                // Center-direct object contact (Eq 1.101): constrain the tip
                 // sphere CENTER to the ellipsoid, with no witness point at all.
                 // EllipsoidCollisionGapFactor's residual is r - Taubin(x); as an
                 // EQUALITY the sign is irrelevant, so its zero set is exactly
                 // Eq 1.101. Dropping the witness removes three variables and four
-                // residual rows per finger — the point of the real-time phase.
-                if (env.object_contact_center_direct &&
-                    env.ellipsoid_semi_axes.norm() > 0.0) {
+                // residual rows per finger. This is the DEFAULT form for an
+                // analytic ellipsoid, not just the controller's phase 2 — see
+                // uses_center_direct_contact().
+                if (uses_center_direct_contact(env)) {
                     auto center_contact =
                         std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
                             tip_key, object_key(), env.contact_node_radius,
@@ -534,11 +555,11 @@ Values TendonHandModel::get_initial_values(const Values* warm) const {
                 // seeded above; there is no witness point to seed.
                 if (!env.target_contact_node.has_value()) return;
 
-                // Controller phase 2 (Eq 1.101) constrains the sphere center
+                // Center-direct contact (Eq 1.101) constrains the sphere center
                 // directly, so build_graph creates no witness variable here —
-                // seeding one would leave an orphan value with no factors.
-                if (env.object_contact_center_direct &&
-                    env.ellipsoid_semi_axes.norm() > 0.0) return;
+                // seeding one would leave an orphan value with no factors. Must
+                // stay in lockstep with build_graph, hence the shared predicate.
+                if (uses_center_direct_contact(env)) return;
 
                 Point3 seed_local;
                 if (env.witness_target) {

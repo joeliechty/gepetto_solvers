@@ -177,14 +177,21 @@ struct EnvironmentConfig {
     gtsam::Vector3 half_space_split_point = gtsam::Vector3::Zero();
     gtsam::Vector3 half_space_normal      = gtsam::Vector3::Zero();  // m_hat
 
-    // Controller phase 2 (Eq 1.101): constrain the contact sphere CENTER directly
-    // to the hyper-ellipsoid proxy instead of introducing a witness point --
+    // Constrain the contact sphere CENTER directly to the hyper-ellipsoid instead
+    // of introducing a witness point (Eq 1.101) --
     //   c_obj(c) = Taubin(T_obj^-1 c) - r = 0
     // -- which is EllipsoidCollisionGapFactor's residual (up to an irrelevant
     // sign, since this is an equality) wrapped in a ZeroCostConstraint. Dropping
-    // the witness removes three variables and five residual rows per finger,
-    // which is the point of the real-time sliding phase. Requires
-    // ellipsoid_semi_axes to be set; ignored when target_contact_node is unset.
+    // the witness removes three variables and four residual rows per finger (5
+    // -> 1), which is the point of the real-time sliding phase.
+    //
+    // NOTE this flag now only FORCES the form: TendonHandModel already uses it by
+    // default for any ellipsoid contact (see uses_center_direct_contact()), so
+    // setting it there is redundant but harmless. Read only by TendonHandModel /
+    // TendonHandController; the single-finger TendonFingerSolver and
+    // TendonFingerTrajectoryPlanner ignore it and always use the witness form.
+    // Requires ellipsoid_semi_axes to be set; ignored when target_contact_node
+    // is unset.
     bool object_contact_center_direct = false;
 
     // Controller phase 3 (Eq 1.107-1.110): drop the normal-alignment row c_N from
