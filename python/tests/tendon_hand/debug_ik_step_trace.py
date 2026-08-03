@@ -26,6 +26,16 @@ collision avoidance ON and the support plane OFF. Nothing here mutates solver
 behaviour: it is a read-only harness like :mod:`debug_al_trace`, which reports one
 *whole* solve where this reports every step of one.
 
+Object contact, table contact, object collision and table collision are four
+independent switches, mirroring the visualizer's, so a stalled solve can be
+bisected one constraint family at a time::
+
+    # the object alone (the default), the table alone, then both
+    python -m python.tests.tendon_hand.debug_ik_step_trace
+    python -m python.tests.tendon_hand.debug_ik_step_trace \
+        --table --table-contact --no-object-contact --no-object-collision
+    python -m python.tests.tendon_hand.debug_ik_step_trace --table --table-contact
+
 Run from the ``crest-sparse/`` repo root in the ``crest_py11`` env, so the import
 resolves to the installed binding rather than the in-tree ``.so``::
 
@@ -57,6 +67,7 @@ from .scene import (GRASP_FLEXOR_TENSION, TABLE_NORMAL, get_primitive_specs,
                     primitive_surface_gap)
 from .solvers import (DEFAULT_WRIST_RPY, DEFAULT_WRIST_XYZ, NUM_FINGERS,
                       HandIKStepper, HandSolveParams, capabilities,
+                      free_sphere_plane_witness, plane_witness, resolve_scene,
                       resolve_table_origin, wrist_pose_from_xyzrpy)
 from .utils import PlannerLogger, log_planner_parameters
 
@@ -97,11 +108,20 @@ def print_scene(stepper, params):
     """The geometry the constraints are written against, resolved."""
     T = np.asarray(params.wrist_pose, float)
     spec = stepper.spec
+    def named(mask):
+        return ", ".join(n for n, on in zip(stepper.finger_names, mask) if on) or "none"
+
     print("scene:")
     print(f"  primitive        : {params.primitive} ({spec['type']})")
     print(f"  object center    : {np.array2string(stepper.object_center, precision=4)}")
-    print(f"  contact fingers  : "
-          f"{', '.join(n for n, on in zip(stepper.finger_names, params.contact_fingers) if on) or 'none'}")
+    print(f"  contact fingers  : {named(params.contact_fingers)}")
+    # The resolved masks, not the flags: (fingers AND target) is what was built,
+    # and a mask that came out empty is the first thing to check when a "table"
+    # run behaves exactly like an object-only one.
+    print(f"  -> object contact: {named(stepper._object_contact_mask())}"
+          f"   ({'on' if params.object_contact else 'OFF'})")
+    print(f"  -> table contact : {named(stepper._table_contact_mask())}"
+          f"   ({'on' if params.table_contact else 'OFF'})")
     print(f"  tip radii (m)    : "
           f"{np.array2string(np.asarray(stepper.tip_radii), precision=4)}")
     print("hand base pose (wrist prior mean):")
@@ -111,11 +131,17 @@ def print_scene(stepper, params):
               else f"                     {row}")
     print(f"  sigma pos / rot  : {params.sigma_wrist_pos:.3g} m / "
           f"{params.sigma_wrist_rot:.3g} rad")
+    spheres_on = params.collision or (params.table and params.plane_avoidance)
     print("environment:")
-    print(f"  collision        : {'on' if params.collision else 'off'}"
-          + (f"  radius={params.collision_radius:.4f} m  "
-             f"sigma={params.collision_sigma:.3g}  "
-             f"cull={params.cull_margin}" if params.collision else ""))
+    print(f"  object collision : {'on' if params.collision else 'off'}")
+    print(f"  table collision  : "
+          f"{'on' if params.table and params.plane_avoidance else 'off'}")
+    # Finger-finger rides on the shared sphere set, so it is active whenever
+    # EITHER avoidance is -- including object-collision-off table runs.
+    print(f"  finger-finger    : {'on' if spheres_on else 'off'}")
+    if spheres_on:
+        print(f"  spheres          : radius={params.collision_radius:.4f} m  "
+              f"sigma={params.collision_sigma:.3g}  cull={params.cull_margin}")
     if params.table:
         origin = resolve_table_origin(params, stepper.spec, stepper.object_center)
         print(f"  table            : on   origin="
@@ -126,6 +152,11 @@ def print_scene(stepper, params):
     print("augmented lagrangian:")
     print(f"  mu0={params.al_mu:g}  rate={params.al_rate:g}  "
           f"(1 outer iteration per step, duals warm-started across steps)")
+    print(f"  settle steps     : {params.ik_settle_steps}"
+          + ("   (leading steps run with the flexor prior PINNED, to settle the "
+             "cold start)" if params.ik_settle_steps > 0
+             else "   (OFF -- expect the flexor to swing negative and the hand "
+                  "to hyperextend for ~13 steps)"))
 
 
 def print_factor_errors(stepper, header):
@@ -169,6 +200,21 @@ def sphere_positions(stepper, result):
                      bool(p), n == tip)
                     for n, p in zip(disc_node_indices(cfg), prox)])
     return out
+
+
+def table_clearance(stepper, result):
+    """Worst signed clearance (m) between the support plane and any sphere NOT
+    driven onto it -- negative means something is through the table.
+
+    Built on :func:`solvers.free_sphere_plane_witness` so the number reported
+    here is measured by the same helper the visualizer's overlays draw with, and
+    excludes exactly the spheres the table CONTACT equality pins (whose distance
+    is a residual, not a clearance). ``inf`` when there is no plane."""
+    if not stepper.params.table:
+        return np.inf
+    gaps = free_sphere_plane_witness(stepper.params, result, 0,
+                                     names=result.table_contact_names())
+    return min((g for _s, _f, g in gaps.values()), default=np.inf)
 
 
 def clearances(stepper, result):
@@ -278,9 +324,20 @@ def print_gaps(result):
     contact = set(result.contact_names())
     cells = [f"{name}={gaps[name]:+.5f}" + ("" if name in contact else "*")
              for name in result.finger_names]
-    print(f"    tip gaps (m): {'  '.join(cells)}"
+    print(f"    obj gaps (m): {'  '.join(cells)}"
           + ("   (* not a contact finger)"
              if len(contact) < len(result.finger_names) else ""))
+
+
+def print_table_gaps(params, result):
+    """The same per-finger readout against the support plane, over the fingers
+    driven onto it. Silent when the solve targeted no table contact."""
+    names = result.table_contact_names()
+    if not names:
+        return
+    gaps = plane_witness(params, result, 0, names=names)
+    cells = [f"{name}={gap:+.5f}" for name, (_s, _f, gap) in gaps.items()]
+    print(f"    tbl gaps (m): {'  '.join(cells)}")
 
 
 # ---------------------------------------------------------------------------
@@ -305,21 +362,36 @@ def step_through(stepper, args):
         status = stepper.status()
         meta = result.meta
         gap = result.worst_gap(0)
+        tgap = result.worst_table_gap(stepper.params, 0)
         obj, ff = clearances(stepper, result)
+        tbl = table_clearance(stepper, result)
 
-        print(f"\n-- step {status.steps:>3} --  {status.state}")
+        settling = status.steps <= stepper.params.ik_settle_steps
+        print(f"\n-- step {status.steps:>3} --  {status.state}"
+              + ("   [SETTLING: flexor prior pinned, cost/violation not "
+                 "comparable to the released steps]" if settling else ""))
         print(f"    AL         : mu={status.mu:.6g}  cost={status.cost:.6g}  "
               f"violation={status.violation:.6g}")
         print(f"    inner LM   : iterations={meta.iterations}  "
               f"error={meta.error:.6g}  "
               f"solver={getattr(meta, 'total_time_ms', float('nan')):.1f} ms  "
               f"wall={wall_ms:.1f} ms")
-        print(f"    worst gap  : {gap * 1e3:+.4f} mm  (over the contact fingers)")
+        # Per surface: one combined number cannot say which contact family is the
+        # one refusing to close, which is the whole point of the split toggles.
+        worst = []
+        if stepper.params.object_contact:
+            worst.append(f"object {gap * 1e3:+.4f} mm")
+        if result.table_contact_names():
+            worst.append(f"table {tgap * 1e3:+.4f} mm")
+        print(f"    worst gap  : {'   '.join(worst) or 'n/a (no contact target)'}"
+              f"  (over the contact fingers)")
         print_gaps(result)
+        print_table_gaps(stepper.params, result)
         print(f"    clearance  : object {obj * 1e3:+.3f} mm   "
               f"finger-finger {ff * 1e3:+.3f} mm"
+              + ("" if np.isinf(tbl) else f"   table {tbl * 1e3:+.3f} mm")
               + ("" if stepper.params.collision
-                 else "   (collision OFF -- reported, not enforced)"))
+                 else "   (object collision OFF -- reported, not enforced)"))
         if args.kinematics:
             print_kinematic_state(stepper, result, nodes=args.nodes)
         if args.inner:
@@ -331,7 +403,8 @@ def step_through(stepper, args):
 
         rows.append({"step": status.steps, "state": status.state, "mu": status.mu,
                      "cost": status.cost, "violation": status.violation,
-                     "gap": gap, "object": obj, "finger_finger": ff,
+                     "gap": gap, "table_gap": tgap, "object": obj,
+                     "finger_finger": ff, "table": tbl,
                      "inner_iters": meta.iterations, "error": meta.error,
                      "ms": wall_ms})
         if status.done:
@@ -340,17 +413,23 @@ def step_through(stepper, args):
     return rows, stepper.status(), result
 
 
-def print_summary_table(rows):
+def print_summary_table(rows, table=False):
     print("\n" + "=" * 72)
     print("PER-STEP SUMMARY")
     print("=" * 72)
+    # The table columns only appear on a run that configured a plane, so an
+    # object-only run prints exactly the table it always did.
+    extra = f"  {'tbl gap mm':>10}  {'tbl clr mm':>10}" if table else ""
     print(f"  {'step':>4}  {'state':>9}  {'mu':>11}  {'cost':>13}  "
-          f"{'violation':>12}  {'gap mm':>9}  {'obj mm':>9}  {'inner':>6}  {'ms':>7}")
-    print("  " + "-" * 100)
+          f"{'violation':>12}  {'gap mm':>9}  {'obj mm':>9}{extra}  "
+          f"{'inner':>6}  {'ms':>7}")
+    print("  " + "-" * (100 + len(extra)))
     for r in rows:
+        cells = (f"  {r['table_gap'] * 1e3:>10.4f}  {r['table'] * 1e3:>10.3f}"
+                 if table else "")
         print(f"  {r['step']:>4}  {r['state']:>9}  {r['mu']:>11.4g}  "
               f"{r['cost']:>13.6g}  {r['violation']:>12.4g}  "
-              f"{r['gap'] * 1e3:>9.4f}  {r['object'] * 1e3:>9.3f}  "
+              f"{r['gap'] * 1e3:>9.4f}  {r['object'] * 1e3:>9.3f}{cells}  "
               f"{r['inner_iters']:>6}  {r['ms']:>7.1f}")
 
 
@@ -381,11 +460,17 @@ def print_verdict(rows, status, args):
             "running": f"hit the --max-steps cap ({args.max_steps}) still running"}
     print(f"  stopped because : {stop.get(status.state, status.state)}")
     print(f"  steps taken     : {status.steps}")
-    print(f"  worst tip gap   : {last['gap'] * 1e3:+.4f} mm")
+    print(f"  worst obj gap   : {last['gap'] * 1e3:+.4f} mm")
+    if not np.isinf(last["table"]):
+        print(f"  worst tbl gap   : {last['table_gap'] * 1e3:+.4f} mm")
     print(f"  object clearance: {last['object'] * 1e3:+.3f} mm"
           + ("" if last["object"] >= -PASS_TOL
              else f"   PENETRATION (> {PASS_TOL * 1e3:.1f} mm tolerance)"))
     print(f"  finger-finger   : {last['finger_finger'] * 1e3:+.3f} mm")
+    if not np.isinf(last["table"]):
+        print(f"  table clearance : {last['table'] * 1e3:+.3f} mm"
+              + ("" if last["table"] >= -PASS_TOL
+                 else f"   PENETRATION (> {PASS_TOL * 1e3:.1f} mm tolerance)"))
     print(f"  total solve time: {sum(r['ms'] for r in rows) / 1e3:.2f} s")
     print(f"  >>> {classify(agg, last['gap'], args.max_steps)}")
 
@@ -395,7 +480,7 @@ def print_verdict(rows, status, args):
 # ---------------------------------------------------------------------------
 
 def build_params(args):
-    """The visualizer's own defaults, with collision on and the table off."""
+    """The visualizer's own defaults, with object collision on and the table off."""
     p = HandSolveParams()
     p.primitive = args.primitive
     p.wrist_pose = wrist_pose_from_xyzrpy(args.wrist[:3], args.wrist[3:])
@@ -405,16 +490,32 @@ def build_params(args):
     p.flexor_tensions = [args.flexor] * NUM_FINGERS
     if args.contact_fingers is not None:
         p.contact_fingers = args.contact_fingers
+    p.object_contact = args.object_contact
+    p.table_contact = args.table_contact
     p.al_mu, p.al_rate = args.al_mu, args.al_rate
     p.al_iters = args.max_steps          # reported only; the stepper caps at 1/step
+    p.ik_settle_steps = args.ik_settle_steps
     p.collision = args.collision
     p.collision_radius = args.collision_radius
     p.collision_sigma = args.collision_sigma
     p.cull_margin = args.cull_margin
-    # The point of this harness: no support plane. Phase-1-style table contact
-    # belongs to the controller (ctrl_5f_phases.py), not to a stepped IK solve.
-    p.table = False
+    p.table = args.table
     p.plane_normal = np.array(TABLE_NORMAL, float)
+    p.plane_avoidance = args.table_collision
+    # k_touch is the PLANNER's approach/slide schedule; a single-state IK solve
+    # has no steps to schedule, so the table equality is simply always active.
+    p.k_touch = None
+    if args.table and args.table_offset:
+        # Absolute origin, resolved from the scene's own seating then shifted --
+        # the headless equivalent of the GUI's "height offset" slider. Must be
+        # resolved BEFORE it is assigned, since resolve_table_origin returns the
+        # auto seating only while plane_origin is still None.
+        spec = get_primitive_specs()[args.primitive]
+        n = np.asarray(p.plane_normal, float)
+        n = n / (np.linalg.norm(n) or 1.0)
+        center = np.asarray(resolve_scene(p)[1], float)
+        p.plane_origin = np.asarray(
+            resolve_table_origin(p, spec, center), float) + args.table_offset * n
     return p
 
 
@@ -440,15 +541,46 @@ def build_parser():
     ap.add_argument("--contact-fingers", dest="contact_fingers", type=parse_mask,
                     default=None, metavar="I,M,R,P,T",
                     help="per-finger contact flags in index,middle,ring,pinky,"
-                         "thumb order (default: all five)")
+                         "thumb order (default: all five). Shared by both "
+                         "contact targets below")
+
+    # The four independent constraint families. Each acts on --contact-fingers,
+    # so any combination of them is one run.
+    ap.add_argument("--no-object-contact", dest="object_contact",
+                    action="store_false", default=True,
+                    help="stop driving the fingertips onto the OBJECT; it stays "
+                         "as collision geometry only")
+    ap.add_argument("--table-contact", dest="table_contact", action="store_true",
+                    default=False,
+                    help="drive the fingertips onto the SUPPORT PLANE (one "
+                         "equality per finger on its sphere-to-plane distance). "
+                         "Implies --table")
+    ap.add_argument("--table", action="store_true", default=False,
+                    help="configure the support plane (off by default here)")
+    ap.add_argument("--table-offset", dest="table_offset", type=float, default=0.0,
+                    help="shift the plane along its normal from the scene's own "
+                         "seating, in m -- the GUI's 'height offset' slider")
+    ap.add_argument("--no-table-collision", dest="table_collision",
+                    action="store_false", default=True,
+                    help="drop the plane avoidance inequalities, leaving only "
+                         "whatever table CONTACT was asked for")
     ap.add_argument("--al-mu", dest="al_mu", type=float, default=1.0)
     ap.add_argument("--al-rate", dest="al_rate", type=float, default=2.0)
     ap.add_argument("--max-steps", dest="max_steps", type=int, default=40,
                     help="cap on AL outer iterations (the GUI's 'max steps')")
-    ap.add_argument("--no-collision", dest="collision", action="store_false",
-                    default=True,
-                    help="drop the Section 1.5 collision spheres (they are ON "
-                         "by default here, unlike in the GUI)")
+    ap.add_argument("--ik-settle-steps", dest="ik_settle_steps", type=int,
+                    default=HandSolveParams().ik_settle_steps,
+                    help="leading steps that pin the flexor prior to settle the "
+                         "cold start (the GUI's 'settle steps'). 0 reproduces "
+                         "the pre-fix behaviour, where the flexor swings to "
+                         "about -0.9 N -- hyperextension -- and the hand spends "
+                         "~13 steps crawling back to the FK pose")
+    ap.add_argument("--no-object-collision", "--no-collision", dest="collision",
+                    action="store_false", default=True,
+                    help="drop the Section 1.5 finger-OBJECT collision "
+                         "inequalities (they are ON by default here, unlike in "
+                         "the GUI). Finger-finger avoidance survives as long as "
+                         "table collision is still on")
     ap.add_argument("--collision-radius", dest="collision_radius", type=float,
                     default=0.003)
     ap.add_argument("--collision-sigma", dest="collision_sigma", type=float,
@@ -476,6 +608,10 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    # Asking for table contact with no plane configured is a typo, not a request
+    # for a silently inert run: the mask would be emptied by _table_contact_mask.
+    if args.table_contact:
+        args.table = True
     if args.verbose:
         os.environ["CREST_AL_VERBOSE"] = "1"
 
@@ -514,7 +650,7 @@ def main(argv=None):
             # number-for-number record of what was solved, so it is never skipped.
             print("\nfinal kinematic state:")
             print_kinematic_state(stepper, result, indent="  ", nodes=args.nodes)
-        print_summary_table(rows)
+        print_summary_table(rows, table=params.table)
         print_verdict(rows, status, args)
         return 0
     finally:

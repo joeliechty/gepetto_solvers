@@ -164,14 +164,16 @@ class ViserHandScene:
     # -- per-frame hand ----------------------------------------------------
 
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
-               collision=False, gaps=None):
+               collision=False, gaps=None, table_gaps=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
 
         ``gaps`` is the optional fingertip-to-object overlay: a
         ``{finger: (sphere_pt, surface_pt, gap_m)}`` map as returned by
-        ``HandResult.contact_witness``. Rendering only -- nothing here feeds the
-        solver."""
+        ``HandResult.contact_witness``. ``table_gaps`` is the same shape measured
+        against the support plane (``solvers.plane_witness``) and drawn alongside,
+        so a solve touching both surfaces shows both distances. Rendering only --
+        nothing here feeds the solver."""
         keep = set()
         tip_radii = tip_radii or [None] * len(self.finger_names)
 
@@ -206,6 +208,9 @@ class ViserHandScene:
             # near/far cue lives on the line.
             if self.show_gap_lines and gaps and name in gaps:
                 keep |= self._update_gap(name, *gaps[name])
+            if self.show_gap_lines and table_gaps and name in table_gaps:
+                keep |= self._update_gap(name, *table_gaps[name],
+                                         kind="table_gap")
 
             # Collision spheres on the disc nodes.
             if collision and self.show_collision_spheres:
@@ -243,16 +248,19 @@ class ViserHandScene:
             keep.add(n)
         return keep
 
-    def _update_gap(self, name, sphere_pt, surface_pt, gap):
+    def _update_gap(self, name, sphere_pt, surface_pt, gap, kind="gap"):
+        """One fingertip-to-surface line + labelled distance. ``kind`` namespaces
+        the scene handles, so an object gap and a table gap on the SAME finger are
+        two overlays rather than one overwriting the other."""
         p0 = np.asarray(sphere_pt, float).reshape(3)
         p1 = np.asarray(surface_pt, float).reshape(3)
         rgb = _GAP_NEAR_RGB if gap < GAP_GREEN_MAX_M else _GAP_FAR_RGB
 
-        ln = f"/hand/{name}/gap/line"
+        ln = f"/hand/{name}/{kind}/line"
         self._dynamic[ln] = self.scene.add_line_segments(
             ln, np.stack([p0, p1])[None], colors=rgb, line_width=3.0)
 
-        lb = f"/hand/{name}/gap/label"
+        lb = f"/hand/{name}/{kind}/label"
         self._dynamic[lb] = self.scene.add_label(
             lb, f"{gap * 1000.0:.1f} mm", position=tuple(0.5 * (p0 + p1)),
             anchor="center-center")

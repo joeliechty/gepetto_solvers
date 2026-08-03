@@ -41,3 +41,4 @@ setup_log*
 *.gif
 
 results/
+*DS_Store

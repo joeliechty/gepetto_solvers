@@ -153,15 +153,9 @@ public:
     // variable (indeterminate system) or an unseeded key.
     static bool uses_center_direct_contact(const crest_sparse::EnvironmentConfig& env);
 
-    // Support-plane sliding witness point for finger i at THIS model's step
-    // (Symbol('U', 1000*step_ + i)). Step-indexed (unlike the object witness
-    // Symbol('Y', i), which only the terminal step instantiates) because the
-    // table sliding contact fires at every slide-phase step, each needing its own
-    // dummy point. The 1000* stride keeps distinct steps' witnesses disjoint for
-    // any realistic finger count.
-    gtsam::Key table_witness_key(int i) const {
-        return gtsam::Symbol('U', 1000 * step_ + i);
-    }
+    // NOTE there is deliberately no table witness key: the support-plane contact
+    // equality constrains the contact node's sphere CENTER directly (one residual,
+    // no free point), so the table introduces no variable of its own at any step.
 
     // This model's own wrist key (step-indexed). Used by the trajectory planner
     // to wire the wrist GP BetweenFactor between consecutive timesteps.

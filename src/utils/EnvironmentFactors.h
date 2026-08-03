@@ -130,13 +130,17 @@ struct EnvironmentConfig {
     // (c_pen = r - SDF_table <= 0) -- the free-space approach that keeps the
     // fingers off the table.
     //
-    // table_contact_node (Eq 1.60-1.64): the finger node whose sphere is placed
-    // on the table and slid across it during the sliding phase. When set, that
-    // node gets a 5-residual PlaneWitnessContactFactor wrapped in a
-    // gtsam::ZeroCostConstraint (table sliding equality). table_contact_radius is
-    // that node's contact sphere radius. The trajectory planner schedules these
-    // fields per step around the k_touch touch step, so the same env is reused
-    // for approach (plane_avoidance on, table_contact_node cleared) and slide
+    // table_contact_node: the finger node whose sphere is placed on the table and
+    // slid across it during the sliding phase. When set, that node gets a SINGLE
+    // residual on the sphere CENTER -- c_table(c) = Dist_plane(c) = 0, i.e.
+    // PlaneCollisionGapFactor wrapped in a gtsam::ZeroCostConstraint -- with no
+    // witness point of its own. (This replaces §1.6's five-residual
+    // PlaneWitnessContactFactor form, Eq 1.60-1.64; it is the same factor
+    // support_contact_node below uses, and the same argument applies: a plane
+    // needs no witness.) table_contact_radius is that node's contact sphere
+    // radius. The trajectory planner schedules these fields per step around the
+    // k_touch touch step, so the same env is reused for approach
+    // (plane_avoidance on, table_contact_node cleared) and slide
     // (plane_avoidance off, table_contact_node set).
     gtsam::Vector3 plane_origin = gtsam::Vector3::Zero();
     gtsam::Vector3 plane_normal = gtsam::Vector3::Zero();  // norm 0 => no table
@@ -151,12 +155,13 @@ struct EnvironmentConfig {
     // the §1.3-1.6 solvers/planners builds exactly the pre-existing graph.
 
     // Support-surface contact EQUALITY on the contact sphere CENTER (Eq 1.97),
-    // used in controller phases 1 and 2. Distinct from table_contact_node above,
-    // which builds the §1.6 five-residual witness form: here there is no witness
-    // point at all, just c_support(c) = Dist_plane(c) = 0 on the sphere center.
-    // The witness is unnecessary because a single scalar residual on the center
-    // leaves no rotational gauge freedom to brick the solver -- the null space
-    // §1.6 worried about only appears once a free p_c variable is introduced.
+    // used in controller phases 1 and 2. Same factor and same residual as
+    // table_contact_node above, on a separately designated node: there is no
+    // witness point at all, just c_support(c) = Dist_plane(c) = 0 on the sphere
+    // center. The witness is unnecessary because a single scalar residual on the
+    // center leaves no rotational gauge freedom to brick the solver -- the null
+    // space §1.6 worried about only appears once a free p_c variable is
+    // introduced.
     //
     // NOTE on sign: the paper writes Dist_plane(c) = |(c - p).n| - r. We use the
     // SIGNED form (which is what PlaneCollisionGapFactor already computes, wrapped
@@ -748,8 +753,7 @@ public:
 // normalization makes c_O a well-scaled O(1) Euclidean-like distance with an
 // exact analytic Jacobian, recovering SDF-level conditioning. The surface-normal
 // rows reuse the standard locally-constant-gradient contact convention (N held
-// fixed within the Gauss-Newton step), matching SdfWitnessContactFactor /
-// PlaneWitnessContactFactor.
+// fixed within the Gauss-Newton step), matching SdfWitnessContactFactor.
 //
 // drop_normal_row (Section 1.8, Eq 1.107-1.110): as on SdfWitnessContactFactor,
 // omits the c_N row and returns the 4-vector [c_R, c_O, c_T1, c_T2].
@@ -888,123 +892,15 @@ public:
 };
 
 
-// Surface-to-surface witness-point contact against a world-fixed analytic plane
-// (Section 1.6, Eq 1.60-1.64) -- the "table sliding equality". The analog of
-// SdfWitnessContactFactor for a constant half-space support surface.
-// Connects:
-//   - node_pose_key (Pose3)  : finger node whose sphere should rest on the plane
-//   - point_key     (Point3) : dummy contact point p_c in world frame
-// The plane (origin p_table, OUTWARD unit normal n_table) is a constant, so there
-// is no object-pose variable and n_table has no rotation Jacobian.
-//
-// 5D residual = [ ||p_c - c|| - R,               (c_R,  Eq 1.60)
-//                 (p_c - p_table) . n_table,      (c_O,  Eq 1.61)
-//                 1 + N_i . n_table,              (c_N,  Eq 1.62)
-//                 (p_c - c) . t1(n_table),        (c_T1, Eq 1.63)
-//                 (p_c - c) . t2(n_table) ].      (c_T2, Eq 1.64)
-// N_i = (p_c - c)/||.|| is the body-sphere outward normal; t1, t2 span the
-// plane's tangent (Frisvad basis of n_table). CRITICALLY we keep rows 3-4: they
-// pin p_c along the contact normal RELATIVE to the tip center, which makes the
-// witness full-rank ({n_table, t1, t2} spans R^3) WITHOUT locking the tip's
-// lateral position -- so the tip is still free to slide across the plane. This
-// is the correction over the earlier 3-residual form, whose missing tangent rows
-// left p_c rank-deficient (IndeterminantLinearSystem) and needed a Tikhonov prior.
-//
-// drop_normal_row (Section 1.8, Eq 1.107-1.110): as on SdfWitnessContactFactor,
-// omits the c_N row and returns the 4-vector [c_R, c_O, c_T1, c_T2].
-class PlaneWitnessContactFactor
-    : public gtsam::NoiseModelFactor2<gtsam::Pose3, gtsam::Point3>
-{
-private:
-    double R_;
-    gtsam::Vector3 p_table_;
-    gtsam::Vector3 n_table_;
-    bool drop_normal_row_;
-
-public:
-    PlaneWitnessContactFactor(gtsam::Key node_pose_key, gtsam::Key point_key,
-                              double radius, const gtsam::Vector3& p_table,
-                              const gtsam::Vector3& n_table,
-                              const gtsam::SharedNoiseModel& noise_model,
-                              bool drop_normal_row = false)
-        : NoiseModelFactor2(noise_model, node_pose_key, point_key),
-          R_(radius), p_table_(p_table), n_table_(n_table.normalized()),
-          drop_normal_row_(drop_normal_row) {}
-
-    gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
-                                const gtsam::Point3& dummy_point,
-                                gtsam::OptionalMatrixType H1,
-                                gtsam::OptionalMatrixType H2) const override
-    {
-        // --- e1 = ||p_c - c|| - R --------------------------------------
-        gtsam::Matrix36 D_center_pose;
-        gtsam::Point3 center = node_pose.translation(H1 ? &D_center_pose : nullptr);
-
-        gtsam::Vector3 diff = dummy_point - center;
-        double d = diff.norm();
-        if (d < 1e-7) d = 1e-7;
-        double e1 = d - R_;
-        gtsam::Vector3 n_i = diff / d;  // body-sphere outward normal (world frame)
-
-        // --- e2 = (p_c - p_table) . n_table ----------------------------
-        double e2 = (dummy_point - p_table_).dot(n_table_);
-
-        // --- e3 = 1 + N_i . n_table ------------------------------------
-        double e3 = 1.0 + n_i.dot(n_table_);
-
-        // --- e4, e5 = C-frame gauge fixing (Eq 1.63-1.64) --------------
-        // Tangent basis of the (constant) plane normal; t1, t2 held constant
-        // within the local Gauss-Newton step, so their Jacobian reduces to the
-        // tangent vectors themselves.
-        gtsam::Vector3 t1, t2;
-        frisvad_tangent_basis(n_table_, t1, t2);
-        double e4 = diff.dot(t1);
-        double e5 = diff.dot(t2);
-
-        // Row layout: [c_R, c_O, (c_N), c_T1, c_T2]. Dropping c_N shifts the two
-        // tangent rows up by one and shrinks the residual to 4.
-        const int dim = drop_normal_row_ ? 4 : 5;
-        const int rT1 = drop_normal_row_ ? 2 : 3;
-
-        if (H1 || H2) {
-            if (H1) *H1 = gtsam::Matrix::Zero(dim, 6);
-            if (H2) *H2 = gtsam::Matrix::Zero(dim, 3);
-
-            // Row 0: e1 -- de1/dp_c = n_i^T, de1/dc = -n_i^T.
-            if (H1) H1->row(0) = -n_i.transpose() * D_center_pose;
-            if (H2) H2->row(0) =  n_i.transpose();
-
-            // Row 1: e2 -- depends only on p_c (n_table constant).
-            if (H2) H2->row(1) = n_table_.transpose();
-
-            // Row 2: e3 -- n_table constant. n_i = diff/d, projector
-            // P = (I - n_i n_i^T)/d.  dn_i/dp_c = P, dn_i/dc = -P.
-            if (!drop_normal_row_) {
-                const gtsam::Matrix3 I3 = gtsam::Matrix3::Identity();
-                gtsam::Matrix3 P = (I3 - n_i * n_i.transpose()) / d;
-                Eigen::RowVector3d ntabP = n_table_.transpose() * P;
-                if (H1) H1->row(2) = -ntabP * D_center_pose;
-                if (H2) H2->row(2) =  ntabP;
-            }
-
-            // Tangent rows: e4, e5. With t1, t2 constant, de/dp_c = t^T and
-            // de/dc = -t^T (diff = p_c - c).
-            if (H2) H2->row(rT1)     = t1.transpose();
-            if (H2) H2->row(rT1 + 1) = t2.transpose();
-            if (H1) H1->row(rT1)     = -t1.transpose() * D_center_pose;
-            if (H1) H1->row(rT1 + 1) = -t2.transpose() * D_center_pose;
-        }
-
-        if (drop_normal_row_)
-            return (gtsam::Vector(4) << e1, e2, e4, e5).finished();
-        return (gtsam::Vector(5) << e1, e2, e3, e4, e5).finished();
-    }
-
-    gtsam::NonlinearFactor::shared_ptr clone() const override {
-        return std::static_pointer_cast<gtsam::NonlinearFactor>(
-            gtsam::NonlinearFactor::shared_ptr(new PlaneWitnessContactFactor(*this)));
-    }
-};
+// NOTE the Section 1.6 five-residual PlaneWitnessContactFactor (Eq 1.60-1.64)
+// that used to live here has been REMOVED. The table sliding equality now
+// constrains the contact sphere's CENTER directly, as the single residual
+// PlaneCollisionGapFactor wrapped in a gtsam::ZeroCostConstraint (see
+// TendonHandModel::build_graph and the support_contact_node notes above).
+// Four of the witness form's five rows existed only to pin the gauge of the
+// free contact point it introduced; for a PLANE that point buys nothing, since
+// a scalar residual on the center leaves no rotational freedom to brick the
+// solver and still lets the tip slide laterally.
 
 
 // Sphere-sphere contact factor (analytical, 1-residual gap form). Use when

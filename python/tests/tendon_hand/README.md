@@ -441,6 +441,13 @@ environments.
   env (so collision and plane avoidance keep protecting it) but **no**
   `target_contact_node`, which the C++ layer reads as a collision-only env. Use it
   for pinch/subset grasps.
+  The solver classes drive `attach_contact` and `attach_table` from *separate*
+  masks — `HandSolveParams.object_contact` / `table_contact`, each ANDed with the
+  shared `contact_fingers` — so a solve can target the object, the table, or both.
+  Likewise `attach_collision(avoidance=...)` splits the collision sphere **set**
+  from the finger-object inequalities built on it: `params.collision` is object
+  collision, `params.plane_avoidance` is table collision, the spheres are attached
+  for either, and finger-finger avoidance is active whenever either is on.
 * `opposition_directions()` / `opposition_axis_from_object()` — the §1.8 m̂:
   `+axis` for the thumb, `−axis` for everyone else.
 * `rotation_from_two_axes()` — "point THIS at THAT, and roll so THIS OTHER lines

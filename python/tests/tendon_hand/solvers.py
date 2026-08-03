@@ -679,7 +679,7 @@ def _plane_measure(center, radius, origin, n_hat):
     return (center - radius * n_hat, center - d * n_hat, d - radius)
 
 
-def plane_witness(params, result, k=0):
+def plane_witness(params, result, k=0, names=None):
     """Per-contact-finger ``{name: (sphere_pt, foot_pt, signed_gap)}`` against the
     support plane at frame ``k``.
 
@@ -687,16 +687,22 @@ def plane_witness(params, result, k=0):
     a table clearance exactly the way it draws an object gap. These are the
     spheres phase 1/2 hold at ``c_support = 0`` (Eq 1.104/1.110); phase 3 relaxes
     them back to the ``<= 0`` inequality, where the same number is a clearance.
+
+    ``names`` overrides which fingers are reported. The default (the fingers
+    designated for OBJECT contact) is what the §1.8 overlays want, since a
+    controller phase designates one contact set for both surfaces; a solve that
+    targets the two surfaces separately passes ``result.table_contact_names()``.
     """
     frame = result.frames[k]
     origin = np.asarray(resolve_table_origin(params, result.spec,
                                              result.object_center), float)
     n_hat = np.asarray(params.plane_normal, float)
     n_hat = n_hat / (np.linalg.norm(n_hat) or 1.0)
+    wanted = set(result.contact_names() if names is None else names)
 
     out = {}
     for name, radius in zip(result.finger_names, result.tip_radii):
-        if name not in result.contact_names():
+        if name not in wanted:
             continue
         fm = frame[name].marginals
         c = np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
@@ -704,20 +710,24 @@ def plane_witness(params, result, k=0):
     return out
 
 
-def free_sphere_plane_witness(params, result, k=0):
+def free_sphere_plane_witness(params, result, k=0, names=None):
     """The same measurement for every sphere NOT designated for support contact,
     keyed ``"{finger}/{node}"``.
 
     These carry the Eq 1.106 avoidance inequality rather than an equality, and
     they are the ones that silently stall a phase: a single sphere driven through
     the table dominates the merit function and the inner LM rejects every step.
+
+    ``names`` (as on :func:`plane_witness`) is the designated support set whose
+    tips are excluded here; it must be the same list, or a fingertip is either
+    reported twice or not at all.
     """
     frame = result.frames[k]
     origin = np.asarray(resolve_table_origin(params, result.spec,
                                              result.object_center), float)
     n_hat = np.asarray(params.plane_normal, float)
     n_hat = n_hat / (np.linalg.norm(n_hat) or 1.0)
-    contact = set(result.contact_names())
+    contact = set(result.contact_names() if names is None else names)
 
     out = {}
     for name, tip_radius in zip(result.finger_names, result.tip_radii):
@@ -951,17 +961,34 @@ class HandSolveParams:
 
     # --- Which fingertips are solved for contact (IK / planner; FK ignores it) ---
     # One flag per finger, in ``configs`` order. A False finger contributes no
-    # contact constraint -- neither to the object nor to the table -- but keeps
-    # its collision spheres and plane avoidance, so it is still kept out of the
-    # object and (wherever avoidance is active) off the table. All-True is the
-    # legacy behavior: every fingertip driven onto the object.
+    # contact constraint -- to any surface -- but keeps its collision spheres and
+    # plane avoidance, so it is still kept out of the object and (wherever
+    # avoidance is active) off the table. All-True is the legacy behavior.
+    # WHICH surfaces the True fingers are driven onto is object_contact /
+    # table_contact below.
     contact_fingers: List[bool] = field(
         default_factory=lambda: [True] * NUM_FINGERS)
+
+    # --- WHICH SURFACE those fingers are driven onto (IK / planner) ---
+    # Orthogonal to contact_fingers, which stays the FINGER selection: the
+    # effective per-surface mask is (contact_fingers AND the flag below). So a
+    # solve can chase the object only (the legacy behavior), the table only, or
+    # both -- which is what makes a stalled grasp bisectable, since the two
+    # constraint families can be switched on one at a time.
+    #
+    # table_contact additionally needs `table` on; without a configured plane
+    # there is nothing to touch and it is silently inert.
+    object_contact: bool = True
+    table_contact: bool = False
 
     # --- Augmented Lagrangian (IK / planner) ---
     al_mu: float = 1.0
     al_rate: float = 2.0
     al_iters: int = 40
+    # How many leading stepper steps run with the flexor prior PINNED as tightly
+    # as the passives (see HandIKStepper.step). Settles the cold start before the
+    # flexor is released to _IK_TENSION_COV; 0 restores the old behaviour.
+    ik_settle_steps: int = 1
 
     # --- Planner-only ---
     K: int = 10
@@ -981,6 +1008,10 @@ class HandSolveParams:
     record_iterations: bool = False
 
     # --- Collision avoidance (Section 1.5, opt-in; IK / planner) ---
+    # OBJECT collision: keep every non-contact sphere out of the object surface.
+    # Independent of the table's own avoidance (plane_avoidance below); the two
+    # share one set of collision spheres, and finger-finger avoidance comes along
+    # whenever EITHER is on.
     collision: bool = False
     collision_radius: float = 0.003
     collision_sigma: float = 1e-4
@@ -992,6 +1023,9 @@ class HandSolveParams:
     plane_origin: Optional[np.ndarray] = None       # None => seat from the scene
     plane_normal: np.ndarray = field(
         default_factory=lambda: np.array(TABLE_NORMAL, float))
+    # TABLE collision: keep every non-contact sphere out of the half-space. Needs
+    # only `table`, not `collision` -- the solvers attach the collision sphere set
+    # whenever either avoidance consumer wants it.
     plane_avoidance: bool = True
     k_touch: Optional[int] = None                    # planner slide-grasp schedule
     # Fraction of the object's FULL along-normal extent sitting BELOW the plane.
@@ -1284,6 +1318,11 @@ class HandResult:
     # entries directly; a one-shot recorded solve leaves this None and the
     # caller falls back to indexing ``meta``'s AL trace.
     iterate_notes: Optional[List[str]] = None
+    # Which fingers were driven onto the SUPPORT PLANE, the table counterpart of
+    # ``contact_fingers`` (which stays the object set). None = none of them, i.e.
+    # the object-only solves every caller ran before the two were separable.
+    # Appended last on purpose: several call sites build a result positionally.
+    table_contact_fingers: Optional[List[bool]] = None
 
     def state(self, k=0):
         """The solved hand state at frame ``k``, for seeding another solver.
@@ -1315,6 +1354,16 @@ class HandResult:
             return list(self.finger_names)
         return [name for name, on in zip(self.finger_names, self.contact_fingers)
                 if on]
+
+    def table_contact_names(self):
+        """The fingers designated to touch the SUPPORT PLANE. Empty unless the
+        solve targeted the table (unlike :meth:`contact_names`, whose None case
+        means "all of them" -- there the mask is an optional restriction, here it
+        is the whole opt-in)."""
+        if self.table_contact_fingers is None:
+            return []
+        return [name for name, on in zip(self.finger_names,
+                                         self.table_contact_fingers) if on]
 
     def contact_witness(self, k=0):
         """Per-finger ``{name: (sphere_surface_pt, object_surface_pt, gap_m)}`` in
@@ -1353,11 +1402,23 @@ class HandResult:
                 for name in self.finger_names]
 
     def worst_gap(self, k=0):
-        """Largest |gap| over the fingers that were *asked* to touch, so a masked
-        subset grasp isn't scored on fingers left free."""
+        """Largest |gap| to the OBJECT over the fingers that were *asked* to touch
+        it, so a masked subset grasp isn't scored on fingers left free."""
         gaps = self.surface_gaps(k)
         names = self.contact_names()
         return max((abs(gaps[n]) for n in names if n in gaps), default=0.0)
+
+    def worst_table_gap(self, params, k=0):
+        """The same score against the SUPPORT PLANE, over the fingers driven onto
+        it. 0.0 when the solve targeted no table contact.
+
+        Takes ``params`` because the plane is not part of a result: its origin is
+        re-resolved from the scene the same way the solve resolved it."""
+        names = self.table_contact_names()
+        if not names:
+            return 0.0
+        gaps = plane_witness(params, self, k, names=names)
+        return max((abs(g) for _p, _f, g in gaps.values()), default=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -1378,28 +1439,52 @@ class HandSolverBase:
         self.spec, self.object_center, self.object_rotation, self.object_pose = \
             resolve_scene(self.params)
 
+    # -- contact masks --
+    #
+    # One finger selection (params.contact_fingers) times one per-surface switch.
+    # Both surfaces read the same finger list, so "index and thumb, on the table
+    # only" is a two-flag change rather than two masks to keep in sync.
+
+    def _object_contact_mask(self):
+        """Fingers driven onto the OBJECT surface."""
+        return [bool(b) and self.params.object_contact
+                for b in self.params.contact_fingers]
+
+    def _table_contact_mask(self):
+        """Fingers driven onto the SUPPORT PLANE. Empty without ``params.table``:
+        there is no plane configured to touch."""
+        on = self.params.table_contact and self.params.table
+        return [bool(b) and on for b in self.params.contact_fingers]
+
     # -- environment attachment (mutates self.configs in place) --
 
     def _attach_contact(self):
         """Per-finger contact env: shared object surface + this finger's tip node
         as the terminal contact (``ik_5f_contact.py`` block). Fingers masked off
-        by ``params.contact_fingers`` get a collision-only env instead."""
+        get a collision-only env instead -- which is also what every finger gets
+        with ``params.object_contact`` off, leaving the object present as
+        collision geometry but with nothing driven onto it."""
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
-                       contact_fingers=self.params.contact_fingers)
+                       contact_fingers=self._object_contact_mask())
 
-    def _attach_collision(self):
+    def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)
         env. Reuses the contact env, so it works for SDF and ellipsoid objects
-        alike (the vdb path is only used if a finger has no env yet)."""
+        alike (the vdb path is only used if a finger has no env yet).
+
+        ``avoidance`` selects whether the finger-OBJECT inequalities are built;
+        the spheres themselves are declared either way, because the support plane
+        and the finger-finger pairs are built on the same set."""
         vdb = (None if self.spec["type"] == "ellipsoid"
                else os.path.normpath(os.path.join(_OBJECTS_DIR, self.spec["vdb"])))
         attach_collision(self.configs, vdb, self.object_pose,
                          radius=self.params.collision_radius,
                          sigma=self.params.collision_sigma,
                          num_proximal_discs=self.params.num_proximal_discs,
-                         cull_margin=self.params.cull_margin)
+                         cull_margin=self.params.cull_margin,
+                         avoidance=avoidance)
 
     def _attach_table(self):
         """Attach the Section 1.6 support plane to every finger's env."""
@@ -1407,7 +1492,27 @@ class HandSolverBase:
         attach_table(self.configs, origin, self.params.plane_normal,
                      avoidance=self.params.plane_avoidance,
                      tip_radii=self.tip_radii,
-                     contact_fingers=self.params.contact_fingers)
+                     contact_fingers=self._table_contact_mask())
+
+    def _attach_environment(self):
+        """The whole constraint environment for one solve, per the four
+        independent toggles (object contact, table contact, object collision,
+        table collision).
+
+        The collision sphere SET is attached whenever either avoidance consumer
+        wants it; ``env.collision_avoidance`` then selects only whether the
+        finger-OBJECT inequalities are built. Finger-finger avoidance rides on the
+        set, so it is active whenever either collision toggle is.
+
+        Shared by the IK solver, the IK stepper and the planner so the three
+        cannot drift into building different environments from the same params.
+        The Section 1.8 controller deliberately does NOT route through here -- it
+        derives its per-phase envs in C++ from one pristine base env."""
+        self._attach_contact()
+        if self.params.collision or (self.params.table and self.params.plane_avoidance):
+            self._attach_collision(avoidance=self.params.collision)
+        if self.params.table:
+            self._attach_table()
 
     # -- prior builders --
 
@@ -1440,11 +1545,17 @@ class HandSolverBase:
         return [crest_sparse.Vector6Gaussian(np.zeros(6), cov) for _ in self.configs]
 
     def _result(self, frames, meta, contact_fingers=None, states=None,
-                iterates=None, iterate_states=None, iterate_notes=None):
+                iterates=None, iterate_states=None, iterate_notes=None,
+                table_contact_fingers=None):
+        # The table mask defaults to the one this solve actually built, so every
+        # result carries it without each call site restating it; a caller that
+        # means "no table" (the controller) passes an explicit all-False list.
+        if table_contact_fingers is None:
+            table_contact_fingers = self._table_contact_mask()
         return HandResult(frames, meta, self.spec, self.object_center,
                           self.object_rotation, self.finger_names, self.tip_radii,
                           contact_fingers, states, iterates, iterate_states,
-                          iterate_notes)
+                          iterate_notes, table_contact_fingers)
 
     def solve(self) -> HandResult:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -1488,17 +1599,38 @@ class HandFKSolver(HandSolverBase):
 # point of the stepper is that it advances *this* solve.
 _IK_TENSION_COV = np.diag([1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-1])
 
+# The same prior with the FLEXOR pinned as hard as the passives, used only to
+# settle a cold start (HandIKStepper.step, params.ik_settle_steps).
+#
+# The C++ initial values seed every tension at ZERO on a rod already at its rest
+# shape (TendonRobotModel::get_initial_values) -- a guess that looks right but is
+# statically inconsistent. Against a commanded 0.5 N passive at sigma 1e-3 that
+# is 0.5 * (0.5/1e-3)^2 * 25 = 3.125e6 units of prior cost, which is exactly the
+# cost the AL trace reports at its iteration 0. The first inner LM solve spends
+# its whole budget hauling the 25 passive tensions home, and the flexor -- whose
+# prior is 1e5x weaker in weight -- is the cheap direction that absorbs the
+# leftover inconsistency: it swings to about -0.9 N. Negative tension is
+# HYPEREXTENSION, so the hand visibly bends backwards, and since the inner LM is
+# capped at 100 iterations per outer step it then takes ~13 steps to crawl back
+# to the FK pose the GUI was already showing. Measured: it is one continuous LM
+# descent chopped into 100-iteration slices, not the constraints pulling (a 400-
+# iteration budget reaches step 4's state in one step, and the excursion is
+# identical for al_mu from 1e-6 to 10, and for contact-only, collision-only or
+# both).
+#
+# Pinning the flexor for the settling step removes the soft direction, so the
+# transient is absorbed by the passives alone: step 1 lands exactly on the FK
+# pose and the solve reaches the same converged grasp in the same number of steps
+# and less wall time.
+_IK_SETTLE_TENSION_COV = np.diag([1e-6] * 6)
+
 
 class HandIKSolver(HandSolverBase):
     """Single terminal grasp: each fingertip driven onto the shared object surface
     by a hard contact constraint (Augmented Lagrangian). ``ik_5f_contact.py``."""
 
     def solve(self) -> HandResult:
-        self._attach_contact()
-        if self.params.collision:
-            self._attach_collision()
-        if self.params.table:
-            self._attach_table()
+        self._attach_environment()
 
         cfg = crest_sparse.TendonHandSolverConfig()
         cfg.wrist_pose = self.params.wrist_pose
@@ -1568,6 +1700,12 @@ class HandIKStepper(HandSolverBase):
     across calls, so N steps are the N iterations the one-shot solve would have
     run internally. Holding the loop counter is the whole trick.
 
+    The one deliberate departure is the leading ``params.ik_settle_steps`` steps,
+    which pin the flexor prior to settle the cold start before releasing it (see
+    ``_IK_SETTLE_TENSION_COV``). Without it the first steps are spent watching the
+    hand hyperextend and crawl back, which is a solver transient rather than
+    anything the solve is being asked to do.
+
     Like :class:`HandFKSolver` this owns its ``crest_sparse.TendonHandSolver`` for
     its lifetime -- that is what lets anything carry at all, since a solver
     rebuilt per call cold-starts even its values. Tensions and the wrist pose are
@@ -1583,11 +1721,7 @@ class HandIKStepper(HandSolverBase):
     # -- construction / restart --
 
     def _build(self):
-        self._attach_contact()
-        if self.params.collision:
-            self._attach_collision()
-        if self.params.table:
-            self._attach_table()
+        self._attach_environment()
 
         cfg = crest_sparse.TendonHandSolverConfig()
         cfg.wrist_pose = self.params.wrist_pose
@@ -1675,13 +1809,22 @@ class HandIKStepper(HandSolverBase):
         return [(str(name), int(count), float(err))
                 for name, count, err in self._solver.get_factor_error_summary()]
 
+    def _settling(self):
+        """True while this step should pin the flexor to settle the cold start.
+
+        Counted off ``self._steps`` (steps already taken), not off a flag, so a
+        :meth:`reset` re-settles and :meth:`restart_al` -- which keeps the posture
+        -- correctly does not."""
+        return self._steps < max(int(self.params.ik_settle_steps), 0)
+
     def step(self) -> HandResult:
         """Advance the AL outer loop by exactly one iteration."""
         # Re-aimed every step so the wrist slider stays live mid-solve; the
         # tension priors are rebuilt from params for the same reason.
         self._solver.set_wrist_pose(self.params.wrist_pose)
-        sol = self._solver.solve(self._tension_priors(_IK_TENSION_COV),
-                                 self._tip_wrenches())
+        settling = self._settling()
+        cov = _IK_SETTLE_TENSION_COV if settling else _IK_TENSION_COV
+        sol = self._solver.solve(self._tension_priors(cov), self._tip_wrenches())
 
         if not self._history:
             # The pre-step values of the first step: the true initial guess, and
@@ -1689,11 +1832,12 @@ class HandIKStepper(HandSolverBase):
             self._append(self._solver.get_initial_solution(), sol.meta,
                          "initial guess")
         self._steps += 1
-        self._update_status(sol.meta)
+        self._update_status(sol.meta, settling=settling)
         s = self._status
         self._append(sol.marginals, sol.meta,
                      f"step {s.steps} &nbsp; violation={s.violation:.3e} "
-                     f"&nbsp; cost={s.cost:.4g} &nbsp; mu={s.mu:.3g}")
+                     f"&nbsp; cost={s.cost:.4g} &nbsp; mu={s.mu:.3g}"
+                     + (" &nbsp; *(settling: flexor pinned)*" if settling else ""))
 
         return self._result(
             [self._frames[-1]], sol.meta, self.params.contact_fingers,
@@ -1706,13 +1850,19 @@ class HandIKStepper(HandSolverBase):
         self._frames.append(_make_frame(self.finger_names, hand_marginals, meta))
         self._notes.append(note)
 
-    def _update_status(self, meta):
+    def _update_status(self, meta, settling=False):
         """Mirror ``ConstrainedOptimizer::checkConvergence`` on this step's trace.
 
         With ``al_max_iterations = 1`` the C++ loop always exits on its iteration
         test before evaluating the tolerances, and it records no stop reason, so
         the caller has to apply the same two tests itself. Each call logs a seed
-        state plus the one iterate; the last entry is the state we just reached."""
+        state plus the one iterate; the last entry is the state we just reached.
+
+        A ``settling`` step is exempt from both verdicts and leaves no baseline
+        behind: it minimizes a DIFFERENT objective (the flexor is pinned), so its
+        cost is not comparable to the released steps on either side of it, and a
+        settled cold start that stops moving is the step doing its job rather than
+        the solve giving up."""
         def last(name, default=float("nan")):
             arr = list(getattr(meta, name, []) or [])
             return float(arr[-1]) if arr else default
@@ -1721,7 +1871,9 @@ class HandIKStepper(HandSolverBase):
                           last("al_iteration_costs"),
                           last("al_iteration_mus", self._status.mu))
         abs_v, abs_c, rel_v, rel_c = self._tols
-        if viol < abs_v and cost < abs_c:
+        if settling:
+            state = "running"
+        elif viol < abs_v and cost < abs_c:
             state = "converged"
         elif (self._prev is not None
               and abs(viol - self._prev[0]) < rel_v
@@ -1729,7 +1881,7 @@ class HandIKStepper(HandSolverBase):
             state = "stalled"
         else:
             state = "running"
-        self._prev = (viol, cost)
+        self._prev = None if settling else (viol, cost)
         self._status = StepStatus(state, viol, cost, mu, self._steps)
 
     def run(self, max_steps=200, on_step=None, should_stop=None) -> StepStatus:
@@ -1759,11 +1911,7 @@ class HandPlannerSolver(HandSolverBase):
     finger tensions, with terminal contact constraints. ``traj_5f_contact.py``."""
 
     def solve(self) -> HandResult:
-        self._attach_contact()
-        if self.params.collision:
-            self._attach_collision()
-        if self.params.table:
-            self._attach_table()
+        self._attach_environment()
 
         n = self.configs[0][1].num_tendons
         pc = crest_sparse.TendonHandTrajectoryPlannerConfig()
@@ -1943,12 +2091,25 @@ class HandControllerSolver(HandSolverBase):
         """Eq 1.99 splitting point for this scene."""
         return split_point(self.params, self.spec, self.object_center)
 
+    # The controller reads params.contact_fingers directly, NOT the object /
+    # table masks the §1.3-1.6 solvers split it into: a phase designates one
+    # contact set and C++ decides per phase which surface it acts on (phase_env
+    # clears table_contact_node itself). Routing these through the split masks
+    # would let a GUI's "table contact off" silently empty the base env the phase
+    # schedule is derived from.
     def _attach_contact(self, proxy_and_exact=False):
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
                        contact_fingers=self.params.contact_fingers,
                        proxy_and_exact=proxy_and_exact)
+
+    def _attach_table(self):
+        origin = resolve_table_origin(self.params, self.spec, self.object_center)
+        attach_table(self.configs, origin, self.params.plane_normal,
+                     avoidance=self.params.plane_avoidance,
+                     tip_radii=self.tip_radii,
+                     contact_fingers=self.params.contact_fingers)
 
     def set_phase(self, phase: int):
         """Switch the active constraint set (0, 1, 2 or 3), keeping the converged

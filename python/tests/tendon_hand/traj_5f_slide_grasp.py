@@ -4,8 +4,11 @@ Adds a world-fixed support plane (a "table") to the collision-aware grasp
 trajectory of ``traj_5f_contact_collision.py`` and, optionally, the human-inspired
 sliding approach of Section 1.6.2. The table is analytic (an origin point + an
 outward normal), so no VDB grid is needed — it plugs straight into the AL
-collision/contact machinery via ``PlaneCollisionGapFactor`` (Eq 1.59-1.60) and
-``PlaneWitnessContactFactor`` (Eq 1.61-1.64).
+collision/contact machinery via ``PlaneCollisionGapFactor``: as an inequality for
+avoidance (Eq 1.59) and, on the designated sliding node, as a single-residual
+equality on the sphere center for contact. (That equality replaces §1.6's
+five-residual ``PlaneWitnessContactFactor``, Eq 1.61-1.64, whose free contact
+point four of its rows existed only to pin.)
 
 Two optional inputs drive it, both defaulting to "off" so the script degrades to
 the plain collision grasp:

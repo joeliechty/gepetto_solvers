@@ -589,8 +589,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
 
 def attach_collision(configs, vdb_path, object_pose, *,
                      radius=0.003, sigma=1e-4, num_proximal_discs=2,
-                     object_pose_cov=None, cull_margin=None):
-    """Enable Section 1.5 AL collision avoidance on every finger of a hand config
+                     object_pose_cov=None, cull_margin=None, avoidance=True):
+    """Declare the Section 1.5 collision spheres on every finger of a hand config
     list, in place. Returns ``configs`` for chaining.
 
     Each finger gets collision spheres on its disc nodes (radius ``radius``),
@@ -603,6 +603,14 @@ def attach_collision(configs, vdb_path, object_pose, *,
     inequalities keeping each finger out of the object and sphere-to-sphere
     inequalities keeping distinct fingers apart (skipping proximal-proximal
     pairs).
+
+    ``avoidance`` (default True) writes ``env.collision_avoidance``, which is
+    what separates the sphere SET from the OBJECT constraints built on it. With
+    ``avoidance=False`` the spheres are still declared -- so the support plane's
+    avoidance inequalities and the finger-finger pairs still have geometry to
+    work with -- but no finger-object inequality is built. That is how a caller
+    turns table collision on with object collision off; passing ``False`` with no
+    support plane configured simply means no collision constraints at all.
 
     ``cull_margin`` (m, None = keep all pairs): drop finger-finger sphere pairs
     whose gap at the initial values exceeds this margin. Heuristic speedup —
@@ -626,7 +634,7 @@ def attach_collision(configs, vdb_path, object_pose, *,
             env.object_pose_per_step = False
 
         nodes = disc_node_indices(cfg)
-        env.collision_avoidance = True
+        env.collision_avoidance = bool(avoidance)
         env.collision_sigma = sigma
         env.collision_node_indices = nodes
         env.collision_node_radii = [radius] * len(nodes)
@@ -651,10 +659,14 @@ def attach_table(configs, plane_origin, plane_normal, *,
       * ``plane_avoidance`` = ``avoidance`` — the free-space approach collision
         (Eq 1.59): every non-tip collision sphere is kept out of the half-space,
       * ``table_contact_node`` — the fingertip node that slides on the plane
-        (defaults to ``tip_node_index(cfg)``, and see ``contact_fingers`` below);
-        the C++ planner *schedules* this field per step around ``k_touch``
-        (cleared during the approach phase, kept during the slide phase), so it
-        is safe to set it for every step here,
+        (defaults to ``tip_node_index(cfg)``, and see ``contact_fingers`` below).
+        That node gets a SINGLE-residual equality on its sphere CENTER,
+        ``Dist_plane(c) = 0`` (``PlaneCollisionGapFactor`` as a
+        ``ZeroCostConstraint``) — not the original §1.6 five-residual witness
+        form, which introduced a free contact point whose gauge four of its rows
+        existed only to pin. The C++ planner *schedules* this field per step
+        around ``k_touch`` (cleared during the approach phase, kept during the
+        slide phase), so it is safe to set it for every step here,
       * ``table_contact_radius`` — that tip's contact sphere radius.
 
     ``contact_fingers`` (None = all, the legacy behavior) is the same per-finger

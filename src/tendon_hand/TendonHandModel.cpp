@@ -330,6 +330,12 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     // the terminal step). Its object-collision sphere is skipped so it can't
     // oppose the contact factor — but it is KEPT for finger-finger collision
     // (the contacting tip must still avoid other fingers).
+    //
+    // The sphere SET is gathered for either consumer -- finger-object (needs
+    // collision_avoidance and an object surface) or the support plane (needs only
+    // plane_avoidance) -- so table collision alone still gets finger-finger
+    // avoidance. Whether the finger-OBJECT inequalities are built is decided
+    // separately, in the loop below.
     struct CollSphere { Key key; double radius; bool proximal; bool is_root; bool is_contact; };
     std::vector<std::vector<CollSphere>> finger_spheres(fingers_.size());
     for (size_t i = 0; i < fingers_.size(); ++i) {
@@ -337,7 +343,10 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         const auto& env = *sdf_contacts_[i];
         bool has_object_surface =
             env.sdf_grid || env.ellipsoid_semi_axes.norm() > 0.0;
-        if (!env.collision_avoidance || !has_object_surface ||
+        bool wants_object_collision = env.collision_avoidance && has_object_surface;
+        bool wants_plane_collision  = env.plane_avoidance &&
+                                      env.plane_normal.norm() > 0.0;
+        if ((!wants_object_collision && !wants_plane_collision) ||
             env.collision_node_indices.empty())
             continue;
         std::visit([&](auto& fp) {
@@ -364,6 +373,14 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     for (size_t i = 0; i < fingers_.size(); ++i) {
         if (finger_spheres[i].empty()) continue;
         const auto& env = *sdf_contacts_[i];
+        // Spheres may have been gathered for the support plane alone; only an env
+        // that actually asked for OBJECT avoidance builds these. This predicate
+        // must stay identical to the has_col guard in get_initial_values(), which
+        // decides whether the shared object variable is seeded at all -- anchoring
+        // an object that was never seeded is an indeterminate system.
+        if (!env.collision_avoidance ||
+            !(env.sdf_grid || env.ellipsoid_semi_axes.norm() > 0.0))
+            continue;
         if (!object_anchored) {
             graph.add(PriorFactor<Pose3>(
                 object_key(), Pose3(env.object_pose_mean),
@@ -428,22 +445,34 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     // --- Support plane / "table" (Section 1.6) ---------------------------
     // A world-fixed analytic half-space (env.plane_origin, env.plane_normal). It
     // is independent of the object SDF machinery above (no object variable), so
-    // gather its spheres here rather than reusing finger_spheres, which is gated
-    // on the object collision fields.
+    // it walks env.collision_node_indices directly rather than reusing
+    // finger_spheres -- which carries the root/contact exclusions the OBJECT
+    // constraints want, not the (different) ones the plane wants.
     for (size_t i = 0; i < fingers_.size(); ++i) {
         if (!sdf_contacts_[i]) continue;
         const auto& env = *sdf_contacts_[i];
         if (env.plane_normal.norm() <= 0.0) continue;   // no table configured
         std::visit([&](auto& fp) {
-            // Table sliding equality (Eq 1.60-1.64): place the contact node's
-            // sphere on the plane and let it slide. 5-residual witness factor —
-            // full-rank, no stabilizing prior (see PlaneWitnessContactFactor).
+            // Table sliding equality: place the contact node's sphere on the
+            // plane and let it slide, as ONE residual on the sphere CENTER --
+            // c_table(c) = Dist_plane(c) = 0 -- with no witness point at all.
+            // PlaneCollisionGapFactor's residual is r - (c - p).n; as an EQUALITY
+            // the sign is irrelevant, so its zero set is exactly that, in the
+            // signed form (pins the sphere on the +n free side and stays smooth
+            // at the contact point, where the paper's |.| has a kink).
+            //
+            // This replaces the original Eq 1.60-1.64 five-residual witness form.
+            // The witness there bought nothing: four of its five rows only pinned
+            // the gauge of the free point it introduced, and for a PLANE a single
+            // scalar on the center leaves no rotational freedom to brick the
+            // solver -- the same argument §1.8 already makes for
+            // support_contact_node, whose factor this now matches exactly.
             if (env.table_contact_node.has_value()) {
                 Key tip_key = fp->rod_->get_pose_key(*env.table_contact_node);
-                auto contact = std::make_shared<crest_sparse::PlaneWitnessContactFactor>(
-                    tip_key, table_witness_key(static_cast<int>(i)),
-                    env.table_contact_radius, env.plane_origin, env.plane_normal,
-                    noiseModel::Isotropic::Sigma(5, 1.0));
+                auto contact = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
+                    tip_key, env.table_contact_radius,
+                    env.plane_origin, env.plane_normal,
+                    noiseModel::Isotropic::Sigma(1, 1.0));
                 graph.add(gtsam::ZeroCostConstraint(contact));
             }
 
@@ -638,23 +667,11 @@ Values TendonHandModel::get_initial_values(const Values* warm) const {
         }, fingers_[i]);
     }
 
-    // Support-plane sliding witness seeds (Section 1.6). For each finger with a
-    // configured plane + table contact node, seed the witness at the tip node
-    // orthogonally projected onto the plane: w = c - ((c - p0).n_hat) n_hat.
-    // Matches the PlaneWitnessContactFactor added in build_graph.
-    for (size_t i = 0; i < fingers_.size(); ++i) {
-        if (!sdf_contacts_[i]) continue;
-        const auto& env = *sdf_contacts_[i];
-        if (env.plane_normal.norm() <= 0.0 || !env.table_contact_node.has_value())
-            continue;
-        std::visit([&](const auto& fp) {
-            Vector3 n_hat = env.plane_normal.normalized();
-            Point3 c = values.at<Pose3>(
-                fp->rod_->get_pose_key(*env.table_contact_node)).translation();
-            Point3 w = c - (c - env.plane_origin).dot(n_hat) * n_hat;
-            values.insert(table_witness_key(static_cast<int>(i)), w);
-        }, fingers_[i]);
-    }
+    // No support-plane seeding: the table contact equality constrains the contact
+    // node's sphere CENTER directly (see build_graph), so there is no witness
+    // variable to seed. Must stay in lockstep with build_graph -- seeding one
+    // here would leave an orphan value with no factors, i.e. an indeterminate
+    // system.
 
     return values;
 }

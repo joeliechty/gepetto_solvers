@@ -9,6 +9,13 @@ and inspect the result; the planner result is scrubbable step by step, and an IK
 solve with *record solve steps* on is scrubbable iteration by iteration (initial
 guess -> each Augmented Lagrangian outer iteration -> converged solution).
 
+Object contact, table contact, object collision and table collision are four
+independent switches (*Contact targets*, *Collision*, *Table*), each acting on
+the shared per-finger mask in *Contact fingers*. That is what makes a stalled
+grasp bisectable: solve for the object alone, the table alone, or both, with or
+without either avoidance, and see which constraint family is the one refusing to
+close.
+
 All three solvers are the reusable classes in ``tendon_hand/solvers.py``; the 3D
 scene is drawn by ``_plotting/viser_hand.ViserHandScene``. The existing demo
 scripts are untouched.
@@ -32,7 +39,7 @@ from .solvers import (
     HandSolveParams, HandFKSolver, HandIKSolver, HandIKStepper,
     HandPlannerSolver, HandControllerSolver, SOLVERS,
     NUM_FINGERS, resolve_scene, resolve_table_origin, capabilities,
-    euler_to_R, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
+    euler_to_R, plane_witness, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
@@ -61,6 +68,12 @@ def _smoke():
     cases = [("FK", HandFKSolver, 1),
              ("IK", HandIKSolver, 1),
              ("Planner", HandPlannerSolver, None)]
+    # The three contact configurations the split toggles exist to bisect, run
+    # through the IK solver. Table cases need the plane env fields.
+    if caps["table"]:
+        cases += [("IK-table", HandIKSolver, 1), ("IK-both", HandIKSolver, 1)]
+    else:
+        print("  [IK-table] skipped -- binding has no support-plane env fields")
     # Only on a binding that has the Section 1.8 controller; on an older one the
     # smoke test still has to pass, it just covers less.
     if caps["controller"]:
@@ -71,15 +84,24 @@ def _smoke():
         params = HandSolveParams()
         if label == "Planner":
             params.K = 6
+        if label.startswith("IK-"):
+            params.table = True
+            params.table_contact = True
+            params.object_contact = (label == "IK-both")
         res = Solver(params).solve()
         n = len(res.frames)
         exp = (params.K + 1) if expect is None else expect
-        gap = res.worst_gap(-1) if label != "FK" else float("nan")
         status = "ok" if n == exp else "BAD"
         if n != exp:
             ok = False
-        extra = "" if label == "FK" else f" | terminal worst gap {gap:+.5f} m"
-        print(f"  [{label:>7}] frames={n} (expect {exp}) [{status}] | "
+        extra = ""
+        if label != "FK":
+            if params.object_contact:
+                extra += f" | worst object gap {res.worst_gap(-1):+.5f} m"
+            if res.table_contact_names():
+                extra += (f" | worst table gap "
+                          f"{res.worst_table_gap(params, -1):+.5f} m")
+        print(f"  [{label:>8}] frames={n} (expect {exp}) [{status}] | "
               f"iters={res.meta.iterations} err={res.meta.error:.3g}{extra}")
     print("Smoke test:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
@@ -177,12 +199,15 @@ class HandVizApp:
         p.passive_tension = self.g_passive.value
         p.flexor_tensions = [s.value for s in self.g_flexors]
         p.contact_fingers = [c.value for c in self.g_contacts]
+        p.object_contact = self.g_obj_contact.value
+        p.table_contact = self.g_tbl_contact.value
         p.sigma_wrist_pos = 10.0 ** self.g_sig_pos.value
         p.sigma_wrist_rot = 10.0 ** self.g_sig_rot.value
         # AL
         p.al_mu = self.g_al_mu.value
         p.al_rate = self.g_al_rate.value
         p.al_iters = self.g_al_iters.value
+        p.ik_settle_steps = int(self.g_ik_settle.value)
         p.record_iterations = self.g_record.value and self.caps["solve_iterates"]
         # planner
         p.K = self.g_K.value
@@ -239,17 +264,27 @@ class HandVizApp:
         # describe the intermediate state without knowing about iterates at all.
         res = self._iter_view()
         k = int(np.clip(k, 0, len(res.frames) - 1))
-        # Only the fingers this solve drove onto the object get a gap line; a
-        # distance readout on a finger nothing asked to touch is just noise.
+        # Only the fingers this solve drove onto a surface get a gap line for it;
+        # a distance readout on a finger nothing asked to touch is just noise.
+        # The two sets are independent, so a finger can carry both lines, one, or
+        # neither.
         gaps = res.contact_witness(k)
-        names = set(res.contact_names())
+        names = set(res.contact_names() if self.params.object_contact else [])
         gaps = {name: v for name, v in gaps.items() if name in names}
+        table_names = res.table_contact_names()
+        table_gaps = (plane_witness(self.params, res, k, names=table_names)
+                      if table_names else None)
         self._report_iterate()
         self.scene.update(res.frames[k],
                           tip_radii=res.tip_radii,
                           collision_radius=self.params.collision_radius,
-                          collision=self.params.collision,
-                          gaps=gaps)
+                          # The spheres are drawn whenever EITHER consumer is
+                          # using them, matching what the solve actually built.
+                          collision=(self.params.collision
+                                     or (self.params.table
+                                         and self.params.plane_avoidance)),
+                          gaps=gaps,
+                          table_gaps=table_gaps)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -324,14 +359,34 @@ class HandVizApp:
             # reads as an AL loop that quit immediately, not a broken control.
             lines.append(f"solve steps recorded: {self.result.num_iterates()}")
         if self.mode != "FK":
-            names = self.result.contact_names()
-            contacting = ("none" if not names
-                          else ", ".join(names) if len(names) < len(self.result.finger_names)
-                          else "all")
-            lines.append(f"contact: {contacting}")
-            lines.append(f"terminal worst gap: {self.result.worst_gap(-1):+.5f} m")
+            lines.extend(self._contact_lines(-1))
         self._set_status("  \n".join(lines))
         self._report_violations()
+
+    def _fingers_label(self, names):
+        return ("none" if not names
+                else ", ".join(names)
+                if len(names) < len(self.result.finger_names) else "all")
+
+    def _contact_lines(self, k):
+        """The per-surface contact readout: which fingers were driven onto each
+        surface and how far they ended up from it. Reported per surface because
+        the whole point of splitting the toggles is telling the two apart -- one
+        combined number cannot say which family is the one refusing to close."""
+        lines = []
+        if self.params.object_contact:
+            names = self.result.contact_names()
+            lines.append(f"object contact: {self._fingers_label(names)}")
+            lines.append(f"terminal worst object gap: "
+                         f"{self.result.worst_gap(k):+.5f} m")
+        table_names = self.result.table_contact_names()
+        if table_names:
+            lines.append(f"table contact: {self._fingers_label(table_names)}")
+            lines.append(f"terminal worst table gap: "
+                         f"{self.result.worst_table_gap(self.params, k):+.5f} m")
+        if not lines:
+            lines.append("contact: none (no surface targeted)")
+        return lines
 
     # -- controller (Section 1.8) --
 
@@ -405,11 +460,15 @@ class HandVizApp:
                    }[status.state]
         if self._auto_stop.is_set() and status.state == "running":
             verdict = "**stopped**"
+        gaps = [f"object {self.result.worst_gap(0):+.5f} m"] \
+            if self.params.object_contact else []
+        if self.result.table_contact_names():
+            gaps.append(f"table {self.result.worst_table_gap(self.params, 0):+.5f} m")
         self._set_status(
             f"**IK step {status.steps}** &nbsp; {verdict}  \n"
             f"violation={status.violation:.3e} &nbsp; cost={status.cost:.4g} "
             f"&nbsp; mu={status.mu:.3g}  \n"
-            f"worst gap: {self.result.worst_gap(0):+.5f} m")
+            f"worst gap: {' &nbsp; '.join(gaps) or 'n/a'}")
 
     def _ik_step(self, _=None):
         """One Augmented Lagrangian outer iteration, continuing the last one."""
@@ -690,6 +749,17 @@ class HandVizApp:
                 disabled=not self.caps["ik_stepping"],
                 hint="Backstop for Auto solve. A converging grasp takes ~30 "
                      "iterations, so hitting this means it is not converging.")
+            self.g_ik_settle = gui.add_slider(
+                "settle steps", 0, 5, 1, HandSolveParams().ik_settle_steps,
+                disabled=not self.caps["ik_stepping"],
+                hint="Leading steps that pin the flexor prior as tightly as the "
+                     "passives, to settle the cold start. The solver seeds every "
+                     "tension at zero on an already-curled rod, and the flexor -- "
+                     "by far the softest variable -- absorbs that inconsistency by "
+                     "swinging NEGATIVE, i.e. the fingers hyperextend and then "
+                     "spend ~13 steps crawling back to the FK pose. One settling "
+                     "step lands step 1 on the FK pose instead, and reaches the "
+                     "same grasp. Set 0 to watch the old behaviour.")
 
         with gui.add_folder("Wrist start pose"):
             # Seeded from the shared default (solvers.DEFAULT_WRIST_*) so the
@@ -712,15 +782,29 @@ class HandVizApp:
                 gui.add_slider(lbl, 0.0, 3.0, 0.05, GRASP_FLEXOR_TENSION)
                 for lbl in FINGER_LABELS]
 
+        with gui.add_folder("Contact targets"):
+            self.g_obj_contact = gui.add_checkbox(
+                "object contact", True,
+                hint="Drive the checked fingertips onto the OBJECT surface. "
+                     "Turn off to leave the object as pure collision geometry "
+                     "-- the way to see what the table constraints do on their "
+                     "own. Applies on the next Solve.")
+            self.g_tbl_contact = gui.add_checkbox(
+                "table contact", False,
+                hint="Drive the checked fingertips onto the SUPPORT PLANE (one "
+                     "equality per finger on the distance from its contact "
+                     "sphere to the plane). Needs the Table folder's *enabled*; "
+                     "combine with object contact to solve for both at once.")
+
         with gui.add_folder("Contact fingers"):
             self.g_contacts = [
                 gui.add_checkbox(
                     lbl, True,
-                    hint="Solve for this fingertip touching the object (IK / "
+                    hint="Which fingers the contact targets above apply to (IK / "
                          "Planner; FK never uses contact). Unchecked fingers "
                          "keep collision avoidance, so they stay out of the "
-                         "object without being driven onto it. Applies on the "
-                         "next Solve.")
+                         "object and off the table without being driven onto "
+                         "either. Applies on the next Solve.")
                 for lbl in FINGER_LABELS]
 
         with gui.add_folder("Planner / GP priors"):
@@ -732,7 +816,11 @@ class HandVizApp:
             self.g_start_flexor = gui.add_slider("start flexor", 0.0, 3.0, 0.05, 0.5)
 
         with gui.add_folder("Collision"):
-            self.g_collision = gui.add_checkbox("enabled", False)
+            self.g_collision = gui.add_checkbox(
+                "object collision", False,
+                hint="Keep every non-contact sphere out of the OBJECT. The "
+                     "table's own avoidance is separate (Table folder); "
+                     "finger-finger avoidance comes on with either.")
             self.g_coll_radius = gui.add_slider("sphere radius (m)", 0.001, 0.01, 0.0005, 0.003)
             self.g_coll_sigma = gui.add_slider("log10 sigma", -6, 0, 0.5, -4)
             self.g_cull = gui.add_slider("cull margin (m, 0 off)", 0.0, 0.1, 0.005, 0.0)
@@ -746,7 +834,11 @@ class HandVizApp:
             # object (HandSolveParams.table_burial = 0.5) rather than resting it
             # on the plane. Dial in -half_extent to recover the old geometry.
             self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, 0.0)
-            self.g_plane_avoid = gui.add_checkbox("avoidance", True)
+            self.g_plane_avoid = gui.add_checkbox(
+                "table collision", True,
+                hint="Keep every non-contact sphere out of the half-space. "
+                     "Independent of object collision -- the collision spheres "
+                     "are attached for whichever of the two is on.")
             self.g_k_touch = gui.add_slider("k_touch", 0, 30, 1, 5)
 
         with gui.add_folder("Controller (Sec 1.8)"):
@@ -853,7 +945,9 @@ class HandVizApp:
         # the controller's constraint set (a disabled finger drops its support,
         # half-space and object constraints and falls back to collision-only),
         # so the cached controller has to go.
-        for h in self.g_contacts:
+        # Same for the two contact-target toggles: which surface a finger is
+        # driven onto IS the constraint set, so a carried dual is meaningless.
+        for h in self.g_contacts + [self.g_obj_contact, self.g_tbl_contact]:
             h.on_update(lambda _: (self._sync_params(),
                                    self._invalidate_controller(),
                                    self._invalidate_stepper(),
@@ -870,7 +964,10 @@ class HandVizApp:
                                    self._invalidate_stepper()))
         # AL knobs are baked into the stepper's config at construction, unlike
         # the tensions it re-reads every step, so they need a rebuild too.
-        for h in (self.g_al_mu, self.g_al_rate, self.g_sig_pos, self.g_sig_rot):
+        # "settle steps" is read live, but it counts off steps ALREADY taken, so
+        # changing it part-way through a run would do nothing without a restart.
+        for h in (self.g_al_mu, self.g_al_rate, self.g_sig_pos, self.g_sig_rot,
+                  self.g_ik_settle):
             h.on_update(lambda _: self._invalidate_stepper())
 
 
