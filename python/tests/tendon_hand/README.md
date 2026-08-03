@@ -529,6 +529,7 @@ Two things in here are load-bearing beyond convenience:
 | `viz_interactive.py` | all four | — | viser workbench: pick solver, set knobs, solve, scrub |
 | `viz_controller.py` | HandController | §1.8 | viser app built around the controller + constraint-goal overlays |
 | `debug_al_trace.py` | all four | — | Read-only AL trace dumper and parameter sweeper |
+| `debug_ik_step_trace.py` | HandIKStepper | §1.4+§1.5 | Headless replay of the GUI's *Step* button, one AL iteration at a time, fully logged |
 | `notes_5f_contact.md` | — | — | Investigation notes: why small objects don't grasp |
 
 #### How the scripts are built
@@ -606,6 +607,19 @@ geometry the constraints are written in. The log pane replays
 `iteration_{errors,step_norms,trust_region}` (inner), with `--sweep KNOB v1 v2 …`
 for parameter sweeps and `--verbose` for the C++ stderr trace. Requires
 `record_iterations=True`, which it sets for you.
+
+**`debug_ik_step_trace.py`** — the same idea one level finer: it drives
+`HandIKStepper` (the loop behind the visualizer's *Step* / *Auto solve*) a single
+AL outer iteration at a time and logs everything per step — µ / cost / violation,
+the inner-LM tail, per-finger tip gaps, worst finger-object and finger-finger
+clearance computed independently from the solved poses, the solved **kinematic
+state** (achieved base pose vs commanded, per-finger tendon tensions Q, tendon
+lengths L and tip poses; `--nodes` expands to every rod node), plus the
+factor-error breakdown by family (`HandIKStepper.factor_errors()`, empty before
+the first step because the graph is built inside `solve()`). Defaults reproduce
+the visualizer's start state — the shared `solvers.DEFAULT_WRIST_*` base pose,
+`HandSolveParams.primitive` (`mid_sphere_ellipsoid`), all five fingers, collision
+**on**, table **off**. `--log` tees to `results/`.
 
 ---
 

@@ -130,6 +130,54 @@ def capabilities():
 
 
 # ---------------------------------------------------------------------------
+# Hand base / wrist start pose.
+# ---------------------------------------------------------------------------
+
+def euler_to_R(roll, pitch, yaw):
+    """ZYX (yaw-pitch-roll) rotation matrix from radians.
+
+    The convention the wrist-pose sliders and the headless harnesses all quote
+    poses in, defined once here so a pose typed into a CLI, a slider and a test
+    all mean the same rotation."""
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+    Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
+
+def wrist_pose_from_xyzrpy(xyz, rpy):
+    """4x4 base pose from a translation (m) and ZYX euler angles (rad)."""
+    T = np.eye(4)
+    T[:3, :3] = euler_to_R(*rpy)
+    T[:3, 3] = np.asarray(xyz, float)
+    return T
+
+
+# The default hand base pose: lifted 75 mm along the support normal and pitched
+# -1.22 rad about +Y. The mount puts the palm along the base frame's -x (see
+# pregrasp_local_geometry), so that pitch swings the palm to face roughly -z --
+# i.e. the hand hovers palm-down over the object at the default grasp locus,
+# fingers already aimed at it, instead of standing at the identity pose with the
+# palm pointing sideways and the fingers through the scene.
+#
+# This is the posing the interactive visualizer opens on and the start every
+# headless harness that does not compute its own pose (free_space_start_pose,
+# pregrasp_wrist_pose) inherits. Keep the two in sync: the visualizer seeds its
+# sliders from these numbers rather than repeating them.
+DEFAULT_WRIST_XYZ = (0.0, 0.0, 0.075)
+DEFAULT_WRIST_RPY = (0.0, -1.22, 0.0)
+
+
+def default_wrist_pose():
+    """The default hand base pose as a 4x4 (fresh array per call, since it is a
+    dataclass field default and callers mutate poses in place)."""
+    return wrist_pose_from_xyzrpy(DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
+
+
+# ---------------------------------------------------------------------------
 # Scene helpers (shared object placement, mirroring the demo scripts).
 # ---------------------------------------------------------------------------
 
@@ -875,7 +923,23 @@ class HandSolveParams:
     object_rotation: Optional[np.ndarray] = None     # None => primitive's rotation
 
     # --- Wrist start pose + prior ---
-    wrist_pose: np.ndarray = field(default_factory=lambda: np.eye(4))
+    # A palm-down HOVER above the object (see DEFAULT_WRIST_XYZ /
+    # DEFAULT_WRIST_RPY), not the identity pose. Identity puts the hand at the
+    # grasp locus itself, which for the bigger primitives means starting INSIDE
+    # them -- on big_sphere the collision spheres begin ~31 mm through the
+    # surface, the merit function starts at ~3e6 and the AL solve stalls at
+    # iters=1 with nothing able to move. From the hover pose the same scene
+    # starts clear of everything at a cost of ~58.
+    #
+    # What it costs, measured: this is a start to APPROACH from, so a single-shot
+    # IK with the default (tight, sigma 1e-4) wrist prior cannot close it -- the
+    # base is pinned ~0.11 m off big_sphere and the contact violation freezes.
+    # Loosen sigma_wrist_pos/rot, or let something that is allowed to move the
+    # base do the positioning (phase 0, or the planner's GP-linked wrist states).
+    #
+    # Callers that derive their own start (ctrl_5f_phases via
+    # free_space_start_pose, viz_controller) overwrite this and are unaffected.
+    wrist_pose: np.ndarray = field(default_factory=default_wrist_pose)
     sigma_wrist_pos: float = 1e-4
     sigma_wrist_rot: float = 1e-3
 
@@ -1598,6 +1662,18 @@ class HandIKStepper(HandSolverBase):
 
     def status(self) -> StepStatus:
         return self._status
+
+    def factor_errors(self):
+        """``[(factor_family, count, total_error)]`` at the CURRENT values.
+
+        Read-only; the one readout that says which part of the graph the inner LM
+        is spending its budget on, which is what decides whether a stalled step is
+        a constraint problem or a scaling problem. Empty on a binding without the
+        accessor."""
+        if not hasattr(self._solver, "get_factor_error_summary"):
+            return []
+        return [(str(name), int(count), float(err))
+                for name, count, err in self._solver.get_factor_error_summary()]
 
     def step(self) -> HandResult:
         """Advance the AL outer loop by exactly one iteration."""

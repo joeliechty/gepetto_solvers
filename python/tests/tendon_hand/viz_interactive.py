@@ -31,7 +31,8 @@ from .scene import get_primitive_specs, GRASP_FLEXOR_TENSION, TABLE_NORMAL
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKSolver, HandIKStepper,
     HandPlannerSolver, HandControllerSolver, SOLVERS,
-    NUM_FINGERS, resolve_scene, resolve_table_origin, capabilities)
+    NUM_FINGERS, resolve_scene, resolve_table_origin, capabilities,
+    euler_to_R, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
@@ -43,15 +44,9 @@ FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
 SDF_DROPDOWN_LABELS = {"sphere": "sphere_sdf", "big_sphere": "big_sphere_sdf"}
 
 
-def _euler_to_R(roll, pitch, yaw):
-    """ZYX (yaw-pitch-roll) rotation matrix from radians."""
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
-    Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
-    Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
-    Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
-    return Rz @ Ry @ Rx
+# The wrist sliders and the solvers must agree on what "pitch" means, so the
+# convention lives with the params rather than here.
+_euler_to_R = euler_to_R
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +54,8 @@ def _euler_to_R(roll, pitch, yaw):
 # ---------------------------------------------------------------------------
 
 def _smoke():
-    print("Smoke-testing the hand solver classes (big_sphere, defaults)...")
+    print(f"Smoke-testing the hand solver classes "
+          f"({HandSolveParams().primitive}, defaults)...")
     ok = True
     caps = capabilities()
     cases = [("FK", HandFKSolver, 1),
@@ -634,9 +630,17 @@ class HandVizApp:
                           if m == "Controller" and not self.caps["controller"]
                           else None))
                 for m in ("FK", "IK", "Planner", "Controller")}
+            # Opens on HandSolveParams' own default (the mid analytic sphere),
+            # so the GUI and a headless HandSolveParams() describe the same
+            # scene. Falls back to the first entry if that primitive is hidden
+            # -- an ellipsoid needs the analytic-surface env fields, which a
+            # stale binding may not have.
+            default_label = SDF_DROPDOWN_LABELS.get(self.params.primitive,
+                                                    self.params.primitive)
+            if default_label not in self._label_to_key:
+                default_label = labels[0]
             self.g_object = gui.add_dropdown(
-                "object", labels,
-                initial_value=SDF_DROPDOWN_LABELS["big_sphere"])
+                "object", labels, initial_value=default_label)
             self.g_solve = gui.add_button("Solve", icon=self.viser.Icon.PLAYER_PLAY)
             self.g_record = gui.add_checkbox(
                 "record solve steps", False,
@@ -688,12 +692,17 @@ class HandVizApp:
                      "iterations, so hitting this means it is not converging.")
 
         with gui.add_folder("Wrist start pose"):
-            self.g_tx = gui.add_slider("x (m)", -0.1, 0.1, 0.001, 0.0)
-            self.g_ty = gui.add_slider("y (m)", -0.1, 0.1, 0.001, 0.0)
-            self.g_tz = gui.add_slider("z (m)", -0.1, 0.1, 0.001, 0.0)
-            self.g_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, 0.0)
-            self.g_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, 0.0)
-            self.g_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, 0.0)
+            # Seeded from the shared default (solvers.DEFAULT_WRIST_*) so the
+            # pose the GUI opens on IS HandSolveParams' default -- a headless
+            # repro of what is on screen needs no numbers copied across.
+            x0, y0, z0 = DEFAULT_WRIST_XYZ
+            r0, p0, yw0 = DEFAULT_WRIST_RPY
+            self.g_tx = gui.add_slider("x (m)", -0.1, 0.1, 0.001, x0)
+            self.g_ty = gui.add_slider("y (m)", -0.1, 0.1, 0.001, y0)
+            self.g_tz = gui.add_slider("z (m)", -0.1, 0.1, 0.001, z0)
+            self.g_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, r0)
+            self.g_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, p0)
+            self.g_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, yw0)
             self.g_sig_pos = gui.add_slider("log10 sigma_pos", -6, 2, 0.5, -4)
             self.g_sig_rot = gui.add_slider("log10 sigma_rot", -6, 2, 0.5, -3)
 
