@@ -108,10 +108,36 @@ public:
     // is the stronger reset, since only that restores the initial values too.
     void reset_al_duals() { SolverBase::reset_al_duals(); }
 
+    // Carry the Augmented Lagrangian multipliers of a previous solve into this
+    // one, matched by constraint identity. The point is a solve whose CONSTRAINT
+    // SET changed: that forces a new solver, and a new solver otherwise restarts
+    // the homotopy at mu = al_initial_mu with every multiplier at zero, which
+    // shows up as the hand drifting off constraints it had already satisfied
+    // before being pulled back over the next few iterations. Constraints the two
+    // problems share keep their multipliers; new ones start at zero.
+    void set_initial_duals(const crest_sparse::WarmALState& d) {
+        SolverBase::set_initial_duals(d);
+    }
+    const crest_sparse::WarmALState& get_al_duals() const {
+        return SolverBase::get_al_duals();
+    }
+    const crest_sparse::ALTransferReport& al_transfer_report() const {
+        return SolverBase::al_transfer_report();
+    }
+
 private:
     void build_graph() override;
     void extract_solution() override;
     void get_initial_values() override;
+
+    // The hand model tags every constraint it builds, so this solver can offer
+    // its multipliers to a differently-constrained rebuild of the same hand.
+    std::vector<std::string> constraint_tags_eq() const override {
+        return hand_->constraint_tags().eq;
+    }
+    std::vector<std::string> constraint_tags_ineq() const override {
+        return hand_->constraint_tags().ineq;
+    }
 
     TendonHandSolverConfig config_;
 

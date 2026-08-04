@@ -178,7 +178,35 @@ SolutionMetadata SolverBase::optimize() {
         // for why a short-budget loop cannot enforce anything without this.
         crest_sparse::WarmAugmentedLagrangianOptimizer optimizer(graph_, values_, p);
         if (config_.al_warm_start_duals) {
+            // Multipliers handed over from another solver (set_initial_duals):
+            // re-seat them onto THIS problem's constraints by identity before
+            // the first solve. Refused unless both sides are tagged -- a
+            // positional reuse across a rebuilt graph pairs a multiplier with
+            // whatever constraint now sits at that index.
+            // Deliberately NOT cleared per solve: a transfer happens on the
+            // first solve only, and the caller reads the report after however
+            // many steps it has taken since. It describes the last TRANSFER,
+            // not the last solve.
+            if (al_warm_.empty() && al_transfer_in_.tagged()) {
+                al_transfer_report_ = crest_sparse::ALTransferReport{};
+                const auto eq_tags = constraint_tags_eq();
+                const auto ineq_tags = constraint_tags_ineq();
+                const auto counts = optimizer.constraint_counts();
+                // A tag list that does not describe this graph means a
+                // constraint was added without one; carrying nothing is the only
+                // safe response.
+                if (eq_tags.size() == counts.first &&
+                    ineq_tags.size() == counts.second) {
+                    al_warm_ = crest_sparse::remap_al_state(
+                        al_transfer_in_, eq_tags, optimizer.eq_dims(), ineq_tags,
+                        config_.al_transfer_mu_max, &al_transfer_report_);
+                }
+                al_transfer_in_.clear();   // consumed either way
+            }
             values_ = optimizer.optimizeWarm(al_warm_, config_.al_warm_mu_max);
+            // Tag what we just produced so the next solver can take it.
+            al_warm_.tag_eq   = constraint_tags_eq();
+            al_warm_.tag_ineq = constraint_tags_ineq();
         } else {
             values_ = optimizer.optimize();
         }
@@ -350,6 +378,11 @@ SolutionMetadata SolverBase::optimize() {
 
 void SolverBase::reset_al_duals() {
     al_warm_.clear();
+    // A pending transfer is the same kind of stale information, so a reset drops
+    // it too: "start the homotopy over" cannot mean "start it over, but from
+    // somebody else's multipliers".
+    al_transfer_in_.clear();
+    al_transfer_report_ = crest_sparse::ALTransferReport{};
 }
 
 

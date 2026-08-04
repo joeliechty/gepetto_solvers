@@ -22,6 +22,8 @@ only *how many copies of the state exist* and *which constraints are switched on
 | Approach over a table, then slide and grasp | planner + `attach_table` + `k_touch` → `traj_5f_slide_grasp.py` | §1.6 |
 | Grasp a flat object without stalling on the flat face | any solver + ellipsoid primitive | §1.6.3 |
 | Real-time, phase-scheduled IK on the live robot state | `TendonHandController` → `ctrl_5f_phases.py`, `viz_controller.py` | §1.8 |
+| Watch an IK solve converge one AL iteration at a time | `HandIKStepper` → `viz_interactive.py`, `debug_ik_step_trace.py` | §1.4+§1.5 |
+| Change a constraint mid-solve and *continue* | `initial_state` + `initial_duals` → §5.1 | — |
 
 ### Running anything
 
@@ -56,7 +58,8 @@ crest-sparse/
       SolverBase.{h,cpp}   optimize(): Dogleg / LM / Augmented Lagrangian, plus
                            the diagnostics (factor-error summary, Hessian, traces)
       WarmAugmentedLagrangian.h  AL outer loop seedable with a carried mu and
-                           multipliers, for the per-tick controller (§1.8)
+                           multipliers — across ticks for the controller (§1.8),
+                           and across a REBUILT graph via remap_al_state()
       EnvironmentFactors.h EVERY contact & collision factor + EnvironmentConfig
     tendon_hand/
       TendonHandModel      the graph builder — shared by all three solvers below
@@ -135,8 +138,9 @@ AL knobs and what the §1.5 notes learned about them:
 | `al_max_dual_step` | 1e12 | Uncaps dual ascent. GTSAM's default of 10 freezes multipliers past µ≈10 and silently degrades AL to a pure penalty method needing µ ≳ 1e8. |
 | `al_inner_rel_tol_initial` | 0 (off) | Inexact inner solves: loose early, tightening ∝ µ₀/µ. Use ≤ 1e-3 on large graphs — 1e-2 falsely stagnates them. |
 | `al_abs_cost_tol` | 1e-5 | GTSAM's exit needs violation **and** cost below threshold, and the cost one is *absolute*, so it never fires for O(1) problems. Set 1e12 to stop on feasibility alone (~2× speedup). |
-| `al_warm_start_duals` | false | Carry µ **and the multipliers** from one `optimize()` to the next. Only meaningful when successive solves pose the *same* constrained problem — i.e. the §1.8 controller. Off elsewhere, so one-shot solves are bit-identical. |
-| `al_warm_mu_max` | 1e4 | Ceiling on the carried µ. Not just a runaway guard — see §6, it is the balance point between equality and inequality constraints and it is sharp. |
+| `al_warm_start_duals` | false | Carry µ **and the multipliers** from one `optimize()` to the next. Needed whenever successive solves pose the same constrained problem — the §1.8 controller, and the `HandIKStepper` that runs one outer iteration per call. Off elsewhere, so one-shot solves are bit-identical. |
+| `al_warm_mu_max` | 1e4 | Ceiling on the µ carried *within* one solver's life. Not just a runaway guard — see §6, it is the balance point between equality and inequality constraints and it is sharp. (`HandIKStepper` sets it to 1e12: it is reproducing a one-shot solve, which runs with no clamp at all and climbs far past 1e4 — 5e5 on the table-contact scene, ~2^28 on a closing grasp. Leaving the default in place stalls the stepped solve at a ~60 mm gap while the one-shot reaches 0.1 mm.) |
+| `al_transfer_mu_max` | 1e4 | Ceiling on a µ carried *across a rebuild* (`set_initial_duals`). A separate knob because the new problem inherits that µ for constraints it has never seen: measured, inheriting the 5e5 the previous solve reached pinned the new constraint as rigidly as the old ones and the hand stalled 2 iterations in, 36 mm from the object it had just been told to touch. |
 | `max_iterations` | 100 | Inner LM cap. A flat cap is the wrong tool (capping at 20 tripled final cost); use the inner-tolerance schedule instead. |
 | `skip_marginals` | false | Skips the covariance factorization. The controller sets it — a tick only reads means. |
 | `record_iterations` | false | Fills `meta.al_iteration_{mus,costs,violations}` and Values snapshots. Required for `get_intermediate_solutions()` and `debug_al_trace.py`. |
@@ -154,6 +158,14 @@ Diagnostics re-exposed on every hand solver:
 `get_factor_error_summary()`, `get_factor_errors_by_type()`,
 `get_initial_factor_error_summary()`, `get_hessian_and_gradient()`,
 `get_intermediate_solutions()`, `get_initial_solution()`.
+
+AL state in and out (`TendonHandSolver`): `reset_al_duals()` drops the carried
+homotopy, `get_al_duals()` hands out the final µ/λ **tagged with the identity of
+the constraint each multiplier belongs to** (`ALDuals`), and
+`set_initial_duals(d)` seeds the next solve from another solver's state, matched
+by those tags. `al_transfer_report()` (`ALTransferReport`) says how many matched.
+That tagging is what makes the transfer safe across a *different* constraint
+set — see §5.1's warm-start notes.
 
 ### 3.2 `TendonHandModel` — the graph builder (not a solver)
 
@@ -182,6 +194,14 @@ with `(finger_configs, wrist_pose, wrist_noise, step, emit_wrist_prior)`.
    center-direct support equality, the opposition half-space inequality, and the
    plane-avoidance inequalities.
 
+Every hard constraint in 4–7 goes in through `add_eq()` / `add_ineq()`, which
+also record a **semantic tag** for it (`obj.witness|f2`, `tbl.contact|f4`,
+`col.obj|f0|n12`, `col.ff|f0n4|f3n8`, `half|f4`) in `constraint_tags()`. The tag
+order is the insertion order, which is exactly the order `ConstrainedOptProblem`
+enumerates constraints in, so tag *k* names the constraint multiplier *k* belongs
+to. Both helpers exist so the two orders cannot drift: adding a constraint any
+other way would silently misalign every tag after it.
+
 `get_initial_values(warm)` builds the seed. The interesting part is **witness
 seeding**, which happens *after* warm-start poses are merged in, so witnesses are
 projected from where the finger actually converged rather than from a straight
@@ -194,6 +214,14 @@ hand:
 * SDF → ray-march from the object-local origin toward the tip until the SDF
   crosses zero;
 * table → orthogonal projection of the tip onto the plane.
+
+`values_from_marginals(state)` is the reverse direction: re-key a solved state
+onto *this* model's variables, for `initial_state` / `set_state`. It covers T/S/F
+per node, D per disc, Q and L — **plus the shared wrist**, which no finger carries
+directly: node 0's pose is not a variable (`T_0 = T_wrist ∘ T_offset`), so the
+wrist is recovered by inverting finger 0's offset. It has to come from the state
+rather than from `wrist_pose_`, because the wrist is a variable with a soft prior
+and a contact solve moves it tens of millimetres off the commanded pose.
 
 Also on the model: `add_temporal_gp` (Eq 1.11 / 1.13 `BetweenFactor`s to the next
 step's model), `add_length_priors` (§1.8 length step prior), `add_tension_priors`
@@ -211,7 +239,9 @@ cfg.sigma_wrist_pos   = 1e-4          # tight => anchored gauge
 cfg.sigma_wrist_rot   = 1e-3
 cfg.goal_positions    = [...]          # optional per-finger tip goals (soft)
 cfg.goal_position_cov = 1e-5*np.eye(3)
+cfg.initial_state     = prev.marginals # optional warm start (posture + wrist)
 solver = crest_sparse.TendonHandSolver(configs, cfg)
+solver.set_initial_duals(prev_solver.get_al_duals())   # optional: and the µ/λ
 ```
 
 Three behaviours from one class, decided entirely by what's on the finger configs:
@@ -229,6 +259,13 @@ onto the AL path.
 `values_` is retained across `solve()` calls, a `set_wrist_pose` + `solve` sweep
 warm-starts from the last solution — only the first solve pays the cold-start
 cost. This is what makes `fk_5f_sweep.py` animate smoothly at high flexion.
+
+`initial_state` covers the case retention cannot: a *new* solver, built because
+the constraint set changed. Without it `get_initial_values()` returns the
+straight-rod, Q = 0 guess; with it the solve starts where the hand already is.
+Pair it with `set_initial_duals()` to carry the AL homotopy as well — the state
+says where the hand is, the duals say how hard each constraint was being held
+there, and a rebuild needs both. See §5.1.
 
 ### 3.4 `TendonHandTrajectoryPlanner` — K+1 steps (§1.4.3, §1.5.2, §1.6.2)
 
@@ -320,7 +357,11 @@ Notes that matter:
   invalidate them. `set_phase()` and `set_state()` call `reset_al_duals()` for
   you; call it yourself if you change the problem another way. The optimizer also
   refuses duals whose *count* disagrees, but a set that changed content while
-  keeping its size would slip past that check.
+  keeping its size would slip past that check. (The tag machinery in §3.2/§5.1
+  is the principled alternative — match multipliers by constraint identity
+  instead of dropping them — but the controller deliberately still resets: its
+  phase transitions are tuned around a fresh homotopy, and nothing has re-tuned
+  them for a carried one.)
 * **`initial_state` / `set_state()` supply Θ_curr's posture.** Without one the
   controller cold-starts from a straight hand with Q = 0, and tick 1 is spent
   travelling back to wherever the robot actually is — the fingers visibly extend
@@ -329,7 +370,8 @@ Notes that matter:
   `CosseratRodModel` hands out keys from a global counter, so two separately
   built models use different Symbols for the same variable and Values cannot be
   merged across them. `TendonHandModel::values_from_marginals` re-keys the
-  bundle onto the receiving model.
+  bundle onto the receiving model — including the shared wrist, which it
+  recovers from finger 0's node-0 pose (§3.2).
 
 Readback API for a phase-advance policy (the controller never advances itself):
 `phase_violations()` (worst |c| per constraint family, re-evaluated by building
@@ -478,7 +520,8 @@ classes behind one `HandSolveParams` dataclass, all returning a uniform
 | Class | Wraps | Mirrors |
 |---|---|---|
 | `HandFKSolver` | `TendonHandSolver`, no contact | `fk_5f_sweep.py` |
-| `HandIKSolver` | `TendonHandSolver` + contact | `ik_5f_contact.py` |
+| `HandIKSolver` | `TendonHandSolver` + contact, one shot | `ik_5f_contact.py` |
+| `HandIKStepper` | `TendonHandSolver` + contact, one AL outer iteration per call | `viz_interactive.py`, `debug_ik_step_trace.py` |
 | `HandPlannerSolver` | `TendonHandTrajectoryPlanner` | `traj_5f_contact.py`, `traj_5f_slide_grasp.py` |
 | `HandControllerSolver` | `TendonHandController` | `ctrl_5f_phases.py` |
 
@@ -489,20 +532,34 @@ planner, so a step scrubber indexes them identically. `surface_gaps()`,
 raw `TendonHandMarginals` behind a frame — the form
 `HandControllerSolver(initial_state=...)` and `set_theta_curr(state=...)` take to
 start a controller from a real posture instead of a straight hand.
-`TendonHandSolverConfig.initial_state` (surfaced as
-`HandSolveParams.initial_state`, gated on `capabilities()["solver_seed"]`) is the
-same idea for the single-shot solver and the stepper: a changed constraint set
-forces a rebuild, and a rebuilt solver cold-starts, so seeding it with the last
-state is the only way to carry a solve across that rebuild. It is also how
-`viz_interactive.py`'s *Warm start* latch starts an IK solve from an FK pose
-rather than from the straight-rod guess. The latch is read when the stepper is
-BUILT, not when the button is pressed: an earlier one-shot "seed now" version
-depended on press order and was silently discarded by anything that re-posed the
-hand in between (pressing FK, or dragging a tension slider, which re-solves FK
-live).
 
-Two things a warm start has to carry, not one. `values_from_marginals` now also
-inserts the shared wrist `Symbol('W', 0)`, recovered as `T_wrist = T_0 ∘
+#### Warm starts: continuing a solve across a rebuild
+
+Changing the CONSTRAINT SET (object, contact mask, collision, table) forces a new
+solver — the Augmented Lagrangian duals are positional and mean nothing against a
+different set — and a new solver cold-starts. Everything below exists so that the
+rebuild *continues* the solve instead of restarting it. Four things have to be
+carried, and each of them was found the hard way by watching part of the hand
+snap back:
+
+| What | Carried by | Symptom when it isn't |
+|---|---|---|
+| The posture | `HandSolveParams.initial_state` → `TendonHandSolverConfig.initial_state` | whole hand back to the straight-rod, Q = 0 guess |
+| The wrist | inside `values_from_marginals` + `_adopt_solved_wrist()` | fingers stay, base jumps back to the commanded pose |
+| The flexor tensions | `_adopt_solved_tensions()` (+ no settling) | fingers snap open ~57 mm on step 1 |
+| The multipliers | `HandSolveParams.initial_duals` (see below) | hand lets go of satisfied constraints, drifts 32 → 57 mm |
+
+`TendonHandSolverConfig.initial_state` (gated on `capabilities()["solver_seed"]`)
+is the controller's `initial_state` idea applied to the single-shot solver and
+the stepper. It is also how `viz_interactive.py`'s *Warm start* latch starts an
+IK solve from an FK pose rather than from the straight-rod guess. The latch is
+read when the stepper is BUILT, not when the button is pressed: an earlier
+one-shot "seed now" version depended on press order and was silently discarded by
+anything that re-posed the hand in between (pressing FK, or dragging a tension
+slider, which re-solves FK live).
+
+**The wrist takes two fixes, not one.** `values_from_marginals` inserts the
+shared wrist `Symbol('W', 0)`, recovered as `T_wrist = T_0 ∘
 T_offset⁻¹` — node 0's pose is not a variable under the hand-base
 reparameterization, so the wrist was previously absent from the bundle and a
 seeded solve held every rod pose from the state while the wrist stayed at
@@ -513,22 +570,74 @@ at where it converged. `viz_interactive` does that in `_adopt_solved_wrist()`,
 which also writes the pose back to the wrist sliders, since `_sync_params` reads
 the prior straight off them and would otherwise undo it on the next step.
 
-The same argument applies to the **flexor tensions**, and to `ik_settle_steps`.
-The flexor prior is deliberately soft (variance 1e-1 in `_IK_TENSION_COV`) so
-contact can drive it, so a grasp ends far from what the slider commands — 1.28 N
-against a commanded 0.6 N — and the restart must adopt it
-(`_adopt_solved_tensions`). Settling is worse: it pins *all six* tendons at the
-commanded means, which is the cure for a cold start's inconsistent Q = 0 guess
-and pure destruction on a warm one (fingers snap open ~57 mm on step 1), so
-`HandIKStepper._settling()` now returns False whenever `initial_state` is set.
-The rule for all three: **anything the solve is free to move, a warm start has to
-re-command, or its prior drags the hand back.**
+The same argument applies to the **flexor tensions**, and to `ik_settle_steps`
+(`HandSolveParams.ik_settle_steps`, the GUI's *settle steps* — see the Gotchas
+entry below for why it exists at all). The flexor prior is deliberately soft
+(variance 1e-1 in `_IK_TENSION_COV`) so contact can drive it, so a grasp ends far
+from what the slider commands — 1.28 N against a commanded 0.6 N — and the
+restart must adopt it (`_adopt_solved_tensions`). Settling is worse: it pins *all
+six* tendons at the commanded means, which is the cure for a cold start's
+inconsistent Q = 0 guess and pure destruction on a warm one (fingers snap open
+~57 mm on step 1), so `HandIKStepper._settling()` now returns False whenever
+`initial_state` is set.
+The rule behind all three: **anything the solve is free to move away from its
+commanded value, a warm start has to re-command — otherwise the prior that
+commanded it drags the hand back.**
+
+#### …and the multipliers (`initial_duals`)
+
+The state is only half of a warm start; the other half is the **optimizer**.
+`WarmALState` (mu + the Lagrange multipliers) is indexed by a constraint's
+POSITION in `ConstrainedOptProblem::eConstraints()`, so a rebuilt graph restarts
+at `mu = al_initial_mu` with every multiplier at zero — the hand lets go of
+constraints it had already satisfied and gets hauled back over the next few
+iterations.
+
+`TendonHandModel::build_graph` therefore emits a **semantic tag** for every hard
+constraint at its insertion site (`add_eq` / `add_ineq`, tags like
+`tbl.contact|f4`, `col.obj|f0|n12`, `col.ff|f0n4|f3n8`), in the order
+`ConstrainedOptProblem` enumerates them — which is just graph insertion order.
+`remap_al_state()` re-seats a carried state onto a new problem by matching tag
+**and dimension** (the same fingertip contact is 5-row as a witness constraint
+and 1-row center-direct); unmatched constraints start at zero, and
+`al_transfer_report()` says how many of each matched. Tags are emitted rather
+than recovered by introspection because the graph cannot be read back: every
+equality is wrapped in `ZeroCostConstraint` and every inequality in
+`CollisionInequalityConstraint`, and a plane collision and a half-space
+inequality on the same node carry identical keys.
+
+mu is global and cannot be per-constraint, so it is carried but clamped by
+`al_transfer_mu_max` (default 1e4). Measured, adding object contact to a
+converged table-contact solve:
+
+| carried | step-1 tip rise | outcome |
+|---|---|---|
+| nothing (cold) | — | stalls, 86.9 mm from the table pose |
+| posture only | 32 → 57 mm | stalls, object gap 12.6 mm |
+| posture + duals | ≈0 mm | table gap 0.6 mm |
+
+And on a change the geometry can actually satisfy (3-finger grasp → enable all
+five): posture only stalls in 2 steps at a 64.4 mm worst gap; posture + duals
+runs 31 steps to **0.49 mm**, with the three already-settled fingers moving
+under 0.4 mm on the first step. Carrying the multipliers is what lets a changed
+constraint set continue rather than restart.
+
+`HandIKStepper` exposes both ends: `al_duals()` hands out the tagged state (also
+attached to every result as `HandResult.duals`) and `params.initial_duals` takes
+one back. `dual_transfer()` / `HandResult.dual_transfer` report the match —
+**0 matched against a non-empty carry means a tag drifted** (a constraint added
+without one), not that the problem genuinely changed.
 
 Two things in here are load-bearing beyond convenience:
 
 * **`capabilities()` + `_set_if()`** — the installed `.so` routinely lags the C++
   source. Every newer field is set through `_set_if`, and `capabilities()` tells a
-  caller (the visualizers) which controls to grey out instead of crashing.
+  caller (the visualizers) which controls to grey out instead of crashing. Keys:
+  `ellipsoid`, `table`, `collision_cull`, `k_touch`, `controller`, `pregrasp`,
+  `witness`, `solve_iterates`, `ik_stepping`, `solver_seed` (`initial_state`),
+  `dual_transfer` (`set_initial_duals`). A control that silently does nothing is
+  almost always a False here — and the usual cause is not a missing rebuild but
+  the stale in-tree `.so` shadowing the installed one (see *Running anything*).
 * **The §1.8 geometry helpers** — `pregrasp_local_geometry`, `pregrasp_wrist_pose`,
   `slew_toward`, `free_space_start_pose`, `goal_geometry` and friends. These are
   read-only: nothing here feeds a solver, they compute the world-frame quantities
@@ -601,8 +710,8 @@ The older scripts (`ik_*`, `traj_*`) each build everything inline, in this order
    solver's own residual;
 7. optional pyvista/viser visualization behind `--no-viz`.
 
-The newer scripts (`ctrl_5f_phases.py`, both `viz_*`, `debug_al_trace.py`) skip
-all of that and drive `solvers.py` instead.
+The newer scripts (`ctrl_5f_phases.py`, both `viz_*`, both `debug_*`) skip all of
+that and drive `solvers.py` instead.
 
 #### Per-script notes
 
@@ -636,6 +745,28 @@ Starts from `free_space_start_pose()` unless `--start-in-collision`, because pha
 0 cannot dig itself out of a deep initial penetration — the collision
 inequalities dominate the merit function and the inner LM rejects every step.
 
+**`viz_interactive.py`** — one panel, four buttons: **FK** re-poses the hand from
+the wrist / tension sliders (which also re-solve FK live as they move), **Step**
+advances the IK solve by exactly one AL outer iteration, **Auto solve** keeps
+stepping to converged/stalled, **Stop** breaks out mid-run. Every step is kept, so
+the *Solve steps* scrubber replays the convergence (iterate 0 is the initial
+guess). Object contact, table contact, object collision and table collision are
+four independent switches over the shared *Contact fingers* mask — that is what
+makes a stalled grasp bisectable: solve for one surface, the other, or both, with
+or without either avoidance, and see which family refuses to close.
+
+Changing any of those restarts the AL loop (the duals are positional). The
+**Warm start** latch is what lets you change one and carry on: while it is on,
+every rebuild starts from the state on screen and carries the wrist pose, the
+flexor tensions and — with *carry AL duals* ticked — the multipliers, reporting
+`duals carried: 547/550 constraints` in the status. It is a latch, not a capture,
+so press order does not matter. **Reset defaults** puts every control back to the
+value it opened with and cold-starts. The startup line names the `crest_sparse`
+that actually got loaded plus any capability missing from it, because a
+capability-gated control that is silently disabled looks exactly like a broken
+feature. The trajectory planner and the §1.8 controller are deliberately *not*
+here — see the `traj_*` scripts and `viz_controller.py`.
+
 **`viz_controller.py`** — two states. *FK pose* (sliders re-solve FK live; "set
 Θ_curr" commits that posture as the measured base pose, tensions, and lengths)
 and *Control* (a phase button builds the controller from that Θ_curr and starts
@@ -660,7 +791,12 @@ factor-error breakdown by family (`HandIKStepper.factor_errors()`, empty before
 the first step because the graph is built inside `solve()`). Defaults reproduce
 the visualizer's start state — the shared `solvers.DEFAULT_WRIST_*` base pose,
 `HandSolveParams.primitive` (`mid_sphere_ellipsoid`), all five fingers, collision
-**on**, table **off**. `--log` tees to `results/`.
+**on**, table **off**. `--log` tees to `results/`. `--ik-settle-steps` (default:
+`HandSolveParams.ik_settle_steps`) controls how many leading steps pin the
+flexor to settle the cold start; each settling step is tagged `[SETTLING: ...]`
+in the per-step output, and `print_scene` reports the count up front. Pass `0`
+to reproduce the pre-fix behaviour and watch the flexor swing negative — see the
+Gotchas entry below.
 
 ---
 
@@ -680,6 +816,36 @@ SDFs are filleted (`edge_radius`) for the same reason.
 loose-flexor is right *with* contact and underdetermined *without* it. With
 collision, a tight flexor prior makes penetration the merit minimum and AL quits
 at `iters=1` — keep the flexor variance at 1e-1.
+
+**A cold-started IK solve hyperextends before it converges — `ik_settle_steps`
+is the fix, not a symptom to tune around.** `TendonRobotModel::get_initial_values`
+seeds every tendon tension at Q = 0 on a rod already posed at its *commanded*
+shape — a guess that looks reasonable (tips land within a few mm of the FK pose)
+but is statically inconsistent. Against the tight-passive prior (σ = 1e-3, mean
+0.5 N) that inconsistency is `0.5·(0.5/1e-3)²·25 tendons ≈ 3.1e6` units of prior
+cost — exactly the `cost` the AL trace reports at iteration 0
+(`CREST_AL_VERBOSE=1`). The first inner LM solve spends its whole 100-iteration
+budget (`SolverBaseConfig::max_iterations`) hauling the 25 passive tensions home,
+and the **flexor** — whose prior is 1e5× weaker in weight (variance 1e-1 vs
+1e-6) — is the cheap direction that absorbs the leftover residual: it swings to
+roughly −0.9 N. Negative tendon tension is hyperextension, so the hand visibly
+bends backwards, then spends ~13 stepped AL outer iterations crawling back past
+the FK pose it started near. This is not the AL loop or any constraint pulling —
+it reproduces identically for contact-only, collision-only and contact+collision,
+is unchanged across `al_mu` from 1e-6 to 10, and a bigger inner-LM budget just
+finishes the same descent inside one Step instead of several (400 iterations ⇒
+step 1 matches stock step 4 exactly). It is one continuous LM descent, chopped
+into fixed-size slices. `HandIKStepper.step()` fixes it by pinning the flexor to
+the passive prior's tightness (`_IK_SETTLE_TENSION_COV`) for the leading
+`params.ik_settle_steps` steps (default 1), then releasing it to the normal
+`_IK_TENSION_COV`. With one settling step the first Step lands exactly on the FK
+pose instead of −0.9 N, and the solve reaches the same converged grasp in the
+same number of outer iterations, ~20% faster in wall time (no time spent undoing
+the excursion). Set `ik_settle_steps=0` to reproduce the old behaviour. A warm-started
+solve must NOT settle — the pin fights an already-converged posture instead of a
+cold one, snapping the fingers open ~57 mm on step 1 — so `_settling()` returns
+False whenever `params.initial_state` is set, whatever `ik_settle_steps` says.
+The setting is a cold-start remedy by definition.
 
 **Base priors must be loose in the controller, tight in the solvers.** A step
 prior tight enough to pin the base (σ = 1e-3 ⇒ 1/σ² = 1e6) is stiffer than the

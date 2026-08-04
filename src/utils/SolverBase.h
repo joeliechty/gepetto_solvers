@@ -130,6 +130,16 @@ struct SolverBaseConfig {
     // point of the method — so this is a guard, not a limit to tune against.
     double al_warm_mu_max = 1e4;
 
+    // Ceiling on a mu carried across a REBUILD (set_initial_duals), as opposed
+    // to al_warm_mu_max which clamps mu within one solver's life. Separate
+    // because the two want different values: a solver that keeps tightening the
+    // same problem can be allowed a large mu, but a NEW problem inherits that mu
+    // for constraints it has never seen. Measured on a table-contact grasp,
+    // inheriting the 5e5 the previous solve reached froze the hand (it stalled 2
+    // iterations in, 36 mm from the object it had just been asked to touch)
+    // while 1e4 held the old contact and still converged.
+    double al_transfer_mu_max = 1e4;
+
     // When true, optimize() uses a manual iterate() loop instead of
     // optimizer.optimize(). Populates SolutionMetadata::iteration_errors and
     // ::iteration_trust_region. Required for get_intermediate_solutions().
@@ -189,6 +199,25 @@ public:
     // No-op unless al_warm_start_duals is set.
     void reset_al_duals();
 
+    // Seed the NEXT solve's multipliers from another solver's final state,
+    // matched by constraint identity (see remap_al_state). The carried state
+    // must be tagged and this solver must tag its own constraints
+    // (constraint_tags_eq/ineq), or the transfer is refused -- pairing
+    // multipliers by position across a rebuilt graph is not a degraded warm
+    // start, it is wrong. Consumed by the first solve after the call.
+    void set_initial_duals(const crest_sparse::WarmALState& duals) {
+        al_transfer_in_ = duals;
+    }
+
+    // The AL state of the last solve, tagged so another solver can take it.
+    const crest_sparse::WarmALState& get_al_duals() const { return al_warm_; }
+
+    // How much of the last transfer matched (matched/total, per class). All
+    // zeros when nothing was carried in.
+    const crest_sparse::ALTransferReport& al_transfer_report() const {
+        return al_transfer_report_;
+    }
+
     // Linearize the factor graph at current values_ and return the dense
     // Hessian H and gradient g of the linearized quadratic.
     // For diagnostics: sparsity pattern, condition number, smallest singular
@@ -230,6 +259,19 @@ protected:
     // constructed (empty multipliers) means "cold start", which is the state
     // after construction and after a reset.
     crest_sparse::WarmALState al_warm_;
+
+    // Duals handed in by set_initial_duals(), pending remap onto this solver's
+    // own constraints. Cleared once consumed, so a transfer seeds the first
+    // solve and every later one continues from al_warm_ as usual.
+    crest_sparse::WarmALState al_transfer_in_;
+    crest_sparse::ALTransferReport al_transfer_report_;
+
+    // This solver's constraint identities, in graph-insertion order (= the order
+    // ConstrainedOptProblem enumerates them). Empty by default: a solver that
+    // does not tag its constraints simply cannot transfer duals across a
+    // rebuild, which is the safe answer rather than a positional guess.
+    virtual std::vector<std::string> constraint_tags_eq() const { return {}; }
+    virtual std::vector<std::string> constraint_tags_ineq() const { return {}; }
 
     // Snapshot of values_ at the start of each optimize() call (the initial
     // guess for that solve). Used by get_initial_factor_error_summary() and

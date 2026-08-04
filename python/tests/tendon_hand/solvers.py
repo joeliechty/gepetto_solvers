@@ -131,6 +131,12 @@ def capabilities():
         # always been seedable. Without it a rebuilt stepper can only cold-start.
         "solver_seed": hasattr(crest_sparse.TendonHandSolverConfig(),
                                "initial_state"),
+        # Carrying the AL multipliers across a REBUILD, matched by constraint
+        # identity (TendonHandSolver.set_initial_duals). Without it a rebuilt
+        # solver restarts the penalty schedule from scratch, which is visible as
+        # the hand drifting off constraints it had already satisfied.
+        "dual_transfer": hasattr(crest_sparse.TendonHandSolver,
+                                 "set_initial_duals"),
     }
 
 
@@ -1039,6 +1045,22 @@ class HandSolveParams:
     # ``TendonHandSolverConfig.initial_state`` (capabilities()["solver_seed"]).
     initial_state: Optional[object] = None
 
+    # The other half of a warm start: the Augmented Lagrangian multipliers and
+    # penalty weight of a previous solve (``HandResult.duals``), matched onto
+    # this solve's constraints by identity. ``initial_state`` carries where the
+    # hand IS; this carries how hard each constraint was being held there. Both
+    # are needed to change a constraint and continue -- with the posture alone
+    # the rebuilt solve restarts at mu = al_mu with every multiplier at zero and
+    # visibly drifts off the constraints it had already satisfied before being
+    # dragged back. Needs capabilities()["dual_transfer"].
+    initial_duals: Optional[object] = None
+
+    # Ceiling on the penalty weight a transfer may carry in. mu is global, so a
+    # rebuilt problem inherits it for constraints it has never seen: too high and
+    # the new constraint is pinned as rigidly as the old ones and cannot recruit
+    # any motion, too low and the old ones are held only weakly.
+    al_transfer_mu_max: float = 1e4
+
     # --- Diagnostics (opt-in; off by default so normal solves are unchanged) ---
     # When True the C++ side records the per-outer-iteration AL trace
     # (al_iteration_mus / _costs / _violations on the result meta) plus
@@ -1362,6 +1384,15 @@ class HandResult:
     # the object-only solves every caller ran before the two were separable.
     # Appended last on purpose: several call sites build a result positionally.
     table_contact_fingers: Optional[List[bool]] = None
+    # The solve's Augmented Lagrangian state (``crest_sparse.ALDuals``): the
+    # multipliers and penalty weight, tagged with the identity of the constraint
+    # each belongs to. Feed to ``HandSolveParams.initial_duals`` to continue this
+    # solve after a rebuild. Only the stepper fills it; None everywhere else.
+    duals: Optional[object] = None
+    # ``crest_sparse.ALTransferReport`` for the transfer INTO this solve, i.e.
+    # how many of its constraints inherited a multiplier. None when nothing was
+    # carried in.
+    dual_transfer: Optional[object] = None
 
     def state(self, k=0):
         """The solved hand state at frame ``k``, for seeding another solver.
@@ -1585,7 +1616,7 @@ class HandSolverBase:
 
     def _result(self, frames, meta, contact_fingers=None, states=None,
                 iterates=None, iterate_states=None, iterate_notes=None,
-                table_contact_fingers=None):
+                table_contact_fingers=None, duals=None, dual_transfer=None):
         # The table mask defaults to the one this solve actually built, so every
         # result carries it without each call site restating it; a caller that
         # means "no table" (the controller) passes an explicit all-False list.
@@ -1594,7 +1625,8 @@ class HandSolverBase:
         return HandResult(frames, meta, self.spec, self.object_center,
                           self.object_rotation, self.finger_names, self.tip_radii,
                           contact_fingers, states, iterates, iterate_states,
-                          iterate_notes, table_contact_fingers)
+                          iterate_notes, table_contact_fingers, duals,
+                          dual_transfer)
 
     def solve(self) -> HandResult:  # pragma: no cover - abstract
         raise NotImplementedError
@@ -1780,6 +1812,9 @@ class HandIKStepper(HandSolverBase):
         # the 1e4 default in place stalls the stepped solve at a ~60 mm gap while
         # the one-shot reaches 0.1 mm: the cap, not the method, is the difference.
         _set_if(cfg.base, "al_warm_mu_max", 1e12)
+        # ...but a mu carried in from ANOTHER solver is clamped: see
+        # HandSolveParams.al_transfer_mu_max.
+        _set_if(cfg.base, "al_transfer_mu_max", self.params.al_transfer_mu_max)
         # The al_iteration_* arrays are the only readout of what a step did, and
         # they are populated only when recording is on -- so this is not optional
         # here the way it is for the one-shot solve.
@@ -1805,6 +1840,13 @@ class HandIKStepper(HandSolverBase):
                       cfg.base.al_rel_violation_tol, cfg.base.al_rel_cost_tol)
 
         self._solver = crest_sparse.TendonHandSolver(self.configs, cfg)
+        # Multipliers carried in from a previous solver, re-seated onto THIS
+        # solver's constraints by identity on its first solve. Set on the solver
+        # rather than the config because the remap needs this graph, which does
+        # not exist until that solve runs.
+        if (self.params.initial_duals is not None
+                and hasattr(self._solver, "set_initial_duals")):
+            self._solver.set_initial_duals(self.params.initial_duals)
         self._history = []      # TendonHandMarginals per step (initial guess first)
         self._frames = []       # the same states as render frames
         self._notes = []        # one readout line per history entry
@@ -1841,6 +1883,24 @@ class HandIKStepper(HandSolverBase):
 
     def status(self) -> StepStatus:
         return self._status
+
+    def al_duals(self):
+        """This solve's AL multipliers + penalty weight, tagged by constraint
+        identity -- what a differently-constrained rebuild takes to continue
+        holding the constraints the two problems share. None on a binding
+        without the accessor."""
+        if not hasattr(self._solver, "get_al_duals"):
+            return None
+        return self._solver.get_al_duals()
+
+    def dual_transfer(self):
+        """How much of the incoming transfer matched (or None). A 0/N here on a
+        rebuild that should have matched means the constraint TAGS drifted, not
+        that the problem genuinely changed."""
+        if not hasattr(self._solver, "al_transfer_report"):
+            return None
+        rep = self._solver.al_transfer_report()
+        return rep if rep.total else None
 
     def factor_errors(self):
         """``[(factor_family, count, total_error)]`` at the CURRENT values.
@@ -1899,7 +1959,8 @@ class HandIKStepper(HandSolverBase):
             [self._frames[-1]], sol.meta, self.params.contact_fingers,
             [self._history[-1]],
             [[f] for f in self._frames], [[hm] for hm in self._history],
-            list(self._notes))
+            list(self._notes), duals=self.al_duals(),
+            dual_transfer=self.dual_transfer())
 
     def _append(self, hand_marginals, meta, note):
         self._history.append(hand_marginals)

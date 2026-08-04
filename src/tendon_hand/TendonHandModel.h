@@ -85,12 +85,35 @@ public:
     // get_marginals_means_only path), so a solver's output re-seeds another
     // solver directly.
     //
-    // Covers T/S/F per node, D per disc, Q and L. Node 0's pose is skipped: under
-    // the hand-base reparameterization it is not a variable (T_0 = T_base o
-    // offset), and T_base is already seeded from wrist_pose_ -- which the caller
-    // sets to the same base pose this state was solved at. Throws if the finger
-    // count, node count or tendon count disagrees with this model.
+    // Covers T/S/F per node, D per disc, Q and L, plus the shared wrist: node 0's
+    // pose is not a variable under the hand-base reparameterization (T_0 = T_base
+    // o offset), so it is skipped as a pose and inverted into T_base instead. The
+    // wrist has to come from the STATE, not from wrist_pose_: it is a variable
+    // with a soft prior, so a contact solve moves it tens of millimetres off the
+    // commanded pose, and seeding the commanded one would pair a converged finger
+    // posture with a base that never went there. Throws if the finger count, node
+    // count or tendon count disagrees with this model.
     gtsam::Values values_from_marginals(const TendonHandMarginals& state) const;
+
+    // Stable, semantic identity for every hard constraint this model builds, in
+    // build_graph()'s insertion order -- which is exactly the order
+    // ConstrainedOptProblem enumerates them in, since it collects constraints by
+    // a filtered walk of the graph.
+    //
+    // The point is transferring Lagrange multipliers across a REBUILD. lambda is
+    // indexed by a constraint's POSITION, so adding one constraint renumbers
+    // every multiplier after it; a tag like "tbl.contact|f4" names the same
+    // physical constraint no matter what else is in the graph. Tags are emitted
+    // at the insertion site rather than recovered by introspection because the
+    // graph cannot be read back: every equality is wrapped in ZeroCostConstraint
+    // and every inequality in CollisionInequalityConstraint, so the factor type
+    // says nothing, and e.g. a plane collision and a half-space inequality on the
+    // same node carry identical keys.
+    struct ConstraintTags {
+        std::vector<std::string> eq;
+        std::vector<std::string> ineq;
+    };
+    const ConstraintTags& constraint_tags() const { return tags_; }
 
     // Re-aim the shared wrist prior at a new pose *without* rebuilding the model.
     // Only the wrist-prior mean depends on wrist_pose_ (the finger offsets and
@@ -238,6 +261,17 @@ private:
 
     std::vector<FingerVariant> fingers_;
     std::vector<std::string> finger_names_;
+
+    // Add one hard constraint AND record its identity, so the two orders cannot
+    // drift: every constraint in this model goes through one of these.
+    void add_eq(gtsam::NonlinearFactorGraph& graph,
+                const gtsam::NoiseModelFactor::shared_ptr& factor,
+                std::string tag);
+    void add_ineq(gtsam::NonlinearFactorGraph& graph,
+                  const gtsam::NoiseModelFactor::shared_ptr& gap,
+                  std::string tag);
+
+    ConstraintTags tags_;
 
     // Each finger's fixed attachment to the wrist (config.hand_base_offset), so
     // T_0^i = T_wrist o T_offset_i. Kept because that relation is the ONLY way

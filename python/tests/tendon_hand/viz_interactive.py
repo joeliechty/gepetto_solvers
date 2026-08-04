@@ -410,6 +410,15 @@ class HandVizApp:
         if self.stepper is None:
             if self.warm_start:
                 self.params.initial_state = self._seed_state()
+                # The other half: the multipliers holding each constraint. The
+                # posture alone restarts the penalty schedule at mu = al_mu with
+                # every multiplier at zero, so the solve lets go of everything it
+                # had already satisfied and hauls it back over the next few
+                # iterations -- the fingers lifting off the table. Matched onto
+                # the new constraint set by identity, so the shared constraints
+                # keep their multipliers and the new ones start at zero.
+                self.params.initial_duals = (
+                    self._seed_duals() if self.g_carry_duals.value else None)
                 # Carrying the posture is only half of it. The wrist and the
                 # flexor tensions are VARIABLES with soft priors commanded from
                 # the sliders, and a contact solve moves both a long way from
@@ -420,8 +429,17 @@ class HandVizApp:
                 self._adopt_solved_tensions()
             else:
                 self.params.initial_state = None
+                self.params.initial_duals = None
             self.stepper = HandIKStepper(self.params)
         return self.stepper
+
+    def _seed_duals(self):
+        """The AL multipliers of the solve on screen, or None.
+
+        Taken from ``self.result`` rather than the scrubbed iterate view: the
+        multipliers belong to the solve as a whole (the AL outer loop's running
+        state), not to the snapshot the scrubber happens to be showing."""
+        return None if self.result is None else self.result.duals
 
     def _adopt_solved_wrist(self):
         """Re-aim the wrist prior at the pose the last solve reached, and move
@@ -512,11 +530,17 @@ class HandVizApp:
             if self.params.object_contact else []
         if self.result.table_contact_names():
             gaps.append(f"table {self.result.worst_table_gap(self.params, 0):+.5f} m")
+        # What the rebuild inherited. Worth a line of its own: 0 matched against
+        # a non-empty carry is a tag drift (a constraint built without one),
+        # which otherwise just looks like the warm start not working.
+        rep = self.result.dual_transfer
+        carried = ("" if rep is None else
+                   f"  \nduals carried: {rep.matched}/{rep.total} constraints")
         self._set_status(
             f"**IK step {status.steps}** &nbsp; {verdict}  \n"
             f"violation={status.violation:.3e} &nbsp; cost={status.cost:.4g} "
             f"&nbsp; mu={status.mu:.3g}  \n"
-            f"worst gap: {' &nbsp; '.join(gaps) or 'n/a'}")
+            f"worst gap: {' &nbsp; '.join(gaps) or 'n/a'}{carried}")
 
     def _ik_step(self, _=None):
         """One Augmented Lagrangian outer iteration, continuing the last one."""
@@ -621,7 +645,10 @@ class HandVizApp:
                 "build is used, and rebuild with `pip install .`)*")
         elif on:
             self.g_warm_status.content = (
-                "the next **Step** starts from the state on screen")
+                "the next **Step** starts from the state on screen"
+                + (", carrying the AL multipliers"
+                   if self.caps["dual_transfer"] and self.g_carry_duals.value
+                   else ""))
         else:
             self.g_warm_status.content = (
                 "the next **Step** cold-starts (straight hand, Q = 0)")
@@ -725,7 +752,7 @@ class HandVizApp:
     def _input_handles(self):
         """Every value-carrying control, in build order. Buttons and markdown are
         deliberately absent -- Reset restores values, not widgets."""
-        return ([self.g_object, self.g_ik_max, self.g_ik_settle,
+        return ([self.g_object, self.g_ik_max, self.g_ik_settle, self.g_carry_duals,
                  self.g_tx, self.g_ty, self.g_tz,
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
@@ -833,6 +860,17 @@ class HandVizApp:
                       if self.caps["solver_seed"]
                       else "requires a rebuilt _crest_sparse with "
                            "TendonHandSolverConfig.initial_state"))
+            self.g_carry_duals = gui.add_checkbox(
+                "carry AL duals", True, disabled=not self.caps["dual_transfer"],
+                hint=("Also carry the Augmented Lagrangian multipliers, matched "
+                      "to the new constraint set by identity. This is what stops "
+                      "the hand letting go of constraints it had already "
+                      "satisfied: without it the rebuilt solve restarts the "
+                      "penalty schedule at mu = al_mu with every multiplier at "
+                      "zero. Untick to see the difference."
+                      if self.caps["dual_transfer"]
+                      else "requires a rebuilt _crest_sparse with "
+                           "TendonHandSolver.set_initial_duals"))
             self.g_reset = gui.add_button(
                 "Reset defaults", icon=self.viser.Icon.ROTATE,
                 hint="Put every control back to the value it opened with, turn "

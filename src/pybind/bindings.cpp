@@ -7,6 +7,52 @@ namespace py = pybind11;
 
 
 void bind_utils(py::module& m) {
+    // Augmented Lagrangian outer-loop state, carried between solves. Opaque on
+    // purpose: a caller moves it from one solver to another and never builds one
+    // -- the multipliers only mean anything paired with the tags beside them.
+    py::class_<crest_sparse::WarmALState>(m, "ALDuals")
+        .def(py::init<>())
+        .def_property_readonly(
+            "num_equality",
+            [](const crest_sparse::WarmALState& s) { return s.lambda_eq.size(); })
+        .def_property_readonly(
+            "num_inequality",
+            [](const crest_sparse::WarmALState& s) { return s.lambda_ineq.size(); })
+        .def_property_readonly("mu", [](const crest_sparse::WarmALState& s) {
+            return s.mu_eq_at;
+        })
+        .def_property_readonly("tagged", &crest_sparse::WarmALState::tagged,
+                               "True when every multiplier carries the identity "
+                               "of its constraint, which is what a transfer "
+                               "across a rebuilt graph requires.")
+        .def_readonly("tags_equality", &crest_sparse::WarmALState::tag_eq)
+        .def_readonly("tags_inequality", &crest_sparse::WarmALState::tag_ineq)
+        .def("__bool__", [](const crest_sparse::WarmALState& s) {
+            return !s.empty();
+        })
+        .def("__repr__", [](const crest_sparse::WarmALState& s) {
+            return "<ALDuals eq=" + std::to_string(s.lambda_eq.size()) +
+                   " ineq=" + std::to_string(s.lambda_ineq.size()) +
+                   " mu=" + std::to_string(s.mu_eq_at) +
+                   (s.tagged() ? " tagged>" : " untagged>");
+        });
+
+    py::class_<crest_sparse::ALTransferReport>(m, "ALTransferReport")
+        .def(py::init<>())
+        .def_readonly("matched_equality",
+                      &crest_sparse::ALTransferReport::matched_eq)
+        .def_readonly("total_equality", &crest_sparse::ALTransferReport::total_eq)
+        .def_readonly("matched_inequality",
+                      &crest_sparse::ALTransferReport::matched_ineq)
+        .def_readonly("total_inequality",
+                      &crest_sparse::ALTransferReport::total_ineq)
+        .def_property_readonly("matched", &crest_sparse::ALTransferReport::matched)
+        .def_property_readonly("total", &crest_sparse::ALTransferReport::total)
+        .def("__repr__", [](const crest_sparse::ALTransferReport& r) {
+            return "<ALTransferReport " + std::to_string(r.matched()) + "/" +
+                   std::to_string(r.total()) + " constraints matched>";
+        });
+
     py::class_<SolverBaseConfig>(m, "SolverBaseConfig")
         .def(py::init<>())
         .def_readwrite("linear_solver_type", &SolverBaseConfig::linear_solver_type)
@@ -28,6 +74,7 @@ void bind_utils(py::module& m) {
         .def_readwrite("al_rel_cost_tol", &SolverBaseConfig::al_rel_cost_tol)
         .def_readwrite("al_warm_start_duals", &SolverBaseConfig::al_warm_start_duals)
         .def_readwrite("al_warm_mu_max", &SolverBaseConfig::al_warm_mu_max)
+        .def_readwrite("al_transfer_mu_max", &SolverBaseConfig::al_transfer_mu_max)
         .def_readwrite("record_iterations", &SolverBaseConfig::record_iterations)
         .def_readwrite("iteration_sample_interval", &SolverBaseConfig::iteration_sample_interval)
         .def_readwrite("skip_marginals", &SolverBaseConfig::skip_marginals);

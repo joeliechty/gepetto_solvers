@@ -178,6 +178,22 @@ bool TendonHandModel::uses_center_direct_contact(
 }
 
 
+void TendonHandModel::add_eq(NonlinearFactorGraph& graph,
+                             const gtsam::NoiseModelFactor::shared_ptr& factor,
+                             std::string tag) {
+    graph.add(gtsam::ZeroCostConstraint(factor));
+    tags_.eq.push_back(std::move(tag));
+}
+
+
+void TendonHandModel::add_ineq(NonlinearFactorGraph& graph,
+                               const gtsam::NoiseModelFactor::shared_ptr& gap,
+                               std::string tag) {
+    graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+    tags_.ineq.push_back(std::move(tag));
+}
+
+
 NonlinearFactorGraph TendonHandModel::build_graph(
     const std::vector<VectorXGaussian>& tensions,
     const std::vector<Vector6Gaussian>& tip_wrenches)
@@ -188,6 +204,9 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         throw std::invalid_argument("tip_wrenches size must match number of fingers");
 
     NonlinearFactorGraph graph;
+    // Rebuilt from scratch alongside the graph: the tags describe THIS graph's
+    // constraints, and a stale entry would pair a multiplier with the wrong one.
+    tags_ = ConstraintTags{};
 
     for (size_t i = 0; i < fingers_.size(); ++i) {
         std::visit([&](auto& fp) {
@@ -259,7 +278,8 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                             tip_key, object_key(), env.contact_node_radius,
                             env.ellipsoid_semi_axes,
                             noiseModel::Isotropic::Sigma(1, 1.0));
-                    graph.add(gtsam::ZeroCostConstraint(center_contact));
+                    add_eq(graph, center_contact,
+                           "obj.center|f" + std::to_string(i));
                     return;
                 }
 
@@ -281,7 +301,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         env.contact_node_radius, env.sdf_grid,
                         noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n);
                 }
-                graph.add(gtsam::ZeroCostConstraint(contact));
+                add_eq(graph, contact, "obj.witness|f" + std::to_string(i));
 
                 // Soft witness target (Section 1.8, Eq 1.111). Because the AL
                 // equality constraints pin the witness to the object surface
@@ -307,13 +327,13 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         finger_key, object_key(), witness_key(static_cast<int>(i)),
                         sc.finger_node_radius, sc.sphere_radius,
                         noiseModel::Isotropic::Sigma(5, 1.0));
-                    graph.add(gtsam::ZeroCostConstraint(contact));
+                    add_eq(graph, contact, "obj.sphwit|f" + std::to_string(i));
                 } else {
                     auto contact = std::make_shared<crest_sparse::SphereSphereContactFactor>(
                         finger_key, object_key(),
                         sc.finger_node_radius, sc.sphere_radius,
                         noiseModel::Isotropic::Sigma(1, 1.0));
-                    graph.add(gtsam::ZeroCostConstraint(contact));
+                    add_eq(graph, contact, "obj.sphere|f" + std::to_string(i));
                 }
             }
         }, fingers_[i]);
@@ -337,7 +357,13 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     // plane_avoidance) -- so table collision alone still gets finger-finger
     // avoidance. Whether the finger-OBJECT inequalities are built is decided
     // separately, in the loop below.
-    struct CollSphere { Key key; double radius; bool proximal; bool is_root; bool is_contact; };
+    // `node` is carried only to name the sphere in a constraint tag: the KEY is
+    // model-local (global counter) and useless across a rebuild, while the node
+    // index is the same sphere in any model built from the same configs.
+    struct CollSphere {
+        Key key; double radius; bool proximal; bool is_root; bool is_contact;
+        int node;
+    };
     std::vector<std::vector<CollSphere>> finger_spheres(fingers_.size());
     for (size_t i = 0; i < fingers_.size(); ++i) {
         if (!sdf_contacts_[i]) continue;
@@ -363,7 +389,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 bool is_contact = env.target_contact_node.has_value() &&
                     fp->rod_->get_pose_key(idx) ==
                         fp->rod_->get_pose_key(*env.target_contact_node);
-                finger_spheres[i].push_back({key, r, prox, is_root, is_contact});
+                finger_spheres[i].push_back({key, r, prox, is_root, is_contact, idx});
             }
         }, fingers_[i]);
     }
@@ -400,7 +426,8 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 gap = std::make_shared<crest_sparse::SdfCollisionGapFactor>(
                     s.key, object_key(), s.radius, env.sdf_grid, col_noise);
             }
-            graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+            add_ineq(graph, gap, "col.obj|f" + std::to_string(i) +
+                                 "|n" + std::to_string(s.node));
         }
     }
 
@@ -437,7 +464,11 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     }
                     auto gap = std::make_shared<crest_sparse::SphereSphereCollisionGapFactor>(
                         sa.key, sb.key, sa.radius, sb.radius, col_noise);
-                    graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+                    // a < b by construction, so the pair name is canonical.
+                    add_ineq(graph, gap,
+                             "col.ff|f" + std::to_string(a) + "n" +
+                             std::to_string(sa.node) + "|f" + std::to_string(b) +
+                             "n" + std::to_string(sb.node));
                 }
             }
         }
@@ -474,7 +505,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     tip_key, env.table_contact_radius,
                     env.plane_origin, env.plane_normal,
                     noiseModel::Isotropic::Sigma(1, 1.0));
-                graph.add(gtsam::ZeroCostConstraint(contact));
+                add_eq(graph, contact, "tbl.contact|f" + std::to_string(i));
             }
 
             // --- Section 1.8 controller phases 1-2 ---------------------------
@@ -491,7 +522,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     sup_key, env.support_contact_radius,
                     env.plane_origin, env.plane_normal,
                     noiseModel::Isotropic::Sigma(1, 1.0));
-                graph.add(gtsam::ZeroCostConstraint(support));
+                add_eq(graph, support, "sup.contact|f" + std::to_string(i));
 
                 // Opposition half-space (Eq 1.92): keep this finger's contact
                 // sphere on its designated half of the support surface, so the
@@ -500,7 +531,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
                         sup_key, env.half_space_split_point, env.half_space_normal,
                         noiseModel::Isotropic::Sigma(1, env.collision_sigma));
-                    graph.add(crest_sparse::CollisionInequalityConstraint(half));
+                    add_ineq(graph, half, "half|f" + std::to_string(i));
                 }
             }
 
@@ -530,7 +561,8 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     auto gap = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
                         fp->rod_->get_pose_key(idx), r,
                         env.plane_origin, env.plane_normal, col_noise);
-                    graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+                    add_ineq(graph, gap, "col.plane|f" + std::to_string(i) +
+                                         "|n" + std::to_string(idx));
                 }
             }
         }, fingers_[i]);

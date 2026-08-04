@@ -3,6 +3,8 @@
 #include <gtsam/constrained/AugmentedLagrangianOptimizer.h>
 
 #include <algorithm>
+#include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -27,11 +29,117 @@ struct WarmALState {
     std::vector<gtsam::Vector> lambda_eq;
     std::vector<double>        lambda_ineq;
 
+    // Stable identity of the constraint each multiplier belongs to, in the same
+    // order (see TendonHandModel::constraint_tags). Empty on a solver that does
+    // not tag its constraints -- such a state can still be carried WITHIN one
+    // solver, where positions do not move, just not across a rebuild.
+    std::vector<std::string> tag_eq;
+    std::vector<std::string> tag_ineq;
+
     // Empty multipliers mean "nothing carried yet": start exactly as GTSAM does.
     bool empty() const { return lambda_eq.empty() && lambda_ineq.empty(); }
 
+    bool tagged() const {
+        return tag_eq.size() == lambda_eq.size() &&
+               tag_ineq.size() == lambda_ineq.size() && !empty();
+    }
+
     void clear() { *this = WarmALState{}; }
 };
+
+
+// How much of a transfer survived, for reporting. A run of 0 matched against a
+// non-empty carried state means the tags drifted, which is a bug rather than a
+// legitimately different problem, so the number is worth surfacing.
+struct ALTransferReport {
+    size_t matched_eq = 0, total_eq = 0;
+    size_t matched_ineq = 0, total_ineq = 0;
+
+    size_t matched() const { return matched_eq + matched_ineq; }
+    size_t total() const { return total_eq + total_ineq; }
+};
+
+
+// Re-seat multipliers carried from one problem onto a DIFFERENT one by matching
+// constraint identity, so that the constraints the two problems share keep their
+// multipliers and everything new starts at zero.
+//
+// This is what makes "change a constraint and carry on" possible at all. lambda
+// is indexed by POSITION, so inserting one constraint renumbers every multiplier
+// after it -- the count check in optimizeWarm() is a guard against exactly that,
+// and it can only ever answer "all or nothing". Matching by tag answers "these
+// 47 of 52", which is the honest answer when a constraint set changes.
+//
+// mu is global to the whole problem and cannot be per-constraint, so it is
+// carried but CLAMPED by mu_max: measured on a table-contact grasp, restarting at
+// the mu the previous solve reached (5e5) pins the new constraint as rigidly as
+// the old ones and the hand cannot move to satisfy it (stalls in 2 iterations,
+// 36 mm from the object), while ~1e4 keeps the old contact and still converges.
+inline WarmALState remap_al_state(const WarmALState& carried,
+                                  const std::vector<std::string>& eq_tags,
+                                  const std::vector<size_t>& eq_dims,
+                                  const std::vector<std::string>& ineq_tags,
+                                  double mu_max,
+                                  ALTransferReport* report = nullptr) {
+    WarmALState out;
+    out.tag_eq   = eq_tags;
+    out.tag_ineq = ineq_tags;
+    out.mu_eq_at     = std::min(carried.mu_eq_at, mu_max);
+    out.mu_ineq_at   = std::min(carried.mu_ineq_at, mu_max);
+    out.mu_eq_next   = std::min(carried.mu_eq_next, mu_max);
+    out.mu_ineq_next = std::min(carried.mu_ineq_next, mu_max);
+
+    ALTransferReport rep;
+    rep.total_eq = eq_tags.size();
+    rep.total_ineq = ineq_tags.size();
+
+    // Repeated tags are matched in order of appearance, so a family that merely
+    // grew or shrank still pairs its common members rather than giving up.
+    auto index_of = [](const std::vector<std::string>& tags) {
+        std::map<std::string, std::vector<size_t>> m;
+        for (size_t i = 0; i < tags.size(); ++i) m[tags[i]].push_back(i);
+        return m;
+    };
+    auto take = [](std::map<std::string, std::vector<size_t>>& m,
+                   const std::string& tag, size_t* idx) {
+        auto it = m.find(tag);
+        if (it == m.end() || it->second.empty()) return false;
+        *idx = it->second.front();
+        it->second.erase(it->second.begin());
+        return true;
+    };
+
+    auto eq_pool = index_of(carried.tag_eq);
+    out.lambda_eq.resize(eq_tags.size());
+    for (size_t k = 0; k < eq_tags.size(); ++k) {
+        const size_t dim = k < eq_dims.size() ? eq_dims[k] : 0;
+        size_t src = 0;
+        // The dimension must agree too: the same fingertip contact is a 5-row
+        // witness constraint or a 1-row center-direct one depending on the
+        // surface, and a 5-vector multiplier means nothing to the 1-row form.
+        if (take(eq_pool, eq_tags[k], &src) && src < carried.lambda_eq.size() &&
+            static_cast<size_t>(carried.lambda_eq[src].size()) == dim) {
+            out.lambda_eq[k] = carried.lambda_eq[src];
+            ++rep.matched_eq;
+        } else {
+            out.lambda_eq[k] = gtsam::Vector::Zero(static_cast<int>(dim));
+        }
+    }
+
+    auto ineq_pool = index_of(carried.tag_ineq);
+    out.lambda_ineq.assign(ineq_tags.size(), 0.0);
+    for (size_t k = 0; k < ineq_tags.size(); ++k) {
+        size_t src = 0;
+        if (take(ineq_pool, ineq_tags[k], &src) &&
+            src < carried.lambda_ineq.size()) {
+            out.lambda_ineq[k] = carried.lambda_ineq[src];
+            ++rep.matched_ineq;
+        }
+    }
+
+    if (report) *report = rep;
+    return out;
+}
 
 
 // An AugmentedLagrangianOptimizer whose outer loop can be SEEDED with a penalty
@@ -67,6 +175,16 @@ public:
     // the problem, so a differing count means the correspondence is gone.
     std::pair<size_t, size_t> constraint_counts() const {
         return {problem_.eConstraints().size(), problem_.iConstraints().size()};
+    }
+
+    // Row count of each equality constraint, in the same order. A tag-matched
+    // transfer checks these: a multiplier only means something to a constraint
+    // of the same dimension (see remap_al_state).
+    std::vector<size_t> eq_dims() const {
+        std::vector<size_t> dims;
+        dims.reserve(problem_.eConstraints().size());
+        for (const auto& c : problem_.eConstraints()) dims.push_back(c->dim());
+        return dims;
     }
 
     // Run the outer loop, seeded from `w` and reporting back through it.

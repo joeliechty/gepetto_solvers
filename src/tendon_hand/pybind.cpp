@@ -57,6 +57,20 @@ void bind_tendon_hand(py::module& m) {
         .def("get_initial_solution", &TendonHandSolver::get_initial_solution,
              "The initial-guess hand state (start of the last solve()), for the "
              "first frame of a step animation.")
+        .def("set_initial_duals", &TendonHandSolver::set_initial_duals,
+             py::arg("duals"),
+             "Seed this solver's Augmented Lagrangian multipliers from another "
+             "solver's get_al_duals(), matched by constraint identity. For "
+             "continuing a solve whose CONSTRAINT SET changed: shared "
+             "constraints keep their multipliers, new ones start at zero, and "
+             "mu is carried clamped by config.base.al_transfer_mu_max.")
+        .def("get_al_duals", &TendonHandSolver::get_al_duals,
+             py::return_value_policy::copy,
+             "The AL multipliers and penalty weight after the last solve, "
+             "tagged with the identity of the constraint each belongs to.")
+        .def("al_transfer_report", &TendonHandSolver::al_transfer_report,
+             py::return_value_policy::copy,
+             "How much of the last set_initial_duals() transfer matched.")
         .def("reset_al_duals", &TendonHandSolver::reset_al_duals,
              "Restart the Augmented Lagrangian homotopy from the current "
              "posture: drops the carried multipliers and penalty weight but "
