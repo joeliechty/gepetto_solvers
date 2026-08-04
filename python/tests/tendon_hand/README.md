@@ -513,6 +513,17 @@ at where it converged. `viz_interactive` does that in `_adopt_solved_wrist()`,
 which also writes the pose back to the wrist sliders, since `_sync_params` reads
 the prior straight off them and would otherwise undo it on the next step.
 
+The same argument applies to the **flexor tensions**, and to `ik_settle_steps`.
+The flexor prior is deliberately soft (variance 1e-1 in `_IK_TENSION_COV`) so
+contact can drive it, so a grasp ends far from what the slider commands — 1.28 N
+against a commanded 0.6 N — and the restart must adopt it
+(`_adopt_solved_tensions`). Settling is worse: it pins *all six* tendons at the
+commanded means, which is the cure for a cold start's inconsistent Q = 0 guess
+and pure destruction on a warm one (fingers snap open ~57 mm on step 1), so
+`HandIKStepper._settling()` now returns False whenever `initial_state` is set.
+The rule for all three: **anything the solve is free to move, a warm start has to
+re-command, or its prior drags the hand back.**
+
 Two things in here are load-bearing beyond convenience:
 
 * **`capabilities()` + `_set_if()`** — the installed `.so` routinely lags the C++

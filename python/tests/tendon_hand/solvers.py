@@ -1859,7 +1859,18 @@ class HandIKStepper(HandSolverBase):
 
         Counted off ``self._steps`` (steps already taken), not off a flag, so a
         :meth:`reset` re-settles and :meth:`restart_al` -- which keeps the posture
-        -- correctly does not."""
+        -- correctly does not.
+
+        NEVER when the solve was seeded (``params.initial_state``). Settling pins
+        every tendon at its COMMANDED mean, which is the right way to absorb a
+        cold start's statically inconsistent Q = 0 guess -- and exactly the wrong
+        thing to do to a warm one: a contact solve drives the flexor well away
+        from its commanded value (1.28 N against a commanded 0.6 N is typical),
+        so pinning it back hauls the fingers open by ~57 mm on step 1 and throws
+        away the posture the seed existed to preserve. A seeded start is already
+        consistent, which is the only thing settling was ever for."""
+        if self.params.initial_state is not None:
+            return False
         return self._steps < max(int(self.params.ik_settle_steps), 0)
 
     def step(self) -> HandResult:

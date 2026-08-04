@@ -54,7 +54,7 @@ from .scene import get_primitive_specs, GRASP_FLEXOR_TENSION, TABLE_NORMAL
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
-    euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
+    euler_to_R, R_to_euler, solved_wrist_pose, plane_witness, FLEXOR_IDX,
     DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 
 
@@ -410,12 +410,14 @@ class HandVizApp:
         if self.stepper is None:
             if self.warm_start:
                 self.params.initial_state = self._seed_state()
-                # The wrist is a VARIABLE with a soft prior, so a solve that
-                # presses the hand onto the table moves the base away from the
-                # commanded pose. Carrying only the posture would rebuild the
-                # prior at the sliders' pose and haul the hand straight back
-                # there, so adopt where it actually ended up -- and show it.
+                # Carrying the posture is only half of it. The wrist and the
+                # flexor tensions are VARIABLES with soft priors commanded from
+                # the sliders, and a contact solve moves both a long way from
+                # what is commanded; rebuilding those priors at the old slider
+                # values hauls the hand straight back. Adopt where the solve
+                # actually ended up -- and show it on the sliders.
                 self._adopt_solved_wrist()
+                self._adopt_solved_tensions()
             else:
                 self.params.initial_state = None
             self.stepper = HandIKStepper(self.params)
@@ -447,6 +449,43 @@ class HandVizApp:
         # Exact, not the round trip through the sliders (they hold the same
         # numbers; viser does not snap a programmatic write to the step grid).
         self.params.wrist_pose = np.asarray(T, float)
+
+    def _adopt_solved_tensions(self):
+        """Move the flexor sliders to the tensions the last solve reached.
+
+        Same failure as the wrist, one variable over: the flexor prior is soft by
+        design (``_IK_TENSION_COV`` gives it variance 1e-1 so contact can drive
+        it), so a grasp ends with the flexor far from what the slider commands --
+        1.28 N against a commanded 0.6 N here. Rebuild the prior at the slider
+        value and it pulls the fingers back open even without a settling step.
+
+        Only the flexors: the five passives are pinned at 1e-6 and come back
+        within 7e-6 N of what was commanded, so the one shared passive slider is
+        already telling the truth and moving it would be noise."""
+        res = self._iter_view()
+        if res is None:
+            return
+        lo, hi = self.g_flexors[0].min, self.g_flexors[0].max
+        solved, clamped = [], False
+        for name in res.finger_names:
+            q = float(np.asarray(
+                res.frames[0][name].marginals.tensions.mean, float)[FLEXOR_IDX])
+            clamped = clamped or not (lo <= q <= hi)
+            solved.append(min(max(q, lo), hi))
+        self._restoring = True
+        try:
+            for handle, q in zip(self.g_flexors, solved):
+                handle.value = q
+        finally:
+            self._restoring = False
+        self.params.flexor_tensions = solved
+        if clamped:
+            # A clamped value is a prior commanded somewhere the hand is not, so
+            # say so rather than let it look like the warm start misbehaving.
+            self._set_status(
+                f"**warm start:** a solved flexor tension fell outside the "
+                f"slider range [{lo}, {hi}] N and was clamped -- the hand will "
+                f"move toward the clamped value.")
 
     def _show_step(self, result, status):
         """Render one stepped state and update both status readouts. Called from
@@ -767,7 +806,10 @@ class HandVizApp:
                      "swinging NEGATIVE, i.e. the fingers hyperextend and then "
                      "spend ~13 steps crawling back to the FK pose. One settling "
                      "step lands step 1 on the FK pose instead, and reaches the "
-                     "same grasp. Set 0 to watch the old behaviour.")
+                     "same grasp. Set 0 to watch the old behaviour. Ignored "
+                     "entirely on a warm start -- a seeded posture is already "
+                     "consistent, and pinning its tendons back to the commanded "
+                     "means is exactly what would undo it.")
             self.g_status = gui.add_markdown("")
 
         # The scrubber over the steps taken. The slider and its readout are built
