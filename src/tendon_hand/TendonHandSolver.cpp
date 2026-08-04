@@ -34,7 +34,16 @@ TendonHandSolver::TendonHandSolver(
 
 
 void TendonHandSolver::get_initial_values() {
-    values_ = hand_->get_initial_values();
+    // Seed from a caller-supplied posture when there is one, so the solve starts
+    // where the hand already is rather than at the straight-rod, zero-tension
+    // cold start (see config_.initial_state). Same warm merge the controller
+    // uses: get_initial_values fills in anything the marginals do not carry.
+    if (config_.initial_state) {
+        const Values warm = hand_->values_from_marginals(*config_.initial_state);
+        values_ = hand_->get_initial_values(&warm);
+    } else {
+        values_ = hand_->get_initial_values();
+    }
 }
 
 

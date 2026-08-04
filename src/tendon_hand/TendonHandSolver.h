@@ -9,6 +9,7 @@
 #include <gtsam/base/Vector.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,18 @@ struct TendonHandSolverConfig {
     // collision/contact still decide whether the Augmented Lagrangian path runs.
     std::vector<gtsam::Vector3> goal_positions;
     Eigen::Matrix3d goal_position_cov = 1e-5 * Eigen::Matrix3d::Identity();
+
+    // Optional warm-start posture: the marginals of any solve on the same finger
+    // configs -- an FK pose, or an earlier solve of this same problem. Unset
+    // (default) => the straight-rod, zero-tension cold start of
+    // TendonHandModel::get_initial_values, unchanged. Set, and the solve begins
+    // where the hand already is, which matters for a contact solve: the cold
+    // guess is statically inconsistent with a curled rod, and the first
+    // iterations are spent hyperextending and crawling back rather than closing
+    // the contact. Marginals rather than Values for the same reason
+    // TendonHandControllerConfig::initial_state uses them -- it is the state
+    // bundle a caller already has from a previous solve.
+    std::optional<TendonHandMarginals> initial_state;
 
     // (Interior/tip external-wrench prior noise is taken per finger from each
     // finger's sigma_stress_moment/force, matching TendonFingerSolver.)

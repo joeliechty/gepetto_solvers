@@ -126,6 +126,11 @@ def capabilities():
         # hasattr can see, and setting the flag on a binding without it would
         # read an empty marginals object. Both ship together.
         "ik_stepping": hasattr(crest_sparse.TendonHandSolver, "reset_al_duals"),
+        # Seeding a single-shot solve / stepper with a posture from an earlier
+        # solve (HandSolveParams.initial_state), the way the controller has
+        # always been seedable. Without it a rebuilt stepper can only cold-start.
+        "solver_seed": hasattr(crest_sparse.TendonHandSolverConfig(),
+                               "initial_state"),
     }
 
 
@@ -1000,6 +1005,15 @@ class HandSolveParams:
     al_inner_tol: float = 1e-2
     al_abs_cost_tol: float = 1e12
 
+    # Warm-start posture for the IK stepper: the ``marginals`` of any solve on
+    # the same finger configs (``HandResult.state(k)``), or None for the
+    # straight-rod, zero-tension cold start. Carries a converged grasp across a
+    # rebuild -- which is the only way to change the CONSTRAINT SET and continue
+    # from where the solve got to, since a new constraint set needs a new solver
+    # and a new solver otherwise cold-starts. Needs a binding with
+    # ``TendonHandSolverConfig.initial_state`` (capabilities()["solver_seed"]).
+    initial_state: Optional[object] = None
+
     # --- Diagnostics (opt-in; off by default so normal solves are unchanged) ---
     # When True the C++ side records the per-outer-iteration AL trace
     # (al_iteration_mus / _costs / _violations on the result meta) plus
@@ -1751,6 +1765,12 @@ class HandIKStepper(HandSolverBase):
         # means-only branch would read an empty marginals object.
         if capabilities()["ik_stepping"]:
             _set_if(cfg.base, "skip_marginals", True)
+        # Warm-start posture, when the caller committed one. Read here rather
+        # than in __init__ so a reset() picks up whatever params carries now:
+        # seeding IS the mechanism for carrying a solve across the rebuild that
+        # a changed constraint set forces.
+        if self.params.initial_state is not None:
+            _set_if(cfg, "initial_state", self.params.initial_state)
 
         # Read the stopping tolerances back off the config rather than keeping a
         # second copy: status() has to mirror the C++ convergence test (which

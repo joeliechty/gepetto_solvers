@@ -489,6 +489,13 @@ planner, so a step scrubber indexes them identically. `surface_gaps()`,
 raw `TendonHandMarginals` behind a frame — the form
 `HandControllerSolver(initial_state=...)` and `set_theta_curr(state=...)` take to
 start a controller from a real posture instead of a straight hand.
+`TendonHandSolverConfig.initial_state` (surfaced as
+`HandSolveParams.initial_state`, gated on `capabilities()["solver_seed"]`) is the
+same idea for the single-shot solver and the stepper: a changed constraint set
+forces a rebuild, and a rebuilt solver cold-starts, so seeding it with the last
+state is the only way to carry a solve across that rebuild. It is also how
+`viz_interactive.py`'s *Seed from current* button starts an IK solve from an FK
+pose rather than from the straight-rod guess.
 
 Two things in here are load-bearing beyond convenience:
 
@@ -533,7 +540,7 @@ Two things in here are load-bearing beyond convenience:
 | `traj_5f_point_collision.py` | HandPlanner | §1.5 | Point goals + collision — this one **passes** |
 | `traj_5f_slide_grasp.py` | HandPlanner | §1.6 | Table + `--k-touch` three-phase slide and grasp |
 | `ctrl_5f_phases.py` | HandController | §1.8 | All four phases headless, with independent geometric checks |
-| `viz_interactive.py` | all four | — | viser workbench: pick solver, set knobs, solve, scrub |
+| `viz_interactive.py` | HandFK + HandIKStepper | §1.4+§1.5 | viser workbench: pose with FK, then step the IK solve one AL iteration at a time and scrub it |
 | `viz_controller.py` | HandController | §1.8 | viser app built around the controller + constraint-goal overlays |
 | `debug_al_trace.py` | all four | — | Read-only AL trace dumper and parameter sweeper |
 | `debug_ik_step_trace.py` | HandIKStepper | §1.4+§1.5 | Headless replay of the GUI's *Step* button, one AL iteration at a time, fully logged |

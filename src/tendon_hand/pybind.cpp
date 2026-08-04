@@ -18,7 +18,11 @@ void bind_tendon_hand(py::module& m) {
         .def_readwrite("sigma_wrist_pos", &TendonHandSolverConfig::sigma_wrist_pos)
         .def_readwrite("sigma_wrist_rot", &TendonHandSolverConfig::sigma_wrist_rot)
         .def_readwrite("goal_positions", &TendonHandSolverConfig::goal_positions)
-        .def_readwrite("goal_position_cov", &TendonHandSolverConfig::goal_position_cov);
+        .def_readwrite("goal_position_cov", &TendonHandSolverConfig::goal_position_cov)
+        .def_readwrite("initial_state", &TendonHandSolverConfig::initial_state,
+                       "Optional warm-start posture (TendonHandMarginals from a "
+                       "previous solve on the same finger configs). None => the "
+                       "straight-rod, zero-tension cold start.");
 
     py::class_<TendonHandMarginals>(m, "TendonHandMarginals")
         .def(py::init<>())
