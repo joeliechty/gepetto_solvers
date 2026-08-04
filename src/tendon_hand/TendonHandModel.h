@@ -239,6 +239,12 @@ private:
     std::vector<FingerVariant> fingers_;
     std::vector<std::string> finger_names_;
 
+    // Each finger's fixed attachment to the wrist (config.hand_base_offset), so
+    // T_0^i = T_wrist o T_offset_i. Kept because that relation is the ONLY way
+    // back from a state bundle to the wrist: node 0's pose is not a variable
+    // under the reparameterization, so values_from_marginals has to invert it.
+    std::vector<gtsam::Pose3> hand_base_offsets_;
+
     // Per-finger contact configuration (either may be empty).
     std::vector<std::optional<crest_sparse::EnvironmentConfig>>   sdf_contacts_;
     std::vector<std::optional<SpherePrimitiveContactConfig>>      sphere_contacts_;

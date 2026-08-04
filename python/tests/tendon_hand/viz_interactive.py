@@ -12,11 +12,17 @@ convergence one iteration at a time (initial guess -> each outer iteration).
 
 Changing the constraint set (object, contacts, collision, table) restarts the IK
 loop, because the Augmented Lagrangian duals it carries describe the constraints
-it has been working on. *Seed from current* is the way to change one anyway and
-keep the posture: it commits the state on screen as the starting values of the
-next solve, so the restart begins where the last solve got to instead of at a
-straight hand with Q = 0. The same button starts an IK solve from an FK pose you
-dialled in by hand. *Reset defaults* puts every control back and cold-starts.
+it has been working on. *Warm start* is the way to change one anyway and keep the
+posture: while the latch is on, every restart begins from the state on screen
+instead of from a straight hand with Q = 0 -- so it also starts an IK solve from
+an FK pose you dialled in by hand. Only the posture carries; the penalty schedule
+restarts regardless. *Reset defaults* puts every control back and cold-starts.
+
+Run (from the ``crest-sparse`` root, so ``crest_sparse`` resolves to the
+INSTALLED build -- launching from ``python/`` picks up the stale in-tree
+``python/crest_sparse/_crest_sparse*.so`` instead, and every capability-gated
+control silently goes dead):
+    python -m python.tests.tendon_hand.viz_interactive
 
 Object contact, table contact, object collision and table collision are four
 independent switches (*Contact targets*, *Collision*, *Table*), each acting on
@@ -31,12 +37,11 @@ The solvers are the reusable ``HandFKSolver`` / ``HandIKStepper`` classes in
 1.8 controller are not part of this app -- see the ``traj_*`` scripts and
 ``viz_controller.py``.
 
-Run (from the ``python/`` directory):
-    python -m tests.tendon_hand.viz_interactive
-then open the printed http://localhost:8080 URL.
+then open the printed http://localhost:8080 URL. The startup line names the
+binding that was actually loaded and lists any capability missing from it.
 
 Optional headless self-check of the solver classes (no browser):
-    python -m tests.tendon_hand.viz_interactive --smoke
+    python -m python.tests.tendon_hand.viz_interactive --smoke
 """
 
 import argparse
@@ -49,7 +54,8 @@ from .scene import get_primitive_specs, GRASP_FLEXOR_TENSION, TABLE_NORMAL
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
-    euler_to_R, plane_witness, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
+    euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
+    DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
@@ -64,6 +70,19 @@ SDF_DROPDOWN_LABELS = {"sphere": "sphere_sdf", "big_sphere": "big_sphere_sdf"}
 # The wrist sliders and the solvers must agree on what "pitch" means, so the
 # convention lives with the params rather than here.
 _euler_to_R = euler_to_R
+
+
+def binding_path():
+    """Where the loaded ``crest_sparse`` came from.
+
+    Worth reporting because there are two of them: the installed build in
+    site-packages, and a stale in-tree ``python/crest_sparse/_crest_sparse*.so``
+    that shadows it whenever the app is launched from the ``python/`` directory.
+    A control gated on ``capabilities()`` then goes quietly dead against a build
+    the source has long since moved past, which looks like the feature failing
+    rather than the import resolving somewhere unexpected."""
+    import crest_sparse
+    return crest_sparse.__file__
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +164,9 @@ class HandVizApp:
         # Cached IK stepper: it owns the AL outer loop being advanced one
         # iteration per Step, so it has to outlive a single step.
         self.stepper = None
+        # Warm-start latch: while on, every (re)build of the stepper starts from
+        # the state on screen rather than the cold guess. See _ensure_stepper.
+        self.warm_start = False
         self._auto_stop = threading.Event()
         self._auto_thread = None
         # True while Reset is writing the controls back to their defaults, so the
@@ -295,20 +317,20 @@ class HandVizApp:
         for btn in (getattr(self, "g_ik_step", None), getattr(self, "g_ik_auto", None)):
             if btn is not None:
                 btn.disabled = solving or not self.caps["ik_stepping"]
-        # Seeding mid-solve would capture a half-drawn state and Reset would pull
-        # the params out from under a running step, so both wait it out.
-        if getattr(self, "g_seed", None) is not None:
-            self.g_seed.disabled = solving or not self.caps["solver_seed"]
+        # Reset would pull the params out from under a running step, and flipping
+        # the warm start mid-run cannot affect the loop already built, so both
+        # wait it out rather than looking like they did something.
+        if getattr(self, "g_warm", None) is not None:
+            self.g_warm.disabled = solving or not self.caps["solver_seed"]
         if getattr(self, "g_reset", None) is not None:
             self.g_reset.disabled = solving
 
     def _fk_solve(self, _=None):
         """Re-pose the hand from the current sliders with the FK solver.
 
-        Also the explicit "start over" action for the IK loop: it drops any
-        partially stepped solve AND the committed seed, so the next Step is a
-        true cold start. (Seed again afterwards to hand the fresh FK pose to the
-        solver instead.)"""
+        Also the "start over" action for the IK loop: it drops any partially
+        stepped solve. What the next Step then starts from is the warm-start
+        latch's business -- off, the cold guess; on, this FK pose."""
         if self._solving:
             return
         self._solving = True
@@ -317,7 +339,6 @@ class HandVizApp:
             self._sync_params()
             self._refresh_object()
             self._invalidate_stepper()
-            self._clear_seed()
             self.mode = "FK"
             self._set_status("Solving (FK)...")
             # Reuse the cached FK solver (shares self.params) so this warm-starts.
@@ -379,9 +400,53 @@ class HandVizApp:
         self.stepper = None
 
     def _ensure_stepper(self):
+        """The cached stepper, built on demand.
+
+        This is the ONE place the warm start is applied, and it is applied at
+        BUILD time: a rebuilt solver is exactly the thing that would otherwise
+        cold-start, and reading the on-screen state here means the posture handed
+        over is whatever is showing at that instant -- no capture to go stale, no
+        ordering to get right."""
         if self.stepper is None:
+            if self.warm_start:
+                self.params.initial_state = self._seed_state()
+                # The wrist is a VARIABLE with a soft prior, so a solve that
+                # presses the hand onto the table moves the base away from the
+                # commanded pose. Carrying only the posture would rebuild the
+                # prior at the sliders' pose and haul the hand straight back
+                # there, so adopt where it actually ended up -- and show it.
+                self._adopt_solved_wrist()
+            else:
+                self.params.initial_state = None
             self.stepper = HandIKStepper(self.params)
         return self.stepper
+
+    def _adopt_solved_wrist(self):
+        """Re-aim the wrist prior at the pose the last solve reached, and move
+        the sliders to match.
+
+        The sliders are the prior's only input -- every step re-commands it from
+        ``params.wrist_pose``, which ``_sync_params`` reads straight off them --
+        so leaving them on the old numbers would undo this on the very next step.
+        Moving them is also the honest thing: after a solve they no longer
+        describe where the hand is."""
+        res = self._iter_view()
+        if res is None:
+            return
+        T = solved_wrist_pose(self.fk_solver.configs, res.frames[0])
+        roll, pitch, yaw = R_to_euler(T[:3, :3])
+        self._restoring = True   # these are OUR writes; no live-FK re-solve
+        try:
+            for handle, value in zip(
+                    (self.g_tx, self.g_ty, self.g_tz,
+                     self.g_roll, self.g_pitch, self.g_yaw),
+                    (*T[:3, 3], roll, pitch, yaw)):
+                handle.value = float(value)
+        finally:
+            self._restoring = False
+        # Exact, not the round trip through the sliders (they hold the same
+        # numbers; viser does not snap a programmatic write to the step grid).
+        self.params.wrist_pose = np.asarray(T, float)
 
     def _show_step(self, result, status):
         """Render one stepped state and update both status readouts. Called from
@@ -475,51 +540,59 @@ class HandVizApp:
         """Ask a running auto-solve to stop; it breaks before the next step."""
         self._auto_stop.set()
 
-    # -- seeding and reset --
+    # -- warm start and reset --
 
-    def _set_seed_status(self, text):
-        self.g_seed_status.content = text
-
-    def _clear_seed(self):
-        """Forget the committed warm start: the next Step cold-starts."""
-        self.params.initial_state = None
-        self._set_seed_status("seed: none (Step cold-starts)")
-
-    def _seed_from_current(self, _=None):
-        """Commit the state on screen as the starting posture of the next solve.
-
-        The stepper cannot absorb a change to the CONSTRAINT SET -- its duals
-        describe the old one -- so any such change rebuilds it, and a rebuilt
-        solver cold-starts from a straight hand with Q = 0. That is what this
-        works around: the committed posture is handed to the new solver as its
-        initial values, so "change a setting and carry on from where the solve
-        got to" becomes possible. It is equally the way to start an IK solve from
-        an FK pose you dialled in by hand instead of from the cold guess.
-
-        Whatever the *iterate* scrubber is showing is what gets committed, so you
-        can also rewind to an earlier iteration and branch from there."""
-        if self._solving or not self.caps["solver_seed"]:
-            return
+    def _seed_state(self):
+        """The posture on screen right now, as a solver seed (None if nothing has
+        been solved). Follows the *iterate* scrubber, so rewinding to an earlier
+        iteration and branching from there works."""
         res = self._iter_view()
-        state = None if res is None else res.state(0)
-        if state is None:
-            self._set_seed_status("**nothing to seed from** -- solve first")
+        return None if res is None else res.state(0)
+
+    def _toggle_warm_start(self, _=None):
+        """Flip the warm-start latch.
+
+        A LATCH, not a one-shot capture: the state is read at the moment the
+        stepper is (re)built, so it cannot go stale and the order you press
+        things in does not matter. Capturing on the button press instead meant
+        that anything re-posing the hand in between -- pressing FK, or just
+        dragging a tension slider, which re-solves FK live -- silently threw the
+        captured state away and the next Step cold-started."""
+        if not self.caps["solver_seed"]:
             return
-        self.params.initial_state = state
-        # The committed posture only reaches the solver through a construction,
-        # so the loop in progress has to go; keeping it would silently ignore
-        # the seed until the next constraint-set change.
-        self._invalidate_stepper()
-        where = (f"IK step {self._current_iterate()}" if self.mode == "IK"
-                 else "the FK pose")
-        self._set_seed_status(f"seed: **{where}** -- next Step starts there")
+        self.warm_start = not self.warm_start
+        self._refresh_warm_start()
+
+    def _refresh_warm_start(self):
+        """Put the latch's state on the button and in its readout."""
+        on = self.warm_start
+        self.g_warm.label = f"Warm start: {'ON' if on else 'off'}"
+        self.g_warm.color = "blue" if on else None
+        if not self.caps["solver_seed"]:
+            # Name the .so that is actually loaded: the usual cause is not a
+            # missing rebuild but the STALE IN-TREE copy at
+            # python/crest_sparse/_crest_sparse*.so shadowing the installed one,
+            # which happens whenever the app is run from the python/ directory.
+            self.g_warm_status.content = (
+                "**unavailable** -- this binding has no "
+                "`TendonHandSolverConfig.initial_state`  \n"
+                f"loaded from `{binding_path()}`  \n"
+                "*(run from the crest-sparse root -- `python -m "
+                "python.tests.tendon_hand.viz_interactive` -- so the installed "
+                "build is used, and rebuild with `pip install .`)*")
+        elif on:
+            self.g_warm_status.content = (
+                "the next **Step** starts from the state on screen")
+        else:
+            self.g_warm_status.content = (
+                "the next **Step** cold-starts (straight hand, Q = 0)")
 
     def _reset_defaults(self, _=None):
         """Put every control back to the value it was built with and cold-start.
 
-        A full reset rather than a re-solve: fresh params (so the seed and any
-        derived scene state go too), fresh FK solver, no stepper, camera back on
-        the default object."""
+        A full reset rather than a re-solve: fresh params (so the warm-start
+        posture and any derived scene state go too), fresh FK solver, no
+        stepper, camera back on the default object."""
         if self._solving:
             return
         self._restoring = True
@@ -529,11 +602,13 @@ class HandVizApp:
         finally:
             self._restoring = False
         self.params = HandSolveParams()
+        self.warm_start = False     # a button, so not in _gui_defaults
+        self._refresh_warm_start()
         self._sync_params()
         self._rebuild_fk()          # also drops the stepper
         self._refresh_object()
         self._aim_all_cameras()
-        self._fk_solve()            # clears the seed and re-renders
+        self._fk_solve()
         self._set_status("**reset** to defaults  \n" + self.g_status.content)
 
     def _live_fk(self, _=None):
@@ -699,25 +774,29 @@ class HandVizApp:
         # per step by _rebuild_iter_slider().
         self.iter_folder = gui.add_folder("Solve steps")
 
-        with gui.add_folder("Seed / reset"):
-            self.g_seed = gui.add_button(
-                "Seed from current", icon=self.viser.Icon.PIN,
+        with gui.add_folder("Warm start / reset"):
+            self.g_warm = gui.add_button(
+                "Warm start: off", icon=self.viser.Icon.PIN,
                 disabled=not self.caps["solver_seed"],
-                hint=("Commit the state on screen (the FK pose, or whichever "
-                      "iteration the scrubber is showing) as the starting "
-                      "posture of the next solve. Changing the object, "
-                      "contacts, collision or table restarts the IK loop from a "
-                      "straight hand; seed first and it restarts from here "
-                      "instead, so you can change a setting and carry on. "
-                      "Pressing FK drops the seed."
+                hint=("Latch: while it is ON, every restart of the IK loop "
+                      "begins from the state on screen instead of from a "
+                      "straight hand with Q = 0. Changing the object, contacts, "
+                      "collision, table or an AL knob restarts the loop (the "
+                      "carried multipliers describe the old constraint set), so "
+                      "this is what lets you change a setting and carry on from "
+                      "the posture you had. It also starts an IK solve from an "
+                      "FK pose you dialled in, and it follows the iterate "
+                      "scrubber, so you can rewind and branch. Only the POSTURE "
+                      "carries -- the penalty schedule restarts either way."
                       if self.caps["solver_seed"]
                       else "requires a rebuilt _crest_sparse with "
                            "TendonHandSolverConfig.initial_state"))
             self.g_reset = gui.add_button(
                 "Reset defaults", icon=self.viser.Icon.ROTATE,
-                hint="Put every control back to the value it opened with, drop "
-                     "the seed and the stepped solve, and re-pose with FK.")
-            self.g_seed_status = gui.add_markdown("")
+                hint="Put every control back to the value it opened with, turn "
+                     "the warm start off, drop the stepped solve, and re-pose "
+                     "with FK.")
+            self.g_warm_status = gui.add_markdown("")
 
         with gui.add_folder("Wrist start pose"):
             # Seeded from the shared default (solvers.DEFAULT_WRIST_*) so the
@@ -806,14 +885,14 @@ class HandVizApp:
         # Every value-carrying control, captured as built: this IS the definition
         # of "defaults" that Reset restores, so the two cannot drift.
         self._gui_defaults = [(h, h.value) for h in self._input_handles()]
-        self._clear_seed()
+        self._refresh_warm_start()
 
         # -- callbacks --
         self.g_fk.on_click(self._fk_solve)
         self.g_ik_step.on_click(self._ik_step)
         self.g_ik_auto.on_click(self._ik_auto)
         self.g_ik_stop.on_click(self._ik_stop)
-        self.g_seed.on_click(self._seed_from_current)
+        self.g_warm.on_click(self._toggle_warm_start)
         self.g_reset.on_click(self._reset_defaults)
 
         @self.g_object.on_update
@@ -876,7 +955,15 @@ def main():
 
     import viser
     server = viser.ViserServer(port=args.port)
-    HandVizApp(server)
+    app = HandVizApp(server)
+    # Which binding got loaded, and what it can do. Printed unconditionally: a
+    # capability-gated control that is silently disabled is indistinguishable
+    # from one that does not work, and the usual cause is the in-tree .so
+    # shadowing the installed build (see binding_path()).
+    print(f"crest_sparse: {binding_path()}")
+    missing = [k for k, v in app.caps.items() if not v]
+    if missing:
+        print(f"  capabilities MISSING from this build: {', '.join(missing)}")
     print(f"viser hand visualizer running -- open http://localhost:{args.port}")
     import time
     while True:

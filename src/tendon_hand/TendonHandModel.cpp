@@ -130,6 +130,7 @@ TendonHandModel::TendonHandModel(
         // T_wrist o T_offset, so the shared base variable seeds to T_wrist for
         // every finger (see get_initial_values / set_root_reparameterization).
         Pose3 offset(c.hand_base_offset);
+        hand_base_offsets_.push_back(offset);
         Pose3 base_pose_mean = wrist_pose_ * offset;
 
         int Nt = c.num_tendons;
@@ -739,6 +740,22 @@ Values TendonHandModel::values_from_marginals(const TendonHandMarginals& state) 
                 values.insert(fp->get_lengths_key(), L);
             }
         }, fingers_[i]);
+    }
+
+    // The shared wrist. No finger carries it directly: under the hand-base
+    // reparameterization node 0's pose is not a variable but the composition
+    // T_0 = T_wrist o T_offset, so the loop above deliberately skipped it and
+    // the wrist would otherwise be missing from the bundle entirely. A warm
+    // start built from that would hold every rod pose from the state and the
+    // wrist at whatever the receiving model was constructed with -- an
+    // inconsistent guess that the Root factors and the wrist prior immediately
+    // tear back apart, i.e. the hand snapping to the commanded base pose on the
+    // first iteration. Invert the relation instead and carry it.
+    const bool uses_root = !fingers_.empty() && std::visit(
+        [](const auto& fp) { return fp->rod_->uses_root(); }, fingers_[0]);
+    if (uses_root && !hand_base_offsets_.empty()) {
+        const Pose3 T0(state.fingers[0].rod.states[0].pose.mean);
+        values.insert(wrist_key(step_), T0 * hand_base_offsets_[0].inverse());
     }
 
     return values;

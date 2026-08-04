@@ -494,8 +494,24 @@ start a controller from a real posture instead of a straight hand.
 same idea for the single-shot solver and the stepper: a changed constraint set
 forces a rebuild, and a rebuilt solver cold-starts, so seeding it with the last
 state is the only way to carry a solve across that rebuild. It is also how
-`viz_interactive.py`'s *Seed from current* button starts an IK solve from an FK
-pose rather than from the straight-rod guess.
+`viz_interactive.py`'s *Warm start* latch starts an IK solve from an FK pose
+rather than from the straight-rod guess. The latch is read when the stepper is
+BUILT, not when the button is pressed: an earlier one-shot "seed now" version
+depended on press order and was silently discarded by anything that re-posed the
+hand in between (pressing FK, or dragging a tension slider, which re-solves FK
+live).
+
+Two things a warm start has to carry, not one. `values_from_marginals` now also
+inserts the shared wrist `Symbol('W', 0)`, recovered as `T_wrist = T_0 ∘
+T_offset⁻¹` — node 0's pose is not a variable under the hand-base
+reparameterization, so the wrist was previously absent from the bundle and a
+seeded solve held every rod pose from the state while the wrist stayed at
+whatever the new model was constructed with. Second, the wrist is a *variable*
+with a soft prior (`sigma_wrist_*`), so a contact solve moves it — 29 mm down
+onto the table at sigma 1e-2 — and the prior for the next solve must be re-aimed
+at where it converged. `viz_interactive` does that in `_adopt_solved_wrist()`,
+which also writes the pose back to the wrist sliders, since `_sync_params` reads
+the prior straight off them and would otherwise undo it on the next step.
 
 Two things in here are load-bearing beyond convenience:
 

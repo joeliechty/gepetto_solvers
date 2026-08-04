@@ -153,12 +153,37 @@ def euler_to_R(roll, pitch, yaw):
     return Rz @ Ry @ Rx
 
 
+def R_to_euler(R):
+    """(roll, pitch, yaw) in radians from a ZYX rotation matrix. Inverse of
+    :func:`euler_to_R`, so a pose can round-trip through the sliders."""
+    R = np.asarray(R, float)
+    pitch = -np.arcsin(np.clip(R[2, 0], -1.0, 1.0))
+    if abs(R[2, 0]) > 1.0 - 1e-9:      # gimbal lock: fold roll into yaw
+        return 0.0, float(pitch), float(np.arctan2(-R[0, 1], R[1, 1]))
+    return (float(np.arctan2(R[2, 1], R[2, 2])), float(pitch),
+            float(np.arctan2(R[1, 0], R[0, 0])))
+
+
 def wrist_pose_from_xyzrpy(xyz, rpy):
     """4x4 base pose from a translation (m) and ZYX euler angles (rad)."""
     T = np.eye(4)
     T[:3, :3] = euler_to_R(*rpy)
     T[:3, 3] = np.asarray(xyz, float)
     return T
+
+
+def solved_wrist_pose(configs, frame):
+    """The wrist pose a solved frame actually ended at, as a 4x4.
+
+    The wrist is a VARIABLE, not a fixed input: its prior is soft (sigma_wrist_*)
+    and contact pulls against it, so a solve that presses the hand onto a table
+    moves the base tens of millimetres away from the commanded pose. Nothing in
+    the result reports it directly, but each finger's node-0 pose is
+    ``T_0 = T_wrist o T_offset``, so inverting finger 0's offset recovers it (all
+    fingers agree to machine precision -- they share the one variable)."""
+    name, cfg = configs[0]
+    T0 = np.asarray(frame[name].marginals.rod.states[0].pose.mean, float)
+    return T0 @ np.linalg.inv(np.asarray(cfg.hand_base_offset, float))
 
 
 # The default hand base pose: lifted 75 mm along the support normal and pitched
