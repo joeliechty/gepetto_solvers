@@ -20,11 +20,12 @@ everything the solve knows:
 
 Defaults reproduce the visualizer's own start state -- the default hand base pose
 (``solvers.DEFAULT_WRIST_XYZ`` / ``DEFAULT_WRIST_RPY``, i.e. the palm-down hover
-the GUI opens on), all five fingertips driven onto the default analytic object
-(``HandSolveParams.primitive``, the half-buried mid sphere), Section 1.5
-collision avoidance ON and the support plane OFF. Nothing here mutates solver
-behaviour: it is a read-only harness like :mod:`debug_al_trace`, which reports one
-*whole* solve where this reports every step of one.
+the GUI opens on), a 3F pinch (index, middle, thumb) driven onto the default
+analytic object (``HandSolveParams.primitive``, the half-buried mid sphere),
+Section 1.5 object collision avoidance ON and the support plane ON (with its own
+collision avoidance). Nothing here mutates solver behaviour: it is a read-only
+harness like :mod:`debug_al_trace`, which reports one *whole* solve where this
+reports every step of one.
 
 Object contact, table contact, object collision and table collision are four
 independent switches, mirroring the visualizer's, so a stalled solve can be
@@ -33,8 +34,8 @@ bisected one constraint family at a time::
     # the object alone (the default), the table alone, then both
     python -m python.tests.tendon_hand.debug_ik_step_trace
     python -m python.tests.tendon_hand.debug_ik_step_trace \
-        --table --table-contact --no-object-contact --no-object-collision
-    python -m python.tests.tendon_hand.debug_ik_step_trace --table --table-contact
+        --table-contact --no-object-contact --no-object-collision
+    python -m python.tests.tendon_hand.debug_ik_step_trace --table-contact
 
 Run from the ``crest-sparse/`` repo root in the ``crest_py11`` env, so the import
 resolves to the installed binding rather than the in-tree ``.so``::
@@ -47,9 +48,9 @@ resolves to the installed binding rather than the in-tree ``.so``::
     # add the C++ outer-loop stderr trace and the per-step inner-LM tail
     python -m python.tests.tendon_hand.debug_ik_step_trace --verbose --inner
 
-    # a pinch instead of a whole-hand grasp, no collision spheres
+    # a whole-hand grasp instead of the default pinch, no collision spheres
     python -m python.tests.tendon_hand.debug_ik_step_trace \
-        --contact-fingers 1,0,0,0,1 --no-collision
+        --contact-fingers 1,1,1,1,1 --no-collision
 """
 
 import argparse
@@ -480,7 +481,8 @@ def print_verdict(rows, status, args):
 # ---------------------------------------------------------------------------
 
 def build_params(args):
-    """The visualizer's own defaults, with object collision on and the table off."""
+    """The visualizer's own defaults: object collision on, table (and its
+    collision avoidance) on, a 3F pinch."""
     p = HandSolveParams()
     p.primitive = args.primitive
     p.wrist_pose = wrist_pose_from_xyzrpy(args.wrist[:3], args.wrist[3:])
@@ -532,17 +534,17 @@ def build_parser():
                          "shared solvers.DEFAULT_WRIST_* pose the visualizer "
                          "opens on.")
     ap.add_argument("--sigma-wrist-pos", dest="sigma_wrist_pos", type=float,
-                    default=1e-4)
+                    default=1e-2)
     ap.add_argument("--sigma-wrist-rot", dest="sigma_wrist_rot", type=float,
-                    default=1e-3)
+                    default=1e-2)
     ap.add_argument("--passive", type=float, default=0.5)
     ap.add_argument("--flexor", type=float, default=GRASP_FLEXOR_TENSION,
                     help="uniform per-finger flexor tension (N)")
     ap.add_argument("--contact-fingers", dest="contact_fingers", type=parse_mask,
-                    default=None, metavar="I,M,R,P,T",
+                    default=[True, True, False, False, True], metavar="I,M,R,P,T",
                     help="per-finger contact flags in index,middle,ring,pinky,"
-                         "thumb order (default: all five). Shared by both "
-                         "contact targets below")
+                         "thumb order (default: a 3F pinch -- index, middle, "
+                         "thumb). Shared by both contact targets below")
 
     # The four independent constraint families. Each acts on --contact-fingers,
     # so any combination of them is one run.
@@ -554,9 +556,10 @@ def build_parser():
                     default=False,
                     help="drive the fingertips onto the SUPPORT PLANE (one "
                          "equality per finger on its sphere-to-plane distance). "
-                         "Implies --table")
-    ap.add_argument("--table", action="store_true", default=False,
-                    help="configure the support plane (off by default here)")
+                         "Forces the plane on even if --no-table was also given")
+    ap.add_argument("--no-table", dest="table", action="store_false", default=True,
+                    help="drop the support plane and its collision avoidance "
+                         "(on by default here, matching the visualizer)")
     ap.add_argument("--table-offset", dest="table_offset", type=float, default=0.0,
                     help="shift the plane along its normal from the scene's own "
                          "seating, in m -- the GUI's 'height offset' slider")

@@ -248,7 +248,17 @@ class HandVizApp:
         p.table = self.g_table.value and self.caps["table"]
         p.plane_normal = np.array(TABLE_NORMAL, float)
         p.plane_avoidance = self.g_plane_avoid.value
-        p.plane_origin = None  # auto (under object); offset applied below
+        # Resolve the auto (under-object) seating once, then bake the "height
+        # offset" slider into an EXPLICIT plane_origin -- shared by the factor
+        # graph (via this params object) and the rendered slab (_table_origin
+        # just reads it back). Previously this stayed None and the offset was
+        # applied only in _table_origin() for the visual scene, so dragging the
+        # slider moved the drawn table without moving the solver's plane.
+        p.plane_origin = None
+        spec, center, _rot, _pose = resolve_scene(p)
+        p.plane_origin = np.asarray(
+            resolve_table_origin(p, spec, center), float) + (
+                self.g_plane_offset.value * np.array(TABLE_NORMAL, float))
         # display toggles
         self.scene.show_discs = self.g_show_discs.value
         self.scene.show_contact_spheres = self.g_show_contact.value
@@ -256,11 +266,11 @@ class HandVizApp:
         self.scene.show_gap_lines = self.g_show_gaps.value
 
     def _table_origin(self):
+        """The rendered slab's origin -- reads straight off ``params.plane_origin``,
+        which ``_sync_params`` bakes the height-offset slider into, so the drawn
+        table and the factor graph's plane always agree."""
         spec, center, _rot, _pose = resolve_scene(self.params)
-        origin = resolve_table_origin(self.params, spec, center)
-        origin = np.asarray(origin, float) + self.g_plane_offset.value * np.array(
-            TABLE_NORMAL, float)
-        return origin
+        return resolve_table_origin(self.params, spec, center)
 
     # -- rendering --
 
@@ -890,8 +900,8 @@ class HandVizApp:
             self.g_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, r0)
             self.g_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, p0)
             self.g_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, yw0)
-            self.g_sig_pos = gui.add_slider("log10 sigma_pos", -6, 2, 0.5, -4)
-            self.g_sig_rot = gui.add_slider("log10 sigma_rot", -6, 2, 0.5, -3)
+            self.g_sig_pos = gui.add_slider("log10 sigma_pos", -6, 2, 0.5, -2)
+            self.g_sig_rot = gui.add_slider("log10 sigma_rot", -6, 2, 0.5, -2)
 
         with gui.add_folder("Tensions (N)"):
             self.g_passive = gui.add_slider("passive", 0.0, 3.0, 0.05, 0.5)
@@ -914,9 +924,13 @@ class HandVizApp:
                      "combine with object contact to solve for both at once.")
 
         with gui.add_folder("Contact fingers"):
+            # Default to a 3-finger pinch (thumb, index, middle) rather than the
+            # whole-hand grasp; ring/pinky keep collision avoidance but are not
+            # driven onto a surface.
+            _pinch_default = {"index", "middle", "thumb"}
             self.g_contacts = [
                 gui.add_checkbox(
-                    lbl, True,
+                    lbl, lbl in _pinch_default,
                     hint="Which fingers the contact targets above apply to (IK "
                          "only; FK never uses contact). Unchecked fingers keep "
                          "collision avoidance, so they stay out of the object "
@@ -926,7 +940,7 @@ class HandVizApp:
 
         with gui.add_folder("Collision"):
             self.g_collision = gui.add_checkbox(
-                "object collision", False,
+                "object collision", True,
                 hint="Keep every non-contact sphere out of the OBJECT. The "
                      "table's own avoidance is separate (Table folder); "
                      "finger-finger avoidance comes on with either.")
@@ -936,7 +950,7 @@ class HandVizApp:
 
         with gui.add_folder("Table"):
             self.g_table = gui.add_checkbox(
-                "enabled", False, disabled=not self.caps["table"],
+                "enabled", True, disabled=not self.caps["table"],
                 hint=None if self.caps["table"]
                 else "requires a newer _crest_sparse build (plane env fields)")
             # Offset from the scene's own seating, which now half-buries the
