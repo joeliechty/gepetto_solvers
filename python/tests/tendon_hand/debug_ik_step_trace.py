@@ -78,7 +78,7 @@ from .utils import PlannerLogger, log_planner_parameters
 # reading it keeps this harness a faithful repro if that default ever moves.
 DEFAULT_PRIMITIVE = HandSolveParams().primitive
 
-# Penetration tolerance (m), matching the collision demos and ctrl_5f_phases.
+# Penetration tolerance (m), matching the collision demos.
 PASS_TOL = 1e-4
 
 

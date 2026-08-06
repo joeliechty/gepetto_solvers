@@ -33,9 +33,8 @@ close.
 
 The solvers are the reusable ``HandFKSolver`` / ``HandIKStepper`` classes in
 ``tendon_hand/solvers.py``; the 3D scene is drawn by
-``_plotting/viser_hand.ViserHandScene``. The trajectory planner and the Section
-1.8 controller are not part of this app -- see the ``traj_*`` scripts and
-``viz_controller.py``.
+``_plotting/viser_hand.ViserHandScene``. The trajectory planner is not part of
+this app -- see the ``traj_*`` scripts.
 
 then open the printed http://localhost:8080 URL. The startup line names the
 binding that was actually loaded and lists any capability missing from it.

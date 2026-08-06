@@ -44,8 +44,7 @@ struct TendonHandSolverConfig {
     // where the hand already is, which matters for a contact solve: the cold
     // guess is statically inconsistent with a curled rod, and the first
     // iterations are spent hyperextending and crawling back rather than closing
-    // the contact. Marginals rather than Values for the same reason
-    // TendonHandControllerConfig::initial_state uses them -- it is the state
+    // the contact. Marginals rather than Values because that is the state
     // bundle a caller already has from a previous solve.
     std::optional<TendonHandMarginals> initial_state;
 

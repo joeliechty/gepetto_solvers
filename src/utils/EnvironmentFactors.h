@@ -192,9 +192,9 @@ struct EnvironmentConfig {
     //
     // NOTE this flag now only FORCES the form: TendonHandModel already uses it by
     // default for any ellipsoid contact (see uses_center_direct_contact()), so
-    // setting it there is redundant but harmless. Read only by TendonHandModel /
-    // TendonHandController; the single-finger TendonFingerSolver and
-    // TendonFingerTrajectoryPlanner ignore it and always use the witness form.
+    // setting it there is redundant but harmless. Read only by TendonHandModel;
+    // the single-finger TendonFingerSolver and TendonFingerTrajectoryPlanner
+    // ignore it and always use the witness form.
     // Requires ellipsoid_semi_axes to be set; ignored when target_contact_node
     // is unset.
     bool object_contact_center_direct = false;

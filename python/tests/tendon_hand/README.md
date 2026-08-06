@@ -4,9 +4,9 @@ A map of everything in this directory and the C++ it drives: what each solver
 actually builds, which section of *Underactuated Object Manipulation* it
 implements, and how each Python script wires it up.
 
-Everything here is one idea applied four ways: **a hand is a set of Cosserat-rod
+Everything here is one idea applied three ways: **a hand is a set of Cosserat-rod
 fingers sharing one floating wrist variable, and every task is a constrained
-inference problem over that graph.** What changes between the four C++ solvers is
+inference problem over that graph.** What changes between the three C++ solvers is
 only *how many copies of the state exist* and *which constraints are switched on*.
 
 ---
@@ -21,7 +21,6 @@ only *how many copies of the state exist* and *which constraints are switched on
 | Plan a K+1-step grasp trajectory | `TendonHandTrajectoryPlanner` → `traj_5f_contact.py` | §1.4 |
 | Approach over a table, then slide and grasp | planner + `attach_table` + `k_touch` → `traj_5f_slide_grasp.py` | §1.6 |
 | Grasp a flat object without stalling on the flat face | any solver + ellipsoid primitive | §1.6.3 |
-| Real-time, phase-scheduled IK on the live robot state | `TendonHandController` → `ctrl_5f_phases.py`, `viz_controller.py` | §1.8 |
 | Watch an IK solve converge one AL iteration at a time | `HandIKStepper` → `viz_interactive.py`, `debug_ik_step_trace.py` | §1.4+§1.5 |
 | Change a constraint mid-solve and *continue* | `initial_state` + `initial_duals` → §5.1 | — |
 
@@ -31,7 +30,7 @@ Run from the **`crest-sparse/` repo root**, so `import crest_sparse` resolves to
 the installed extension rather than the stale in-tree `.so`:
 
 ```bash
-python -m python.tests.tendon_hand.ctrl_5f_phases
+python -m python.tests.tendon_hand.traj_5f_slide_grasp --no-viz
 python -m python.tests.tendon_hand.ik_5f_contact big_sphere --no-viz
 ```
 
@@ -58,22 +57,21 @@ crest-sparse/
       SolverBase.{h,cpp}   optimize(): Dogleg / LM / Augmented Lagrangian, plus
                            the diagnostics (factor-error summary, Hessian, traces)
       WarmAugmentedLagrangian.h  AL outer loop seedable with a carried mu and
-                           multipliers — across ticks for the controller (§1.8),
-                           and across a REBUILT graph via remap_al_state()
+                           multipliers, across a REBUILT graph via
+                           remap_al_state()
       EnvironmentFactors.h EVERY contact & collision factor + EnvironmentConfig
     tendon_hand/
-      TendonHandModel      the graph builder — shared by all three solvers below
+      TendonHandModel      the graph builder — shared by both solvers below
       TendonHandSolver     single-shot static / IK solve
       TendonHandTrajectoryPlanner   K+1-step trajectory (§1.4–1.6)
-      TendonHandController          phased real-time IK (§1.8)
       pybind.cpp           the Python bindings for all of the above
   python/tests/tendon_hand/   ← you are here
 ```
 
-The layering is strict: `TendonHandSolver`, `TendonHandTrajectoryPlanner`, and
-`TendonHandController` are all thin `SolverBase` subclasses. They own
-`TendonHandModel` instances and differ almost entirely in **how many models they
-build** and **what extra factors they staple on**.
+The layering is strict: `TendonHandSolver` and `TendonHandTrajectoryPlanner` are
+both thin `SolverBase` subclasses. They own `TendonHandModel` instances and
+differ almost entirely in **how many models they build** and **what extra
+factors they staple on**.
 
 ---
 
@@ -132,17 +130,17 @@ AL knobs and what the §1.5 notes learned about them:
 
 | Field | Default | Why you'd touch it |
 |---|---|---|
-| `al_initial_mu` | 1.0 | Starting penalty for a cold outer loop. Was *the* lever for the controller back when µ restarted every tick; with `al_warm_start_duals` it only sets where the first tick begins, and `al_warm_mu_max` sets where the ladder stops. |
+| `al_initial_mu` | 1.0 | Starting penalty for a cold outer loop. With `al_warm_start_duals` it only sets where the first solve begins, and `al_warm_mu_max` sets where the ladder stops. |
 | `al_mu_increase_rate` | 2.0 | The µ ramp is a *homotopy*. Aggressive ramps (10) converge feasible but higher-cost. Shorten the ladder, don't skip it. |
 | `al_max_iterations` | 20 | Outer loop cap. Raising it rarely helps: the loop exits on the stagnation test as soon as the inner LM rejects every step. |
 | `al_max_dual_step` | 1e12 | Uncaps dual ascent. GTSAM's default of 10 freezes multipliers past µ≈10 and silently degrades AL to a pure penalty method needing µ ≳ 1e8. |
 | `al_inner_rel_tol_initial` | 0 (off) | Inexact inner solves: loose early, tightening ∝ µ₀/µ. Use ≤ 1e-3 on large graphs — 1e-2 falsely stagnates them. |
 | `al_abs_cost_tol` | 1e-5 | GTSAM's exit needs violation **and** cost below threshold, and the cost one is *absolute*, so it never fires for O(1) problems. Set 1e12 to stop on feasibility alone (~2× speedup). |
-| `al_warm_start_duals` | false | Carry µ **and the multipliers** from one `optimize()` to the next. Needed whenever successive solves pose the same constrained problem — the §1.8 controller, and the `HandIKStepper` that runs one outer iteration per call. Off elsewhere, so one-shot solves are bit-identical. |
+| `al_warm_start_duals` | false | Carry µ **and the multipliers** from one `optimize()` to the next. Needed whenever successive solves pose the same constrained problem — the `HandIKStepper` that runs one outer iteration per call. Off elsewhere, so one-shot solves are bit-identical. |
 | `al_warm_mu_max` | 1e4 | Ceiling on the µ carried *within* one solver's life. Not just a runaway guard — see §6, it is the balance point between equality and inequality constraints and it is sharp. (`HandIKStepper` sets it to 1e12: it is reproducing a one-shot solve, which runs with no clamp at all and climbs far past 1e4 — 5e5 on the table-contact scene, ~2^28 on a closing grasp. Leaving the default in place stalls the stepped solve at a ~60 mm gap while the one-shot reaches 0.1 mm.) |
 | `al_transfer_mu_max` | 1e4 | Ceiling on a µ carried *across a rebuild* (`set_initial_duals`). A separate knob because the new problem inherits that µ for constraints it has never seen: measured, inheriting the 5e5 the previous solve reached pinned the new constraint as rigidly as the old ones and the hand stalled 2 iterations in, 36 mm from the object it had just been told to touch. |
 | `max_iterations` | 100 | Inner LM cap. A flat cap is the wrong tool (capping at 20 tripled final cost); use the inner-tolerance schedule instead. |
-| `skip_marginals` | false | Skips the covariance factorization. The controller sets it — a tick only reads means. |
+| `skip_marginals` | false | Skips the covariance factorization. `HandIKStepper` sets it — a stepped iteration only reads means. |
 | `record_iterations` | false | Fills `meta.al_iteration_{mus,costs,violations}` and Values snapshots. Required for `get_intermediate_solutions()` and `debug_al_trace.py`. |
 
 **The linear solver is forced to Cholesky on the AL path**, printing a notice if
@@ -298,92 +296,6 @@ hand actually is.
 measured tendon state, so the trajectory begins in the known configuration (e.g.
 open hand, flexors slack) rather than at the background target.
 
-### 3.5 `TendonHandController` — phased real-time IK (§1.8)
-
-The most recent addition, and structurally different: **the phases are different
-constraint sets over the same single-state graph, not time windows.** One model,
-re-solved once per control tick, anchored to the measured state Θ_curr by step
-priors (Eq 1.101–1.102), and warm-started from the previous tick.
-
-```python
-cfg = crest_sparse.TendonHandControllerConfig()
-cfg.wrist_pose  = T_curr        # doubles as the Eq 1.94 step-prior mean
-cfg.sigma_wrist_pos = 1e-1      # trust region, NOT an anchor (see below)
-cfg.phase       = crest_sparse.ControllerPhase.SupportContact
-cfg.step_anchor = crest_sparse.StepAnchor.Tension
-ctrl = crest_sparse.TendonHandController(configs, cfg)
-sol  = ctrl.step(tensions, tip_wrenches, lengths)
-```
-
-The phase schedule lives entirely in C++ (`TendonHandController::phase_env`),
-derived each time from **one pristine per-finger env** so switching phases never
-compounds a previous phase's edits:
-
-| Phase | Name | Equalities | Inequalities | Object surface |
-|---|---|---|---|---|
-| 0 | `PreGrasp` | **none** — two soft targets (T_base,pre and Q_pre) | table + object on *every* sphere (Eq 1.97/1.98) | proxy |
-| 1 | `SupportContact` | `c_support = 0` on contact spheres (Eq 1.104) | half-space (Eq 1.105), table on D_free, object on all | proxy |
-| 2 | `ObjectApproach` | `c_support = 0` **and** `c_obj = 0` center-direct (Eq 1.108) | table/object on D_free | ellipsoid proxy |
-| 3 | `ObjectServo` | 4-residual witness contact `[c_R,c_O,c_T1,c_T2]` (Eq 1.114–1.117) | table relaxed back to ≤0 on all spheres | **exact SDF** if one exists |
-
-Notes that matter:
-
-* **Phase 0 is deliberately an empty `case`** in `phase_env` — the clean slate
-  *is* the constraint set. What makes it a phase is the pair of soft targets
-  `build_graph` adds. It throws if no collision constraints are configured,
-  because an inequality-only phase with no inequalities would servo the hand
-  through the table.
-* **Phase 2 drops the witness point** entirely, constraining the sphere *center*
-  to the ellipsoid. That removes three variables and five residual rows per
-  finger, which is the whole point of a real-time sliding phase.
-* **Phase 3 drops the `c_N` row** (`contact_drop_normal_row`): with sphere
-  collision geometry the tangent-slip rows already force the relative vector
-  collinear with the surface normal, so `c_N` is redundant.
-* `set_phase()` **preserves the converged robot state** and merges in only the
-  variables the new phase introduces, keyed off the new phase's variable set so
-  orphans are dropped. The 2→3 transition matters most: it moves the constraint
-  manifold, and the new witnesses are projected from converged contact nodes.
-* **The AL loop is genuinely amortized across ticks** — values, µ *and* the
-  Lagrange multipliers. `SolverBase::optimize()` still builds a fresh optimizer
-  each call, but with `al_warm_start_duals` it drives the outer loop through
-  `WarmAugmentedLagrangianOptimizer` (`src/utils/WarmAugmentedLagrangian.h`),
-  seeding it from the retained `WarmALState` and storing the final one back.
-  Without this a tick's penalty could never exceed
-  `al_initial_mu · al_rate^(ctrl_al_iters−1)` ≈ 8 before the graph was discarded,
-  so the hard constraints were never enforced no matter how many ticks ran.
-  (Earlier revisions of this file claimed the loop was amortized when it was
-  not; it is now.)
-* **The duals are positional**, so anything that changes the constraint set must
-  invalidate them. `set_phase()` and `set_state()` call `reset_al_duals()` for
-  you; call it yourself if you change the problem another way. The optimizer also
-  refuses duals whose *count* disagrees, but a set that changed content while
-  keeping its size would slip past that check. (The tag machinery in §3.2/§5.1
-  is the principled alternative — match multipliers by constraint identity
-  instead of dropping them — but the controller deliberately still resets: its
-  phase transitions are tuned around a fresh homotopy, and nothing has re-tuned
-  them for a carried one.)
-* **`initial_state` / `set_state()` supply Θ_curr's posture.** Without one the
-  controller cold-starts from a straight hand with Q = 0, and tick 1 is spent
-  travelling back to wherever the robot actually is — the fingers visibly extend
-  before they curl, which is nothing the hardware would do. The payload is a
-  `TendonHandMarginals` (from `HandResult.state(k)`), *not* a `gtsam::Values`:
-  `CosseratRodModel` hands out keys from a global counter, so two separately
-  built models use different Symbols for the same variable and Values cannot be
-  merged across them. `TendonHandModel::values_from_marginals` re-keys the
-  bundle onto the receiving model — including the shared wrist, which it
-  recovers from finger 0's node-0 pose (§3.2).
-
-Readback API for a phase-advance policy (the controller never advances itself):
-`phase_violations()` (worst |c| per constraint family, re-evaluated by building
-throwaway factor instances on the solved values so the report can never drift
-from what the graph enforced), `current_wrist_pose()`, `current_tendon_lengths()`,
-`current_witness_points()`.
-
-`StepAnchor` picks what pins a tick to Θ_curr: `Tension` (simulation default),
-`Length` (hardware-faithful — the motor commands length, and a disturbance
-contact changes tension without the robot having moved), or `Both` (diagnostic;
-over-constrains a real tick).
-
 ---
 
 ## 4. The factor catalog (`src/utils/EnvironmentFactors.h`)
@@ -513,7 +425,7 @@ finger–object and cross-finger clearance computed from solved poses), plus old
 single-finger trajectory-generation helpers.
 
 **`solvers.py` — the reusable class layer (the one to read first).**
-Factors the build → solve → extract skeleton out of the demo scripts into four
+Factors the build → solve → extract skeleton out of the demo scripts into three
 classes behind one `HandSolveParams` dataclass, all returning a uniform
 `HandResult`:
 
@@ -523,15 +435,13 @@ classes behind one `HandSolveParams` dataclass, all returning a uniform
 | `HandIKSolver` | `TendonHandSolver` + contact, one shot | `ik_5f_contact.py` |
 | `HandIKStepper` | `TendonHandSolver` + contact, one AL outer iteration per call | `viz_interactive.py`, `debug_ik_step_trace.py` |
 | `HandPlannerSolver` | `TendonHandTrajectoryPlanner` | `traj_5f_contact.py`, `traj_5f_slide_grasp.py` |
-| `HandControllerSolver` | `TendonHandController` | `ctrl_5f_phases.py` |
 
-`HandResult.frames` is length 1 for FK/IK/controller-tick and K+1 for the
-planner, so a step scrubber indexes them identically. `surface_gaps()`,
-`contact_witness()`, `worst_gap()` and `tendon_lengths()` report against the
-*analytic* surface, independent of the solver. `HandResult.state(k)` returns the
-raw `TendonHandMarginals` behind a frame — the form
-`HandControllerSolver(initial_state=...)` and `set_theta_curr(state=...)` take to
-start a controller from a real posture instead of a straight hand.
+`HandResult.frames` is length 1 for FK/IK and K+1 for the planner, so a step
+scrubber indexes them identically. `surface_gaps()`, `contact_witness()`,
+`worst_gap()` and `tendon_lengths()` report against the *analytic* surface,
+independent of the solver. `HandResult.state(k)` returns the raw
+`TendonHandMarginals` behind a frame — the form `HandSolveParams.initial_state`
+takes to warm-start a solve from a real posture instead of a straight hand.
 
 #### Warm starts: continuing a solve across a rebuild
 
@@ -550,8 +460,9 @@ snap back:
 | The multipliers | `HandSolveParams.initial_duals` (see below) | hand lets go of satisfied constraints, drifts 32 → 57 mm |
 
 `TendonHandSolverConfig.initial_state` (gated on `capabilities()["solver_seed"]`)
-is the controller's `initial_state` idea applied to the single-shot solver and
-the stepper. It is also how `viz_interactive.py`'s *Warm start* latch starts an
+is what lets the single-shot solver and the stepper warm-start from a real
+posture instead of the straight-rod cold start. It is also how
+`viz_interactive.py`'s *Warm start* latch starts an
 IK solve from an FK pose rather than from the straight-rod guess. The latch is
 read when the stepper is BUILT, not when the button is pressed: an earlier
 one-shot "seed now" version depended on press order and was silently discarded by
@@ -633,30 +544,11 @@ Two things in here are load-bearing beyond convenience:
 * **`capabilities()` + `_set_if()`** — the installed `.so` routinely lags the C++
   source. Every newer field is set through `_set_if`, and `capabilities()` tells a
   caller (the visualizers) which controls to grey out instead of crashing. Keys:
-  `ellipsoid`, `table`, `collision_cull`, `k_touch`, `controller`, `pregrasp`,
-  `witness`, `solve_iterates`, `ik_stepping`, `solver_seed` (`initial_state`),
-  `dual_transfer` (`set_initial_duals`). A control that silently does nothing is
-  almost always a False here — and the usual cause is not a missing rebuild but
-  the stale in-tree `.so` shadowing the installed one (see *Running anything*).
-* **The §1.8 geometry helpers** — `pregrasp_local_geometry`, `pregrasp_wrist_pose`,
-  `slew_toward`, `free_space_start_pose`, `goal_geometry` and friends. These are
-  read-only: nothing here feeds a solver, they compute the world-frame quantities
-  each phase's constraints are *written in terms of*, so overlays and headless
-  checks can't drift from the constraints.
-
-  `pregrasp_local_geometry` deserves a callout. §1.8 says the wrist's approach
-  axis is its local +ẑ; **that is not this hand's mounting.** The axes are
-  *measured* from two FK solves instead: `a_hat` (palm-facing) is the direction
-  the tip centroid moves as flexor tension rises, `g_hat` is the centroid
-  direction orthogonalized against it, `s_hat = g_hat × a_hat` sign-checked
-  against the thumb. On the default mount the palm faces base −x, fingers grow
-  along +y, thumb-ward is +z. Hard-coding the paper's rule mis-orients the hand
-  by ~90°.
-
-  `slew_toward` is why phase 0 works at all: the pre-grasp pose can be a ~172°
-  rotation from an identity base, and handing a stiff `Pose3` prior a target that
-  far off drives the merit function to ~3e6 and the inner LM rejects every step.
-  Slewing a waypoint keeps the commanded pose near the achieved one the whole way.
+  `ellipsoid`, `table`, `collision_cull`, `k_touch`, `solve_iterates`,
+  `ik_stepping`, `solver_seed` (`initial_state`), `dual_transfer`
+  (`set_initial_duals`). A control that silently does nothing is almost always a
+  False here — and the usual cause is not a missing rebuild but the stale
+  in-tree `.so` shadowing the installed one (see *Running anything*).
 
 ### 5.2 The scripts
 
@@ -675,10 +567,8 @@ Two things in here are load-bearing beyond convenience:
 | `traj_5f_point.py` | HandPlanner | §1.4 | Terminal tip-position goals instead of contact (non-AL path) |
 | `traj_5f_point_collision.py` | HandPlanner | §1.5 | Point goals + collision — this one **passes** |
 | `traj_5f_slide_grasp.py` | HandPlanner | §1.6 | Table + `--k-touch` three-phase slide and grasp |
-| `ctrl_5f_phases.py` | HandController | §1.8 | All four phases headless, with independent geometric checks |
 | `viz_interactive.py` | HandFK + HandIKStepper | §1.4+§1.5 | viser workbench: pose with FK, then step the IK solve one AL iteration at a time and scrub it |
-| `viz_controller.py` | HandController | §1.8 | viser app built around the controller + constraint-goal overlays |
-| `debug_al_trace.py` | all four | — | Read-only AL trace dumper and parameter sweeper |
+| `debug_al_trace.py` | all three | — | Read-only AL trace dumper and parameter sweeper |
 | `debug_ik_step_trace.py` | HandIKStepper | §1.4+§1.5 | Headless replay of the GUI's *Step* button, one AL iteration at a time, fully logged |
 | `notes_5f_contact.md` | — | — | Investigation notes: why small objects don't grasp |
 
@@ -710,8 +600,8 @@ The older scripts (`ik_*`, `traj_*`) each build everything inline, in this order
    solver's own residual;
 7. optional pyvista/viser visualization behind `--no-viz`.
 
-The newer scripts (`ctrl_5f_phases.py`, both `viz_*`, both `debug_*`) skip all of
-that and drive `solvers.py` instead.
+The newer scripts (`viz_interactive.py`, both `debug_*`) skip all of that and
+drive `solvers.py` instead.
 
 #### Per-script notes
 
@@ -737,14 +627,6 @@ k=0 and never enters the penetrating basin.
 pure collision at every step; adding `--k-touch K` splits the horizon into the
 three §1.6.2 phases. `--no-table` recovers `traj_5f_contact_collision` exactly.
 
-**`ctrl_5f_phases.py`** — runs phases 0→3, N ticks each, printing per tick the
-iteration count and `phase_violations()`, plus an **independent** geometric report
-(`geometric_report`) computed here from solved poses. That independence is the
-point: a constraint the graph believes it satisfied cannot hide a penetration.
-Starts from `free_space_start_pose()` unless `--start-in-collision`, because phase
-0 cannot dig itself out of a deep initial penetration — the collision
-inequalities dominate the merit function and the inner LM rejects every step.
-
 **`viz_interactive.py`** — one panel, four buttons: **FK** re-poses the hand from
 the wrist / tension sliders (which also re-solve FK live as they move), **Step**
 advances the IK solve by exactly one AL outer iteration, **Auto solve** keeps
@@ -764,15 +646,8 @@ so press order does not matter. **Reset defaults** puts every control back to th
 value it opened with and cold-starts. The startup line names the `crest_sparse`
 that actually got loaded plus any capability missing from it, because a
 capability-gated control that is silently disabled looks exactly like a broken
-feature. The trajectory planner and the §1.8 controller are deliberately *not*
-here — see the `traj_*` scripts and `viz_controller.py`.
-
-**`viz_controller.py`** — two states. *FK pose* (sliders re-solve FK live; "set
-Θ_curr" commits that posture as the measured base pose, tensions, and lengths)
-and *Control* (a phase button builds the controller from that Θ_curr and starts
-ticking). Overlays come from `solvers.goal_geometry`, so they draw the same
-geometry the constraints are written in. The log pane replays
-`ctrl_5f_phases`' own report functions rather than reimplementing them.
+feature. The trajectory planner is deliberately *not* here — see the `traj_*`
+scripts.
 
 **`debug_al_trace.py`** — the tool to reach for when a solve stalls. Prints
 `al_iteration_{mus,costs,violations}` (outer) and
@@ -847,38 +722,6 @@ cold one, snapping the fingers open ~57 mm on step 1 — so `_settling()` return
 False whenever `params.initial_state` is set, whatever `ik_settle_steps` says.
 The setting is a cold-start remedy by definition.
 
-**Base priors must be loose in the controller, tight in the solvers.** A step
-prior tight enough to pin the base (σ = 1e-3 ⇒ 1/σ² = 1e6) is stiffer than the
-penalty the controller's AL loop can reach (µ ≈ 8e3), so *nothing* moves the base
-and the controller silently solves with it frozen. Control speed with
-`pregrasp_slew_*`, never by tightening σ. Conversely, `TendonHandSolver`'s wrist
-prior is an anchor and should stay tight (1e-4 / 1e-3).
-
-**A loose base cuts both ways.** Freeing the base also frees it to push fingers
-into things, because the collision inequality resisting that is only as strong as
-the same weak per-tick penalty. Raising `al_mu` recovers the clearance but freezes
-the servo. There is no setting of the pair that does both — the underlying issue
-is graph *scaling* (the passive-tension step priors carry ~99.9 % of the graph's
-error), not the trust region.
-
-**Raising `ctrl_al_iters` does nothing.** Measured at 4 / 20 / 40 iterations per
-tick, the outer loop runs 1–5 either way: it exits on stagnation as soon as the
-inner LM rejects every step. Still true *within* a tick — but the progress a tick
-does make now survives into the next one (`al_warm_start_duals`), so the µ/λ
-ladder is climbed across ticks instead of rebuilt and abandoned on each.
-
-**`ctrl_al_mu_max` is a balance point, not a safety limit.** Sweeping only this
-on `ctrl_5f_phases` (mid sphere, half-buried, five fingers): 2 / 4 / 8 all PASS,
-16 FAILS with phase 1 penetrating the table. Above ~8 the support *equality*
-out-muscles the plane-avoidance *inequalities* — the contact tips are driven onto
-the plane hard enough to rotate the finger until a proximal sphere dips through
-it. Both families carry multipliers, but the equality is always active while an
-inequality only accumulates once violated, so a large shared µ systematically
-favours the equality. Keeping µ small is the right shape for AL anyway: λ is
-supposed to do the feasibility work and µ only has to keep the subproblem convex.
-That is precisely what carrying the duals buys, and why the fix was λ rather than
-a bigger µ.
-
 **The default scene half-buries the object.** `HandSolveParams.table_burial`
 (0.5) seats the support plane through the object *centroid* rather than tangent
 to its underside. A 35 mm sphere resting on the table has its crown at 70 mm,
@@ -887,15 +730,6 @@ is both reachable and the low-profile case §1.8 is about. Set `table_burial=0.0
 to recover the object-rests-on-the-table geometry §1.6 wants. Note `h_clear` is
 deliberately still measured from the centroid, so with burial the hover sits
 higher above the *table* than `pregrasp_margin` alone suggests.
-
-**Active and passive tendons need different step priors.** The controller has no
-GP — `p_step(Q | Q_curr)` and `p_step(L | L_curr)` *are* its entire step-to-step
-regularization. Passive tendons are spring-backed, so their **tension** is pinned
-(1e-6) under *both* anchors while their **length** must stay loose
-(`sigma_l_step_passive`); the flexor is the mirror. Pinning passive lengths pins
-the joint angles and freezes the hand — which is what a uniform `sigma_l_step`
-used to do, making `step_anchor="length"` (the hardware-faithful mode) the most
-frozen one. Build these with `tendon_diag(passive, active)`.
 
 **Never use QR on the AL path.** It is switched to Cholesky automatically, but if
 you add a new solver, remember why (negated-Hessian `AntiFactor`s).
@@ -913,11 +747,9 @@ which is loose. Pass explicit values if the wrist behaviour matters to your run.
 
 ## 7. Reading order for someone new
 
-1. `solvers.py` — `HandSolveParams`, then the four solver classes. It is the
+1. `solvers.py` — `HandSolveParams`, then the three solver classes. It is the
    shortest complete statement of what the system does.
 2. `TendonHandModel.cpp::build_graph` — every factor in the system, in the order
    it is added.
 3. `EnvironmentFactors.h` — the residuals and their Jacobians, with the paper
    equation numbers in the comments.
-4. `TendonHandController::phase_env` — the §1.8 schedule in 60 lines.
-5. `ctrl_5f_phases.py` — the whole pipeline exercised headless.
