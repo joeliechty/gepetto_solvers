@@ -214,6 +214,22 @@ struct EnvironmentConfig {
     // the "contact anywhere on the surface" formulation (Eq 1.119-1.125).
     std::optional<gtsam::Point3> witness_target;
     Eigen::Matrix3d witness_target_cov = 1e-4 * Eigen::Matrix3d::Identity();
+
+    // --- Pre-grasp hand-centering (Section 2.2.1, Eq 2.18-2.19) ----------
+    // Opt-in per finger: a finger participates in PreGraspHandCenteringFactor
+    // by setting pregrasp_center_node (the node whose sphere center enters
+    // the constraint), mirroring table_contact_node/support_contact_node.
+    // UNLIKE every other field on this struct, this constraint spans
+    // MULTIPLE fingers at once (the thumb + every other participating
+    // finger), so build_graph() collects it in a separate hand-level pass
+    // after the per-finger loop rather than building one factor per finger
+    // here. pregrasp_clearance_height / pregrasp_clearance_normal are shared
+    // constants, duplicated across every participating finger's env (same
+    // convention as plane_origin/plane_normal). clearance_normal norm 0 (the
+    // default) => not configured.
+    std::optional<int> pregrasp_center_node;
+    double pregrasp_clearance_height = 0.0;
+    gtsam::Vector3 pregrasp_clearance_normal = gtsam::Vector3::Zero();
 };
 
 

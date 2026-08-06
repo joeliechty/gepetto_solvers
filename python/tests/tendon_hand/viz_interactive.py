@@ -24,12 +24,15 @@ INSTALLED build -- launching from ``python/`` picks up the stale in-tree
 control silently goes dead):
     python -m python.tests.tendon_hand.viz_interactive
 
-Object contact, table contact, object collision and table collision are four
-independent switches (*Contact targets*, *Collision*, *Table*), each acting on
-the shared per-finger mask in *Contact fingers*. That is what makes a stalled
-grasp bisectable: solve for the object alone, the table alone, or both, with or
-without either avoidance, and see which constraint family is the one refusing to
-close.
+Every constraint from the paper's Chapter 2 (Eq 2.8-2.19) is an independent
+switch in the *Constraints* folder -- object/table contact, object/table
+collision, drop-normal-row SDF contact, opposition half-space, pre-grasp
+centering -- each acting on the shared per-finger mask in its nested *fingers*
+sub-folder. That is what makes a stalled grasp bisectable: solve for the object
+alone, the table alone, or both, with or without either avoidance, and see which
+constraint family is the one refusing to close. (Their tuning sliders --
+collision radius/sigma/cull margin, table height offset -- stay in the
+*Collision*/*Table* folders alongside the object/primitive picker.)
 
 The solvers are the reusable ``HandFKSolver`` / ``HandIKStepper`` classes in
 ``tendon_hand/solvers.py``; the 3D scene is drawn by
@@ -53,8 +56,9 @@ from .scene import get_primitive_specs, GRASP_FLEXOR_TENSION, TABLE_NORMAL
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
-    euler_to_R, R_to_euler, solved_wrist_pose, plane_witness, FLEXOR_IDX,
-    DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
+    euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
+    half_space_witness, pregrasp_center_witness, default_half_space_axis,
+    FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
@@ -230,6 +234,12 @@ class HandVizApp:
         p.contact_fingers = [c.value for c in self.g_contacts]
         p.object_contact = self.g_obj_contact.value
         p.table_contact = self.g_tbl_contact.value
+        p.contact_drop_normal_row = self.g_drop_normal_row.value
+        p.half_space = self.g_half_space.value
+        p.half_space_split = None   # derive from object_center
+        p.half_space_axis = None    # derive from the object's own long axis
+        p.pregrasp_center = self.g_pregrasp_center.value
+        p.h_clear = self.g_h_clear.value
         p.sigma_wrist_pos = 10.0 ** self.g_sig_pos.value
         p.sigma_wrist_rot = 10.0 ** self.g_sig_rot.value
         # AL
@@ -280,6 +290,14 @@ class HandVizApp:
             self.scene.set_table(self._table_origin(), self.params.plane_normal)
         else:
             self.scene.clear_table()
+        if self.params.half_space:
+            axis = (self.params.half_space_axis if self.params.half_space_axis is not None
+                   else default_half_space_axis(spec, rotation, self.params.plane_normal))
+            split = (self.params.half_space_split if self.params.half_space_split is not None
+                    else center)
+            self.scene.set_half_space_plane(split, axis)
+        else:
+            self.scene.clear_half_space_plane()
 
     def _render_frame(self):
         if self.result is None:
@@ -299,6 +317,10 @@ class HandVizApp:
         table_names = res.table_contact_names()
         table_gaps = (plane_witness(self.params, res, 0, names=table_names)
                       if table_names else None)
+        half_gaps = (half_space_witness(self.params, res, 0)
+                    if self.params.half_space else None)
+        center_gap = (pregrasp_center_witness(self.params, res, 0)
+                     if self.params.pregrasp_center else None)
         self._report_iterate()
         self.scene.update(res.frames[0],
                           tip_radii=res.tip_radii,
@@ -309,7 +331,9 @@ class HandVizApp:
                                      or (self.params.table
                                          and self.params.plane_avoidance)),
                           gaps=gaps,
-                          table_gaps=table_gaps)
+                          table_gaps=table_gaps,
+                          half_space_gaps=half_gaps,
+                          center_gap=center_gap)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -766,7 +790,8 @@ class HandVizApp:
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
-                + [self.g_obj_contact, self.g_tbl_contact]
+                + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
+                   self.g_half_space, self.g_pregrasp_center, self.g_h_clear]
                 + self.g_contacts
                 + [self.g_collision, self.g_coll_radius, self.g_coll_sigma,
                    self.g_cull,
@@ -908,59 +933,97 @@ class HandVizApp:
                 gui.add_slider(lbl, 0.0, 3.0, 0.05, GRASP_FLEXOR_TENSION)
                 for lbl in FINGER_LABELS]
 
-        with gui.add_folder("Contact targets"):
-            self.g_obj_contact = gui.add_checkbox(
-                "object contact", True,
-                hint="Drive the checked fingertips onto the OBJECT surface. "
-                     "Turn off to leave the object as pure collision geometry "
-                     "-- the way to see what the table constraints do on their "
-                     "own. Applies on the next solve.")
-            self.g_tbl_contact = gui.add_checkbox(
-                "table contact", False,
-                hint="Drive the checked fingertips onto the SUPPORT PLANE (one "
-                     "equality per finger on the distance from its contact "
-                     "sphere to the plane). Needs the Table folder's *enabled*; "
-                     "combine with object contact to solve for both at once.")
+        # Every constraint on/off toggle lives here (Chapter 2, Eq 2.8-2.19),
+        # grouped by the paper's structure. Numeric tuning sliders that go with
+        # a toggle (collision radius/sigma/cull margin, table height offset)
+        # stay behind in Collision/Table below -- only the booleans move.
+        with gui.add_folder("Constraints"):
+            with gui.add_folder("Collision (Eq 2.8-2.9)"):
+                self.g_collision = gui.add_checkbox(
+                    "object collision", True,
+                    hint="Keep every non-contact sphere out of the OBJECT. "
+                         "Independent of table collision; finger-finger "
+                         "avoidance comes on with either. Sliders in the "
+                         "Collision folder below.")
+                self.g_plane_avoid = gui.add_checkbox(
+                    "table collision", True,
+                    hint="Keep every non-contact sphere out of the "
+                         "half-space. Independent of object collision -- the "
+                         "collision spheres are attached for whichever of "
+                         "the two is on. Needs the table enabled below.")
 
-        with gui.add_folder("Contact fingers"):
-            # Default to a 3-finger pinch (thumb, index, middle) rather than the
-            # whole-hand grasp; ring/pinky keep collision avoidance but are not
-            # driven onto a surface.
-            _pinch_default = {"index", "middle", "thumb"}
-            self.g_contacts = [
-                gui.add_checkbox(
-                    lbl, lbl in _pinch_default,
-                    hint="Which fingers the contact targets above apply to (IK "
-                         "only; FK never uses contact). Unchecked fingers keep "
-                         "collision avoidance, so they stay out of the object "
-                         "and off the table without being driven onto either. "
-                         "Applies on the next solve.")
-                for lbl in FINGER_LABELS]
+            with gui.add_folder("Contact (Eq 2.11-2.15)"):
+                self.g_table = gui.add_checkbox(
+                    "table enabled", True, disabled=not self.caps["table"],
+                    hint=None if self.caps["table"]
+                    else "requires a newer _crest_sparse build (plane env fields)")
+                self.g_obj_contact = gui.add_checkbox(
+                    "object contact", True,
+                    hint="Drive the checked fingertips onto the OBJECT "
+                         "surface. Turn off to leave the object as pure "
+                         "collision geometry -- the way to see what the "
+                         "table constraints do on their own.")
+                self.g_tbl_contact = gui.add_checkbox(
+                    "table contact", False,
+                    hint="Drive the checked fingertips onto the SUPPORT "
+                         "PLANE (one equality per finger on the distance "
+                         "from its contact sphere to the plane). Needs "
+                         "*table enabled*; combine with object contact to "
+                         "solve for both at once.")
+                self.g_drop_normal_row = gui.add_checkbox(
+                    "drop contact normal row", False,
+                    disabled=not self.caps["drop_normal_row"],
+                    hint="Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, "
+                         "c_T2] SDF witness contact form (c_N dropped) "
+                         "instead of the default 5-row form. Only affects "
+                         "non-ellipsoid (SDF) object contact.")
+
+            with gui.add_folder("Pre-grasp (Eq 2.16-2.19)"):
+                self.g_half_space = gui.add_checkbox(
+                    "opposition half-space", False,
+                    disabled=not self.caps["opposition"],
+                    hint="Eq 2.16-2.17: keep each contact finger on its "
+                         "designated half of the table, thumb opposite the "
+                         "rest. Needs table contact.")
+                self.g_pregrasp_center = gui.add_checkbox(
+                    "pre-grasp centering", False,
+                    disabled=not self.caps["pregrasp_center"],
+                    hint="Eq 2.18-2.19: center the midpoint of the thumb + "
+                         "opposing fingers' contact points over the object, "
+                         "raised by the clearance slider along the table "
+                         "normal. Needs the thumb AND at least one other "
+                         "finger checked below.")
+                self.g_h_clear = gui.add_slider(
+                    "clearance (m)", 0.0, 0.08, 0.002, 0.02,
+                    hint="Pre-grasp centering's height above the object "
+                         "centroid, along the table normal.")
+
+            with gui.add_folder("fingers"):
+                # Default to a 3-finger pinch (thumb, index, middle) rather
+                # than the whole-hand grasp; ring/pinky keep collision
+                # avoidance but are not driven onto a surface.
+                _pinch_default = {"index", "middle", "thumb"}
+                self.g_contacts = [
+                    gui.add_checkbox(
+                        lbl, lbl in _pinch_default,
+                        hint="Which fingers every constraint above applies "
+                             "to (IK only; FK never uses contact). "
+                             "Unchecked fingers keep collision avoidance, so "
+                             "they stay out of the object and off the table "
+                             "without being driven onto either, opposed "
+                             "against, or centered on.")
+                    for lbl in FINGER_LABELS]
 
         with gui.add_folder("Collision"):
-            self.g_collision = gui.add_checkbox(
-                "object collision", True,
-                hint="Keep every non-contact sphere out of the OBJECT. The "
-                     "table's own avoidance is separate (Table folder); "
-                     "finger-finger avoidance comes on with either.")
             self.g_coll_radius = gui.add_slider("sphere radius (m)", 0.001, 0.01, 0.0005, 0.003)
             self.g_coll_sigma = gui.add_slider("log10 sigma", -6, 0, 0.5, -4)
             self.g_cull = gui.add_slider("cull margin (m, 0 off)", 0.0, 0.1, 0.005, 0.0)
 
         with gui.add_folder("Table"):
-            self.g_table = gui.add_checkbox(
-                "enabled", True, disabled=not self.caps["table"],
-                hint=None if self.caps["table"]
-                else "requires a newer _crest_sparse build (plane env fields)")
             # Offset from the scene's own seating, which now half-buries the
             # object (HandSolveParams.table_burial = 0.5) rather than resting it
             # on the plane. Dial in -half_extent to recover the old geometry.
             self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, 0.0)
-            self.g_plane_avoid = gui.add_checkbox(
-                "table collision", True,
-                hint="Keep every non-contact sphere out of the half-space. "
-                     "Independent of object collision -- the collision spheres "
-                     "are attached for whichever of the two is on.")
 
         with gui.add_folder("Augmented Lagrangian"):
             self.g_al_mu = gui.add_slider("mu", 0.1, 10.0, 0.1, 1.0)
@@ -973,7 +1036,11 @@ class HandVizApp:
             self.g_show_discs = gui.add_checkbox("routing discs", False)
             self.g_show_gaps = gui.add_checkbox(
                 "contact distance", True,
-                hint="Fingertip-to-object gap in mm; green under 15 mm, red over.")
+                hint="Fingertip-to-surface gap/margin overlays in mm: object "
+                     "and table contact (green under 15 mm, red over), "
+                     "opposition half-space (green = correct side, red = "
+                     "violating), and pre-grasp centering (green under 15 mm "
+                     "to target).")
 
         # Every value-carrying control, captured as built: this IS the definition
         # of "defaults" that Reset restores, so the two cannot drift.
@@ -1019,13 +1086,22 @@ class HandVizApp:
             h.on_update(lambda _: (self._sync_params(),
                                    self._invalidate_stepper(),
                                    self._render_frame()))
-        # Table toggle / height updates the static slab immediately.
-        for h in (self.g_table, self.g_plane_offset):
+        # Table toggle / height updates the static slab immediately; opposition
+        # half-space rides along since it draws its own static split-plane slab
+        # (set_half_space_plane) the same way.
+        for h in (self.g_table, self.g_plane_offset, self.g_half_space):
             h.on_update(lambda _: (self._sync_params(), self._refresh_object(),
                                    self._invalidate_stepper()))
         # Collision knobs are part of the constraint set too.
         for h in (self.g_collision, self.g_coll_radius, self.g_coll_sigma,
                   self.g_cull, self.g_plane_avoid):
+            h.on_update(lambda _: self._invalidate_stepper())
+        # drop-normal-row / pre-grasp centering / clearance: no static geometry
+        # of their own (the centering line only appears once a solve has run,
+        # via _render_frame), so just invalidate the stepper -- self.params is
+        # refreshed from every handle at the start of the next solve regardless
+        # of which widget triggered it.
+        for h in (self.g_drop_normal_row, self.g_pregrasp_center, self.g_h_clear):
             h.on_update(lambda _: self._invalidate_stepper())
         # AL knobs are baked into the stepper's config at construction, unlike
         # the tensions it re-reads every step, so they need a rebuild too.

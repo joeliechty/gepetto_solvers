@@ -506,6 +506,21 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     env.plane_origin, env.plane_normal,
                     noiseModel::Isotropic::Sigma(1, 1.0));
                 add_eq(graph, contact, "tbl.contact|f" + std::to_string(i));
+
+                // Opposition half-space (Eq 2.16-2.17 / Eq 1.92): keep this
+                // finger's table-contact sphere on its designated half of the
+                // support surface, so the thumb lands opposite the fingers.
+                // Gated on table_contact_node (the live table-contact path)
+                // rather than support_contact_node (the §1.8-controller-only
+                // field below, which no Python code writes anymore), so the
+                // constraint is reachable from the same env every other table
+                // factor here already uses. Constant Jacobian.
+                if (env.half_space_enabled && env.half_space_normal.norm() > 0.0) {
+                    auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
+                        tip_key, env.half_space_split_point, env.half_space_normal,
+                        noiseModel::Isotropic::Sigma(1, env.collision_sigma));
+                    add_ineq(graph, half, "half|f" + std::to_string(i));
+                }
             }
 
             // --- Section 1.8 controller phases 1-2 ---------------------------
@@ -515,7 +530,9 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             // the sign is irrelevant, so its zero set is exactly Dist_plane = 0 —
             // in the signed form, which pins the sphere on the +n (free) side and
             // stays smooth at the contact point (the paper's |.| has a kink
-            // exactly where the solver operates).
+            // exactly where the solver operates). Kept for the dormant phased
+            // controller use case; independent of the table_contact_node /
+            // half_space_enabled wiring above.
             if (env.support_contact_node.has_value()) {
                 Key sup_key = fp->rod_->get_pose_key(*env.support_contact_node);
                 auto support = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
@@ -523,16 +540,6 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     env.plane_origin, env.plane_normal,
                     noiseModel::Isotropic::Sigma(1, 1.0));
                 add_eq(graph, support, "sup.contact|f" + std::to_string(i));
-
-                // Opposition half-space (Eq 1.92): keep this finger's contact
-                // sphere on its designated half of the support surface, so the
-                // thumb lands opposite the fingers. Constant Jacobian.
-                if (env.half_space_enabled && env.half_space_normal.norm() > 0.0) {
-                    auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
-                        sup_key, env.half_space_split_point, env.half_space_normal,
-                        noiseModel::Isotropic::Sigma(1, env.collision_sigma));
-                    add_ineq(graph, half, "half|f" + std::to_string(i));
-                }
             }
 
             // Table collision (Eq 1.59): keep every non-root collision sphere out
@@ -566,6 +573,45 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 }
             }
         }, fingers_[i]);
+    }
+
+    // Pre-grasp hand-centering (Eq 2.18-2.19): spans the thumb + every other
+    // participating finger, so — unlike every block above — this collects
+    // across ALL fingers first rather than building inside the per-finger
+    // visit. Thumb identified by name (the existing hand-wide convention:
+    // config.py's get_default_hand_configs always appends "thumb" last).
+    {
+        std::optional<Key> thumb_key;
+        std::vector<Key> finger_keys;
+        double h_clear = 0.0;
+        gtsam::Vector3 n_hat = gtsam::Vector3::Zero();
+        for (size_t i = 0; i < fingers_.size(); ++i) {
+            if (!sdf_contacts_[i]) continue;
+            const auto& env = *sdf_contacts_[i];
+            if (!env.pregrasp_center_node.has_value()) continue;
+            std::visit([&](auto& fp) {
+                Key k = fp->rod_->get_pose_key(*env.pregrasp_center_node);
+                if (finger_names_[i] == "thumb") thumb_key = k;
+                else finger_keys.push_back(k);
+            }, fingers_[i]);
+            h_clear = env.pregrasp_clearance_height;
+            n_hat = env.pregrasp_clearance_normal;
+            // Anchor the shared object pose if nothing else has yet -- this
+            // constraint touches object_key() too, but only its translation,
+            // so it cannot by itself fix the object's orientation gauge.
+            if (!object_anchored) {
+                graph.add(PriorFactor<Pose3>(
+                    object_key(), Pose3(env.object_pose_mean),
+                    noiseModel::Gaussian::Covariance(env.object_pose_cov)));
+                object_anchored = true;
+            }
+        }
+        if (thumb_key.has_value() && !finger_keys.empty() && n_hat.norm() > 0.0) {
+            auto center = std::make_shared<crest_sparse::PreGraspHandCenteringFactor>(
+                *thumb_key, finger_keys, object_key(), h_clear, n_hat,
+                noiseModel::Isotropic::Sigma(3, 1.0));
+            add_eq(graph, center, "pregrasp.center");
+        }
     }
 
     return graph;

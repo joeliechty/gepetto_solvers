@@ -37,12 +37,20 @@ _CONTACT_RGB = (80, 200, 120)
 _COLLISION_RGB = (230, 120, 60)
 _DISC_RGB = (100, 149, 237)
 _TABLE_RGB = (150, 150, 160)
+_HALF_SPACE_RGB = (255, 140, 0)
+_CENTER_TARGET_RGB = (180, 60, 220)
 
 # Fingertip-to-object gap overlay: green within GAP_GREEN_MAX_M of the surface
 # (including interpenetration, which is simply "not far"), red beyond it.
 GAP_GREEN_MAX_M = 0.015
 _GAP_NEAR_RGB = (0, 190, 60)
 _GAP_FAR_RGB = (220, 40, 40)
+# Opposition half-space margin overlay: green when the constraint is
+# SATISFIED (margin >= 0, i.e. the finger is on its designated side), red when
+# violated -- a sign-based rule rather than GAP_GREEN_MAX_M's magnitude-based
+# one, since what matters here is which side of the plane, not how far.
+_MARGIN_OK_RGB = _GAP_NEAR_RGB
+_MARGIN_VIOLATED_RGB = _GAP_FAR_RGB
 
 
 def _recenter(mesh):
@@ -161,10 +169,34 @@ class ViserHandScene:
         except Exception:
             pass
 
+    def set_half_space_plane(self, split_point, axis, *, span=0.25, thickness=0.003):
+        """Draw the Eq 2.16-2.17 opposition split plane -- a thin translucent
+        slab through ``split_point``, thin along ``axis`` (the in-plane
+        direction separating the thumb's half from the other fingers'; NOT the
+        table normal -- this plane stands roughly vertical, cutting across the
+        table). Visual aid only, mirroring :meth:`set_table`; the solver uses
+        the analytic half-space directly."""
+        origin = np.asarray(split_point, float).reshape(3)
+        a = np.asarray(axis, float).reshape(3)
+        a = a / (np.linalg.norm(a) or 1.0)
+        ax = int(np.argmax(np.abs(a)))
+        extents = [span, span, span]
+        extents[ax] = thickness
+        self.scene.add_box("/half_space_plane", color=_HALF_SPACE_RGB,
+                           dimensions=tuple(extents), opacity=0.25,
+                           position=tuple(origin))
+
+    def clear_half_space_plane(self):
+        try:
+            self.server.scene.remove_by_name("/half_space_plane")
+        except Exception:
+            pass
+
     # -- per-frame hand ----------------------------------------------------
 
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
-               collision=False, gaps=None, table_gaps=None):
+               collision=False, gaps=None, table_gaps=None,
+               half_space_gaps=None, center_gap=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
 
@@ -172,8 +204,22 @@ class ViserHandScene:
         ``{finger: (sphere_pt, surface_pt, gap_m)}`` map as returned by
         ``HandResult.contact_witness``. ``table_gaps`` is the same shape measured
         against the support plane (``solvers.plane_witness``) and drawn alongside,
-        so a solve touching both surfaces shows both distances. Rendering only --
-        nothing here feeds the solver."""
+        so a solve touching both surfaces shows both distances.
+
+        ``half_space_gaps`` is the Eq 2.16-2.17 opposition overlay: a
+        ``{finger: (sphere_pt, foot_pt, signed_margin_m)}`` map (as returned by
+        ``solvers.half_space_witness``) drawn per finger like the gap overlays
+        above, but colored by SIGN (green = on the correct side, red =
+        violating) rather than by distance.
+
+        ``center_gap`` is the Eq 2.18-2.19 pre-grasp centering overlay: a single
+        ``(hand_centroid_pt, target_pt, gap_m)`` tuple (as returned by
+        ``solvers.pregrasp_center_witness``) or None -- a HAND-level quantity,
+        not per finger, so it is drawn once rather than per finger name.
+
+        All gated on ``self.show_gap_lines`` (the existing "contact distance"
+        display toggle) -- one category of overlay, one switch. Rendering only
+        -- nothing here feeds the solver."""
         keep = set()
         tip_radii = tip_radii or [None] * len(self.finger_names)
 
@@ -211,6 +257,8 @@ class ViserHandScene:
             if self.show_gap_lines and table_gaps and name in table_gaps:
                 keep |= self._update_gap(name, *table_gaps[name],
                                          kind="table_gap")
+            if self.show_gap_lines and half_space_gaps and name in half_space_gaps:
+                keep |= self._update_half_space(name, *half_space_gaps[name])
 
             # Collision spheres on the disc nodes.
             if collision and self.show_collision_spheres:
@@ -224,6 +272,11 @@ class ViserHandScene:
             # Routing discs.
             if self.show_discs:
                 keep |= self._update_discs(name, fm, poses)
+
+        # Pre-grasp centering (Eq 2.18-2.19): a HAND-level overlay, drawn once
+        # rather than per finger.
+        if self.show_gap_lines and center_gap is not None:
+            keep |= self._update_center(*center_gap)
 
         self._prune(keep)
 
@@ -265,6 +318,60 @@ class ViserHandScene:
             lb, f"{gap * 1000.0:.1f} mm", position=tuple(0.5 * (p0 + p1)),
             anchor="center-center")
         return {ln, lb}
+
+    def _update_half_space(self, name, sphere_pt, foot_pt, margin):
+        """One fingertip-to-split-plane line + labelled signed margin (Eq
+        2.16-2.17). Colored by SIGN, not distance: green while ``margin >= 0``
+        (the finger is on its designated side of the opposition plane), red
+        once it crosses to the wrong side. The label keeps the sign so a
+        violation reads as a negative number rather than looking like a small
+        satisfied gap."""
+        p0 = np.asarray(sphere_pt, float).reshape(3)
+        p1 = np.asarray(foot_pt, float).reshape(3)
+        rgb = _MARGIN_OK_RGB if margin >= 0.0 else _MARGIN_VIOLATED_RGB
+
+        ln = f"/hand/{name}/half_space/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb, line_width=3.0)
+
+        lb = f"/hand/{name}/half_space/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, f"{margin * 1000.0:+.1f} mm", position=tuple(0.5 * (p0 + p1)),
+            anchor="center-center")
+        return {ln, lb}
+
+    def _update_center(self, hand_pt, target_pt, gap):
+        """The pre-grasp hand-centering overlay (Eq 2.18-2.19): a marker at the
+        target point (object centroid + clearance), a marker at the achieved
+        hand-centroid midpoint, and a labelled line between them. Colored by
+        distance like the fingertip gap lines (near = converged)."""
+        p0 = np.asarray(hand_pt, float).reshape(3)
+        p1 = np.asarray(target_pt, float).reshape(3)
+        rgb = _GAP_NEAR_RGB if gap < GAP_GREEN_MAX_M else _GAP_FAR_RGB
+        keep = set()
+
+        tgt = "/pregrasp_center/target"
+        self._dynamic[tgt] = self.scene.add_icosphere(
+            tgt, radius=0.004, color=_CENTER_TARGET_RGB, opacity=0.8,
+            position=tuple(p1))
+        keep.add(tgt)
+
+        mid = "/pregrasp_center/midpoint"
+        self._dynamic[mid] = self.scene.add_icosphere(
+            mid, radius=0.004, color=rgb, opacity=0.8, position=tuple(p0))
+        keep.add(mid)
+
+        ln = "/pregrasp_center/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb, line_width=3.0)
+        keep.add(ln)
+
+        lb = "/pregrasp_center/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, f"{gap * 1000.0:.1f} mm", position=tuple(0.5 * (p0 + p1)),
+            anchor="center-center")
+        keep.add(lb)
+        return keep
 
     def _update_discs(self, name, fm, poses):
         keep = set()

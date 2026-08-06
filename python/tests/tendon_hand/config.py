@@ -499,7 +499,8 @@ def _resolve_contact_mask(configs, contact_fingers):
 
 def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
                    tip_radii=None, radius=None, contact_fingers=None,
-                   object_pose_cov=None, proxy_and_exact=False):
+                   object_pose_cov=None, proxy_and_exact=False,
+                   drop_normal_row=False):
     """Attach the shared object surface + a terminal tip contact to every finger
     of a hand config list, in place. Returns ``configs`` for chaining.
 
@@ -526,6 +527,13 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     slides against in phase 2 to the exact geometry it servos on in phase 3.
     Default False keeps the single-surface behavior every existing caller relies
     on.
+
+    ``drop_normal_row`` (Eq 2.12-2.15) selects the 4-row witness contact form
+    [c_R, c_O, c_T1, c_T2] (c_N dropped) instead of the default 5-row form.
+    Written for every finger regardless of ``contact_fingers`` -- it is a
+    property of the contact FORM, like ``radius``, not gated by the mask. Only
+    affects the witness-point contact factor; inert for a center-direct
+    ellipsoid contact, which has no normal row to begin with.
     """
     import crest_sparse
 
@@ -547,6 +555,7 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
             env.contact_node_radius = radius
         elif tip_radii is not None:
             env.contact_node_radius = tip_radii[i]
+        env.contact_drop_normal_row = drop_normal_row
         if mask[i]:
             env.target_contact_node = tip_node_index(cfg)
         cfg.sdf_contact = env
@@ -678,6 +687,135 @@ def attach_table(configs, plane_origin, plane_normal, *,
                 env.table_contact_radius = tip_radii[i]
             else:
                 env.table_contact_radius = env.contact_node_radius
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs
+
+
+def opposition_axis_from_object(plane_normal, e_long):
+    """``m_hat = n_hat x e_long``: the opposition axis implied by splitting the
+    support surface ALONG the object's longest in-plane axis.
+
+    Putting the split *line* along ``e_long`` (e.g. lengthwise along a pen)
+    means the half-space normal -- the direction that actually separates thumb
+    from fingers -- is perpendicular to it within the plane. That is exactly
+    ``n_hat x e_long``: thumb and fingers end up opposed ACROSS the object's
+    width, not split along its length. Get ``e_long`` from
+    :func:`scene.object_principal_inplane_axis`, which already handles
+    degenerate (in-plane-isotropic) objects with a documented fallback.
+
+    NOTE this generally differs from :func:`opposition_directions`'s legacy
+    default of world +X, which is only correct by coincidence when it happens
+    to already be perpendicular to the object's long axis -- for an elongated
+    object (a pen) oriented so its length runs along world +X, using world +X
+    as ``m_hat`` directly splits the two groups ACROSS the object's length
+    (bisecting its short axis) instead of along it, putting the thumb near one
+    end and the fingers near the other.
+    """
+    n = np.asarray(plane_normal, dtype=float).reshape(3)
+    n = n / np.linalg.norm(n)
+    e = np.asarray(e_long, dtype=float).reshape(3)
+    e = e - (e @ n) * n
+    ne = np.linalg.norm(e)
+    if ne < 1e-9:
+        raise ValueError(
+            "opposition_axis_from_object: e_long is parallel to the plane "
+            "normal, so it defines no in-plane split direction")
+    m = np.cross(n, e / ne)
+    return m / np.linalg.norm(m)
+
+
+def opposition_directions(configs, *, thumb_index=-1, axis=None):
+    """Per-finger in-plane unit vectors ``m_hat`` for the Eq 2.16-2.17 (Eq 1.92)
+    half-space split.
+
+    Divide the support surface in half along ``axis`` and put the thumb on one
+    half, the grasping fingers on the other. This returns ``+axis`` for the
+    thumb and ``-axis`` for every other finger, so the two groups are driven to
+    opposite halves.
+
+    ``axis`` (default world +X; callers should prefer deriving it from the
+    object's shape via :func:`opposition_axis_from_object`, see
+    ``solvers.default_half_space_axis``) must lie IN the support plane -- the
+    constraint is only radius-independent when ``n_table . m_hat = 0``, which
+    is what makes its Jacobian constant. ``thumb_index`` defaults to the last
+    config, matching :func:`get_default_hand_configs` (four fingers, then the
+    thumb).
+    """
+    if axis is None:
+        axis = np.array([1.0, 0.0, 0.0])
+    axis = np.asarray(axis, dtype=float).reshape(3)
+    axis = axis / np.linalg.norm(axis)
+    n = len(configs)
+    thumb = thumb_index % n
+    return [axis if i == thumb else -axis for i in range(n)]
+
+
+def attach_half_space(configs, split_point, directions, *, contact_fingers=None):
+    """Attach the Eq 2.16-2.17 (Eq 1.92) opposition half-space to every masked-in
+    finger's env, in place. Returns ``configs`` for chaining.
+
+    ``split_point`` is a point on the splitting line (e.g. the object centroid
+    projected onto the support surface); ``directions`` is one in-plane unit
+    vector per finger, as produced by :func:`opposition_directions`. A finger
+    masked off by ``contact_fingers`` gets no half-space: it has no designated
+    contact sphere for the constraint to act on. Call AFTER attach_table (needs
+    an existing env with ``table_contact_node`` set -- the C++ layer gates this
+    constraint on that same node).
+    """
+    mask = _resolve_contact_mask(configs, contact_fingers)
+    if len(directions) != len(configs):
+        raise ValueError(
+            f"directions has {len(directions)} entries but there are "
+            f"{len(configs)} fingers; pass one m_hat per finger.")
+    p_split = np.asarray(split_point, dtype=float).reshape(3)
+
+    for i, (_, cfg) in enumerate(configs):
+        env = cfg.sdf_contact
+        if env is None:
+            continue
+        if mask[i]:
+            m = np.asarray(directions[i], dtype=float).reshape(3)
+            env.half_space_enabled = True
+            env.half_space_split_point = p_split
+            env.half_space_normal = m / np.linalg.norm(m)
+        else:
+            env.half_space_enabled = False
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs
+
+
+def attach_pregrasp_center(configs, *, clearance_height=0.0, clearance_normal=None,
+                           contact_fingers=None, contact_node=None):
+    """Attach the pre-grasp hand-centering constraint (Eq 2.18-2.19) to every
+    PARTICIPATING finger's env, in place. Returns ``configs`` for chaining.
+
+    A HAND-LEVEL constraint: the C++ layer collects every finger with
+    ``pregrasp_center_node`` set, groups the one named "thumb" against the
+    rest, and adds ONE Vector3 equality centering their sphere-center midpoint
+    over the object (raised by ``clearance_height`` along ``clearance_normal``).
+    Requires the thumb AND at least one other finger to participate, and a
+    nonzero ``clearance_normal``, or the C++ layer silently skips the
+    constraint.
+
+    ``contact_fingers`` (None = all) selects which fingers participate, the
+    same per-finger bool mask :func:`attach_contact`/:func:`attach_table` take.
+    Call AFTER attach_contact (needs an existing env with ``object_pose_mean``/
+    ``object_pose_cov`` set, so this constraint can anchor the object pose even
+    when no other block does).
+    """
+    mask = _resolve_contact_mask(configs, contact_fingers)
+    normal = (np.asarray(clearance_normal, dtype=float).reshape(3)
+             if clearance_normal is not None else np.zeros(3))
+
+    for i, (_, cfg) in enumerate(configs):
+        env = cfg.sdf_contact
+        if env is None:
+            continue
+        env.pregrasp_clearance_height = clearance_height
+        env.pregrasp_clearance_normal = normal
+        env.pregrasp_center_node = (
+            (contact_node if contact_node is not None else tip_node_index(cfg))
+            if mask[i] else None)
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs
 

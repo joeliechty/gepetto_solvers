@@ -115,6 +115,13 @@ void bind_tendon_finger(py::module& m) {
                        &crest_sparse::EnvironmentConfig::contact_drop_normal_row)
         .def_readwrite("witness_target",     &crest_sparse::EnvironmentConfig::witness_target)
         .def_readwrite("witness_target_cov", &crest_sparse::EnvironmentConfig::witness_target_cov)
+        // --- Pre-grasp hand-centering (Section 2.2.1, Eq 2.18-2.19) ---
+        .def_readwrite("pregrasp_center_node",
+                       &crest_sparse::EnvironmentConfig::pregrasp_center_node)
+        .def_readwrite("pregrasp_clearance_height",
+                       &crest_sparse::EnvironmentConfig::pregrasp_clearance_height)
+        .def_readwrite("pregrasp_clearance_normal",
+                       &crest_sparse::EnvironmentConfig::pregrasp_clearance_normal)
         .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);

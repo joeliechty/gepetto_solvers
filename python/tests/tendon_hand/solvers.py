@@ -39,10 +39,11 @@ import crest_sparse
 from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     disc_node_indices, attach_contact, attach_collision, attach_table,
-    tip_node_index)
+    tip_node_index, opposition_directions, opposition_axis_from_object,
+    attach_half_space, attach_pregrasp_center)
 from .scene import (
     OBJECT_CENTER, GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL,
-    get_primitive_specs, primitive_surface_witness)
+    get_primitive_specs, primitive_surface_witness, object_principal_inplane_axis)
 
 
 # The _objects/ directory holding the baked .vdb SDF grids (relative to this file).
@@ -115,6 +116,16 @@ def capabilities():
         # the hand drifting off constraints it had already satisfied.
         "dual_transfer": hasattr(crest_sparse.TendonHandSolver,
                                  "set_initial_duals"),
+        # Eq 2.18-2.19 pre-grasp hand-centering. Needs a rebuilt binding with
+        # EnvironmentConfig.pregrasp_center_node.
+        "pregrasp_center": hasattr(env, "pregrasp_center_node"),
+        # Eq 2.16-2.17 opposition half-space and Eq 2.12-2.15's drop-normal-row
+        # SDF contact form. Both fields have been on EnvironmentConfig for a
+        # while (the §1.8 controller used them), so these are almost always
+        # True; gated for consistency with every other control here and as a
+        # defensive check against a stale binding.
+        "opposition": hasattr(env, "half_space_enabled"),
+        "drop_normal_row": hasattr(env, "contact_drop_normal_row"),
     }
 
 
@@ -359,6 +370,100 @@ def free_sphere_plane_witness(params, result, k=0, names=None):
     return out
 
 
+def default_half_space_axis(spec, rotation, plane_normal):
+    """The opposition split axis (Eq 2.16-2.17's ``m_hat``) derived from the
+    object's own geometry, for when ``HandSolveParams.half_space_axis`` is
+    unset: perpendicular, within the support plane, to the object's longest
+    in-plane axis (:func:`scene.object_principal_inplane_axis`), via
+    :func:`config.opposition_axis_from_object`.
+
+    This is what makes the split LINE run along the object's length (e.g.
+    lengthwise along a pen, thumb on one side and fingers on the other across
+    its diameter) instead of across it. Falls back to world +X only when the
+    object is in-plane isotropic (below the degeneracy ratio) --
+    :func:`scene.object_principal_inplane_axis`'s own fallback."""
+    e_long, _ratio = object_principal_inplane_axis(spec, rotation, plane_normal)
+    return opposition_axis_from_object(plane_normal, e_long)
+
+
+def half_space_witness(params, result, k=0, names=None):
+    """Per-contact-finger ``{name: (sphere_pt, foot_pt, signed_margin_m)}``
+    against the Eq 2.16-2.17 opposition half-space at frame ``k``.
+
+    ``signed_margin`` is ``-c_half`` (the C++ factor's own sign convention,
+    negated back to something readable): positive means the finger is on its
+    designated side (constraint satisfied, with that much room to spare),
+    negative means it has crossed to the wrong side by that many meters.
+    ``foot_pt`` is the fingertip projected onto the splitting plane along the
+    finger's own ``m_hat`` (``+axis`` for the thumb, ``-axis`` for everyone
+    else -- :func:`config.opposition_directions`'s convention).
+
+    ``names`` defaults to :meth:`HandResult.table_contact_names`, matching
+    where the C++ layer actually gates ``half_space_enabled`` (on
+    ``table_contact_node``, not the broader object-contact mask
+    :func:`config.attach_half_space` itself is written with).
+    """
+    frame = result.frames[k]
+    axis = (np.asarray(params.half_space_axis, dtype=float).reshape(3)
+           if params.half_space_axis is not None else
+           default_half_space_axis(result.spec, result.object_rotation,
+                                   params.plane_normal))
+    axis = axis / (np.linalg.norm(axis) or 1.0)
+    p_split = (np.asarray(params.half_space_split, dtype=float).reshape(3)
+              if params.half_space_split is not None else result.object_center)
+    wanted = set(result.table_contact_names() if names is None else names)
+
+    out = {}
+    for name in result.finger_names:
+        if name not in wanted:
+            continue
+        fm = frame[name].marginals
+        c = np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
+        m_hat = axis if name == "thumb" else -axis
+        margin = float((c - p_split) @ m_hat)   # >= 0 => correct side
+        foot = c - margin * m_hat
+        out[name] = (c, foot, margin)
+    return out
+
+
+def pregrasp_center_witness(params, result, k=0):
+    """``(hand_centroid_pt, target_pt, gap_m)`` for the Eq 2.18-2.19 pre-grasp
+    hand-centering constraint at frame ``k``, or None if the thumb or the
+    opposing set has no fingers designated (:meth:`HandResult.contact_names`).
+
+    ``hand_centroid_pt`` is the midpoint of the thumb's and the opposing
+    (non-thumb, contact-designated) fingers' contact-sphere centers --
+    ``c_hand`` in the paper's notation. ``target_pt`` is the object centroid
+    raised by ``h_clear`` along ``plane_normal``. ``gap_m`` is their Euclidean
+    separation (0 at the constraint's zero set); unlike the other witness
+    functions this is a single HAND-level tuple, not one per finger.
+    """
+    names = result.contact_names()
+    if "thumb" not in names:
+        return None
+    others = [n for n in names if n != "thumb"]
+    if not others:
+        return None
+
+    frame = result.frames[k]
+
+    def tip(name):
+        fm = frame[name].marginals
+        return np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
+
+    c_thumb = tip("thumb")
+    c_others = np.mean([tip(n) for n in others], axis=0)
+    hand_centroid = 0.5 * (c_thumb + c_others)
+
+    n_hat = np.asarray(params.plane_normal, dtype=float).reshape(3)
+    n_hat = n_hat / (np.linalg.norm(n_hat) or 1.0)
+    h_clear = params.h_clear if params.h_clear is not None else 0.02
+    target = np.asarray(result.object_center, dtype=float) + h_clear * n_hat
+
+    gap = float(np.linalg.norm(hand_centroid - target))
+    return (hand_centroid, target, gap)
+
+
 # ---------------------------------------------------------------------------
 # Params / results.
 # ---------------------------------------------------------------------------
@@ -427,6 +532,16 @@ class HandSolveParams:
     # there is nothing to touch and it is silently inert.
     object_contact: bool = True
     table_contact: bool = False
+    # Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, c_T2] SDF witness contact
+    # form (c_N dropped) instead of the default 5-row form. Only affects a
+    # non-ellipsoid (SDF) object's witness contact -- inert for the analytic
+    # ellipsoid's center-direct form, which has no normal row.
+    contact_drop_normal_row: bool = False
+    # Eq 2.18-2.19: center the midpoint of the thumb's and the opposing
+    # fingers' contact points over the object, raised by h_clear along
+    # plane_normal. Needs the thumb AND at least one other finger checked in
+    # contact_fingers, or the C++ layer silently skips it.
+    pregrasp_center: bool = False
 
     # --- Augmented Lagrangian (IK / planner) ---
     al_mu: float = 1.0
@@ -602,10 +717,18 @@ class HandSolveParams:
     sigma_q_step: float = 1e-1
     sigma_l_step_passive: float = 1e-1
     sigma_l_step_active: float = 1e-3
-    # Opposition half-space (Eq 1.92): the splitting point (None => the object
-    # centroid projected onto the support plane) and the in-plane axis the split
-    # runs along (None => world +X).
-    half_space: bool = True
+    # Opposition half-space (Eq 2.16-2.17 / Eq 1.92), read by
+    # HandSolverBase._attach_opposition(): the splitting point (None => the
+    # object centroid) and the in-plane axis the split runs along (None =>
+    # solvers.default_half_space_axis, derived from the object's own longest
+    # in-plane axis so the split runs along an elongated object's length
+    # rather than a fixed world direction). Needs table_contact fingers to act
+    # on. Default False (this field used to be read only by the deleted §1.8
+    # controller, which gated it by phase rather than this flag -- defaulting
+    # it True here, now that it is live, would silently add a constraint to
+    # every existing caller of HandSolveParams() that never touches this
+    # field).
+    half_space: bool = False
     half_space_split: Optional[np.ndarray] = None
     half_space_axis: Optional[np.ndarray] = None
     # Optional per-finger phase-3 witness targets (Eq 1.111); None entries mean
@@ -673,6 +796,12 @@ class HandSolveParams:
     # pregrasp_margin, i.e. scaled to the object rather than an absolute number
     # (the capsule and cylinder stand their long axis along +Z, so a value tuned
     # on a sphere would not clear them).
+    #
+    # Also read live by HandSolverBase._attach_pregrasp_center() (Eq 2.19's
+    # h_clear) when pregrasp_center is on -- same physical quantity, a
+    # clearance offset along the support normal. None there falls back to a
+    # flat 0.02 m rather than the object_extent_along derivation above (that
+    # helper belonged to the deleted §1.8 phase-0 code).
     h_clear: Optional[float] = None
     pregrasp_margin: float = 0.04
     # Eq 1.92: Q_pre = [c]*5 + [c + pregrasp_flexor_offset], the "slightly curled"
@@ -723,10 +852,15 @@ class HandSolveParams:
     # tendons and there is no reason to pull on them with different authority.
     sigma_pregrasp_q_passive: float = 1e-1
     sigma_pregrasp_q_active: float = 1e-1
-    # Derive the Eq 1.92 half-space axis from the object's longest in-plane axis
-    # (m_hat = n_hat x e_long) instead of using half_space_axis. Off by default:
-    # it changes the legacy world-+X default (to +Y for an in-plane-isotropic
-    # object), and most demo primitives are degenerate anyway.
+    # SUPERSEDED / unused: this used to gate deriving the Eq 1.92 half-space
+    # axis from the object's longest in-plane axis as an opt-in, off by
+    # default (world +X). That derivation (m_hat = n_hat x e_long) is now
+    # UNCONDITIONAL whenever half_space_axis is None -- see
+    # HandSolverBase._attach_opposition() / default_half_space_axis() -- since
+    # world +X turned out to be actively wrong for elongated objects (it
+    # bisects a pen across its short axis instead of splitting along its
+    # length). Kept only so an old caller that set this doesn't hit an
+    # AttributeError; it is read nowhere.
     derive_half_space_axis: bool = False
     # Close the Eq 1.93 Theta_curr loop: after each tick, write the SOLVED base
     # pose back so the step prior is anchored to the achieved state. Without this
@@ -948,7 +1082,8 @@ class HandSolverBase:
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
-                       contact_fingers=self._object_contact_mask())
+                       contact_fingers=self._object_contact_mask(),
+                       drop_normal_row=self.params.contact_drop_normal_row)
 
     def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)
@@ -975,10 +1110,43 @@ class HandSolverBase:
                      tip_radii=self.tip_radii,
                      contact_fingers=self._table_contact_mask())
 
+    def _attach_opposition(self):
+        """Attach the Eq 2.16-2.17 opposition half-space to every finger's env.
+
+        Masked by ``_table_contact_mask()`` (not the broader ``contact_fingers``
+        directly): the C++ layer gates ``half_space_enabled`` on
+        ``table_contact_node`` being set, so writing it onto a finger that
+        won't get a table-contact node would be a no-op that only looks live.
+        The thumb (identified by name, the hand-wide convention) gets ``+axis``
+        and every other checked finger gets ``-axis``
+        (:func:`opposition_directions`). ``half_space_split`` defaults to the
+        object center; ``half_space_axis`` defaults to
+        :func:`default_half_space_axis` -- derived from the object's own
+        longest in-plane axis, so the split runs along an elongated object's
+        length (e.g. a pen) rather than a fixed world direction that is only
+        right by coincidence."""
+        axis = (self.params.half_space_axis if self.params.half_space_axis is not None
+               else default_half_space_axis(self.spec, self.object_rotation,
+                                            self.params.plane_normal))
+        directions = opposition_directions(self.configs, axis=axis)
+        split = (self.params.half_space_split if self.params.half_space_split is not None
+                else self.object_center)
+        attach_half_space(self.configs, split, directions,
+                          contact_fingers=self._table_contact_mask())
+
+    def _attach_pregrasp_center(self):
+        """Attach the Eq 2.18-2.19 pre-grasp hand-centering constraint, using
+        the shared ``contact_fingers`` mask to pick which fingers (thumb +
+        opposing set) participate, and ``plane_normal`` as the clearance axis."""
+        h_clear = self.params.h_clear if self.params.h_clear is not None else 0.02
+        attach_pregrasp_center(self.configs, clearance_height=h_clear,
+                               clearance_normal=self.params.plane_normal,
+                               contact_fingers=self.params.contact_fingers)
+
     def _attach_environment(self):
-        """The whole constraint environment for one solve, per the four
-        independent toggles (object contact, table contact, object collision,
-        table collision).
+        """The whole constraint environment for one solve, per the independent
+        toggles (object contact, table contact, object collision, table
+        collision, opposition half-space, pre-grasp centering).
 
         The collision sphere SET is attached whenever either avoidance consumer
         wants it; ``env.collision_avoidance`` then selects only whether the
@@ -986,14 +1154,16 @@ class HandSolverBase:
         set, so it is active whenever either collision toggle is.
 
         Shared by the IK solver, the IK stepper and the planner so the three
-        cannot drift into building different environments from the same params.
-        The Section 1.8 controller deliberately does NOT route through here -- it
-        derives its per-phase envs in C++ from one pristine base env."""
+        cannot drift into building different environments from the same params."""
         self._attach_contact()
         if self.params.collision or (self.params.table and self.params.plane_avoidance):
             self._attach_collision(avoidance=self.params.collision)
         if self.params.table:
             self._attach_table()
+        if self.params.half_space:
+            self._attach_opposition()
+        if self.params.pregrasp_center:
+            self._attach_pregrasp_center()
 
     # -- prior builders --
 
