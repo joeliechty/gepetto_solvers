@@ -820,3 +820,43 @@ def attach_pregrasp_center(configs, *, clearance_height=0.0, clearance_normal=No
     return configs
 
 
+def attach_pregrasp_axis_alignment(configs, axis, *, contact_fingers=None, contact_node=None):
+    """Attach the pre-grasp short-axis alignment constraint (companion to
+    Eq 2.16-2.17) to every PARTICIPATING finger's env, in place. Returns
+    ``configs`` for chaining.
+
+    A HAND-LEVEL constraint, same shape as :func:`attach_pregrasp_center`: the
+    C++ layer collects every finger with ``pregrasp_align_node`` set, groups
+    the one named "thumb" against the rest, and adds ONE scalar equality
+    aligning the vector between their sphere-center centroids with ``axis``,
+    direction-agnostically (squared cosine). Requires the thumb AND at least
+    one other finger to participate, and a nonzero ``axis``, or the C++ layer
+    silently skips the constraint.
+
+    ``axis`` is a caller-supplied world-frame direction -- typically
+    ``solvers.default_half_space_axis(...)``, the SAME axis the opposition
+    half-space uses (perpendicular to the object's longest in-plane axis).
+    Passed in rather than derived here so this stays a pure env-mutation
+    helper, matching :func:`attach_half_space`/:func:`attach_pregrasp_center`.
+
+    ``contact_fingers`` (None = all) selects which fingers participate, the
+    same per-finger bool mask every other ``attach_*`` helper here takes.
+    Call AFTER attach_contact (needs an existing ``cfg.sdf_contact`` env).
+    """
+    mask = _resolve_contact_mask(configs, contact_fingers)
+    m_hat = np.asarray(axis, dtype=float).reshape(3)
+    if np.linalg.norm(m_hat) > 0:
+        m_hat = m_hat / np.linalg.norm(m_hat)
+
+    for i, (_, cfg) in enumerate(configs):
+        env = cfg.sdf_contact
+        if env is None:
+            continue
+        env.pregrasp_align_axis = m_hat
+        env.pregrasp_align_node = (
+            (contact_node if contact_node is not None else tip_node_index(cfg))
+            if mask[i] else None)
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs
+
+

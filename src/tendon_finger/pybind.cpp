@@ -122,6 +122,11 @@ void bind_tendon_finger(py::module& m) {
                        &crest_sparse::EnvironmentConfig::pregrasp_clearance_height)
         .def_readwrite("pregrasp_clearance_normal",
                        &crest_sparse::EnvironmentConfig::pregrasp_clearance_normal)
+        // --- Pre-grasp short-axis alignment ---
+        .def_readwrite("pregrasp_align_node",
+                       &crest_sparse::EnvironmentConfig::pregrasp_align_node)
+        .def_readwrite("pregrasp_align_axis",
+                       &crest_sparse::EnvironmentConfig::pregrasp_align_axis)
         .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);

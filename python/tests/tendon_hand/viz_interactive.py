@@ -57,7 +57,8 @@ from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
     euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
-    half_space_witness, pregrasp_center_witness, default_half_space_axis,
+    half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
+    default_half_space_axis,
     FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 
 
@@ -240,6 +241,7 @@ class HandVizApp:
         p.half_space_axis = None    # derive from the object's own long axis
         p.pregrasp_center = self.g_pregrasp_center.value
         p.h_clear = self.g_h_clear.value
+        p.pregrasp_axis_align = self.g_axis_align.value
         p.sigma_wrist_pos = 10.0 ** self.g_sig_pos.value
         p.sigma_wrist_rot = 10.0 ** self.g_sig_rot.value
         # AL
@@ -321,6 +323,8 @@ class HandVizApp:
                     if self.params.half_space else None)
         center_gap = (pregrasp_center_witness(self.params, res, 0)
                      if self.params.pregrasp_center else None)
+        axis_align = (pregrasp_axis_witness(self.params, res, 0)
+                     if self.params.pregrasp_axis_align else None)
         self._report_iterate()
         self.scene.update(res.frames[0],
                           tip_radii=res.tip_radii,
@@ -333,7 +337,8 @@ class HandVizApp:
                           gaps=gaps,
                           table_gaps=table_gaps,
                           half_space_gaps=half_gaps,
-                          center_gap=center_gap)
+                          center_gap=center_gap,
+                          axis_align=axis_align)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -791,7 +796,8 @@ class HandVizApp:
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
                 + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
-                   self.g_half_space, self.g_pregrasp_center, self.g_h_clear]
+                   self.g_half_space, self.g_pregrasp_center, self.g_h_clear,
+                   self.g_axis_align]
                 + self.g_contacts
                 + [self.g_collision, self.g_coll_radius, self.g_coll_sigma,
                    self.g_cull,
@@ -997,6 +1003,18 @@ class HandVizApp:
                     "clearance (m)", 0.0, 0.08, 0.002, 0.02,
                     hint="Pre-grasp centering's height above the object "
                          "centroid, along the table normal.")
+                self.g_axis_align = gui.add_checkbox(
+                    "short-axis alignment", False,
+                    disabled=not self.caps["pregrasp_axis_align"],
+                    hint="Align the thumb-vs-opposing-fingers connecting "
+                         "vector with the perpendicular to the opposition "
+                         "split plane (the same axis opposition half-space "
+                         "uses), direction-agnostic -- it doesn't matter "
+                         "which way it points, just that it's colinear. "
+                         "Needs the thumb AND at least one other finger "
+                         "checked below. Independent of opposition "
+                         "half-space and pre-grasp centering -- computes its "
+                         "own copy of the axis either way.")
 
             with gui.add_folder("fingers"):
                 # Default to a 3-finger pinch (thumb, index, middle) rather
@@ -1101,7 +1119,8 @@ class HandVizApp:
         # via _render_frame), so just invalidate the stepper -- self.params is
         # refreshed from every handle at the start of the next solve regardless
         # of which widget triggered it.
-        for h in (self.g_drop_normal_row, self.g_pregrasp_center, self.g_h_clear):
+        for h in (self.g_drop_normal_row, self.g_pregrasp_center, self.g_h_clear,
+                  self.g_axis_align):
             h.on_update(lambda _: self._invalidate_stepper())
         # AL knobs are baked into the stepper's config at construction, unlike
         # the tensions it re-reads every step, so they need a rebuild too.

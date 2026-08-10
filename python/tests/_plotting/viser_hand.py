@@ -51,6 +51,9 @@ _GAP_FAR_RGB = (220, 40, 40)
 # one, since what matters here is which side of the plane, not how far.
 _MARGIN_OK_RGB = _GAP_NEAR_RGB
 _MARGIN_VIOLATED_RGB = _GAP_FAR_RGB
+# Pre-grasp short-axis alignment overlay: green within ANGLE_GREEN_MAX_DEG of
+# the target axis (either direction), red beyond it.
+ANGLE_GREEN_MAX_DEG = 10.0
 
 
 def _recenter(mesh):
@@ -196,7 +199,7 @@ class ViserHandScene:
 
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
                collision=False, gaps=None, table_gaps=None,
-               half_space_gaps=None, center_gap=None):
+               half_space_gaps=None, center_gap=None, axis_align=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
 
@@ -216,6 +219,14 @@ class ViserHandScene:
         ``(hand_centroid_pt, target_pt, gap_m)`` tuple (as returned by
         ``solvers.pregrasp_center_witness``) or None -- a HAND-level quantity,
         not per finger, so it is drawn once rather than per finger name.
+
+        ``axis_align`` is the pre-grasp short-axis alignment overlay: a single
+        ``(c_thumb, c_others_mean, angle_deg)`` tuple (as returned by
+        ``solvers.pregrasp_axis_witness``) or None -- also HAND-level, drawn
+        under its own scene path so it coexists with ``center_gap`` when both
+        are on (the two lines connect the same two points but mean different
+        things -- distance to a target vs. angle off an axis -- so they are
+        never merged into one draw call).
 
         All gated on ``self.show_gap_lines`` (the existing "contact distance"
         display toggle) -- one category of overlay, one switch. Rendering only
@@ -277,6 +288,10 @@ class ViserHandScene:
         # rather than per finger.
         if self.show_gap_lines and center_gap is not None:
             keep |= self._update_center(*center_gap)
+
+        # Pre-grasp short-axis alignment: also HAND-level, drawn once.
+        if self.show_gap_lines and axis_align is not None:
+            keep |= self._update_axis_align(*axis_align)
 
         self._prune(keep)
 
@@ -369,6 +384,32 @@ class ViserHandScene:
         lb = "/pregrasp_center/label"
         self._dynamic[lb] = self.scene.add_label(
             lb, f"{gap * 1000.0:.1f} mm", position=tuple(0.5 * (p0 + p1)),
+            anchor="center-center")
+        keep.add(lb)
+        return keep
+
+    def _update_axis_align(self, c_thumb, c_others, angle_deg):
+        """The pre-grasp short-axis alignment overlay: a labelled line between
+        the thumb's and the opposing fingers' contact centroids, colored by
+        the angle off the target axis (near 0 deg = converged; the target
+        itself is direction-agnostic, so unlike ``_update_center`` there is no
+        single target POINT to mark, only the achieved angle). Own scene path
+        (``/pregrasp_align/...``) so it coexists with the centering overlay,
+        which can be drawn between the same two points but means something
+        different (distance to a point, not an angle)."""
+        p0 = np.asarray(c_thumb, float).reshape(3)
+        p1 = np.asarray(c_others, float).reshape(3)
+        rgb = _GAP_NEAR_RGB if angle_deg < ANGLE_GREEN_MAX_DEG else _GAP_FAR_RGB
+        keep = set()
+
+        ln = "/pregrasp_align/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb, line_width=3.0)
+        keep.add(ln)
+
+        lb = "/pregrasp_align/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, f"{angle_deg:.1f} deg", position=tuple(0.5 * (p0 + p1)),
             anchor="center-center")
         keep.add(lb)
         return keep

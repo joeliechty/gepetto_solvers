@@ -614,6 +614,34 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         }
     }
 
+    // Pre-grasp short-axis alignment (companion to Eq 2.16-2.17): also a
+    // hand-level pass, collected the same way as the hand-centering block
+    // above, but on the SEPARATE pregrasp_align_node/pregrasp_align_axis
+    // fields so it stays independently toggleable. No object-pose anchoring
+    // needed here -- PreGraspAxisAlignmentFactor never touches object_key().
+    {
+        std::optional<Key> thumb_key;
+        std::vector<Key> finger_keys;
+        gtsam::Vector3 axis = gtsam::Vector3::Zero();
+        for (size_t i = 0; i < fingers_.size(); ++i) {
+            if (!sdf_contacts_[i]) continue;
+            const auto& env = *sdf_contacts_[i];
+            if (!env.pregrasp_align_node.has_value()) continue;
+            std::visit([&](auto& fp) {
+                Key k = fp->rod_->get_pose_key(*env.pregrasp_align_node);
+                if (finger_names_[i] == "thumb") thumb_key = k;
+                else finger_keys.push_back(k);
+            }, fingers_[i]);
+            axis = env.pregrasp_align_axis;
+        }
+        if (thumb_key.has_value() && !finger_keys.empty() && axis.norm() > 0.0) {
+            auto align = std::make_shared<crest_sparse::PreGraspAxisAlignmentFactor>(
+                *thumb_key, finger_keys, axis,
+                noiseModel::Isotropic::Sigma(1, 1.0));
+            add_eq(graph, align, "pregrasp.align");
+        }
+    }
+
     return graph;
 }
 

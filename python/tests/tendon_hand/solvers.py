@@ -40,7 +40,7 @@ from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     disc_node_indices, attach_contact, attach_collision, attach_table,
     tip_node_index, opposition_directions, opposition_axis_from_object,
-    attach_half_space, attach_pregrasp_center)
+    attach_half_space, attach_pregrasp_center, attach_pregrasp_axis_alignment)
 from .scene import (
     OBJECT_CENTER, GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL,
     get_primitive_specs, primitive_surface_witness, object_principal_inplane_axis)
@@ -126,6 +126,9 @@ def capabilities():
         # defensive check against a stale binding.
         "opposition": hasattr(env, "half_space_enabled"),
         "drop_normal_row": hasattr(env, "contact_drop_normal_row"),
+        # Pre-grasp short-axis alignment (companion to Eq 2.16-2.17). Needs a
+        # rebuilt binding with EnvironmentConfig.pregrasp_align_node.
+        "pregrasp_axis_align": hasattr(env, "pregrasp_align_node"),
     }
 
 
@@ -464,6 +467,48 @@ def pregrasp_center_witness(params, result, k=0):
     return (hand_centroid, target, gap)
 
 
+def pregrasp_axis_witness(params, result, k=0):
+    """``(c_thumb, c_others_mean, angle_deg)`` for the pre-grasp short-axis
+    alignment constraint at frame ``k``, or None if the thumb or the opposing
+    set has no fingers designated (:meth:`HandResult.contact_names`).
+
+    ``angle_deg`` is the acute angle between the achieved thumb-vs-opposing
+    connecting vector and ``default_half_space_axis`` -- 0 at the constraint's
+    zero set (either parallel or antiparallel), up to 90 at worst. Recomputes
+    the SAME axis :meth:`HandSolverBase._attach_pregrasp_axis_alignment` uses,
+    from ``result.spec``/``result.object_rotation`` rather than a stored
+    value, so the overlay always matches the axis the last-attached
+    constraint actually used.
+    """
+    names = result.contact_names()
+    if "thumb" not in names:
+        return None
+    others = [n for n in names if n != "thumb"]
+    if not others:
+        return None
+
+    frame = result.frames[k]
+
+    def tip(name):
+        fm = frame[name].marginals
+        return np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
+
+    c_thumb = tip("thumb")
+    c_others = np.mean([tip(n) for n in others], axis=0)
+    v = c_thumb - c_others
+    vn = np.linalg.norm(v)
+    if vn < 1e-9:
+        return None
+    v_hat = v / vn
+
+    axis = default_half_space_axis(result.spec, result.object_rotation,
+                                   params.plane_normal)
+    cos_a = abs(float(v_hat @ axis))
+    cos_a = min(1.0, max(-1.0, cos_a))
+    angle_deg = float(np.degrees(np.arccos(cos_a)))
+    return (c_thumb, c_others, angle_deg)
+
+
 # ---------------------------------------------------------------------------
 # Params / results.
 # ---------------------------------------------------------------------------
@@ -542,6 +587,14 @@ class HandSolveParams:
     # plane_normal. Needs the thumb AND at least one other finger checked in
     # contact_fingers, or the C++ layer silently skips it.
     pregrasp_center: bool = False
+    # Companion to Eq 2.16-2.17: align the vector between the thumb's and the
+    # opposing fingers' contact centroids with the SAME axis the opposition
+    # half-space split uses (perpendicular to the object's longest in-plane
+    # axis), direction-agnostically. Independent of half_space/pregrasp_center
+    # -- it computes its own copy of that axis via default_half_space_axis()
+    # regardless of whether the opposition constraint itself is on. Needs the
+    # thumb AND at least one other finger checked in contact_fingers.
+    pregrasp_axis_align: bool = False
 
     # --- Augmented Lagrangian (IK / planner) ---
     al_mu: float = 1.0
@@ -1143,10 +1196,23 @@ class HandSolverBase:
                                clearance_normal=self.params.plane_normal,
                                contact_fingers=self.params.contact_fingers)
 
+    def _attach_pregrasp_axis_alignment(self):
+        """Attach the pre-grasp short-axis alignment constraint (companion to
+        Eq 2.16-2.17), using the shared ``contact_fingers`` mask for the thumb
+        + opposing set. Computes its own copy of the opposition axis via
+        :func:`default_half_space_axis` -- independent of whether
+        ``_attach_opposition()`` itself runs, so this stays toggleable on its
+        own."""
+        axis = default_half_space_axis(self.spec, self.object_rotation,
+                                       self.params.plane_normal)
+        attach_pregrasp_axis_alignment(self.configs, axis,
+                                       contact_fingers=self.params.contact_fingers)
+
     def _attach_environment(self):
         """The whole constraint environment for one solve, per the independent
         toggles (object contact, table contact, object collision, table
-        collision, opposition half-space, pre-grasp centering).
+        collision, opposition half-space, pre-grasp centering, pre-grasp
+        short-axis alignment).
 
         The collision sphere SET is attached whenever either avoidance consumer
         wants it; ``env.collision_avoidance`` then selects only whether the
@@ -1164,6 +1230,8 @@ class HandSolverBase:
             self._attach_opposition()
         if self.params.pregrasp_center:
             self._attach_pregrasp_center()
+        if self.params.pregrasp_axis_align:
+            self._attach_pregrasp_axis_alignment()
 
     # -- prior builders --
 
