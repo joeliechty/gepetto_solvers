@@ -30,7 +30,7 @@ kinematics solve (the renderer can still draw the spheres/table for reference).
 
 import os
 from dataclasses import dataclass, field, replace
-from typing import List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 import numpy as np
 
@@ -555,6 +555,14 @@ class HandSolveParams:
     flexor_tensions: List[float] = field(
         default_factory=lambda: [GRASP_FLEXOR_TENSION] * NUM_FINGERS)
     tip_wrench_sigma: float = 1e-3
+    # How loose the ACTUATED (flexor) tendon's tension prior is once contact
+    # is expected to move it away from its commanded value -- squared into
+    # the tension covariance's flexor entry by _flexor_tension_cov(), the
+    # same sigma-squared-into-covariance pattern tip_wrench_sigma uses above.
+    # The five passive tendons stay pinned at variance 1e-6 regardless (their
+    # physics: a spring holds roughly constant tension). Default reproduces
+    # the historical hardcoded flexor variance (1e-1) exactly.
+    flexor_tension_sigma: float = 0.1 ** 0.5
 
     # --- Which fingertips are solved for contact (IK / planner; FK ignores it) ---
     # One flag per finger, in ``configs`` order. A False finger contributes no
@@ -602,7 +610,7 @@ class HandSolveParams:
     al_iters: int = 40
     # How many leading stepper steps run with the flexor prior PINNED as tightly
     # as the passives (see HandIKStepper.step). Settles the cold start before the
-    # flexor is released to _IK_TENSION_COV; 0 restores the old behaviour.
+    # flexor is released to flexor_tension_sigma; 0 restores the old behaviour.
     ik_settle_steps: int = 1
 
     # --- Planner-only ---
@@ -1090,6 +1098,67 @@ class HandResult:
 
 
 # ---------------------------------------------------------------------------
+# Phase presets.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PhasePreset:
+    """A named group of ``HandSolveParams`` overrides for one phase of the
+    §1.8-style pipeline (0: pre-grasp positioning, 1: support contact, 2:
+    object approach, 3: on-object servoing -- only phase 0 is populated so
+    far). Only the fields listed in ``overrides`` are touched when applied --
+    wrist pose, per-finger flexor tensions, AL/collision tuning sliders, table
+    height offset etc. are left at whatever the caller already has, since
+    those are generic solver knobs rather than part of what DEFINES a phase."""
+    label: str
+    overrides: Dict[str, object]
+
+
+PHASE_PRESETS: Dict[str, PhasePreset] = {
+    "phase0": PhasePreset(
+        label="Phase 0: pre-grasp positioning",
+        overrides=dict(
+            object_contact=False,
+            table_contact=False,
+            collision=True,
+            table=True,
+            plane_avoidance=True,
+            half_space=True,
+            pregrasp_center=True,
+            pregrasp_axis_align=True,
+            h_clear=0.02,
+            contact_drop_normal_row=False,
+            contact_fingers=[True, True, False, False, True],  # index, middle, thumb
+            # Loose wrist prior: phase 0 is a big repositioning move, so the
+            # wrist must be free to get there rather than held near its start.
+            sigma_wrist_pos=1.0,
+            sigma_wrist_rot=1.0,
+            # Explicit even though it equals the field's own default -- states
+            # plainly that phase 0 uses the standard flexor looseness rather
+            # than leaving it at "whatever the slider happened to be at."
+            flexor_tension_sigma=0.1 ** 0.5,
+        ),
+    ),
+    # phase1 / phase2 / phase3 land here later, same shape.
+}
+
+
+def apply_phase_preset(params: HandSolveParams, name: str) -> HandSolveParams:
+    """Apply ``PHASE_PRESETS[name]``'s overrides onto ``params`` IN PLACE
+    (``setattr`` per field), returning it for chaining. An override naming a
+    field that doesn't exist on ``HandSolveParams`` raises -- a typo in a
+    preset should fail loudly, not silently no-op."""
+    preset = PHASE_PRESETS[name]
+    for field_name, value in preset.overrides.items():
+        if not hasattr(params, field_name):
+            raise AttributeError(
+                f"phase preset {name!r} sets unknown HandSolveParams field "
+                f"{field_name!r}")
+        setattr(params, field_name, value)
+    return params
+
+
+# ---------------------------------------------------------------------------
 # Solver base + the three flavours.
 # ---------------------------------------------------------------------------
 
@@ -1263,6 +1332,19 @@ class HandSolverBase:
         cov = self.params.tip_wrench_sigma ** 2 * np.eye(6)
         return [crest_sparse.Vector6Gaussian(np.zeros(6), cov) for _ in self.configs]
 
+    def _flexor_tension_cov(self):
+        """The "tight-passive / loose-flexor" tension-prior covariance used
+        outside the leading settle steps: the five passives pinned at
+        variance 1e-6 (their physics -- a spring holds roughly constant
+        tension), the actuated flexor (index 5) at
+        ``params.flexor_tension_sigma ** 2`` so contact can drive it away from
+        its commanded value. Read live every call, like ``_tip_wrenches()``,
+        so a mid-solve slider drag takes effect on the next step with no
+        stepper rebuild."""
+        cov = np.diag([1e-6] * 6)
+        cov[FLEXOR_IDX, FLEXOR_IDX] = self.params.flexor_tension_sigma ** 2
+        return cov
+
     def _result(self, frames, meta, contact_fingers=None, states=None,
                 iterates=None, iterate_states=None, iterate_notes=None,
                 table_contact_fingers=None, duals=None, dual_transfer=None):
@@ -1313,11 +1395,11 @@ class HandFKSolver(HandSolverBase):
                             [sol.marginals])
 
 
-# Tight passive / loose flexor: the optimizer drives contact through the flexor
-# while the passives stay pinned. Shared by the one-shot IK solve and the stepper
-# so the two cannot drift into solving subtly different problems -- the whole
-# point of the stepper is that it advances *this* solve.
-_IK_TENSION_COV = np.diag([1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-1])
+# The tight-passive/loose-flexor prior itself now lives on
+# HandSolverBase._flexor_tension_cov() (params.flexor_tension_sigma), shared
+# by the one-shot IK solve, the stepper and the planner so the three cannot
+# drift into solving subtly different problems -- the whole point of the
+# stepper is that it advances *this* solve.
 
 # The same prior with the FLEXOR pinned as hard as the passives, used only to
 # settle a cold start (HandIKStepper.step, params.ik_settle_steps).
@@ -1369,7 +1451,7 @@ class HandIKSolver(HandSolverBase):
             _set_if(cfg.base, "iteration_sample_interval", 1)
 
         solver = crest_sparse.TendonHandSolver(self.configs, cfg)
-        sol = solver.solve(self._tension_priors(_IK_TENSION_COV),
+        sol = solver.solve(self._tension_priors(self._flexor_tension_cov()),
                            self._tip_wrenches())
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)
         iterates, iterate_states = self._collect_iterates(solver, sol)
@@ -1413,7 +1495,7 @@ class HandIKStepper(HandSolverBase):
     outer iteration per :meth:`step` call instead of run to convergence in one go.
 
     Every step solves the *identical* graph the one-shot solve builds -- same
-    contact constraints, same priors (``_IK_TENSION_COV``), same tolerances. The
+    contact constraints, same priors (``_flexor_tension_cov()``), same tolerances. The
     only difference is that the outer loop is told to stop after one iteration
     and resume on the next call: ``al_max_iterations = 1`` with
     ``al_warm_start_duals`` carries mu, the Lagrange multipliers and the values
@@ -1588,7 +1670,7 @@ class HandIKStepper(HandSolverBase):
         # tension priors are rebuilt from params for the same reason.
         self._solver.set_wrist_pose(self.params.wrist_pose)
         settling = self._settling()
-        cov = _IK_SETTLE_TENSION_COV if settling else _IK_TENSION_COV
+        cov = _IK_SETTLE_TENSION_COV if settling else self._flexor_tension_cov()
         sol = self._solver.solve(self._tension_priors(cov), self._tip_wrenches())
 
         if not self._history:
@@ -1706,7 +1788,7 @@ class HandPlannerSolver(HandSolverBase):
         # Target tensions at k>=1 (tight passive / loose flexor), plus the measured
         # k=0 start (open hand at start_flexor, all pinned) that the trajectory
         # closes from.
-        cov = np.diag([1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-1])
+        cov = self._flexor_tension_cov()
         start_cov = np.diag([1e-6] * n)
         starts = []
         for _, cfg in self.configs:

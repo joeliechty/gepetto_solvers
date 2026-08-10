@@ -47,6 +47,7 @@ Optional headless self-check of the solver classes (no browser):
 """
 
 import argparse
+import math
 import sys
 import threading
 
@@ -58,7 +59,7 @@ from .solvers import (
     resolve_scene, resolve_table_origin, capabilities,
     euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
-    default_half_space_axis,
+    default_half_space_axis, PHASE_PRESETS,
     FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 
 
@@ -232,6 +233,7 @@ class HandVizApp:
         self._sync_wrist()
         p.passive_tension = self.g_passive.value
         p.flexor_tensions = [s.value for s in self.g_flexors]
+        p.flexor_tension_sigma = 10.0 ** self.g_flexor_sigma.value
         p.contact_fingers = [c.value for c in self.g_contacts]
         p.object_contact = self.g_obj_contact.value
         p.table_contact = self.g_tbl_contact.value
@@ -715,6 +717,64 @@ class HandVizApp:
         self._fk_solve()
         self._set_status("**reset** to defaults  \n" + self.g_status.content)
 
+    # -- phase presets --
+
+    def _preset_widget(self, field):
+        """The GUI handle a ``PHASE_PRESETS`` override field writes onto, for
+        the plain 1:1 cases (everything except ``contact_fingers``,
+        ``sigma_wrist_pos``/``sigma_wrist_rot`` and ``flexor_tension_sigma``,
+        which :meth:`_apply_phase_preset` special-cases itself)."""
+        return {
+            "object_contact": self.g_obj_contact,
+            "table_contact": self.g_tbl_contact,
+            "collision": self.g_collision,
+            "table": self.g_table,
+            "plane_avoidance": self.g_plane_avoid,
+            "half_space": self.g_half_space,
+            "pregrasp_center": self.g_pregrasp_center,
+            "pregrasp_axis_align": self.g_axis_align,
+            "h_clear": self.g_h_clear,
+            "contact_drop_normal_row": self.g_drop_normal_row,
+        }[field]
+
+    def _apply_phase_preset(self, name):
+        """Write ``PHASE_PRESETS[name]``'s overrides directly onto the
+        corresponding GUI widgets, so checking the preset box is a single
+        visible action: every affected checkbox/slider jumps to the preset's
+        value on screen. One solve-ready sync/invalidate happens at the end --
+        Auto solve is a separate, manual next step, not triggered here."""
+        overrides = PHASE_PRESETS[name].overrides
+        self._restoring = True   # batch write; no live-FK/other side effects
+        try:
+            for field, value in overrides.items():
+                if field == "contact_fingers":
+                    for handle, v in zip(self.g_contacts, value):
+                        handle.value = bool(v)
+                elif field == "sigma_wrist_pos":
+                    self.g_sig_pos.value = math.log10(value)
+                elif field == "sigma_wrist_rot":
+                    self.g_sig_rot.value = math.log10(value)
+                elif field == "flexor_tension_sigma":
+                    self.g_flexor_sigma.value = math.log10(value)
+                else:
+                    self._preset_widget(field).value = value
+        finally:
+            self._restoring = False
+        self._sync_params()
+        self._invalidate_stepper()
+        self._refresh_object()
+        self._render_frame()
+
+    def _on_phase0_toggle(self, _=None):
+        """Checking *Phase 0* applies the preset; unchecking is a no-op -- the
+        controls it wrote stay exactly where the preset left them, freely
+        editable afterward. There is nothing to "undo" back to, since the
+        preset never remembered a prior state."""
+        if self._restoring:
+            return
+        if self.g_phase0.value:
+            self._apply_phase_preset("phase0")
+
     def _live_fk(self, _=None):
         """FK is fast and warm-starts, so re-solve live as sliders move.
 
@@ -795,6 +855,7 @@ class HandVizApp:
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
+                + [self.g_flexor_sigma, self.g_phase0]
                 + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_pregrasp_center, self.g_h_clear,
                    self.g_axis_align]
@@ -938,6 +999,31 @@ class HandVizApp:
             self.g_flexors = [
                 gui.add_slider(lbl, 0.0, 3.0, 0.05, GRASP_FLEXOR_TENSION)
                 for lbl in FINGER_LABELS]
+            self.g_flexor_sigma = gui.add_slider(
+                "log10 flexor tension sigma", -3.0, 1.0, 0.1,
+                math.log10(HandSolveParams().flexor_tension_sigma),
+                hint="How loose the ACTUATED (flexor) tendon's tension prior "
+                     "is once contact is expected to move it away from its "
+                     "commanded value above -- the five passive tendons stay "
+                     "pinned regardless. Read live every IK step, so a drag "
+                     "takes effect on the next Step/Auto solve with no "
+                     "rebuild. Has no effect on FK.")
+
+        # One-click constraint-set presets, backed by solvers.PHASE_PRESETS so
+        # the same data is usable headlessly. Checking a box writes its whole
+        # preset onto the Constraints controls below in one go; press Auto
+        # solve afterward to run it.
+        with gui.add_folder("Presets"):
+            self.g_phase0 = gui.add_checkbox(
+                PHASE_PRESETS["phase0"].label, False,
+                hint="Apply the phase-0 preset: no object/table contact yet, "
+                     "collision avoidance on, all three pre-grasp constraints "
+                     "(opposition half-space, centering, short-axis "
+                     "alignment) on, a loose wrist prior (this is a big "
+                     "repositioning move), and a 3-finger pinch "
+                     "(index/middle/thumb). Writes straight onto the "
+                     "Constraints/Wrist controls -- check this, then press "
+                     "Auto solve. Unchecking is a no-op.")
 
         # Every constraint on/off toggle lives here (Chapter 2, Eq 2.8-2.19),
         # grouped by the paper's structure. Numeric tuning sliders that go with
@@ -1072,6 +1158,7 @@ class HandVizApp:
         self.g_ik_stop.on_click(self._ik_stop)
         self.g_warm.on_click(self._toggle_warm_start)
         self.g_reset.on_click(self._reset_defaults)
+        self.g_phase0.on_update(self._on_phase0_toggle)
 
         @self.g_object.on_update
         def _(_):
