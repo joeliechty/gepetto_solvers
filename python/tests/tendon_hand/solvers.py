@@ -1166,7 +1166,33 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             # a clearance value would be inert and misleading to state.
         ),
     ),
-    # phase2 / phase3 land here later, same shape.
+    "phase2": PhasePreset(
+        label="Phase 2: object approach",
+        overrides=dict(
+            # The only real change from phase 1: the object is now ALSO a
+            # contact target, approached while table contact is maintained.
+            object_contact=True,
+            table_contact=True,
+            collision=True,
+            table=True,
+            plane_avoidance=True,
+            half_space=False,
+            pregrasp_center=False,
+            pregrasp_axis_align=False,
+            contact_drop_normal_row=False,
+            contact_fingers=[True, True, False, False, True],  # index, middle, thumb
+            # Loose again, like phase 0 -- object approach (sliding across
+            # the table toward the object while keeping table contact) is
+            # another significant motion, not the small settle phase 1's
+            # 0.01 assumes.
+            sigma_wrist_pos=1.0,
+            sigma_wrist_rot=1.0,
+            flexor_tension_sigma=0.1 ** 0.5,
+            # h_clear intentionally omitted, as in phase1 -- pregrasp_center
+            # is off, so a clearance value would be inert and misleading.
+        ),
+    ),
+    # phase3 lands here later, same shape.
 }
 
 

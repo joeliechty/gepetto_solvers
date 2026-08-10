@@ -778,9 +778,10 @@ class HandVizApp:
 
     def _phase_checkboxes(self):
         """Every phase-preset checkbox, name -> handle. Small and built on
-        demand rather than cached, so a future phase2/3 checkbox only needs
+        demand rather than cached, so a future phase3 checkbox only needs
         adding here (and to ``_build_gui``/``_input_handles``)."""
-        return {"phase0": self.g_phase0, "phase1": self.g_phase1}
+        return {"phase0": self.g_phase0, "phase1": self.g_phase1,
+                "phase2": self.g_phase2}
 
     def _on_phase_toggle(self, name, _=None):
         """Checking a phase preset applies it and unchecks every OTHER phase
@@ -884,7 +885,7 @@ class HandVizApp:
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
-                + [self.g_flexor_sigma, self.g_phase0, self.g_phase1]
+                + [self.g_flexor_sigma, self.g_phase0, self.g_phase1, self.g_phase2]
                 + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_pregrasp_center, self.g_h_clear,
                    self.g_axis_align]
@@ -1065,6 +1066,17 @@ class HandVizApp:
                      "3-finger pinch. Writes straight onto the "
                      "Constraints/Wrist controls -- check this, then press "
                      "Auto solve. Unchecking is a no-op.")
+            self.g_phase2 = gui.add_checkbox(
+                PHASE_PRESETS["phase2"].label, False,
+                hint="Apply the phase-2 preset: object contact turned back "
+                     "ON alongside table contact (approaching the object "
+                     "while still sliding on the table), pre-grasp "
+                     "constraints still off, and the wrist prior loosened "
+                     "back to phase 0's level -- object approach is another "
+                     "significant motion, not phase 1's small settle. Same "
+                     "3-finger pinch. Writes straight onto the "
+                     "Constraints/Wrist controls -- check this, then press "
+                     "Auto solve. Unchecking is a no-op.")
 
         # Every constraint on/off toggle lives here (Chapter 2, Eq 2.8-2.19),
         # grouped by the paper's structure. Numeric tuning sliders that go with
@@ -1202,6 +1214,7 @@ class HandVizApp:
         self.g_reset.on_click(self._reset_defaults)
         self.g_phase0.on_update(lambda _: self._on_phase_toggle("phase0"))
         self.g_phase1.on_update(lambda _: self._on_phase_toggle("phase1"))
+        self.g_phase2.on_update(lambda _: self._on_phase_toggle("phase2"))
 
         @self.g_object.on_update
         def _(_):
