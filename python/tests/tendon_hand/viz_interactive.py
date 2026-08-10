@@ -65,6 +65,10 @@ from .solvers import (
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
 
+# This app's own startup object -- see HandVizApp.__init__ for why it's set
+# there rather than just changed on the dropdown widget.
+DEFAULT_OBJECT_PRIMITIVE = "pen"
+
 # Display-only suffix for the baked-SDF spheres in the object dropdown, so they
 # read apart from the analytic ``*_sphere_ellipsoid`` look-alikes. The spec keys
 # (and the demo scripts' argparse choices) keep the un-suffixed names; only the
@@ -160,6 +164,13 @@ class HandVizApp:
         self.viser = viser
         self.server = server
         self.params = HandSolveParams()
+        # This app's own startup default -- not HandSolveParams' own default,
+        # which stays whatever headless callers/other scripts expect. Set
+        # here (not just on the dropdown widget below) because _rebuild_fk()/
+        # _refresh_object() run before the first _sync_params() and read
+        # self.params.primitive directly; the dropdown's own default_label
+        # computation already reads it too, so it follows automatically.
+        self.params.primitive = DEFAULT_OBJECT_PRIMITIVE
         # Which solver produced what is on screen: "FK" for a posed hand, "IK"
         # once the stepper has been driven. Gates the live FK re-solve and labels
         # the status readout; there is no mode picker.
@@ -765,15 +776,33 @@ class HandVizApp:
         self._refresh_object()
         self._render_frame()
 
-    def _on_phase0_toggle(self, _=None):
-        """Checking *Phase 0* applies the preset; unchecking is a no-op -- the
-        controls it wrote stay exactly where the preset left them, freely
-        editable afterward. There is nothing to "undo" back to, since the
-        preset never remembered a prior state."""
+    def _phase_checkboxes(self):
+        """Every phase-preset checkbox, name -> handle. Small and built on
+        demand rather than cached, so a future phase2/3 checkbox only needs
+        adding here (and to ``_build_gui``/``_input_handles``)."""
+        return {"phase0": self.g_phase0, "phase1": self.g_phase1}
+
+    def _on_phase_toggle(self, name, _=None):
+        """Checking a phase preset applies it and unchecks every OTHER phase
+        checkbox first -- they are mutually exclusive stages of the same
+        pipeline, and leaving two checked at once would show a state whose
+        settings actually contradict each other (e.g. phase 0's half_space=
+        True vs. phase 1's False). Unchecking is a no-op -- the controls a
+        preset wrote stay exactly where it left them, freely editable
+        afterward; there is nothing to "undo" back to."""
         if self._restoring:
             return
-        if self.g_phase0.value:
-            self._apply_phase_preset("phase0")
+        checkbox = self._phase_checkboxes()[name]
+        if not checkbox.value:
+            return
+        self._restoring = True
+        try:
+            for other_name, other_box in self._phase_checkboxes().items():
+                if other_name != name:
+                    other_box.value = False
+        finally:
+            self._restoring = False
+        self._apply_phase_preset(name)
 
     def _live_fk(self, _=None):
         """FK is fast and warm-starts, so re-solve live as sliders move.
@@ -855,7 +884,7 @@ class HandVizApp:
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
-                + [self.g_flexor_sigma, self.g_phase0]
+                + [self.g_flexor_sigma, self.g_phase0, self.g_phase1]
                 + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_pregrasp_center, self.g_h_clear,
                    self.g_axis_align]
@@ -1012,7 +1041,8 @@ class HandVizApp:
         # One-click constraint-set presets, backed by solvers.PHASE_PRESETS so
         # the same data is usable headlessly. Checking a box writes its whole
         # preset onto the Constraints controls below in one go; press Auto
-        # solve afterward to run it.
+        # solve afterward to run it. Mutually exclusive -- checking one
+        # unchecks the other, see _on_phase_toggle.
         with gui.add_folder("Presets"):
             self.g_phase0 = gui.add_checkbox(
                 PHASE_PRESETS["phase0"].label, False,
@@ -1022,6 +1052,17 @@ class HandVizApp:
                      "alignment) on, a loose wrist prior (this is a big "
                      "repositioning move), and a 3-finger pinch "
                      "(index/middle/thumb). Writes straight onto the "
+                     "Constraints/Wrist controls -- check this, then press "
+                     "Auto solve. Unchecking is a no-op.")
+            self.g_phase1 = gui.add_checkbox(
+                PHASE_PRESETS["phase1"].label, False,
+                hint="Apply the phase-1 preset: table contact ON (object "
+                     "contact stays off), the three pre-grasp constraints "
+                     "(opposition half-space, centering, short-axis "
+                     "alignment) turned back OFF now that they've done their "
+                     "job, and a tighter wrist prior than phase 0 (held "
+                     "closer to where it ended up, not free to roam). Same "
+                     "3-finger pinch. Writes straight onto the "
                      "Constraints/Wrist controls -- check this, then press "
                      "Auto solve. Unchecking is a no-op.")
 
@@ -1127,7 +1168,8 @@ class HandVizApp:
             # Offset from the scene's own seating, which now half-buries the
             # object (HandSolveParams.table_burial = 0.5) rather than resting it
             # on the plane. Dial in -half_extent to recover the old geometry.
-            self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, 0.0)
+            # -0.006 m is this app's own default seating for the pen.
+            self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, -0.006)
 
         with gui.add_folder("Augmented Lagrangian"):
             self.g_al_mu = gui.add_slider("mu", 0.1, 10.0, 0.1, 1.0)
@@ -1158,7 +1200,8 @@ class HandVizApp:
         self.g_ik_stop.on_click(self._ik_stop)
         self.g_warm.on_click(self._toggle_warm_start)
         self.g_reset.on_click(self._reset_defaults)
-        self.g_phase0.on_update(self._on_phase0_toggle)
+        self.g_phase0.on_update(lambda _: self._on_phase_toggle("phase0"))
+        self.g_phase1.on_update(lambda _: self._on_phase_toggle("phase1"))
 
         @self.g_object.on_update
         def _(_):

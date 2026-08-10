@@ -1139,7 +1139,34 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             flexor_tension_sigma=0.1 ** 0.5,
         ),
     ),
-    # phase1 / phase2 / phase3 land here later, same shape.
+    "phase1": PhasePreset(
+        label="Phase 1: support contact",
+        overrides=dict(
+            object_contact=False,
+            table_contact=True,
+            collision=True,
+            table=True,
+            plane_avoidance=True,
+            # The three pre-grasp-only constraints did their job getting the
+            # hand into position in phase 0; phase 1 slides the fingers onto
+            # the table and doesn't need them anymore.
+            half_space=False,
+            pregrasp_center=False,
+            pregrasp_axis_align=False,
+            contact_drop_normal_row=False,
+            contact_fingers=[True, True, False, False, True],  # index, middle, thumb
+            # Tighter than phase 0's 1.0: the big repositioning move is done,
+            # so the wrist is held closer to where phase 0 left it -- but not
+            # fully rigid (phase 0's own sigma_wrist_pos/rot default is much
+            # smaller still), since settling into contact needs some give.
+            sigma_wrist_pos=0.01,
+            sigma_wrist_rot=0.01,
+            flexor_tension_sigma=0.1 ** 0.5,
+            # h_clear intentionally omitted -- pregrasp_center is off here, so
+            # a clearance value would be inert and misleading to state.
+        ),
+    ),
+    # phase2 / phase3 land here later, same shape.
 }
 
 
