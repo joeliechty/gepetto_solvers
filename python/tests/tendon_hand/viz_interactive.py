@@ -59,8 +59,9 @@ from .solvers import (
     resolve_scene, resolve_table_origin, capabilities,
     euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
-    default_half_space_axis, PHASE_PRESETS,
+    pregrasp_centroid_witness, default_half_space_axis, PHASE_PRESETS,
     FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
+from .config import pinch_pose
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
@@ -245,6 +246,7 @@ class HandVizApp:
         p.passive_tension = self.g_passive.value
         p.flexor_tensions = [s.value for s in self.g_flexors]
         p.flexor_tension_sigma = 10.0 ** self.g_flexor_sigma.value
+        p.passive_tension_sigma = 10.0 ** self.g_passive_sigma.value
         p.contact_fingers = [c.value for c in self.g_contacts]
         p.object_contact = self.g_obj_contact.value
         p.table_contact = self.g_tbl_contact.value
@@ -252,9 +254,11 @@ class HandVizApp:
         p.half_space = self.g_half_space.value
         p.half_space_split = None   # derive from object_center
         p.half_space_axis = None    # derive from the object's own long axis
+        p.half_space_margin = self.g_half_margin.value
         p.pregrasp_center = self.g_pregrasp_center.value
         p.h_clear = self.g_h_clear.value
         p.pregrasp_axis_align = self.g_axis_align.value
+        p.pregrasp_centroid = self.g_pregrasp_centroid.value
         p.sigma_wrist_pos = 10.0 ** self.g_sig_pos.value
         p.sigma_wrist_rot = 10.0 ** self.g_sig_rot.value
         # AL
@@ -310,7 +314,8 @@ class HandVizApp:
                    else default_half_space_axis(spec, rotation, self.params.plane_normal))
             split = (self.params.half_space_split if self.params.half_space_split is not None
                     else center)
-            self.scene.set_half_space_plane(split, axis)
+            self.scene.set_half_space_plane(
+                split, axis, margin=self.params.half_space_margin)
         else:
             self.scene.clear_half_space_plane()
 
@@ -338,6 +343,8 @@ class HandVizApp:
                      if self.params.pregrasp_center else None)
         axis_align = (pregrasp_axis_witness(self.params, res, 0)
                      if self.params.pregrasp_axis_align else None)
+        centroid_gap = (pregrasp_centroid_witness(self.params, res, 0)
+                       if self.params.pregrasp_centroid else None)
         self._report_iterate()
         self.scene.update(res.frames[0],
                           tip_radii=res.tip_radii,
@@ -351,7 +358,8 @@ class HandVizApp:
                           table_gaps=table_gaps,
                           half_space_gaps=half_gaps,
                           center_gap=center_gap,
-                          axis_align=axis_align)
+                          axis_align=axis_align,
+                          centroid_gap=centroid_gap)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -404,12 +412,68 @@ class HandVizApp:
             self._set_solving(False)
             self._solving = False
 
+    def _pinch_note(self):
+        """Warn when pinch-centroid centering is checked but the selected
+        digits have no measured pinch pose.
+
+        Only combinations INCLUDING THE THUMB were measured, so a selection
+        like index+middle silently attaches nothing -- the C++ layer skips an
+        unconfigured constraint without complaint, which is the same trap the
+        other pre-grasp toggles set (they need the thumb plus one other finger
+        or they vanish too). Say it out loud instead."""
+        if not self.params.pregrasp_centroid:
+            return []
+        names = [n for n, c in zip(FINGER_LABELS, self.g_contacts) if c.value]
+        pose = pinch_pose(names)
+        if pose is None:
+            return [f"**pinch-centroid: INACTIVE** -- no measured pinch pose "
+                    f"for ({', '.join(names) or 'no fingers'}); only "
+                    f"combinations including the thumb were measured"]
+        if not pose.touches():
+            # A real measurement, but of a closest approach rather than a
+            # contact -- the centroid is still well-defined, the digits just
+            # never actually meet there.
+            return [f"pinch-centroid: these digits close to "
+                    f"{pose.gap * 1000:.1f} mm apart (they never touch)"]
+        return []
+
+    def _half_space_note(self):
+        """Warn when the opposition half-space (and so its standoff) is checked
+        but attaches to nothing.
+
+        The C++ layer gates ``half_space_enabled`` on ``table_contact_node``, so
+        ``_attach_opposition`` masks by the TABLE-contact fingers: with *table
+        contact* unchecked -- the state the app opens in -- checking *opposition
+        half-space* builds no factor at all, the split plane still draws, and
+        dragging the standoff slider does nothing. Same trap the pre-grasp
+        toggles set, so it gets the same treatment: say it out loud."""
+        if not self.params.half_space:
+            return []
+        names = [n for n, c in zip(FINGER_LABELS, self.g_contacts) if c.value]
+        if not (self.params.table and self.params.table_contact and names):
+            return [f"**opposition half-space: INACTIVE** -- it attaches to the "
+                    f"TABLE-contact fingers, so it needs *table enabled* + "
+                    f"*table contact* + at least one finger checked; the "
+                    f"standoff slider does nothing until then"]
+        if not self.caps["half_space_margin"]:
+            return ["opposition half-space: this binding has no "
+                    "`EnvironmentConfig.half_space_margin`, so the standoff "
+                    "slider is inert (rebuild with `pip install .`)"]
+        if self.params.half_space_margin > 0.0:
+            return [f"opposition standoff: each side held "
+                    f"{self.params.half_space_margin * 1000:.0f} mm off the "
+                    f"split ({self.params.half_space_margin * 2000:.0f} mm "
+                    f"corridor)"]
+        return []
+
     def _report(self):
         m = self.result.meta
         lines = [f"**{self.mode}** &nbsp; iters={m.iterations} &nbsp; "
                  f"err={m.error:.3g} &nbsp; {m.total_time_ms:.0f} ms"]
         if self.mode != "FK":
             lines.extend(self._contact_lines(-1))
+        lines.extend(self._half_space_note())
+        lines.extend(self._pinch_note())
         self._set_status("  \n".join(lines))
 
     def _fingers_label(self, names):
@@ -587,11 +651,13 @@ class HandVizApp:
         rep = self.result.dual_transfer
         carried = ("" if rep is None else
                    f"  \nduals carried: {rep.matched}/{rep.total} constraints")
+        pinch = self._half_space_note() + self._pinch_note()
         self._set_status(
             f"**IK step {status.steps}** &nbsp; {verdict}  \n"
             f"violation={status.violation:.3e} &nbsp; cost={status.cost:.4g} "
             f"&nbsp; mu={status.mu:.3g}  \n"
-            f"worst gap: {' &nbsp; '.join(gaps) or 'n/a'}{carried}")
+            f"worst gap: {' &nbsp; '.join(gaps) or 'n/a'}{carried}"
+            + ("  \n" + "  \n".join(pinch) if pinch else ""))
 
     def _ik_step(self, _=None):
         """One Augmented Lagrangian outer iteration, continuing the last one."""
@@ -742,8 +808,10 @@ class HandVizApp:
             "table": self.g_table,
             "plane_avoidance": self.g_plane_avoid,
             "half_space": self.g_half_space,
+            "half_space_margin": self.g_half_margin,
             "pregrasp_center": self.g_pregrasp_center,
             "pregrasp_axis_align": self.g_axis_align,
+            "pregrasp_centroid": self.g_pregrasp_centroid,
             "h_clear": self.g_h_clear,
             "contact_drop_normal_row": self.g_drop_normal_row,
         }[field]
@@ -885,10 +953,12 @@ class HandVizApp:
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
-                + [self.g_flexor_sigma, self.g_phase0, self.g_phase1, self.g_phase2]
+                + [self.g_flexor_sigma, self.g_passive_sigma,
+                   self.g_phase0, self.g_phase1, self.g_phase2]
                 + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
-                   self.g_half_space, self.g_pregrasp_center, self.g_h_clear,
-                   self.g_axis_align]
+                   self.g_half_space, self.g_half_margin,
+                   self.g_pregrasp_center, self.g_h_clear,
+                   self.g_pregrasp_centroid, self.g_axis_align]
                 + self.g_contacts
                 + [self.g_collision, self.g_coll_radius, self.g_coll_sigma,
                    self.g_cull,
@@ -1030,14 +1100,24 @@ class HandVizApp:
                 gui.add_slider(lbl, 0.0, 3.0, 0.05, GRASP_FLEXOR_TENSION)
                 for lbl in FINGER_LABELS]
             self.g_flexor_sigma = gui.add_slider(
-                "log10 flexor tension sigma", -3.0, 1.0, 0.1,
+                "log10 flexor tension sigma", -3.0, 5.0, 0.1,
                 math.log10(HandSolveParams().flexor_tension_sigma),
                 hint="How loose the ACTUATED (flexor) tendon's tension prior "
                      "is once contact is expected to move it away from its "
-                     "commanded value above -- the five passive tendons stay "
-                     "pinned regardless. Read live every IK step, so a drag "
-                     "takes effect on the next Step/Auto solve with no "
+                     "commanded value above. Read live every IK step, so a "
+                     "drag takes effect on the next Step/Auto solve with no "
                      "rebuild. Has no effect on FK.")
+            self.g_passive_sigma = gui.add_slider(
+                "log10 passive tension sigma", -6.0, 1.0, 0.1,
+                math.log10(HandSolveParams().passive_tension_sigma),
+                hint="How loose the five PASSIVE tendons' tension prior is -- "
+                     "normally left tight (their physics is a spring holding "
+                     "roughly constant tension), unlike the actuated flexor "
+                     "above. Below ~1e-3 (variance ~1e-6) risks an "
+                     "IndeterminantLinearSystem against the flexor's much "
+                     "looser scale. Read live every IK step, so a drag takes "
+                     "effect on the next Step/Auto solve with no rebuild. "
+                     "Has no effect on FK.")
 
         # One-click constraint-set presets, backed by solvers.PHASE_PRESETS so
         # the same data is usable headlessly. Checking a box writes its whole
@@ -1130,6 +1210,23 @@ class HandVizApp:
                     hint="Eq 2.16-2.17: keep each contact finger on its "
                          "designated half of the table, thumb opposite the "
                          "rest. Needs table contact.")
+                self.g_half_margin = gui.add_slider(
+                    "half-space standoff (m)", 0.0, 0.05, 0.001, 0.0,
+                    disabled=not self.caps["half_space_margin"],
+                    hint="Minimum distance each contact finger must keep from "
+                         "the splitting plane, along its own side's direction: "
+                         "HalfSpaceGapFactor's d_min, making the constraint "
+                         "-(c - p_split).m_hat + standoff <= 0 rather than "
+                         "<= 0 alone. At 0 a fingertip sitting exactly ON the "
+                         "split is already legal, so opposition alone does not "
+                         "stop the thumb and the fingers closing onto each "
+                         "other; a positive standoff holds them 2x this far "
+                         "apart, which is what makes it a pre-grasp opening. "
+                         "Drawn as the two fainter planes either side of the "
+                         "split."
+                         if self.caps["half_space_margin"]
+                         else "requires a rebuilt _crest_sparse with "
+                              "EnvironmentConfig.half_space_margin")
                 self.g_pregrasp_center = gui.add_checkbox(
                     "pre-grasp centering", False,
                     disabled=not self.caps["pregrasp_center"],
@@ -1139,9 +1236,28 @@ class HandVizApp:
                          "normal. Needs the thumb AND at least one other "
                          "finger checked below.")
                 self.g_h_clear = gui.add_slider(
-                    "clearance (m)", 0.0, 0.08, 0.002, 0.02,
+                    "clearance (m)", 0.0, 0.08, 0.002, 0.07,
                     hint="Pre-grasp centering's height above the object "
                          "centroid, along the table normal.")
+                self.g_pregrasp_centroid = gui.add_checkbox(
+                    "pinch-centroid centering", False,
+                    disabled=not self.caps["pregrasp_centroid"],
+                    hint="Drive the point where the CHECKED digits are "
+                         "measured to meet -- a constant in the hand frame, "
+                         "looked up from config.HAND_PINCH_POSES -- onto the "
+                         "object centroid, raised by the clearance slider "
+                         "above. Unlike pre-grasp centering (which averages "
+                         "where the fingertips actually are, so it only says "
+                         "something once they are nearly closed) this "
+                         "constrains the WRIST alone: it positions the hand "
+                         "so that closing those digits would close them ON "
+                         "the object, whatever the fingers are doing now. "
+                         "Only combinations INCLUDING THE THUMB were "
+                         "measured; any other selection leaves it inert and "
+                         "says so in the status line."
+                         if self.caps["pregrasp_centroid"]
+                         else "requires a rebuilt _crest_sparse with "
+                              "EnvironmentConfig.pregrasp_centroid_point")
                 self.g_axis_align = gui.add_checkbox(
                     "short-axis alignment", False,
                     disabled=not self.caps["pregrasp_axis_align"],
@@ -1249,8 +1365,10 @@ class HandVizApp:
                                    self._render_frame()))
         # Table toggle / height updates the static slab immediately; opposition
         # half-space rides along since it draws its own static split-plane slab
-        # (set_half_space_plane) the same way.
-        for h in (self.g_table, self.g_plane_offset, self.g_half_space):
+        # (set_half_space_plane) the same way -- as does its standoff slider,
+        # which draws the two boundary planes either side of that split.
+        for h in (self.g_table, self.g_plane_offset, self.g_half_space,
+                  self.g_half_margin):
             h.on_update(lambda _: (self._sync_params(), self._refresh_object(),
                                    self._invalidate_stepper()))
         # Collision knobs are part of the constraint set too.
@@ -1263,7 +1381,7 @@ class HandVizApp:
         # refreshed from every handle at the start of the next solve regardless
         # of which widget triggered it.
         for h in (self.g_drop_normal_row, self.g_pregrasp_center, self.g_h_clear,
-                  self.g_axis_align):
+                  self.g_axis_align, self.g_pregrasp_centroid):
             h.on_update(lambda _: self._invalidate_stepper())
         # AL knobs are baked into the stepper's config at construction, unlike
         # the tensions it re-reads every step, so they need a rebuild too.

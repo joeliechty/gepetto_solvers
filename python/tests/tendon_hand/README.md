@@ -318,7 +318,7 @@ wrapped in a constraint class that hands it to the AL optimizer.
 | `EllipsoidCollisionGapFactor` | `r − Taubin(x)` | `T`, `O` | Eq 1.91 |
 | `PlaneCollisionGapFactor` | `r − (p − p_table)·n̂` | `T` | Eq 1.59 |
 | `SphereSphereCollisionGapFactor` | `(r_i + r_j) − ‖p_i − p_j‖` | `T`, `T` | Eq 1.58 |
-| `HalfSpaceGapFactor` | `−(c − p_split)·m̂`, **constant Jacobian** | `T` | Eq 1.99 |
+| `HalfSpaceGapFactor` | `−(c − p_split)·m̂ + d_min`, **constant Jacobian** | `T` | Eq 1.99 |
 
 Two implementation details you will trip over if you don't know them:
 
@@ -354,6 +354,7 @@ exactly the pre-existing graph.
 | `table_contact_node/_radius` | 5-residual table sliding equality | Eq 1.60–1.64 |
 | `support_contact_node/_radius` | §1.8 center-direct support equality (no witness) | Eq 1.104 |
 | `half_space_enabled/_split_point/_normal` | opposition half-space inequality | Eq 1.99 |
+| `half_space_margin` | minimum standoff `d_min` from the split (0 ⇒ the bare half-space) | Eq 1.99 |
 | `object_contact_center_direct` | forces the witness-free object equality — already the **default** for any ellipsoid contact in `TendonHandModel` | Eq 1.108 |
 | `contact_drop_normal_row` | 4-row witness contact | Eq 1.114–1.117 |
 | `witness_target/_cov` | soft geodesic pull on the witness point | Eq 1.118 |

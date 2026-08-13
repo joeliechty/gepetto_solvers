@@ -10,6 +10,9 @@ repositions that finger on the common wrist. Add a finger by appending one more
 ``(name, config)`` entry — no code changes required.
 """
 
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
+
 import numpy as np
 
 from ..tendon_finger.config import get_6tendon_config
@@ -462,6 +465,137 @@ def get_default_hand_configs(dims=None):
 
 
 # ---------------------------------------------------------------------------
+# Measured pinch geometry for THIS hand
+# ---------------------------------------------------------------------------
+#
+# Where each combination of digits actually meets when it closes, measured
+# offline by tests/tendon_hand/fk_pinch_centroids.py (--q-max 4.5) against the
+# hand get_default_hand_configs() builds above.
+#
+# THESE NUMBERS BELONG TO THIS MORPHOLOGY. They are a property of the bone
+# lengths, palm origins and base angles in DEFAULT_HAND_DIMENSIONS /
+# gepetto_core, and of finger_base_offset()'s mounting convention -- change any
+# of those and every entry here is silently wrong, because nothing in the code
+# can detect the mismatch. That is exactly why they live in this module, next
+# to the dimensions they were derived from, rather than in a solver or a demo
+# script. Regenerate with:
+#
+#     python -m tests.tendon_hand.fk_pinch_centroids --q-max 4.5
+#
+# The centroid is in the WRIST / HAND-BASE frame, which is what makes it usable
+# as a constraint: PreGraspCentroidFactor pushes it through the wrist pose to
+# get a world point. Measured with the wrist pinned at identity (the solved
+# wrist held to 7e-16, so the tip poses were already base-frame).
+
+# The digit order get_default_hand_configs() returns, thumb last. FINGER_NAMES
+# above is the four non-thumb fingers only, so it cannot be reused here.
+DIGIT_ORDER = FINGER_NAMES + ["thumb"]
+
+
+@dataclass(frozen=True)
+class PinchPose:
+    """Where one combination of digits meets, and what closes it.
+
+    ``centroid``   (x, y, z) in meters, WRIST/HAND-BASE frame: the centroid of
+                   the combination's fingertip contact spheres at their closest
+                   approach.
+    ``tensions``   ``{finger: flexor tension N}`` that produces that pose --
+                   what to command to actually close this pinch. Note some
+                   exceed the interactive viewer's 3 N slider maximum (the
+                   pinky needs up to 3.55 N).
+    ``gap``        meters, the closest tip-sphere pair's SURFACE separation
+                   there. <= 0 means the spheres genuinely touch; positive
+                   means this combination never closes and ``centroid`` is a
+                   closest-approach point rather than a contact point. Quoted
+                   to the source log's 0.1 mm precision.
+    """
+    centroid: Tuple[float, float, float]
+    tensions: Dict[str, float]
+    gap: float
+
+    def touches(self, tol=2e-4):
+        """Whether these digits actually reach each other (vs merely getting
+        as close as the hand allows). 7 of the 15 combinations do not."""
+        return self.gap <= tol
+
+
+def _pinch_key(finger_names):
+    """Canonical lookup key: the given digits in ``DIGIT_ORDER``, deduplicated.
+
+    Order-insensitive so a caller can pass a contact mask, a set, or whatever
+    order the GUI checkboxes happen to be read in and still hit the same entry.
+    """
+    wanted = set(finger_names)
+    return tuple(n for n in DIGIT_ORDER if n in wanted)
+
+
+HAND_PINCH_POSES: Dict[Tuple[str, ...], PinchPose] = {
+    ("index", "thumb"): PinchPose(
+        (-0.07212, 0.07190, 0.00335), {"thumb": 1.25, "index": 2.70}, -0.0002),
+    ("middle", "thumb"): PinchPose(
+        (-0.07260, 0.07270, -0.00795), {"thumb": 1.35, "middle": 2.20}, 0.0013),
+    ("ring", "thumb"): PinchPose(
+        (-0.06388, 0.06684, -0.02104), {"thumb": 1.50, "ring": 2.75}, 0.0009),
+    ("pinky", "thumb"): PinchPose(
+        (-0.05512, 0.06067, -0.02966), {"thumb": 1.60, "pinky": 3.55}, 0.0000),
+    ("index", "middle", "thumb"): PinchPose(
+        (-0.07223, 0.06981, -0.00553),
+        {"thumb": 1.35, "index": 2.70, "middle": 2.25}, -0.0030),
+    ("index", "ring", "thumb"): PinchPose(
+        (-0.06792, 0.06592, -0.01107),
+        {"thumb": 1.40, "index": 2.80, "ring": 2.80}, 0.0024),
+    ("index", "pinky", "thumb"): PinchPose(
+        (-0.06178, 0.06110, -0.01766),
+        {"thumb": 1.50, "index": 2.95, "pinky": 3.50}, 0.0050),
+    ("middle", "ring", "thumb"): PinchPose(
+        (-0.06911, 0.06667, -0.01631),
+        {"thumb": 1.45, "middle": 2.30, "ring": 2.75}, 0.0012),
+    ("middle", "pinky", "thumb"): PinchPose(
+        (-0.06443, 0.06283, -0.02112),
+        {"thumb": 1.50, "middle": 2.40, "pinky": 3.40}, 0.0041),
+    ("ring", "pinky", "thumb"): PinchPose(
+        (-0.06135, 0.06281, -0.02616),
+        {"thumb": 1.55, "ring": 2.85, "pinky": 3.40}, 0.0009),
+    ("index", "middle", "ring", "thumb"): PinchPose(
+        (-0.07047, 0.06670, -0.01122),
+        {"thumb": 1.40, "index": 2.75, "middle": 2.30, "ring": 2.75}, 0.0008),
+    ("index", "middle", "pinky", "thumb"): PinchPose(
+        (-0.06446, 0.05954, -0.01608),
+        {"thumb": 1.50, "index": 2.95, "middle": 2.45, "pinky": 3.50}, 0.0001),
+    ("index", "ring", "pinky", "thumb"): PinchPose(
+        (-0.06282, 0.05976, -0.01868),
+        {"thumb": 1.50, "index": 2.95, "ring": 2.95, "pinky": 3.50}, 0.0024),
+    ("middle", "ring", "pinky", "thumb"): PinchPose(
+        (-0.06508, 0.06159, -0.02133),
+        {"thumb": 1.50, "middle": 2.40, "ring": 2.90, "pinky": 3.40}, 0.0017),
+    ("index", "middle", "ring", "pinky", "thumb"): PinchPose(
+        (-0.06628, 0.06096, -0.01636),
+        {"thumb": 1.45, "index": 2.90, "middle": 2.40, "ring": 2.90,
+         "pinky": 3.45}, 0.0004),
+}
+
+
+def pinch_pose(finger_names) -> Optional[PinchPose]:
+    """The measured :class:`PinchPose` for a set of digits, or None.
+
+    None means the combination was never measured, which is the honest answer
+    for anything the scan did not cover: fewer than two digits, or any set
+    WITHOUT the thumb. Non-thumb sets are excluded on purpose -- those fingers
+    are all on the same side of the palm, so their "closest approach" is a
+    fist curl rather than a pinch, and calling that a grasp centroid would be
+    wrong. Callers must handle None rather than substituting a default.
+    """
+    return HAND_PINCH_POSES.get(_pinch_key(finger_names))
+
+
+def pinch_pose_for_mask(configs, contact_fingers) -> Optional[PinchPose]:
+    """:func:`pinch_pose` driven by a per-finger bool mask in ``configs``
+    order -- the form the solver params and the GUI checkboxes carry."""
+    mask = _resolve_contact_mask(configs, contact_fingers)
+    return pinch_pose([name for (name, _), on in zip(configs, mask) if on])
+
+
+# ---------------------------------------------------------------------------
 # Collision avoidance (Section 1.5)
 # ---------------------------------------------------------------------------
 
@@ -750,7 +884,8 @@ def opposition_directions(configs, *, thumb_index=-1, axis=None):
     return [axis if i == thumb else -axis for i in range(n)]
 
 
-def attach_half_space(configs, split_point, directions, *, contact_fingers=None):
+def attach_half_space(configs, split_point, directions, *, contact_fingers=None,
+                      margin=0.0):
     """Attach the Eq 2.16-2.17 (Eq 1.92) opposition half-space to every masked-in
     finger's env, in place. Returns ``configs`` for chaining.
 
@@ -761,6 +896,20 @@ def attach_half_space(configs, split_point, directions, *, contact_fingers=None)
     contact sphere for the constraint to act on. Call AFTER attach_table (needs
     an existing env with ``table_contact_node`` set -- the C++ layer gates this
     constraint on that same node).
+
+    ``margin`` (m, >= 0) is the MINIMUM STANDOFF each finger must keep from the
+    splitting line, written onto ``env.half_space_margin`` -- the constraint the
+    C++ ``HalfSpaceGapFactor`` builds is then
+
+        -(c - p_split) . m_hat + margin <= 0 ,
+
+    so the thumb's side and the opposing fingers' side are each held ``margin``
+    off the split (a corridor of width ``2 * margin`` between them). At 0 -- the
+    default, and the original constraint -- a fingertip sitting exactly ON the
+    split is already legal, so opposition alone does not stop the digits closing
+    onto each other. Raises on a binding too old to carry the field rather than
+    silently dropping the standoff; call
+    :func:`solvers.capabilities`'s ``half_space_margin`` to gate on it.
     """
     mask = _resolve_contact_mask(configs, contact_fingers)
     if len(directions) != len(configs):
@@ -768,6 +917,7 @@ def attach_half_space(configs, split_point, directions, *, contact_fingers=None)
             f"directions has {len(directions)} entries but there are "
             f"{len(configs)} fingers; pass one m_hat per finger.")
     p_split = np.asarray(split_point, dtype=float).reshape(3)
+    margin = float(margin)
 
     for i, (_, cfg) in enumerate(configs):
         env = cfg.sdf_contact
@@ -778,6 +928,13 @@ def attach_half_space(configs, split_point, directions, *, contact_fingers=None)
             env.half_space_enabled = True
             env.half_space_split_point = p_split
             env.half_space_normal = m / np.linalg.norm(m)
+            if margin != 0.0 and not hasattr(env, "half_space_margin"):
+                raise AttributeError(
+                    "this crest_sparse build has no "
+                    "EnvironmentConfig.half_space_margin -- rebuild it "
+                    "(pip install .) to use an opposition standoff")
+            if hasattr(env, "half_space_margin"):
+                env.half_space_margin = margin
         else:
             env.half_space_enabled = False
         cfg.sdf_contact = env            # write the (mutated) env back
@@ -856,6 +1013,41 @@ def attach_pregrasp_axis_alignment(configs, axis, *, contact_fingers=None, conta
         env.pregrasp_align_node = (
             (contact_node if contact_node is not None else tip_node_index(cfg))
             if mask[i] else None)
+        cfg.sdf_contact = env            # write the (mutated) env back
+    return configs
+
+
+def attach_pregrasp_centroid(configs, centroid, *, clearance_height=0.0,
+                             clearance_normal=None):
+    """Attach the pre-grasp PINCH-CENTROID centering constraint to every
+    finger's env, in place. Returns ``configs`` for chaining.
+
+    A HAND-LEVEL constraint like :func:`attach_pregrasp_center`, but with one
+    structural difference that shows up in this signature: there is no
+    per-finger mask and no ``contact_node``. ``centroid`` is a point FIXED in
+    the wrist frame (from :data:`HAND_PINCH_POSES`, chosen by the caller from
+    whichever digits are participating), so no finger opts in and no fingertip
+    pose enters the residual -- the C++ layer keys the factor off the shared
+    wrist variable and the object, and reads these fields off whichever env it
+    finds them on first. They are written to every finger's env anyway, the
+    same way ``plane_origin``/``plane_normal`` are, so the envs stay uniform.
+
+    The C++ layer silently skips the constraint when ``clearance_normal`` has
+    zero norm, so leaving it unset is a safe no-op. Call AFTER attach_contact
+    (needs an existing ``cfg.sdf_contact`` env carrying the object pose, which
+    this constraint can end up anchoring).
+    """
+    c = np.asarray(centroid, dtype=float).reshape(3)
+    normal = (np.asarray(clearance_normal, dtype=float).reshape(3)
+             if clearance_normal is not None else np.zeros(3))
+
+    for _, cfg in configs:
+        env = cfg.sdf_contact
+        if env is None:
+            continue
+        env.pregrasp_centroid_point = c
+        env.pregrasp_centroid_clearance = float(clearance_height)
+        env.pregrasp_centroid_normal = normal
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs
 

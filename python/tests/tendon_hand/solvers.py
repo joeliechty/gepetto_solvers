@@ -40,7 +40,8 @@ from .config import (
     get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
     disc_node_indices, attach_contact, attach_collision, attach_table,
     tip_node_index, opposition_directions, opposition_axis_from_object,
-    attach_half_space, attach_pregrasp_center, attach_pregrasp_axis_alignment)
+    attach_half_space, attach_pregrasp_center, attach_pregrasp_axis_alignment,
+    attach_pregrasp_centroid, pinch_pose_for_mask)
 from .scene import (
     OBJECT_CENTER, GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL,
     get_primitive_specs, primitive_surface_witness, object_principal_inplane_axis)
@@ -125,10 +126,20 @@ def capabilities():
         # True; gated for consistency with every other control here and as a
         # defensive check against a stale binding.
         "opposition": hasattr(env, "half_space_enabled"),
+        # The opposition half-space's MINIMUM STANDOFF (HalfSpaceGapFactor's
+        # d_min): a newer field than the half-space itself, so a binding can
+        # have the constraint and not the standoff -- in which case the
+        # constraint still builds, just with no minimum distance.
+        "half_space_margin": hasattr(env, "half_space_margin"),
         "drop_normal_row": hasattr(env, "contact_drop_normal_row"),
         # Pre-grasp short-axis alignment (companion to Eq 2.16-2.17). Needs a
         # rebuilt binding with EnvironmentConfig.pregrasp_align_node.
         "pregrasp_axis_align": hasattr(env, "pregrasp_align_node"),
+        # Pre-grasp PINCH-CENTROID centering: drive the measured hand-frame
+        # meeting point of the checked digits (config.HAND_PINCH_POSES) onto
+        # the object. Needs a rebuilt binding with
+        # EnvironmentConfig.pregrasp_centroid_point.
+        "pregrasp_centroid": hasattr(env, "pregrasp_centroid_point"),
     }
 
 
@@ -373,6 +384,29 @@ def free_sphere_plane_witness(params, result, k=0, names=None):
     return out
 
 
+def tip_gap_matrix(tips, radii):
+    """Pairwise fingertip SURFACE gaps (m) for a set of contact spheres.
+
+    ``tips`` is an ``(n, 3)`` array of sphere centers and ``radii`` the matching
+    ``(n,)`` radii, so entry ``(i, j)`` is
+    ``||c_i - c_j|| - (r_i + r_j)`` -- zero when the two tip spheres just touch
+    and negative when they interpenetrate. The diagonal is set to ``+inf`` so
+    ``.min()`` over the matrix is the closest DISTINCT pair without having to
+    mask it out.
+
+    Every other witness helper in this module measures a fingertip against a
+    *surface* (the object, the support plane, a half-space); this is the
+    finger-to-finger counterpart, which a pinch has to be judged on -- two
+    fingertips can each sit far from any object yet be touching each other.
+    """
+    c = np.asarray(tips, dtype=float).reshape(-1, 3)
+    r = np.asarray(radii, dtype=float).reshape(-1)
+    d = np.linalg.norm(c[:, None, :] - c[None, :, :], axis=-1)
+    gaps = d - (r[:, None] + r[None, :])
+    np.fill_diagonal(gaps, np.inf)
+    return gaps
+
+
 def default_half_space_axis(spec, rotation, plane_normal):
     """The opposition split axis (Eq 2.16-2.17's ``m_hat``) derived from the
     object's own geometry, for when ``HandSolveParams.half_space_axis`` is
@@ -401,6 +435,13 @@ def half_space_witness(params, result, k=0, names=None):
     finger's own ``m_hat`` (``+axis`` for the thumb, ``-axis`` for everyone
     else -- :func:`config.opposition_directions`'s convention).
 
+    Measured against the finger's OWN boundary -- the split plane offset by
+    ``params.half_space_margin``, which is exactly what the C++ residual's
+    ``+ d_min`` term does -- so zero stays the constraint's zero set (and the
+    overlay's green/red flip stays the constraint's own) once a minimum standoff
+    is asked for, rather than reporting slack against a boundary the solver is
+    no longer using.
+
     ``names`` defaults to :meth:`HandResult.table_contact_names`, matching
     where the C++ layer actually gates ``half_space_enabled`` (on
     ``table_contact_node``, not the broader object-contact mask
@@ -423,7 +464,10 @@ def half_space_witness(params, result, k=0, names=None):
         fm = frame[name].marginals
         c = np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
         m_hat = axis if name == "thumb" else -axis
-        margin = float((c - p_split) @ m_hat)   # >= 0 => correct side
+        # The boundary this finger is actually held to: the split pushed out by
+        # the standoff along its own m_hat (0 => the plain splitting plane).
+        p_bound = p_split + float(params.half_space_margin) * m_hat
+        margin = float((c - p_bound) @ m_hat)   # >= 0 => correct side
         foot = c - margin * m_hat
         out[name] = (c, foot, margin)
     return out
@@ -465,6 +509,47 @@ def pregrasp_center_witness(params, result, k=0):
 
     gap = float(np.linalg.norm(hand_centroid - target))
     return (hand_centroid, target, gap)
+
+
+def pregrasp_centroid_witness(params, result, k=0):
+    """``(pinch_pt, target_pt, gap_m)`` for the pre-grasp PINCH-CENTROID
+    constraint at frame ``k``, or None if the checked digits have no measured
+    pinch pose (:func:`config.pinch_pose`).
+
+    Same 3-tuple shape as :func:`pregrasp_center_witness`, so the renderer
+    draws it identically -- but it measures something different.
+    ``pregrasp_center_witness`` reads where the fingertips ACTUALLY are;
+    this pushes the hand-frame constant through the SOLVED WRIST POSE:
+
+        pinch_pt = T_wrist * c_local
+
+    which is an independent re-derivation of exactly what the C++
+    ``PreGraspCentroidFactor`` computes, from the solved values rather than
+    from the factor. So a disagreement between this readout and the solver's
+    own residual is a real signal, not a display artifact.
+
+    Needs ``configs`` to recover the wrist pose from the solved frame, which
+    it takes from the result's own finger list via :func:`solved_wrist_pose`.
+    """
+    from .config import pinch_pose
+
+    pose = pinch_pose(result.contact_names())
+    if pose is None:
+        return None
+
+    # solved_wrist_pose needs (name, cfg) pairs; rebuild the same hand the
+    # result came from. Cheap (no solve) and keeps this a free function.
+    configs = get_default_hand_configs()
+    T = solved_wrist_pose(configs, result.frames[k])
+    c_local = np.asarray(pose.centroid, dtype=float).reshape(3)
+    pinch_pt = T[:3, :3] @ c_local + T[:3, 3]
+
+    n_hat = np.asarray(params.plane_normal, dtype=float).reshape(3)
+    n_hat = n_hat / (np.linalg.norm(n_hat) or 1.0)
+    h_clear = params.h_clear if params.h_clear is not None else 0.02
+    target = np.asarray(result.object_center, dtype=float) + h_clear * n_hat
+
+    return (pinch_pt, target, float(np.linalg.norm(pinch_pt - target)))
 
 
 def pregrasp_axis_witness(params, result, k=0):
@@ -559,10 +644,15 @@ class HandSolveParams:
     # is expected to move it away from its commanded value -- squared into
     # the tension covariance's flexor entry by _flexor_tension_cov(), the
     # same sigma-squared-into-covariance pattern tip_wrench_sigma uses above.
-    # The five passive tendons stay pinned at variance 1e-6 regardless (their
-    # physics: a spring holds roughly constant tension). Default reproduces
-    # the historical hardcoded flexor variance (1e-1) exactly.
+    # Default reproduces the historical hardcoded flexor variance (1e-1)
+    # exactly.
     flexor_tension_sigma: float = 0.1 ** 0.5
+    # Same, for the five PASSIVE tendons -- their physics is a spring holding
+    # roughly constant tension, so this is normally left tight. Default
+    # reproduces the historical hardcoded passive variance (1e-6) exactly.
+    # Dropping much below that (mixed with a much looser flexor scale) risks
+    # an IndeterminantLinearSystem, so treat 1e-3 as close to a floor.
+    passive_tension_sigma: float = 1e-3
 
     # --- Which fingertips are solved for contact (IK / planner; FK ignores it) ---
     # One flag per finger, in ``configs`` order. A False finger contributes no
@@ -603,6 +693,19 @@ class HandSolveParams:
     # regardless of whether the opposition constraint itself is on. Needs the
     # thumb AND at least one other finger checked in contact_fingers.
     pregrasp_axis_align: bool = False
+    # Pre-grasp PINCH-CENTROID centering: drive the point where the checked
+    # digits are MEASURED to meet (config.HAND_PINCH_POSES, in the wrist
+    # frame) onto the object centroid, raised by h_clear along plane_normal.
+    #
+    # The hardcoded-point sibling of pregrasp_center above. That one averages
+    # the fingertips' achieved positions, so it only says something once the
+    # fingers are already near the grasp; this one constrains the WRIST alone,
+    # so it positions the hand such that closing those digits would close them
+    # on the object -- true whatever the fingers are currently doing.
+    #
+    # Silently inert for a digit set with no measured pose (fewer than two
+    # digits, or any set without the thumb) -- see config.pinch_pose.
+    pregrasp_centroid: bool = False
 
     # --- Augmented Lagrangian (IK / planner) ---
     al_mu: float = 1.0
@@ -792,6 +895,16 @@ class HandSolveParams:
     half_space: bool = False
     half_space_split: Optional[np.ndarray] = None
     half_space_axis: Optional[np.ndarray] = None
+    # Minimum standoff (m) each contact finger must keep from the splitting
+    # line, along its own m_hat: HalfSpaceGapFactor's d_min, so the constraint
+    # is -(c - p_split) . m_hat + half_space_margin <= 0. 0.0 (the default) is
+    # the original "anywhere on my own side" form, which a fingertip sitting
+    # exactly ON the split already satisfies -- so the thumb and the opposing
+    # fingers can be driven arbitrarily close together while both are "legal".
+    # A positive value holds them 2 * margin apart, which is what makes this
+    # useful as a PRE-grasp opening. Needs a binding carrying
+    # EnvironmentConfig.half_space_margin (capabilities()["half_space_margin"]).
+    half_space_margin: float = 0.0
     # Optional per-finger phase-3 witness targets (Eq 1.111); None entries mean
     # "contact anywhere on the surface" for that finger.
     witness_targets: Optional[List[Optional[np.ndarray]]] = None
@@ -1126,7 +1239,12 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             half_space=True,
             pregrasp_center=True,
             pregrasp_axis_align=True,
-            h_clear=0.02,
+            # Off: phase 0 already centers the hand via pregrasp_center, and
+            # running both would impose two different centering targets at
+            # once (the achieved fingertip midpoint AND the measured pinch
+            # point) that only coincide once the fingers are already closed.
+            pregrasp_centroid=False,
+            h_clear=0.07,
             contact_drop_normal_row=False,
             contact_fingers=[True, True, False, False, True],  # index, middle, thumb
             # Loose wrist prior: phase 0 is a big repositioning move, so the
@@ -1153,6 +1271,7 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             half_space=False,
             pregrasp_center=False,
             pregrasp_axis_align=False,
+            pregrasp_centroid=False,
             contact_drop_normal_row=False,
             contact_fingers=[True, True, False, False, True],  # index, middle, thumb
             # Tighter than phase 0's 1.0: the big repositioning move is done,
@@ -1179,6 +1298,7 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             half_space=False,
             pregrasp_center=False,
             pregrasp_axis_align=False,
+            pregrasp_centroid=False,
             contact_drop_normal_row=False,
             contact_fingers=[True, True, False, False, True],  # index, middle, thumb
             # Loose again, like phase 0 -- object approach (sliding across
@@ -1307,7 +1427,8 @@ class HandSolverBase:
         split = (self.params.half_space_split if self.params.half_space_split is not None
                 else self.object_center)
         attach_half_space(self.configs, split, directions,
-                          contact_fingers=self._table_contact_mask())
+                          contact_fingers=self._table_contact_mask(),
+                          margin=self.params.half_space_margin)
 
     def _attach_pregrasp_center(self):
         """Attach the Eq 2.18-2.19 pre-grasp hand-centering constraint, using
@@ -1329,6 +1450,25 @@ class HandSolverBase:
                                        self.params.plane_normal)
         attach_pregrasp_axis_alignment(self.configs, axis,
                                        contact_fingers=self.params.contact_fingers)
+
+    def _attach_pregrasp_centroid(self):
+        """Attach the pre-grasp pinch-centroid constraint for the CHECKED
+        digits, and report whether it went on.
+
+        Returns the :class:`config.PinchPose` used, or None when the checked
+        set has no measured pose. The return value exists so a caller can say
+        so out loud: the C++ layer skips an unconfigured constraint silently,
+        and a constraint that quietly does nothing is the trap this whole
+        family of toggles keeps setting.
+        """
+        pose = pinch_pose_for_mask(self.configs, self.params.contact_fingers)
+        if pose is None:
+            return None
+        h_clear = self.params.h_clear if self.params.h_clear is not None else 0.02
+        attach_pregrasp_centroid(self.configs, pose.centroid,
+                                 clearance_height=h_clear,
+                                 clearance_normal=self.params.plane_normal)
+        return pose
 
     def _attach_environment(self):
         """The whole constraint environment for one solve, per the independent
@@ -1354,6 +1494,8 @@ class HandSolverBase:
             self._attach_pregrasp_center()
         if self.params.pregrasp_axis_align:
             self._attach_pregrasp_axis_alignment()
+        if self.params.pregrasp_centroid:
+            self._attach_pregrasp_centroid()
 
     # -- prior builders --
 
@@ -1387,14 +1529,14 @@ class HandSolverBase:
 
     def _flexor_tension_cov(self):
         """The "tight-passive / loose-flexor" tension-prior covariance used
-        outside the leading settle steps: the five passives pinned at
-        variance 1e-6 (their physics -- a spring holds roughly constant
-        tension), the actuated flexor (index 5) at
-        ``params.flexor_tension_sigma ** 2`` so contact can drive it away from
-        its commanded value. Read live every call, like ``_tip_wrenches()``,
-        so a mid-solve slider drag takes effect on the next step with no
-        stepper rebuild."""
-        cov = np.diag([1e-6] * 6)
+        outside the leading settle steps: the five passives at
+        ``params.passive_tension_sigma ** 2`` (their physics -- a spring holds
+        roughly constant tension, so this is normally left tight), the
+        actuated flexor (index 5) at ``params.flexor_tension_sigma ** 2`` so
+        contact can drive it away from its commanded value. Read live every
+        call, like ``_tip_wrenches()``, so a mid-solve slider drag takes
+        effect on the next step with no stepper rebuild."""
+        cov = np.diag([self.params.passive_tension_sigma ** 2] * 6)
         cov[FLEXOR_IDX, FLEXOR_IDX] = self.params.flexor_tension_sigma ** 2
         return cov
 
@@ -1449,7 +1591,8 @@ class HandFKSolver(HandSolverBase):
 
 
 # The tight-passive/loose-flexor prior itself now lives on
-# HandSolverBase._flexor_tension_cov() (params.flexor_tension_sigma), shared
+# HandSolverBase._flexor_tension_cov() (params.flexor_tension_sigma,
+# params.passive_tension_sigma), shared
 # by the one-shot IK solve, the stepper and the planner so the three cannot
 # drift into solving subtly different problems -- the whole point of the
 # stepper is that it advances *this* solve.

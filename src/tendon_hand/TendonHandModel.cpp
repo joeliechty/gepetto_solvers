@@ -518,7 +518,8 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 if (env.half_space_enabled && env.half_space_normal.norm() > 0.0) {
                     auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
                         tip_key, env.half_space_split_point, env.half_space_normal,
-                        noiseModel::Isotropic::Sigma(1, env.collision_sigma));
+                        noiseModel::Isotropic::Sigma(1, env.collision_sigma),
+                        env.half_space_margin);
                     add_ineq(graph, half, "half|f" + std::to_string(i));
                 }
             }
@@ -639,6 +640,42 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 *thumb_key, finger_keys, axis,
                 noiseModel::Isotropic::Sigma(1, 1.0));
             add_eq(graph, align, "pregrasp.align");
+        }
+    }
+
+    // Pre-grasp PINCH-CENTROID centering: the hardcoded-point sibling of the
+    // hand-centering block above. Hand-level like the other two, but no finger
+    // opts in -- the point is a constant in the WRIST frame, so the factor
+    // keys off wrist_key() directly and the fields are simply duplicated
+    // across every finger's env (first one found wins, matching how
+    // h_clear/n_hat are read above).
+    {
+        std::optional<gtsam::Vector3> centroid;
+        double h_clear = 0.0;
+        gtsam::Vector3 n_hat = gtsam::Vector3::Zero();
+        for (size_t i = 0; i < fingers_.size(); ++i) {
+            if (!sdf_contacts_[i]) continue;
+            const auto& env = *sdf_contacts_[i];
+            if (!env.pregrasp_centroid_point.has_value()) continue;
+            centroid = *env.pregrasp_centroid_point;
+            h_clear = env.pregrasp_centroid_clearance;
+            n_hat = env.pregrasp_centroid_normal;
+            // Same reasoning as the hand-centering block: this constraint
+            // reads object_key()'s translation, so the object needs an anchor
+            // if no other block has supplied one.
+            if (!object_anchored) {
+                graph.add(PriorFactor<Pose3>(
+                    object_key(), Pose3(env.object_pose_mean),
+                    noiseModel::Gaussian::Covariance(env.object_pose_cov)));
+                object_anchored = true;
+            }
+            break;
+        }
+        if (centroid.has_value() && n_hat.norm() > 0.0) {
+            auto pinch = std::make_shared<crest_sparse::PreGraspCentroidFactor>(
+                wrist_key(step_), object_key(), gtsam::Point3(*centroid),
+                h_clear, n_hat, noiseModel::Isotropic::Sigma(3, 1.0));
+            add_eq(graph, pinch, "pregrasp.centroid");
         }
     }
 

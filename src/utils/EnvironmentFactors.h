@@ -173,14 +173,21 @@ struct EnvironmentConfig {
 
     // Opposition half-space (Eq 1.92), controller phase 1. Splits the support
     // surface in half so the thumb lands opposite the fingers:
-    //   c_half(c) = -(c - p_split) . m_hat <= 0
+    //   c_half(c) = -(c - p_split) . m_hat + half_space_margin <= 0
     // m_hat is a unit vector lying IN the support plane (n_table . m_hat = 0)
     // pointing into the valid half-space for THIS finger, so each finger carries
     // its own direction. Applied to support_contact_node's sphere. Inert unless
     // half_space_enabled and half_space_normal has non-zero norm.
+    //
+    // half_space_margin (m, >= 0) is the minimum standoff this finger must keep
+    // from the splitting line -- see HalfSpaceGapFactor's d_min. 0 (the default)
+    // is the plain half-space, satisfied by a center sitting exactly on the
+    // split; a positive value opens a corridor of width 2*margin between the
+    // thumb's side and the opposing fingers'.
     bool           half_space_enabled     = false;
     gtsam::Vector3 half_space_split_point = gtsam::Vector3::Zero();
     gtsam::Vector3 half_space_normal      = gtsam::Vector3::Zero();  // m_hat
+    double         half_space_margin      = 0.0;
 
     // Constrain the contact sphere CENTER directly to the hyper-ellipsoid instead
     // of introducing a witness point (Eq 1.101) --
@@ -248,6 +255,37 @@ struct EnvironmentConfig {
     // default) => not configured.
     std::optional<int> pregrasp_align_node;
     gtsam::Vector3 pregrasp_align_axis = gtsam::Vector3::Zero();
+
+    // --- Pre-grasp PINCH-CENTROID centering -------------------------------
+    // The hardcoded-point sibling of pregrasp_center_node above. Centering
+    // drives the MEASURED midpoint of the thumb's and the opposing fingers'
+    // contact spheres onto the object; this drives a point that is CONSTANT
+    // in the wrist frame onto the same target. That point is where a given
+    // finger combination's fingertips are known to meet (measured offline
+    // per combination -- see python/tests/tendon_hand/fk_pinch_centroids.py
+    // and the HAND_PINCH_POSES table in tendon_hand/config.py), so satisfying
+    // this constraint positions the hand such that CLOSING those digits
+    // closes them on the object, without the fingers having to be curled yet.
+    //
+    // Consequences of the point being constant rather than pose-derived:
+    //   * the residual depends only on the wrist and object poses, so
+    //     PreGraspCentroidFactor is a fixed-arity NoiseModelFactorN<Pose3,
+    //     Pose3> rather than the runtime-arity KeyVector the other two
+    //     pre-grasp factors need, and
+    //   * no finger opts in, so there is no *_node field here. The point
+    //     itself being set IS the opt-in.
+    // Hand-level all the same, so build_graph() collects it in its own pass;
+    // the fields are duplicated across every finger's env like
+    // pregrasp_clearance_* (first one found wins).
+    //
+    // SEPARATE clearance/normal fields rather than reusing
+    // pregrasp_clearance_* on purpose: those are only written when the
+    // pre-grasp centering block runs, so sharing them would leave this
+    // constraint silently inert whenever that toggle happens to be off.
+    // Zero-norm normal (the default) => not configured, same convention.
+    std::optional<gtsam::Vector3> pregrasp_centroid_point;   // WRIST frame
+    double pregrasp_centroid_clearance = 0.0;
+    gtsam::Vector3 pregrasp_centroid_normal = gtsam::Vector3::Zero();
 };
 
 
@@ -498,7 +536,7 @@ public:
 // contact sphere on its designated half of the support surface, so the thumb
 // opposes the other grasping fingers:
 //
-//   c_half(c) = -(c - p_split) . m_hat   <= 0
+//   c_half(c) = -(c - p_split) . m_hat + d_min   <= 0
 //
 // where c is the world-frame center of the contact sphere (the node pose's
 // translation), p_split is a point on the splitting line (e.g. the object's
@@ -513,17 +551,29 @@ public:
 // chained through node_pose.translation(). That constant Jacobian makes this the
 // cheapest constraint in the graph to evaluate. Wrap an instance in a
 // CollisionInequalityConstraint to enforce c_half <= 0.
+//
+// d_min (>= 0, default 0) is a MINIMUM STANDOFF: the distance the sphere center
+// must clear the splitting line by, along this finger's own m_hat. At the
+// default 0 the constraint is the bare half-space above, which a center sitting
+// exactly ON the split already satisfies -- so opposition alone does not stop
+// the thumb and the opposing fingers from closing onto each other. A positive
+// d_min holds each side that far off the split, i.e. holds a corridor of width
+// 2*d_min open between the two groups, which is what makes this usable as a
+// pre-grasp opening. It shifts the residual by a constant, so the Jacobian --
+// and the cost of evaluating it -- is unchanged.
 class HalfSpaceGapFactor : public gtsam::NoiseModelFactorN<gtsam::Pose3> {
 private:
     gtsam::Vector3 p_split_;
     gtsam::Vector3 m_hat_;
+    double         d_min_;
 
 public:
     HalfSpaceGapFactor(gtsam::Key node_pose_key,
                        const gtsam::Vector3& p_split, const gtsam::Vector3& m_hat,
-                       const gtsam::SharedNoiseModel& noise_model)
+                       const gtsam::SharedNoiseModel& noise_model,
+                       double d_min = 0.0)
         : NoiseModelFactorN(noise_model, node_pose_key),
-          p_split_(p_split), m_hat_(m_hat.normalized()) {}
+          p_split_(p_split), m_hat_(m_hat.normalized()), d_min_(d_min) {}
 
     gtsam::Vector evaluateError(const gtsam::Pose3& node_pose,
                                 gtsam::OptionalMatrixType H1) const override
@@ -531,8 +581,9 @@ public:
         gtsam::Matrix36 D_pworld_pose;
         gtsam::Point3 p_world = node_pose.translation(H1 ? &D_pworld_pose : nullptr);
 
-        // > 0  <=>  the center is on the WRONG side of the splitting line.
-        double c_half = -(p_world - p_split_).dot(m_hat_);
+        // > 0  <=>  the center is on the WRONG side of the splitting line, or is
+        // on the right side but closer to it than the required standoff.
+        double c_half = -(p_world - p_split_).dot(m_hat_) + d_min_;
 
         if (H1) *H1 = -m_hat_.transpose() * D_pworld_pose;   // 1x6, constant in p
 
@@ -735,6 +786,79 @@ public:
     gtsam::NonlinearFactor::shared_ptr clone() const override {
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
             gtsam::NonlinearFactor::shared_ptr(new PreGraspAxisAlignmentFactor(*this)));
+    }
+};
+
+
+// Pre-grasp PINCH-CENTROID centering: put a point that is FIXED in the wrist
+// frame onto the object (raised by a clearance along n_hat).
+//
+//   c_world(T_wrist) = T_wrist * c_local
+//   target(T_obj)    = p_obj + h_clear * n_hat
+//   c_centroid       = c_world - target = 0        (Vector3)
+//
+// The hardcoded-point counterpart of PreGraspHandCenteringFactor: that factor
+// averages the thumb's and the opposing fingers' ACHIEVED sphere centers, so
+// it only says something once the fingers are already near the grasp. c_local
+// here is instead the offline-measured point where a given finger combination
+// meets (HAND_PINCH_POSES, keyed by which fingers are checked), so this
+// constrains where the HAND must be for that pinch to land on the object --
+// a statement about the wrist alone, true whatever the fingers are doing.
+//
+// Because c_local is constant, only two variables enter and the arity is fixed
+// -- so unlike its two siblings this is a plain NoiseModelFactorN and gets
+// evaluateError() rather than a hand-built KeyVector and unwhitenedError().
+//
+// It also means the factor references the wrist variable DIRECTLY
+// (TendonHandModel::wrist_key), sidestepping the root-reparameterization trap
+// that node-0 of a finger has no pose key of its own when uses_root() -- there
+// is no finger node here to remap.
+//
+// Keys: [wrist_pose_key, object_key].  Residual: Vector3.
+class PreGraspCentroidFactor
+    : public gtsam::NoiseModelFactorN<gtsam::Pose3, gtsam::Pose3> {
+private:
+    gtsam::Point3 c_local_;
+    double h_clear_;
+    gtsam::Vector3 n_hat_;
+
+public:
+    PreGraspCentroidFactor(gtsam::Key wrist_key,
+                           gtsam::Key object_key,
+                           const gtsam::Point3& centroid_local,
+                           double h_clear,
+                           const gtsam::Vector3& n_hat,
+                           const gtsam::SharedNoiseModel& noise_model)
+        : NoiseModelFactorN(noise_model, wrist_key, object_key),
+          c_local_(centroid_local),
+          h_clear_(h_clear),
+          n_hat_(n_hat.normalized()) {}
+
+    gtsam::Vector evaluateError(const gtsam::Pose3& wrist_pose,
+                                const gtsam::Pose3& object_pose,
+                                gtsam::OptionalMatrixType H_wrist,
+                                gtsam::OptionalMatrixType H_object) const override
+    {
+        // Constant body-frame point pushed to the world, with its 3x6
+        // Jacobian -- the same primitive TendonLengthFactor uses for a
+        // routing hole.
+        gtsam::Matrix36 D_cworld_wrist;
+        gtsam::Point3 c_world =
+            wrist_pose.transformFrom(c_local_, H_wrist ? &D_cworld_wrist : nullptr);
+
+        gtsam::Matrix36 D_pobj_pose;
+        gtsam::Point3 p_obj =
+            object_pose.translation(H_object ? &D_pobj_pose : nullptr);
+
+        if (H_wrist) *H_wrist = D_cworld_wrist;
+        if (H_object) *H_object = -D_pobj_pose;
+
+        return gtsam::Vector3(c_world - (p_obj + h_clear_ * n_hat_));
+    }
+
+    gtsam::NonlinearFactor::shared_ptr clone() const override {
+        return std::static_pointer_cast<gtsam::NonlinearFactor>(
+            gtsam::NonlinearFactor::shared_ptr(new PreGraspCentroidFactor(*this)));
     }
 };
 

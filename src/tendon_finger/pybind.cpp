@@ -109,6 +109,7 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("half_space_enabled",     &crest_sparse::EnvironmentConfig::half_space_enabled)
         .def_readwrite("half_space_split_point", &crest_sparse::EnvironmentConfig::half_space_split_point)
         .def_readwrite("half_space_normal",      &crest_sparse::EnvironmentConfig::half_space_normal)
+        .def_readwrite("half_space_margin",      &crest_sparse::EnvironmentConfig::half_space_margin)
         .def_readwrite("object_contact_center_direct",
                        &crest_sparse::EnvironmentConfig::object_contact_center_direct)
         .def_readwrite("contact_drop_normal_row",
@@ -127,6 +128,13 @@ void bind_tendon_finger(py::module& m) {
                        &crest_sparse::EnvironmentConfig::pregrasp_align_node)
         .def_readwrite("pregrasp_align_axis",
                        &crest_sparse::EnvironmentConfig::pregrasp_align_axis)
+        // --- Pre-grasp pinch-centroid centering (hardcoded hand-frame point) ---
+        .def_readwrite("pregrasp_centroid_point",
+                       &crest_sparse::EnvironmentConfig::pregrasp_centroid_point)
+        .def_readwrite("pregrasp_centroid_clearance",
+                       &crest_sparse::EnvironmentConfig::pregrasp_centroid_clearance)
+        .def_readwrite("pregrasp_centroid_normal",
+                       &crest_sparse::EnvironmentConfig::pregrasp_centroid_normal)
         .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);

@@ -172,13 +172,21 @@ class ViserHandScene:
         except Exception:
             pass
 
-    def set_half_space_plane(self, split_point, axis, *, span=0.25, thickness=0.003):
+    def set_half_space_plane(self, split_point, axis, *, margin=0.0, span=0.25,
+                             thickness=0.003):
         """Draw the Eq 2.16-2.17 opposition split plane -- a thin translucent
         slab through ``split_point``, thin along ``axis`` (the in-plane
         direction separating the thumb's half from the other fingers'; NOT the
         table normal -- this plane stands roughly vertical, cutting across the
         table). Visual aid only, mirroring :meth:`set_table`; the solver uses
-        the analytic half-space directly."""
+        the analytic half-space directly.
+
+        ``margin`` is the minimum standoff (m) the constraint now demands of
+        each side (``solvers.HandSolveParams.half_space_margin``). Nonzero, the
+        split itself is no longer the boundary anyone is held to, so the two
+        planes that ARE -- ``split_point +- margin * axis``, the thumb's and the
+        opposing fingers' -- are drawn alongside it, fainter. The corridor
+        between them is the region the constraint now keeps empty."""
         origin = np.asarray(split_point, float).reshape(3)
         a = np.asarray(axis, float).reshape(3)
         a = a / (np.linalg.norm(a) or 1.0)
@@ -188,18 +196,31 @@ class ViserHandScene:
         self.scene.add_box("/half_space_plane", color=_HALF_SPACE_RGB,
                            dimensions=tuple(extents), opacity=0.25,
                            position=tuple(origin))
+        for name, side in (("/half_space_margin_pos", +1.0),
+                           ("/half_space_margin_neg", -1.0)):
+            try:
+                self.server.scene.remove_by_name(name)
+            except Exception:
+                pass
+            if margin > 0.0:
+                self.scene.add_box(name, color=_HALF_SPACE_RGB,
+                                   dimensions=tuple(extents), opacity=0.15,
+                                   position=tuple(origin + side * margin * a))
 
     def clear_half_space_plane(self):
-        try:
-            self.server.scene.remove_by_name("/half_space_plane")
-        except Exception:
-            pass
+        for name in ("/half_space_plane", "/half_space_margin_pos",
+                     "/half_space_margin_neg"):
+            try:
+                self.server.scene.remove_by_name(name)
+            except Exception:
+                pass
 
     # -- per-frame hand ----------------------------------------------------
 
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
                collision=False, gaps=None, table_gaps=None,
-               half_space_gaps=None, center_gap=None, axis_align=None):
+               half_space_gaps=None, center_gap=None, axis_align=None,
+               centroid_gap=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
 
@@ -219,6 +240,15 @@ class ViserHandScene:
         ``(hand_centroid_pt, target_pt, gap_m)`` tuple (as returned by
         ``solvers.pregrasp_center_witness``) or None -- a HAND-level quantity,
         not per finger, so it is drawn once rather than per finger name.
+
+        ``centroid_gap`` is the pre-grasp PINCH-CENTROID overlay: a single
+        ``(pinch_pt, target_pt, gap_m)`` tuple (as returned by
+        ``solvers.pregrasp_centroid_witness``) or None. Same shape and same
+        HAND-level treatment as ``center_gap``, and drawn under its own scene
+        path so both can be shown at once -- but ``pinch_pt`` is the measured
+        hand-frame meeting point carried through the wrist pose, not the
+        fingertips' achieved midpoint, so the two lines genuinely differ until
+        the hand is closed.
 
         ``axis_align`` is the pre-grasp short-axis alignment overlay: a single
         ``(c_thumb, c_others_mean, angle_deg)`` tuple (as returned by
@@ -292,6 +322,10 @@ class ViserHandScene:
         # Pre-grasp short-axis alignment: also HAND-level, drawn once.
         if self.show_gap_lines and axis_align is not None:
             keep |= self._update_axis_align(*axis_align)
+
+        # Pre-grasp pinch-centroid centering: also HAND-level, drawn once.
+        if self.show_gap_lines and centroid_gap is not None:
+            keep |= self._update_centroid(*centroid_gap)
 
         self._prune(keep)
 
@@ -382,6 +416,44 @@ class ViserHandScene:
         keep.add(ln)
 
         lb = "/pregrasp_center/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, f"{gap * 1000.0:.1f} mm", position=tuple(0.5 * (p0 + p1)),
+            anchor="center-center")
+        keep.add(lb)
+        return keep
+
+    def _update_centroid(self, pinch_pt, target_pt, gap):
+        """The pre-grasp pinch-centroid overlay: a marker at the target (object
+        centroid + clearance), a marker at where the checked digits WOULD meet
+        given the current wrist pose, and a labelled line between them.
+
+        Visually a twin of ``_update_center``, deliberately under its own
+        ``/pregrasp_centroid/...`` path so both can be on at once. Reading them
+        together is the point: the centering line ends at the fingertips'
+        achieved midpoint, this one at the hand's measured pinch point, and the
+        two converge only as the fingers close."""
+        p0 = np.asarray(pinch_pt, float).reshape(3)
+        p1 = np.asarray(target_pt, float).reshape(3)
+        rgb = _GAP_NEAR_RGB if gap < GAP_GREEN_MAX_M else _GAP_FAR_RGB
+        keep = set()
+
+        tgt = "/pregrasp_centroid/target"
+        self._dynamic[tgt] = self.scene.add_icosphere(
+            tgt, radius=0.004, color=_CENTER_TARGET_RGB, opacity=0.8,
+            position=tuple(p1))
+        keep.add(tgt)
+
+        pin = "/pregrasp_centroid/pinch"
+        self._dynamic[pin] = self.scene.add_icosphere(
+            pin, radius=0.005, color=rgb, opacity=0.55, position=tuple(p0))
+        keep.add(pin)
+
+        ln = "/pregrasp_centroid/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb, line_width=3.0)
+        keep.add(ln)
+
+        lb = "/pregrasp_centroid/label"
         self._dynamic[lb] = self.scene.add_label(
             lb, f"{gap * 1000.0:.1f} mm", position=tuple(0.5 * (p0 + p1)),
             anchor="center-center")
