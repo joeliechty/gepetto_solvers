@@ -96,6 +96,24 @@ TendonHandModel::TendonHandModel(
              c.sdf_contact->ellipsoid_semi_axes.norm() > 0.0) &&
             !c.sdf_contact->collision_node_indices.empty())
             has_collision_ = true;
+        // Finger-finger, on the same spheres and gated on its own field. Each
+        // clause here must match the corresponding gate in build_graph(): a
+        // constraint family that is built but does not flip this flag is solved
+        // WITHOUT the Augmented Lagrangian, i.e. built and never enforced.
+        if (c.sdf_contact.has_value() &&
+            c.sdf_contact->self_collision &&
+            !c.sdf_contact->collision_node_indices.empty())
+            has_collision_ = true;
+        // Opposition half-space (Eq 2.16-2.17): an inequality => AL. Standalone,
+        // matching build_graph()'s own pass -- it needs neither the support
+        // plane nor a contact node of any kind, so a solve whose ONLY constraint
+        // is this one still takes the AL path.
+        if (c.sdf_contact.has_value() &&
+            c.sdf_contact->half_space_enabled &&
+            c.sdf_contact->half_space_normal.norm() > 0.0 &&
+            (c.sdf_contact->half_space_node.has_value() ||
+             c.sdf_contact->table_contact_node.has_value()))
+            has_collision_ = true;
         // Support plane (Section 1.6). A configured plane (non-zero normal) with
         // a table_contact_node is a hard equality (sliding contact => AL); with
         // plane_avoidance it is a hard inequality (table collision => AL).
@@ -104,16 +122,11 @@ TendonHandModel::TendonHandModel(
             if (c.sdf_contact->table_contact_node.has_value()) has_contact_   = true;
             if (c.sdf_contact->plane_avoidance)                has_collision_ = true;
             // Section 1.8 controller phases 1-2: the support-surface equality is
-            // a ZeroCostConstraint (=> AL) and the opposition half-space is an
-            // inequality (=> AL). Phase 1 has no OBJECT contact at all, so
-            // without this the solve would miss the AL path entirely and the
+            // a ZeroCostConstraint => AL. Phase 1 has no OBJECT contact at all,
+            // so without this the solve would miss the AL path entirely and the
             // support constraint would silently do nothing.
-            if (c.sdf_contact->support_contact_node.has_value()) {
+            if (c.sdf_contact->support_contact_node.has_value())
                 has_contact_ = true;
-                if (c.sdf_contact->half_space_enabled &&
-                    c.sdf_contact->half_space_normal.norm() > 0.0)
-                    has_collision_ = true;
-            }
         }
 
         SharedDiagonal twist_noise = get_noise_model_rot_pos(
@@ -352,11 +365,12 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     // oppose the contact factor — but it is KEPT for finger-finger collision
     // (the contacting tip must still avoid other fingers).
     //
-    // The sphere SET is gathered for either consumer -- finger-object (needs
-    // collision_avoidance and an object surface) or the support plane (needs only
-    // plane_avoidance) -- so table collision alone still gets finger-finger
-    // avoidance. Whether the finger-OBJECT inequalities are built is decided
-    // separately, in the loop below.
+    // The sphere SET is gathered for ANY of its three consumers -- finger-object
+    // (needs collision_avoidance and an object surface), the support plane (needs
+    // only plane_avoidance) or finger-finger (needs only self_collision). Which
+    // constraints are actually built is then decided per family, each on its own
+    // field: the finger-object loop below re-checks its own gate, and the
+    // finger-finger loop re-checks self_collision.
     // `node` is carried only to name the sphere in a constraint tag: the KEY is
     // model-local (global counter) and useless across a rebuild, while the node
     // index is the same sphere in any model built from the same configs.
@@ -373,7 +387,9 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         bool wants_object_collision = env.collision_avoidance && has_object_surface;
         bool wants_plane_collision  = env.plane_avoidance &&
                                       env.plane_normal.norm() > 0.0;
-        if ((!wants_object_collision && !wants_plane_collision) ||
+        bool wants_self_collision   = env.self_collision;
+        if ((!wants_object_collision && !wants_plane_collision &&
+             !wants_self_collision) ||
             env.collision_node_indices.empty())
             continue;
         std::visit([&](auto& fp) {
@@ -431,10 +447,13 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         }
     }
 
-    // Finger-finger: keep collision spheres of distinct fingers apart. Skip a
-    // pair iff BOTH spheres are proximal (rigidly-attached base bones), and skip
-    // any base-disc (root) sphere (no distinct per-finger pose variable). This
-    // leaves distal-distal and distal-proximal cross-finger pairs.
+    // Finger-finger: keep collision spheres of distinct fingers apart. Built for
+    // a pair iff BOTH its fingers asked for self_collision -- the constraint
+    // belongs to the two of them jointly, so one finger opting out drops every
+    // pair it is part of. Skip a pair iff BOTH spheres are proximal
+    // (rigidly-attached base bones), and skip any base-disc (root) sphere (no
+    // distinct per-finger pose variable). This leaves distal-distal and
+    // distal-proximal cross-finger pairs.
     // When collision_cull_margin >= 0, additionally skip pairs whose gap at the
     // initial values already exceeds the margin (see the caveats on
     // EnvironmentConfig::collision_cull_margin — heuristic, verified by the
@@ -446,11 +465,13 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     };
     for (size_t a = 0; a < fingers_.size(); ++a) {
         if (finger_spheres[a].empty()) continue;
+        if (!sdf_contacts_[a]->self_collision) continue;
         auto col_noise = noiseModel::Isotropic::Sigma(
             1, sdf_contacts_[a]->collision_sigma);
         const double cull_margin = sdf_contacts_[a]->collision_cull_margin;
         for (size_t b = a + 1; b < fingers_.size(); ++b) {
             if (finger_spheres[b].empty()) continue;
+            if (!sdf_contacts_[b]->self_collision) continue;
             for (const auto& sa : finger_spheres[a]) {
                 if (sa.is_root) continue;
                 for (const auto& sb : finger_spheres[b]) {
@@ -506,22 +527,6 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     env.plane_origin, env.plane_normal,
                     noiseModel::Isotropic::Sigma(1, 1.0));
                 add_eq(graph, contact, "tbl.contact|f" + std::to_string(i));
-
-                // Opposition half-space (Eq 2.16-2.17 / Eq 1.92): keep this
-                // finger's table-contact sphere on its designated half of the
-                // support surface, so the thumb lands opposite the fingers.
-                // Gated on table_contact_node (the live table-contact path)
-                // rather than support_contact_node (the §1.8-controller-only
-                // field below, which no Python code writes anymore), so the
-                // constraint is reachable from the same env every other table
-                // factor here already uses. Constant Jacobian.
-                if (env.half_space_enabled && env.half_space_normal.norm() > 0.0) {
-                    auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
-                        tip_key, env.half_space_split_point, env.half_space_normal,
-                        noiseModel::Isotropic::Sigma(1, env.collision_sigma),
-                        env.half_space_margin);
-                    add_ineq(graph, half, "half|f" + std::to_string(i));
-                }
             }
 
             // --- Section 1.8 controller phases 1-2 ---------------------------
@@ -532,8 +537,8 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             // in the signed form, which pins the sphere on the +n (free) side and
             // stays smooth at the contact point (the paper's |.| has a kink
             // exactly where the solver operates). Kept for the dormant phased
-            // controller use case; independent of the table_contact_node /
-            // half_space_enabled wiring above.
+            // controller use case; independent of the table_contact_node
+            // equality above.
             if (env.support_contact_node.has_value()) {
                 Key sup_key = fp->rod_->get_pose_key(*env.support_contact_node);
                 auto support = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
@@ -573,6 +578,39 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                                          "|n" + std::to_string(idx));
                 }
             }
+        }, fingers_[i]);
+    }
+
+    // --- Opposition half-space (Eq 2.16-2.17 / Eq 1.92) ------------------
+    // Keep each participating finger's sphere center on its designated half of
+    // the splitting line, so the thumb lands opposite the fingers. A pass of its
+    // OWN, gated on nothing but its own fields: the residual is a statement
+    // about one node's position relative to a line (constant Jacobian), and
+    // needs neither a support plane nor a contact node of any kind. It used to
+    // live inside the table-contact branch above, which silently made checking
+    // "opposition" alone build nothing at all.
+    //
+    // half_space_node is this constraint's own opt-in field; table_contact_node
+    // is the fallback for a caller still writing the env the old way.
+    for (size_t i = 0; i < fingers_.size(); ++i) {
+        if (!sdf_contacts_[i]) continue;
+        const auto& env = *sdf_contacts_[i];
+        if (!env.half_space_enabled || env.half_space_normal.norm() <= 0.0)
+            continue;
+        std::optional<int> node = env.half_space_node.has_value()
+                                      ? env.half_space_node
+                                      : env.table_contact_node;
+        if (!node.has_value()) continue;
+        std::visit([&](auto& fp) {
+            auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
+                fp->rod_->get_pose_key(*node),
+                env.half_space_split_point, env.half_space_normal,
+                noiseModel::Isotropic::Sigma(1, env.collision_sigma),
+                env.half_space_margin);
+            // Tag unchanged from when this lived in the table block: the AL
+            // dual transfer matches constraints by tag, so renaming it here
+            // would silently break every warm start across a rebuild.
+            add_ineq(graph, half, "half|f" + std::to_string(i));
         }, fingers_[i]);
     }
 

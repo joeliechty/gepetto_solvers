@@ -131,6 +131,15 @@ def capabilities():
         # have the constraint and not the standoff -- in which case the
         # constraint still builds, just with no minimum distance.
         "half_space_margin": hasattr(env, "half_space_margin"),
+        # The half-space standing on its own field (half_space_node) instead of
+        # riding on table_contact_node. Without it the constraint is only built
+        # for fingers that are ALSO driven onto the table, so checking it alone
+        # builds nothing.
+        "half_space_standalone": hasattr(env, "half_space_node"),
+        # Finger-finger avoidance as its own switch. Without it, self-collision
+        # is whatever the object/table collision toggles imply and cannot be
+        # turned off.
+        "self_collision": hasattr(env, "self_collision"),
         "drop_normal_row": hasattr(env, "contact_drop_normal_row"),
         # Pre-grasp short-axis alignment (companion to Eq 2.16-2.17). Needs a
         # rebuilt binding with EnvironmentConfig.pregrasp_align_node.
@@ -418,9 +427,49 @@ def default_half_space_axis(spec, rotation, plane_normal):
     lengthwise along a pen, thumb on one side and fingers on the other across
     its diameter) instead of across it. Falls back to world +X only when the
     object is in-plane isotropic (below the degeneracy ratio) --
-    :func:`scene.object_principal_inplane_axis`'s own fallback."""
+    :func:`scene.object_principal_inplane_axis`'s own fallback.
+
+    Returns the LINE, not the side assignment: the sign is inherited from the
+    object's principal-axis direction, which is an arbitrary convention (an
+    eigenvector's sign, or the +X fallback). Which half the THUMB is asked to
+    stay on is a statement about the hand, not the object -- see
+    :func:`orient_opposition_axis`, which every caller must apply before
+    building the constraint."""
     e_long, _ratio = object_principal_inplane_axis(spec, rotation, plane_normal)
     return opposition_axis_from_object(plane_normal, e_long)
+
+
+def orient_opposition_axis(axis, thumb_pt, finger_pts, flip=None):
+    """``(oriented_axis, flipped)`` -- ``axis`` signed so that ``+m_hat`` points
+    from the opposing fingers TOWARD the thumb at the posture given.
+
+    :func:`config.opposition_directions` hands the thumb ``+m_hat`` and every
+    other finger ``-m_hat``, so the sign of ``m_hat`` IS the side assignment.
+    Deriving it from the object alone (:func:`default_half_space_axis`) picks
+    that assignment by a coin flip, and when it lands the wrong way up the
+    constraint asks the thumb and the fingers to TRADE sides -- a ~180 degree
+    roll of the whole hand about the object. Measured on the phase-0 pen scene
+    that is a 32 mm demand on the thumb and 70-75 mm on the fingers, from a
+    start pose that already satisfies the constraint in the other orientation:
+    the AL stalls at 3 outer iterations with a violation of 1.09e3 and the hand
+    never moves. Orienting by the hand instead turns the same scene into a
+    solve that runs to a 3e-7 violation.
+
+    ``flip`` overrides the measurement: None (default) picks the nearer
+    orientation as described, False keeps the derived sign, True inverts it --
+    the way to ask for the opposition the hand is NOT already in, which is a
+    genuine (large) repositioning move rather than a mislabeling.
+    """
+    axis = np.asarray(axis, dtype=float).reshape(3)
+    axis = axis / (np.linalg.norm(axis) or 1.0)
+    if flip is not None:
+        return (-axis if flip else axis), bool(flip)
+    pts = np.asarray(finger_pts, dtype=float).reshape(-1, 3)
+    if pts.size == 0:
+        return axis, False
+    reach = float((np.asarray(thumb_pt, float).reshape(3) - pts.mean(axis=0))
+                  @ axis)
+    return (-axis, True) if reach < 0.0 else (axis, False)
 
 
 def half_space_witness(params, result, k=0, names=None):
@@ -442,27 +491,47 @@ def half_space_witness(params, result, k=0, names=None):
     is asked for, rather than reporting slack against a boundary the solver is
     no longer using.
 
-    ``names`` defaults to :meth:`HandResult.table_contact_names`, matching
-    where the C++ layer actually gates ``half_space_enabled`` (on
-    ``table_contact_node``, not the broader object-contact mask
-    :func:`config.attach_half_space` itself is written with).
+    ``names`` defaults to ``params.contact_fingers`` (None = every finger) --
+    the mask :func:`config.attach_half_space` is written with, so the overlay
+    covers exactly the fingers the constraint was built for. It used to default
+    to the TABLE-contact set, back when the C++ layer only built the constraint
+    for a finger that was also driven onto the table.
     """
     frame = result.frames[k]
-    axis = (np.asarray(params.half_space_axis, dtype=float).reshape(3)
-           if params.half_space_axis is not None else
-           default_half_space_axis(result.spec, result.object_rotation,
-                                   params.plane_normal))
-    axis = axis / (np.linalg.norm(axis) or 1.0)
     p_split = (np.asarray(params.half_space_split, dtype=float).reshape(3)
               if params.half_space_split is not None else result.object_center)
-    wanted = set(result.table_contact_names() if names is None else names)
+    if names is None:
+        mask = params.contact_fingers
+        names = (list(result.finger_names) if mask is None else
+                 [n for n, on in zip(result.finger_names, mask) if on])
+    wanted = set(names)
+
+    def tip(name):
+        return np.asarray(frame[name].marginals.rod.states[-1].pose.mean,
+                          float)[:3, 3]
+
+    if params.half_space_axis is not None:
+        # Already oriented -- either the caller's own axis, or the one
+        # _attach_opposition resolved and wrote back after building the graph.
+        axis = np.asarray(params.half_space_axis, dtype=float).reshape(3)
+        axis = axis / (np.linalg.norm(axis) or 1.0)
+    else:
+        # No solve has resolved it (an FK pose, say). Orient it here off THIS
+        # frame's own fingertips, by the same rule _attach_opposition uses, so
+        # the overlay never shows the mirror image of the constraint an IK solve
+        # would build.
+        axis, _flipped = orient_opposition_axis(
+            default_half_space_axis(result.spec, result.object_rotation,
+                                    params.plane_normal),
+            tip("thumb") if "thumb" in result.finger_names else np.zeros(3),
+            [tip(n) for n in wanted if n != "thumb"],
+            flip=params.half_space_flip)
 
     out = {}
     for name in result.finger_names:
         if name not in wanted:
             continue
-        fm = frame[name].marginals
-        c = np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
+        c = tip(name)
         m_hat = axis if name == "thumb" else -axis
         # The boundary this finger is actually held to: the split pushed out by
         # the standoff along its own m_hat (0 => the plain splitting plane).
@@ -760,10 +829,17 @@ class HandSolveParams:
 
     # --- Collision avoidance (Section 1.5, opt-in; IK / planner) ---
     # OBJECT collision: keep every non-contact sphere out of the object surface.
-    # Independent of the table's own avoidance (plane_avoidance below); the two
-    # share one set of collision spheres, and finger-finger avoidance comes along
-    # whenever EITHER is on.
+    # Independent of the table's own avoidance (plane_avoidance below) and of
+    # finger-finger (self_collision): the three families share one set of
+    # collision spheres but each is gated on its own field, so any combination
+    # of them is available. The sphere set is attached whenever any of the three
+    # wants it (_attach_environment).
     collision: bool = False
+    # FINGER-FINGER collision: keep the fingers out of each other. Default True,
+    # unlike the other two -- self-intersection is never wanted, and it needs no
+    # object and no table. Costs the most factors of the three (every
+    # cross-finger sphere pair), which is what cull_margin exists to trim.
+    self_collision: bool = True
     collision_radius: float = 0.003
     collision_sigma: float = 1e-4
     num_proximal_discs: int = 2
@@ -776,7 +852,7 @@ class HandSolveParams:
         default_factory=lambda: np.array(TABLE_NORMAL, float))
     # TABLE collision: keep every non-contact sphere out of the half-space. Needs
     # only `table`, not `collision` -- the solvers attach the collision sphere set
-    # whenever either avoidance consumer wants it.
+    # whenever any of the three avoidance consumers wants it.
     plane_avoidance: bool = True
     k_touch: Optional[int] = None                    # planner slide-grasp schedule
     # Fraction of the object's FULL along-normal extent sitting BELOW the plane.
@@ -895,6 +971,14 @@ class HandSolveParams:
     half_space: bool = False
     half_space_split: Optional[np.ndarray] = None
     half_space_axis: Optional[np.ndarray] = None
+    # Which SIDE of the split the thumb is asked to stay on. The derived axis
+    # only fixes the split LINE; its sign is an arbitrary object-frame
+    # convention, and getting it backwards asks the thumb and fingers to trade
+    # sides (see orient_opposition_axis -- it stalls the solve outright).
+    # None (default) = orient by the hand's current posture, False = keep the
+    # derived sign, True = invert it. Ignored when half_space_axis is given
+    # explicitly, which is taken as already oriented.
+    half_space_flip: Optional[bool] = None
     # Minimum standoff (m) each contact finger must keep from the splitting
     # line, along its own m_hat: HalfSpaceGapFactor's d_min, so the constraint
     # is -(c - p_split) . m_hat + half_space_margin <= 0. 0.0 (the default) is
@@ -1385,9 +1469,10 @@ class HandSolverBase:
         env. Reuses the contact env, so it works for SDF and ellipsoid objects
         alike (the vdb path is only used if a finger has no env yet).
 
-        ``avoidance`` selects whether the finger-OBJECT inequalities are built;
-        the spheres themselves are declared either way, because the support plane
-        and the finger-finger pairs are built on the same set."""
+        ``avoidance`` selects whether the finger-OBJECT inequalities are built
+        and ``params.self_collision`` whether the finger-finger ones are; the
+        spheres themselves are declared either way, because the support plane
+        builds its own inequalities on the same set."""
         vdb = (None if self.spec["type"] == "ellipsoid"
                else os.path.normpath(os.path.join(_OBJECTS_DIR, self.spec["vdb"])))
         attach_collision(self.configs, vdb, self.object_pose,
@@ -1395,7 +1480,8 @@ class HandSolverBase:
                          sigma=self.params.collision_sigma,
                          num_proximal_discs=self.params.num_proximal_discs,
                          cull_margin=self.params.cull_margin,
-                         avoidance=avoidance)
+                         avoidance=avoidance,
+                         self_collision=self.params.self_collision)
 
     def _attach_table(self):
         """Attach the Section 1.6 support plane to every finger's env."""
@@ -1408,10 +1494,10 @@ class HandSolverBase:
     def _attach_opposition(self):
         """Attach the Eq 2.16-2.17 opposition half-space to every finger's env.
 
-        Masked by ``_table_contact_mask()`` (not the broader ``contact_fingers``
-        directly): the C++ layer gates ``half_space_enabled`` on
-        ``table_contact_node`` being set, so writing it onto a finger that
-        won't get a table-contact node would be a no-op that only looks live.
+        Masked by the shared ``contact_fingers``, like every other constraint
+        in the set: the C++ layer builds this one off its own
+        ``half_space_node``, so it no longer needs -- or silently waits for --
+        table contact on the same finger.
         The thumb (identified by name, the hand-wide convention) gets ``+axis``
         and every other checked finger gets ``-axis``
         (:func:`opposition_directions`). ``half_space_split`` defaults to the
@@ -1419,16 +1505,54 @@ class HandSolverBase:
         :func:`default_half_space_axis` -- derived from the object's own
         longest in-plane axis, so the split runs along an elongated object's
         length (e.g. a pen) rather than a fixed world direction that is only
-        right by coincidence."""
-        axis = (self.params.half_space_axis if self.params.half_space_axis is not None
+        right by coincidence.
+
+        That derived axis fixes the split LINE only. Its SIGN -- which half the
+        thumb is sent to -- is oriented against the hand's current posture by
+        :func:`orient_opposition_axis`, because the object-frame sign is
+        arbitrary and the wrong one asks the hand to turn itself inside out.
+        The resolved axis is written back onto ``params.half_space_axis`` so the
+        witness overlay and any later rebuild describe the constraint that was
+        actually built, rather than re-deriving and disagreeing with it."""
+        explicit = self.params.half_space_axis is not None
+        axis = (self.params.half_space_axis if explicit
                else default_half_space_axis(self.spec, self.object_rotation,
                                             self.params.plane_normal))
+        if not explicit:
+            thumb, others = self._opposition_tips()
+            axis, _flipped = orient_opposition_axis(
+                axis, thumb, others, flip=self.params.half_space_flip)
+            self.params.half_space_axis = np.asarray(axis, float)
         directions = opposition_directions(self.configs, axis=axis)
         split = (self.params.half_space_split if self.params.half_space_split is not None
                 else self.object_center)
         attach_half_space(self.configs, split, directions,
-                          contact_fingers=self._table_contact_mask(),
+                          contact_fingers=self.params.contact_fingers,
                           margin=self.params.half_space_margin)
+
+    def _opposition_tips(self):
+        """``(thumb_tip, [other checked fingertips])`` at the posture this solve
+        starts from, for orienting the opposition axis.
+
+        Measured with a throwaway FK solve (~180 ms, cached for the life of this
+        solver) rather than read off the configs: the fingertips are where the
+        TENSIONS put them, and the thumb-vs-fingers direction swings by more
+        than a right angle across the flexor range -- the finger BASES, which
+        are free to read, sit only ~5 mm apart along the opposition axis and get
+        the sign wrong for 3 of 7 sampled wrist poses. Only the sign of one dot
+        product is taken from this, so the ~100 mm the tips move between the FK
+        pose and a warm-started posture cannot change the answer."""
+        if getattr(self, "_fk_probe_tips", None) is None:
+            frame = HandFKSolver(self.params).solve().frames[0]
+            self._fk_probe_tips = {
+                name: np.asarray(frame[name].marginals.rod.states[-1].pose.mean,
+                                 float)[:3, 3]
+                for name in self.finger_names}
+        tips = self._fk_probe_tips
+        mask = self.params.contact_fingers
+        others = [tips[n] for n, on in zip(self.finger_names, mask)
+                  if on and n != "thumb"]
+        return tips.get("thumb"), others
 
     def _attach_pregrasp_center(self):
         """Attach the Eq 2.18-2.19 pre-grasp hand-centering constraint, using
@@ -1476,15 +1600,17 @@ class HandSolverBase:
         collision, opposition half-space, pre-grasp centering, pre-grasp
         short-axis alignment).
 
-        The collision sphere SET is attached whenever either avoidance consumer
-        wants it; ``env.collision_avoidance`` then selects only whether the
-        finger-OBJECT inequalities are built. Finger-finger avoidance rides on the
-        set, so it is active whenever either collision toggle is.
+        Every constraint family is gated on its own toggle alone -- checking one
+        builds it, full stop. The collision sphere SET is shared, so it is
+        attached whenever ANY of its three consumers (object, finger-finger,
+        plane) wants it, and each family's own field then decides what gets
+        built on it.
 
         Shared by the IK solver, the IK stepper and the planner so the three
         cannot drift into building different environments from the same params."""
         self._attach_contact()
-        if self.params.collision or (self.params.table and self.params.plane_avoidance):
+        if (self.params.collision or self.params.self_collision
+                or (self.params.table and self.params.plane_avoidance)):
             self._attach_collision(avoidance=self.params.collision)
         if self.params.table:
             self._attach_table()

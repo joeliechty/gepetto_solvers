@@ -53,10 +53,19 @@ struct EnvironmentConfig {
     // collision_sigma scales the constraint rows (1.0 = same whitening as the
     // contact constraint rows).
     //
-    // collision_avoidance is the master on/off switch (default true). When
-    // true, the planners add the AL inequality collision factors (finger-object
-    // at every trajectory step, plus finger-finger in the hand). When false, no
-    // collision factors are added at all.
+    // collision_avoidance switches the finger-OBJECT inequalities on and off
+    // (default true), at every trajectory step and in the hand. It does NOT
+    // govern the other two consumers of the same collision-sphere set: the
+    // support plane has plane_avoidance, and finger-finger has self_collision
+    // below. Each constraint family is gated on its own field alone, so a
+    // caller can ask for any combination of the three.
+    //
+    // self_collision (default true) switches the FINGER-FINGER pairs on and
+    // off -- cross-finger sphere pairs in the hand, SphereSphereCollisionGap-
+    // Factor. Only TendonHandModel builds these (a single finger cannot
+    // collide with another), so it is inert for the single-finger solvers.
+    // Needs collision_node_indices to be non-empty like the other two, since
+    // the spheres are what it constrains.
     //
     // collision_node_is_proximal is a parallel vector to collision_node_indices
     // (1 = proximal, 0 = distal). It only matters for finger-finger collision in
@@ -65,6 +74,7 @@ struct EnvironmentConfig {
     // constraint between them is constant and useless). An empty vector means
     // every node is treated as non-proximal (no pair excluded).
     bool collision_avoidance = true;
+    bool self_collision      = true;
     double collision_sigma   = 1e-3;
     std::vector<int>    collision_node_indices;
     std::vector<double> collision_node_radii;
@@ -176,18 +186,28 @@ struct EnvironmentConfig {
     //   c_half(c) = -(c - p_split) . m_hat + half_space_margin <= 0
     // m_hat is a unit vector lying IN the support plane (n_table . m_hat = 0)
     // pointing into the valid half-space for THIS finger, so each finger carries
-    // its own direction. Applied to support_contact_node's sphere. Inert unless
-    // half_space_enabled and half_space_normal has non-zero norm.
+    // its own direction.
+    //
+    // half_space_node is the node whose sphere CENTER the constraint acts on --
+    // its own opt-in field, the same shape as pregrasp_center_node/
+    // pregrasp_align_node below. The constraint is a statement about where one
+    // node sits relative to a splitting line: it needs no support plane and no
+    // table contact, and TendonHandModel builds it in a pass of its own gated
+    // on nothing but the fields here. Unset falls back to table_contact_node,
+    // which is where this constraint used to live, so a caller that has not
+    // been updated keeps working. Inert unless half_space_enabled, a node
+    // resolves, and half_space_normal has non-zero norm.
     //
     // half_space_margin (m, >= 0) is the minimum standoff this finger must keep
     // from the splitting line -- see HalfSpaceGapFactor's d_min. 0 (the default)
     // is the plain half-space, satisfied by a center sitting exactly on the
     // split; a positive value opens a corridor of width 2*margin between the
     // thumb's side and the opposing fingers'.
-    bool           half_space_enabled     = false;
-    gtsam::Vector3 half_space_split_point = gtsam::Vector3::Zero();
-    gtsam::Vector3 half_space_normal      = gtsam::Vector3::Zero();  // m_hat
-    double         half_space_margin      = 0.0;
+    bool               half_space_enabled     = false;
+    std::optional<int> half_space_node;
+    gtsam::Vector3     half_space_split_point = gtsam::Vector3::Zero();
+    gtsam::Vector3     half_space_normal      = gtsam::Vector3::Zero();  // m_hat
+    double             half_space_margin      = 0.0;
 
     // Constrain the contact sphere CENTER directly to the hyper-ellipsoid instead
     // of introducing a witness point (Eq 1.101) --

@@ -698,7 +698,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
 
 def attach_collision(configs, vdb_path, object_pose, *,
                      radius=0.003, sigma=1e-4, num_proximal_discs=2,
-                     object_pose_cov=None, cull_margin=None, avoidance=True):
+                     object_pose_cov=None, cull_margin=None, avoidance=True,
+                     self_collision=True):
     """Declare the Section 1.5 collision spheres on every finger of a hand config
     list, in place. Returns ``configs`` for chaining.
 
@@ -713,13 +714,16 @@ def attach_collision(configs, vdb_path, object_pose, *,
     inequalities keeping distinct fingers apart (skipping proximal-proximal
     pairs).
 
-    ``avoidance`` (default True) writes ``env.collision_avoidance``, which is
-    what separates the sphere SET from the OBJECT constraints built on it. With
-    ``avoidance=False`` the spheres are still declared -- so the support plane's
-    avoidance inequalities and the finger-finger pairs still have geometry to
-    work with -- but no finger-object inequality is built. That is how a caller
-    turns table collision on with object collision off; passing ``False`` with no
-    support plane configured simply means no collision constraints at all.
+    The sphere SET is one thing; the three constraint families built on it are
+    three others, each with its own switch -- ``avoidance`` (finger-OBJECT,
+    ``env.collision_avoidance``), ``self_collision`` (FINGER-FINGER,
+    ``env.self_collision``) and :func:`attach_table`'s ``avoidance``
+    (finger-PLANE, ``env.plane_avoidance``). Declaring the spheres builds
+    nothing on its own; every family is gated on its own field alone, so any
+    combination of the three is available. ``avoidance=False`` with a support
+    plane is how a caller turns table collision on with object collision off;
+    ``self_collision`` defaults True because keeping the fingers out of each
+    other is wanted in nearly every solve.
 
     ``cull_margin`` (m, None = keep all pairs): drop finger-finger sphere pairs
     whose gap at the initial values exceeds this margin. Heuristic speedup —
@@ -744,6 +748,15 @@ def attach_collision(configs, vdb_path, object_pose, *,
 
         nodes = disc_node_indices(cfg)
         env.collision_avoidance = bool(avoidance)
+        if not hasattr(env, "self_collision"):
+            if not self_collision:
+                raise AttributeError(
+                    "this crest_sparse build has no "
+                    "EnvironmentConfig.self_collision, so finger-finger "
+                    "avoidance cannot be turned off -- rebuild it "
+                    "(pip install .)")
+        else:
+            env.self_collision = bool(self_collision)
         env.collision_sigma = sigma
         env.collision_node_indices = nodes
         env.collision_node_radii = [radius] * len(nodes)
@@ -885,17 +898,23 @@ def opposition_directions(configs, *, thumb_index=-1, axis=None):
 
 
 def attach_half_space(configs, split_point, directions, *, contact_fingers=None,
-                      margin=0.0):
+                      margin=0.0, contact_node=None):
     """Attach the Eq 2.16-2.17 (Eq 1.92) opposition half-space to every masked-in
     finger's env, in place. Returns ``configs`` for chaining.
 
     ``split_point`` is a point on the splitting line (e.g. the object centroid
     projected onto the support surface); ``directions`` is one in-plane unit
     vector per finger, as produced by :func:`opposition_directions`. A finger
-    masked off by ``contact_fingers`` gets no half-space: it has no designated
-    contact sphere for the constraint to act on. Call AFTER attach_table (needs
-    an existing env with ``table_contact_node`` set -- the C++ layer gates this
-    constraint on that same node).
+    masked off by ``contact_fingers`` gets no half-space.
+
+    ``contact_node`` is the node whose sphere center is constrained (default
+    ``tip_node_index(cfg)``, the same fingertip :func:`attach_table` slides),
+    written onto this constraint's OWN field ``env.half_space_node``. Standing
+    on its own field is the point: the constraint used to be built off
+    ``table_contact_node``, so it silently did nothing without table contact.
+    It needs no support plane and no contact of any kind, and can be attached
+    before or after anything else -- it does need an env to write onto, so call
+    it after :func:`attach_contact` or :func:`attach_collision` has made one.
 
     ``margin`` (m, >= 0) is the MINIMUM STANDOFF each finger must keep from the
     splitting line, written onto ``env.half_space_margin`` -- the constraint the
@@ -928,6 +947,9 @@ def attach_half_space(configs, split_point, directions, *, contact_fingers=None,
             env.half_space_enabled = True
             env.half_space_split_point = p_split
             env.half_space_normal = m / np.linalg.norm(m)
+            if hasattr(env, "half_space_node"):
+                env.half_space_node = (contact_node if contact_node is not None
+                                       else tip_node_index(cfg))
             if margin != 0.0 and not hasattr(env, "half_space_margin"):
                 raise AttributeError(
                     "this crest_sparse build has no "
@@ -937,6 +959,11 @@ def attach_half_space(configs, split_point, directions, *, contact_fingers=None,
                 env.half_space_margin = margin
         else:
             env.half_space_enabled = False
+            # Clear rather than skip, in case the env already carried a node
+            # from an earlier attach -- same reason attach_table clears
+            # table_contact_node for a masked-off finger.
+            if hasattr(env, "half_space_node"):
+                env.half_space_node = None
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs
 

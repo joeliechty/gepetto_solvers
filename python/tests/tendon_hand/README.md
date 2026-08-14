@@ -346,14 +346,16 @@ exactly the pre-existing graph.
 | `object_pose_mean` / `_cov` | the `O` prior (1e-8 = rigidly pinned) | — |
 | `target_contact_node`, `contact_node_radius` | terminal contact equality (witness for an SDF, center-direct for an ellipsoid) | Eq 1.35–1.39 |
 | `witness_point_seed` | override the ray-march seed (object-local) | — |
-| `collision_avoidance`, `collision_node_indices/_radii`, `collision_sigma` | sphere–SDF and sphere–sphere inequalities | Eq 1.57–1.58 |
+| `collision_avoidance`, `collision_node_indices/_radii`, `collision_sigma` | the sphere set, plus the finger–OBJECT sphere–SDF inequalities | Eq 1.57 |
+| `self_collision` | finger–finger sphere–sphere inequalities (default **on**; hand only) | Eq 1.58 |
 | `collision_node_is_proximal` | skips proximal–proximal finger pairs | §1.5 |
 | `collision_cull_margin` | drops finger–finger pairs whose *initial* gap exceeds it | §1.5 notes |
 | `plane_origin`, `plane_normal` | the support surface (zero normal ⇒ no table) | §1.6 |
 | `plane_avoidance` | table collision inequality on non-contact spheres | Eq 1.59 |
 | `table_contact_node/_radius` | 5-residual table sliding equality | Eq 1.60–1.64 |
 | `support_contact_node/_radius` | §1.8 center-direct support equality (no witness) | Eq 1.104 |
-| `half_space_enabled/_split_point/_normal` | opposition half-space inequality | Eq 1.99 |
+| `half_space_enabled/_split_point/_normal` | opposition half-space inequality — its own pass, independent of the table and of table contact | Eq 1.99 |
+| `half_space_node` | which node the half-space constrains (unset ⇒ falls back to `table_contact_node`) | Eq 1.99 |
 | `half_space_margin` | minimum standoff `d_min` from the split (0 ⇒ the bare half-space) | Eq 1.99 |
 | `object_contact_center_direct` | forces the witness-free object equality — already the **default** for any ellipsoid contact in `TendonHandModel` | Eq 1.108 |
 | `contact_drop_normal_row` | 4-row witness contact | Eq 1.114–1.117 |
@@ -399,12 +401,25 @@ environments.
   The solver classes drive `attach_contact` and `attach_table` from *separate*
   masks — `HandSolveParams.object_contact` / `table_contact`, each ANDed with the
   shared `contact_fingers` — so a solve can target the object, the table, or both.
-  Likewise `attach_collision(avoidance=...)` splits the collision sphere **set**
-  from the finger-object inequalities built on it: `params.collision` is object
-  collision, `params.plane_avoidance` is table collision, the spheres are attached
-  for either, and finger-finger avoidance is active whenever either is on.
+  Likewise the collision sphere **set** is separate from the three constraint
+  families built on it, each with its own switch: `params.collision` →
+  `attach_collision(avoidance=...)` → `env.collision_avoidance` (finger-object),
+  `params.self_collision` → `attach_collision(self_collision=...)` →
+  `env.self_collision` (finger-finger, default on), and `params.plane_avoidance`
+  → `attach_table(avoidance=...)` → `env.plane_avoidance` (finger-plane). The
+  spheres are attached whenever any of the three wants them; declaring them
+  builds nothing on its own.
 * `opposition_directions()` / `opposition_axis_from_object()` — the §1.8 m̂:
-  `+axis` for the thumb, `−axis` for everyone else.
+  `+axis` for the thumb, `−axis` for everyone else. These fix the split **line**
+  only. Its **sign is the side assignment**, and the object's own geometry cannot
+  answer it: `opposition_axis_from_object` inherits an arbitrary principal-axis
+  direction, and when it lands the wrong way up the constraint asks the thumb and
+  the fingers to *trade sides* — a ~180° roll of the hand about the object, from
+  which the AL stalls on iteration 3 without moving (measured on phase-0 pen:
+  32 mm demanded of the thumb, 70–75 mm of the fingers, violation 1.09e3).
+  `solvers.orient_opposition_axis()` resolves the sign against the hand's actual
+  posture and every caller must apply it; `HandSolveParams.half_space_flip`
+  (None = auto, False = as derived, True = inverted) overrides it.
 * `rotation_from_two_axes()` — "point THIS at THAT, and roll so THIS OTHER lines
   up", used to build the pre-grasp orientation.
 

@@ -25,12 +25,14 @@ control silently goes dead):
     python -m python.tests.tendon_hand.viz_interactive
 
 Every constraint from the paper's Chapter 2 (Eq 2.8-2.19) is an independent
-switch in the *Constraints* folder -- object/table contact, object/table
+switch in the *Constraints* folder -- object/table contact, object/self/table
 collision, drop-normal-row SDF contact, opposition half-space, pre-grasp
 centering -- each acting on the shared per-finger mask in its nested *fingers*
-sub-folder. That is what makes a stalled grasp bisectable: solve for the object
-alone, the table alone, or both, with or without either avoidance, and see which
-constraint family is the one refusing to close. (Their tuning sliders --
+sub-folder. A box is the whole story: checked means that constraint family is in
+the graph, with no second toggle it silently waits on. That is what makes a
+stalled grasp bisectable: solve for the object alone, the table alone, or both,
+with or without any of the three avoidances, and see which constraint family is
+the one refusing to close. (Their tuning sliders --
 collision radius/sigma/cull margin, table height offset -- stay in the
 *Collision*/*Table* folders alongside the object/primitive picker.)
 
@@ -75,6 +77,15 @@ DEFAULT_OBJECT_PRIMITIVE = "pen"
 # (and the demo scripts' argparse choices) keep the un-suffixed names; only the
 # label the user picks from carries "_sdf".
 SDF_DROPDOWN_LABELS = {"sphere": "sphere_sdf", "big_sphere": "big_sphere_sdf"}
+
+# Which half of the split the THUMB is sent to -- the opposition axis's sign,
+# which the object's own geometry cannot answer (see
+# solvers.orient_opposition_axis). Label -> HandSolveParams.half_space_flip.
+OPPOSITION_SIDES = {
+    "auto (match the hand)": None,
+    "as derived": False,
+    "flipped": True,
+}
 
 
 # The wrist sliders and the solvers must agree on what "pitch" means, so the
@@ -253,7 +264,12 @@ class HandVizApp:
         p.contact_drop_normal_row = self.g_drop_normal_row.value
         p.half_space = self.g_half_space.value
         p.half_space_split = None   # derive from object_center
-        p.half_space_axis = None    # derive from the object's own long axis
+        # Cleared every sync so the SIGN is re-resolved against the posture on
+        # screen: _attach_opposition writes the oriented axis back here, and a
+        # stale one would keep sending the thumb to the side it was on two
+        # solves ago.
+        p.half_space_axis = None
+        p.half_space_flip = OPPOSITION_SIDES[self.g_half_sides.value]
         p.half_space_margin = self.g_half_margin.value
         p.pregrasp_center = self.g_pregrasp_center.value
         p.h_clear = self.g_h_clear.value
@@ -268,6 +284,7 @@ class HandVizApp:
         p.ik_settle_steps = int(self.g_ik_settle.value)
         # collision
         p.collision = self.g_collision.value
+        p.self_collision = self.g_self_collision.value
         p.collision_radius = self.g_coll_radius.value
         p.collision_sigma = 10.0 ** self.g_coll_sigma.value
         p.cull_margin = (None if not self.caps["collision_cull"] or self.g_cull.value <= 0
@@ -349,9 +366,11 @@ class HandVizApp:
         self.scene.update(res.frames[0],
                           tip_radii=res.tip_radii,
                           collision_radius=self.params.collision_radius,
-                          # The spheres are drawn whenever EITHER consumer is
-                          # using them, matching what the solve actually built.
+                          # The spheres are drawn whenever ANY of the three
+                          # consumers is using them, matching what the solve
+                          # actually built.
                           collision=(self.params.collision
+                                     or self.params.self_collision
                                      or (self.params.table
                                          and self.params.plane_avoidance)),
                           gaps=gaps,
@@ -438,33 +457,56 @@ class HandVizApp:
         return []
 
     def _half_space_note(self):
-        """Warn when the opposition half-space (and so its standoff) is checked
-        but attaches to nothing.
+        """The opposition half-space's own status line: inert when no finger is
+        checked for it, and the standoff it is holding when there is one.
 
-        The C++ layer gates ``half_space_enabled`` on ``table_contact_node``, so
-        ``_attach_opposition`` masks by the TABLE-contact fingers: with *table
-        contact* unchecked -- the state the app opens in -- checking *opposition
-        half-space* builds no factor at all, the split plane still draws, and
-        dragging the standoff slider does nothing. Same trap the pre-grasp
-        toggles set, so it gets the same treatment: say it out loud."""
+        The constraint is built per finger off its own ``half_space_node``, so
+        the only way to check the box and get nothing is to check no fingers --
+        the finger mask is the one dependency it has left."""
         if not self.params.half_space:
             return []
         names = [n for n, c in zip(FINGER_LABELS, self.g_contacts) if c.value]
-        if not (self.params.table and self.params.table_contact and names):
-            return [f"**opposition half-space: INACTIVE** -- it attaches to the "
-                    f"TABLE-contact fingers, so it needs *table enabled* + "
-                    f"*table contact* + at least one finger checked; the "
-                    f"standoff slider does nothing until then"]
+        if not names:
+            return ["**opposition half-space: INACTIVE** -- no fingers checked "
+                    "in the *fingers* folder, so there is nothing to oppose"]
         if not self.caps["half_space_margin"]:
             return ["opposition half-space: this binding has no "
                     "`EnvironmentConfig.half_space_margin`, so the standoff "
                     "slider is inert (rebuild with `pip install .`)"]
+        lines = []
         if self.params.half_space_margin > 0.0:
-            return [f"opposition standoff: each side held "
-                    f"{self.params.half_space_margin * 1000:.0f} mm off the "
-                    f"split ({self.params.half_space_margin * 2000:.0f} mm "
-                    f"corridor)"]
-        return []
+            lines.append(f"opposition standoff: each side held "
+                         f"{self.params.half_space_margin * 1000:.0f} mm off "
+                         f"the split "
+                         f"({self.params.half_space_margin * 2000:.0f} mm "
+                         f"corridor)")
+        lines.extend(self._opposition_side_note())
+        return lines
+
+    def _opposition_side_note(self):
+        """How far the current posture is from the side assignment being asked
+        for -- the one number that says whether this constraint is a nudge or a
+        demand that the hand turn itself inside out.
+
+        Worth a line of its own because the failure is silent otherwise: with
+        the sides the wrong way up the solve stalls on iteration 3 with the hand
+        visibly untouched, which reads as the solver giving up rather than as
+        the constraint asking for a 180 degree roll."""
+        res = self._iter_view()
+        if res is None or "thumb" not in res.finger_names:
+            return []
+        gaps = half_space_witness(self.params, res, 0)
+        if not gaps or "thumb" not in gaps:
+            return []
+        worst = min(v[2] for v in gaps.values())
+        mode = self.g_half_sides.value
+        if worst >= 0.0:
+            return [f"opposition sides ({mode}): satisfied, worst digit "
+                    f"{worst * 1000:+.0f} mm inside its half"]
+        return [f"**opposition sides ({mode}): the hand is on the WRONG side "
+                f"by up to {-worst * 1000:.0f} mm** -- it has to trade thumb "
+                f"and fingers over to satisfy this, which normally stalls the "
+                f"solve. Try *auto* (or *flipped*) in the sides dropdown."]
 
     def _report(self):
         m = self.result.meta
@@ -805,6 +847,7 @@ class HandVizApp:
             "object_contact": self.g_obj_contact,
             "table_contact": self.g_tbl_contact,
             "collision": self.g_collision,
+            "self_collision": self.g_self_collision,
             "table": self.g_table,
             "plane_avoidance": self.g_plane_avoid,
             "half_space": self.g_half_space,
@@ -956,12 +999,12 @@ class HandVizApp:
                 + [self.g_flexor_sigma, self.g_passive_sigma,
                    self.g_phase0, self.g_phase1, self.g_phase2]
                 + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
-                   self.g_half_space, self.g_half_margin,
+                   self.g_half_space, self.g_half_sides, self.g_half_margin,
                    self.g_pregrasp_center, self.g_h_clear,
                    self.g_pregrasp_centroid, self.g_axis_align]
                 + self.g_contacts
-                + [self.g_collision, self.g_coll_radius, self.g_coll_sigma,
-                   self.g_cull,
+                + [self.g_collision, self.g_self_collision,
+                   self.g_coll_radius, self.g_coll_sigma, self.g_cull,
                    self.g_table, self.g_plane_offset, self.g_plane_avoid,
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
                    self.g_show_contact, self.g_show_collision,
@@ -1167,15 +1210,29 @@ class HandVizApp:
                 self.g_collision = gui.add_checkbox(
                     "object collision", True,
                     hint="Keep every non-contact sphere out of the OBJECT. "
-                         "Independent of table collision; finger-finger "
-                         "avoidance comes on with either. Sliders in the "
+                         "Independent of the other two collision families "
+                         "below -- the three share one set of collision "
+                         "spheres but each is its own switch. Sliders in the "
                          "Collision folder below.")
+                self.g_self_collision = gui.add_checkbox(
+                    "self collision", True,
+                    disabled=not self.caps["self_collision"],
+                    hint="Keep the FINGERS out of each other: one inequality "
+                         "per cross-finger sphere pair, minus the pairs the "
+                         "cull margin drops. On by default -- a hand passing "
+                         "through itself is never wanted -- and needs neither "
+                         "the object nor the table. The most expensive of the "
+                         "three families by factor count, so this is the one "
+                         "to untick when bisecting a slow solve."
+                         if self.caps["self_collision"]
+                         else "requires a rebuilt _crest_sparse with "
+                              "EnvironmentConfig.self_collision")
                 self.g_plane_avoid = gui.add_checkbox(
                     "table collision", True,
                     hint="Keep every non-contact sphere out of the "
-                         "half-space. Independent of object collision -- the "
-                         "collision spheres are attached for whichever of "
-                         "the two is on. Needs the table enabled below.")
+                         "half-space. Independent of the other two collision "
+                         "families. Needs the table enabled below -- with no "
+                         "plane there is no half-space to stay out of.")
 
             with gui.add_folder("Contact (Eq 2.11-2.15)"):
                 self.g_table = gui.add_checkbox(
@@ -1207,9 +1264,26 @@ class HandVizApp:
                 self.g_half_space = gui.add_checkbox(
                     "opposition half-space", False,
                     disabled=not self.caps["opposition"],
-                    hint="Eq 2.16-2.17: keep each contact finger on its "
-                         "designated half of the table, thumb opposite the "
-                         "rest. Needs table contact.")
+                    hint="Eq 2.16-2.17: keep each checked finger on its "
+                         "designated side of the splitting plane, thumb "
+                         "opposite the rest. Independent of table contact and "
+                         "of the table itself -- it constrains a fingertip "
+                         "against a line, not against the plane.")
+                self.g_half_sides = gui.add_dropdown(
+                    "opposition sides", list(OPPOSITION_SIDES),
+                    initial_value="auto (match the hand)",
+                    hint="Which half of the split the THUMB is sent to. The "
+                         "object fixes the split LINE; its sign -- the side "
+                         "assignment -- is an arbitrary object-frame "
+                         "convention, and the wrong one asks the thumb and the "
+                         "fingers to TRADE sides, i.e. to roll the hand ~180 "
+                         "degrees about the object. That is infeasible from any "
+                         "normal start pose and the solve stalls immediately, "
+                         "at any standoff and any wrist sigma. *auto* orients "
+                         "it by where the digits already are (the nearer "
+                         "opposition); *flipped* deliberately asks for the "
+                         "other one; *as derived* is the old object-only "
+                         "behaviour, kept for comparison.")
                 self.g_half_margin = gui.add_slider(
                     "half-space standoff (m)", 0.0, 0.05, 0.001, 0.0,
                     disabled=not self.caps["half_space_margin"],
@@ -1368,13 +1442,16 @@ class HandVizApp:
         # (set_half_space_plane) the same way -- as does its standoff slider,
         # which draws the two boundary planes either side of that split.
         for h in (self.g_table, self.g_plane_offset, self.g_half_space,
-                  self.g_half_margin):
+                  self.g_half_margin, self.g_half_sides):
             h.on_update(lambda _: (self._sync_params(), self._refresh_object(),
                                    self._invalidate_stepper()))
-        # Collision knobs are part of the constraint set too.
-        for h in (self.g_collision, self.g_coll_radius, self.g_coll_sigma,
-                  self.g_cull, self.g_plane_avoid):
-            h.on_update(lambda _: self._invalidate_stepper())
+        # Collision knobs are part of the constraint set too. The sphere-drawing
+        # flag follows the toggles, so these re-render as well as invalidate.
+        for h in (self.g_collision, self.g_self_collision, self.g_coll_radius,
+                  self.g_coll_sigma, self.g_cull, self.g_plane_avoid):
+            h.on_update(lambda _: (self._sync_params(),
+                                   self._invalidate_stepper(),
+                                   self._render_frame()))
         # drop-normal-row / pre-grasp centering / clearance: no static geometry
         # of their own (the centering line only appears once a solve has run,
         # via _render_frame), so just invalidate the stepper -- self.params is

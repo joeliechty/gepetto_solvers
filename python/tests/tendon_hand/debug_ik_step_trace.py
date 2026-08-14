@@ -132,14 +132,15 @@ def print_scene(stepper, params):
               else f"                     {row}")
     print(f"  sigma pos / rot  : {params.sigma_wrist_pos:.3g} m / "
           f"{params.sigma_wrist_rot:.3g} rad")
-    spheres_on = params.collision or (params.table and params.plane_avoidance)
+    spheres_on = (params.collision or params.self_collision
+                  or (params.table and params.plane_avoidance))
     print("environment:")
     print(f"  object collision : {'on' if params.collision else 'off'}")
     print(f"  table collision  : "
           f"{'on' if params.table and params.plane_avoidance else 'off'}")
-    # Finger-finger rides on the shared sphere set, so it is active whenever
-    # EITHER avoidance is -- including object-collision-off table runs.
-    print(f"  finger-finger    : {'on' if spheres_on else 'off'}")
+    # Its own switch, like the other two: the three families share the sphere
+    # set but none of them implies another.
+    print(f"  finger-finger    : {'on' if params.self_collision else 'off'}")
     if spheres_on:
         print(f"  spheres          : radius={params.collision_radius:.4f} m  "
               f"sigma={params.collision_sigma:.3g}  cull={params.cull_margin}")
@@ -498,6 +499,7 @@ def build_params(args):
     p.al_iters = args.max_steps          # reported only; the stepper caps at 1/step
     p.ik_settle_steps = args.ik_settle_steps
     p.collision = args.collision
+    p.self_collision = args.self_collision
     p.collision_radius = args.collision_radius
     p.collision_sigma = args.collision_sigma
     p.cull_margin = args.cull_margin
@@ -582,8 +584,14 @@ def build_parser():
                     action="store_false", default=True,
                     help="drop the Section 1.5 finger-OBJECT collision "
                          "inequalities (they are ON by default here, unlike in "
-                         "the GUI). Finger-finger avoidance survives as long as "
-                         "table collision is still on")
+                         "the GUI). The other two collision families are "
+                         "unaffected -- each is its own switch")
+    ap.add_argument("--no-self-collision", dest="self_collision",
+                    action="store_false", default=True,
+                    help="drop the finger-FINGER inequalities (on by default, "
+                         "matching HandSolveParams and the GUI). By far the "
+                         "biggest family by factor count, so this is the first "
+                         "thing to try when a step is slow")
     ap.add_argument("--collision-radius", dest="collision_radius", type=float,
                     default=0.003)
     ap.add_argument("--collision-sigma", dest="collision_sigma", type=float,

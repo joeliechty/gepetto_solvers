@@ -212,6 +212,7 @@ def _build_params(args):
     p.K, p.dt, p.gp_wrist, p.gp_tense = args.K, args.dt, args.gp_wrist, args.gp_tense
     p.start_flexor = args.start_flexor
     p.collision = args.collision
+    p.self_collision = args.self_collision
     p.collision_sigma = args.collision_sigma
     p.cull_margin = args.cull_margin
     p.table = args.table
@@ -323,7 +324,16 @@ def build_parser():
     ap.add_argument("--gp-tense", dest="gp_tense", type=float, default=1.0)
     ap.add_argument("--start-flexor", dest="start_flexor", type=float, default=0.5)
     # Collision / table.
-    ap.add_argument("--collision", action="store_true")
+    ap.add_argument("--collision", action="store_true",
+                    help="finger-OBJECT collision inequalities. Independent of "
+                         "--no-self-collision and --plane-avoidance: the three "
+                         "collision families share one sphere set but each is "
+                         "its own switch")
+    ap.add_argument("--no-self-collision", dest="self_collision",
+                    action="store_false", default=True,
+                    help="drop the finger-FINGER inequalities (on by default, "
+                         "matching HandSolveParams and the GUI); the biggest "
+                         "family by factor count")
     ap.add_argument("--collision-sigma", dest="collision_sigma", type=float, default=1e-4)
     ap.add_argument("--cull-margin", dest="cull_margin", type=float, default=None)
     ap.add_argument("--table", action="store_true",

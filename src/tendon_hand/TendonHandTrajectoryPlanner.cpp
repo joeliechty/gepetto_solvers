@@ -66,9 +66,14 @@ TendonHandTrajectoryPlanner::TendonHandTrajectoryPlanner(
                     env.target_contact_node.reset();
                     env.witness_point_seed.reset();
                 }
-                // start step: no object collision.
-                if (is_start)
+                // start step: no collision of any kind on the measured state --
+                // finger-finger for the same reason as finger-object (see the
+                // note above): a start that is already in contact with itself
+                // would make k=0 infeasible by construction.
+                if (is_start) {
                     env.collision_avoidance = false;
+                    env.self_collision      = false;
+                }
                 // (b) support-plane phase schedule.
                 if (env.plane_normal.norm() > 0.0) {
                     const bool sliding = !is_start && k_touch.has_value() && k >= *k_touch;
