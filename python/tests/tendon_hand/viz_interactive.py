@@ -383,6 +383,22 @@ class HandVizApp:
     def _set_status(self, text):
         self.g_status.content = text
 
+    def _error_status(self, exc):
+        """Show a solver exception with the reason attached where we can name it.
+
+        GTSAM's IndeterminantLinearSystem text explains what an ill-posed system
+        IS, not which of the controls on this page caused one. In a pre-grasp
+        solve there is essentially one answer -- the wrist prior stopped fixing
+        the wrist -- so say that instead of leaving a Doxygen link on screen."""
+        note = []
+        if "Indeterminant" in str(exc):
+            note = self._wrist_gauge_note() or [
+                "*Indeterminant means some variable has no information left. In "
+                "a pre-grasp solve the usual culprit is the wrist prior: "
+                "inequalities (collision, opposition) contribute nothing while "
+                "satisfied, so the prior is what fixes the wrist.*"]
+        self._set_status("  \n".join([f"**Error:** {exc}"] + note))
+
     # -- solve --
 
     def _set_solving(self, solving):
@@ -425,7 +441,7 @@ class HandVizApp:
             self._render_frame()
             self._report()
         except Exception as exc:  # surface solver errors in the GUI, keep serving
-            self._set_status(f"**Error:** {exc}")
+            self._error_status(exc)
             raise
         finally:
             self._set_solving(False)
@@ -481,7 +497,65 @@ class HandVizApp:
                          f"({self.params.half_space_margin * 2000:.0f} mm "
                          f"corridor)")
         lines.extend(self._opposition_side_note())
+        lines.extend(self._rotation_driver_note())
         return lines
+
+    # Wrist priors looser than this (sigma, m and rad) stop fixing the wrist's
+    # gauge in any solve whose other constraints are all INEQUALITIES. Measured
+    # on the pen pre-grasp scene (pinch-centroid + collision + opposition): every
+    # cell at sigma >= 10 on EITHER prior throws IndeterminantLinearSystem near
+    # W0, every cell at <= 1 solves, and adding the other pre-grasp constraints
+    # does not move the boundary.
+    WRIST_PRIOR_GAUGE_LIMIT = 10.0
+
+    def _wrist_gauge_note(self):
+        """Warn when the wrist prior is the only thing fixing the wrist, and is
+        too loose to do it.
+
+        An inequality that is SATISFIED contributes no rows to the linearized
+        system -- collision, table avoidance and the opposition half-space are
+        all inequalities, and in a pre-grasp scene they sit slack. Contact
+        equalities are what would otherwise pin the hand, and a pre-grasp solve
+        has none by definition. So the 6 dof of the wrist are held by: the
+        pre-grasp constraints that touch it (pinch-centroid, 3 rows on a point;
+        centering, 3 rows on a fingertip midpoint; short-axis alignment, ONE
+        scalar row) and the prior. Loosen the prior far enough and what is left
+        is rank-deficient -- which surfaces as GTSAM's IndeterminantLinearSystem
+        near W0, not as anything that names the prior."""
+        pos, rot = self.params.sigma_wrist_pos, self.params.sigma_wrist_rot
+        loose = [n for n, v in (("position", pos), ("rotation", rot))
+                 if v >= self.WRIST_PRIOR_GAUGE_LIMIT]
+        if not loose:
+            return []
+        equality_backed = (self.params.object_contact or self.params.table_contact)
+        if equality_backed:
+            return []
+        return [f"**wrist prior ({' and '.join(loose)}) is very loose "
+                f"(sigma {pos:g} m / {rot:g} rad)** -- with no contact "
+                f"equalities on, nothing else fixes the wrist: collision and "
+                f"the opposition half-space are inequalities and contribute "
+                f"nothing while satisfied. Expect "
+                f"*IndeterminantLinearSystem near W0*; keep sigma at or below "
+                f"1 (log10 0)."]
+
+    def _rotation_driver_note(self):
+        """Say when nothing in the constraint set can rotate the hand.
+
+        The half-space is a one-sided inequality on POSITIONS: once each digit
+        is on its own side it goes slack and contributes no gradient at all, so
+        it cannot turn the wrist however large the standoff. Pinch-centroid is
+        three rows on a single point -- satisfiable by translation alone.
+        Short-axis alignment is the only constraint here that says anything
+        about ORIENTATION. Measured on this scene: 1.5 degrees of wrist rotation
+        without it, 45 with."""
+        if not (self.params.half_space or self.params.pregrasp_centroid):
+            return []
+        if self.params.pregrasp_axis_align or self.params.object_contact:
+            return []
+        return ["*nothing here rotates the hand*: the half-space is a "
+                "one-sided inequality on positions (slack => no gradient) and "
+                "pinch-centroid is satisfiable by translation alone. Tick "
+                "**short-axis alignment** for the orientation constraint."]
 
     def _opposition_side_note(self):
         """How far the current posture is from the side assignment being asked
@@ -515,6 +589,7 @@ class HandVizApp:
         if self.mode != "FK":
             lines.extend(self._contact_lines(-1))
         lines.extend(self._half_space_note())
+        lines.extend(self._wrist_gauge_note())
         lines.extend(self._pinch_note())
         self._set_status("  \n".join(lines))
 
@@ -693,7 +768,8 @@ class HandVizApp:
         rep = self.result.dual_transfer
         carried = ("" if rep is None else
                    f"  \nduals carried: {rep.matched}/{rep.total} constraints")
-        pinch = self._half_space_note() + self._pinch_note()
+        pinch = (self._half_space_note() + self._wrist_gauge_note()
+                 + self._pinch_note())
         self._set_status(
             f"**IK step {status.steps}** &nbsp; {verdict}  \n"
             f"violation={status.violation:.3e} &nbsp; cost={status.cost:.4g} "
@@ -716,7 +792,7 @@ class HandVizApp:
             self._show_step(stepper.step(), stepper.status())
             self._rebuild_iter_slider()
         except Exception as exc:
-            self._set_status(f"**Error:** {exc}")
+            self._error_status(exc)
             raise
         finally:
             self._set_solving(False)
@@ -749,7 +825,7 @@ class HandVizApp:
                 # would tear a GUI handle down and re-add it every iteration.
                 self._rebuild_iter_slider()
             except Exception as exc:
-                self._set_status(f"**Error:** {exc}")
+                self._error_status(exc)
             finally:
                 self.g_ik_stop.disabled = True
                 self._set_solving(False)
