@@ -1,7 +1,10 @@
-numpy==2.3.5
-scipy==1.16.3
+# numpy >=2.3 and scipy >=1.16 dropped Python 3.10, so conda_setup_py10.sh needs the
+# last releases that still ship cp310 wheels. The py11/py12 setups keep the newer pins.
+numpy==2.3.5; python_version >= "3.11"
+numpy==2.2.6; python_version < "3.11"
+scipy==1.16.3; python_version >= "3.11"
+scipy==1.15.3; python_version < "3.11"
 pyvista==0.46.4
 matplotlib==3.10.7
 vtk==9.5.2
 pybind11==3.0.1
-pyvista
