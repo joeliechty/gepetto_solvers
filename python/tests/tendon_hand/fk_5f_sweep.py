@@ -95,6 +95,7 @@ def main():
     background_tension = 0.5
     flexor_amplitude = 0.75  # peak flexor ~= background + 2*amplitude = 2.0 N
     finger_phases = np.linspace(0.0, np.pi, len(configs))
+    flexor_index = 5
 
     # Build the solver ONCE. Rebuilding each frame would discard the retained
     # solution and force a straight-hand cold start every time; instead we keep
@@ -114,8 +115,8 @@ def main():
         flexors = []
         for phase in finger_phases:
             tensions_mean = np.full(num_tendons, background_tension)
-            flexor = background_tension + flexor_amplitude * (np.cos(0.01 * i - np.pi + phase) + 1.0)
-            tensions_mean[5] = flexor
+            flexor = background_tension + 1.0#flexor_amplitude * (np.cos(0.01 * i - np.pi + phase) + 1.0)
+            tensions_mean[flexor_index] = flexor
             flexors.append(flexor)
             all_tensions.append(
                 crest_sparse.VectorXGaussian(tensions_mean, tensions_cov))
@@ -123,6 +124,11 @@ def main():
                             for _ in configs]
 
         solution = solver.solve(all_tensions, all_tip_wrenches)
+
+        # Solved flexor tendon length per finger (meters). The lengths come back
+        # per finger as the full num_tendons vector; index 5 is the flexor.
+        flexor_lengths = [fm.tendon_lengths[flexor_index]
+                          for fm in solution.marginals.fingers]
 
         # --- Feed the plotter one shim per finger ---
         solutions = {}
@@ -137,7 +143,10 @@ def main():
             tip = np.array(solution.marginals.fingers[0].rod.states[-1].pose.mean)
             print(f"Iteration {i}/{num_iters} | iters={solution.meta.iterations} "
                   f"err={solution.meta.error:.3g}")
-            print(f"  Flexor tensions: {np.round(flexors, 2)}")
+            width = max(len(name) for name in finger_names)
+            print(f"  {'finger':<{width}}  tension(N)  length(mm)")
+            for name, tension, length in zip(finger_names, flexors, flexor_lengths):
+                print(f"  {name:<{width}}  {tension:>10.2f}  {1e3 * length:>10.2f}")
             print(f"  Wrist pos: {wrist_pose[:3, 3]}")
             print(f"  {finger_names[0]} tip pos: {tip[:3, 3]}")
 

@@ -21,8 +21,18 @@ only *how many copies of the state exist* and *which constraints are switched on
 | Plan a K+1-step grasp trajectory | `TendonHandTrajectoryPlanner` → `traj_5f_contact.py` | §1.4 |
 | Approach over a table, then slide and grasp | planner + `attach_table` + `k_touch` → `traj_5f_slide_grasp.py` | §1.6 |
 | Grasp a flat object without stalling on the flat face | any solver + ellipsoid primitive | §1.6.3 |
+| Position the hand *over* an object before closing | `attach_pregrasp_center` / `_axis_alignment` / `_centroid` + `attach_half_space` | Eq 2.16–2.19 |
+| Run the pre-grasp → support → approach pipeline | `apply_phase_preset(params, "phase0"/"1"/"2")` | §1.8 / ch. 2 |
 | Watch an IK solve converge one AL iteration at a time | `HandIKStepper` → `viz_interactive.py`, `debug_ik_step_trace.py` | §1.4+§1.5 |
 | Change a constraint mid-solve and *continue* | `initial_state` + `initial_duals` → §5.1 | — |
+| Know what you can delete | §8, the dependency graph | — |
+
+**A note on paper numbering.** Most of the code cites the chapter-1 numbering
+(`§1.1`–`§1.8`, `Eq 1.x`) this README uses throughout. The newest pre-grasp work
+cites a chapter-2 renumbering of the same material (`Eq 2.8-2.9` collision,
+`Eq 2.11-2.15` contact, `Eq 2.16-2.19` pre-grasp) — that is what the visualizer's
+folder labels say. Both refer to the same equations; the source has not been
+swept.
 
 ### Running anything
 
@@ -191,10 +201,26 @@ with `(finger_configs, wrist_pose, wrist_noise, step, emit_wrist_prior)`.
 7. **Support plane** (§1.6/§1.8): the 5-residual sliding equality, the §1.8
    center-direct support equality, the opposition half-space inequality, and the
    plane-avoidance inequalities.
+8. **Pre-grasp positioning** (Eq 2.16–2.19): three hand-level equalities that
+   position the *wrist* before anything closes. Unlike 1–7 these are **not**
+   per-finger — each collects keys across every participating digit first (the
+   thumb identified by name, which is why `get_default_hand_configs` always
+   appends `"thumb"` last), then adds exactly one factor: `pregrasp.center`
+   (`PreGraspHandCenteringFactor`), `pregrasp.align`
+   (`PreGraspAxisAlignmentFactor`), and `pregrasp.centroid`
+   (`PreGraspCentroidFactor`, which keys off `wrist_key()` directly and so needs
+   no finger to opt in — its fields are duplicated across every env and the
+   first one found wins). The centering and centroid blocks will anchor the
+   object prior themselves if no earlier block did, since both read
+   `object_key()`'s translation but neither can fix its orientation gauge.
 
-Every hard constraint in 4–7 goes in through `add_eq()` / `add_ineq()`, which
-also record a **semantic tag** for it (`obj.witness|f2`, `tbl.contact|f4`,
-`col.obj|f0|n12`, `col.ff|f0n4|f3n8`, `half|f4`) in `constraint_tags()`. The tag
+Every hard constraint in 4–8 goes in through `add_eq()` / `add_ineq()`, which
+also record a **semantic tag** for it in `constraint_tags()`. The full tag
+vocabulary, in build order: `obj.center|fN` / `obj.witness|fN` /
+`obj.sphwit|fN` / `obj.sphere|fN` (object contact, one form per surface type),
+`col.obj|fN|nM`, `col.ff|fAnI|fBnJ`, `tbl.contact|fN`, `sup.contact|fN`,
+`col.plane|fN|nM`, `half|fN`, `pregrasp.center`, `pregrasp.align`,
+`pregrasp.centroid`. The tag
 order is the insertion order, which is exactly the order `ConstrainedOptProblem`
 enumerates constraints in, so tag *k* names the constraint multiplier *k* belongs
 to. Both helpers exist so the two orders cannot drift: adding a constraint any
@@ -319,6 +345,19 @@ wrapped in a constraint class that hands it to the AL optimizer.
 | `PlaneCollisionGapFactor` | `r − (p − p_table)·n̂` | `T` | Eq 1.59 |
 | `SphereSphereCollisionGapFactor` | `(r_i + r_j) − ‖p_i − p_j‖` | `T`, `T` | Eq 1.58 |
 | `HalfSpaceGapFactor` | `−(c − p_split)·m̂ + d_min`, **constant Jacobian** | `T` | Eq 1.99 |
+| `PreGraspHandCenteringFactor` | `½(c_thumb + mean(c_fingers)) − (p_obj + h·n̂)`, 3 rows | thumb `T`, all finger `T`, `O` | Eq 2.18–2.19 |
+| `PreGraspAxisAlignmentFactor` | `1 − (v̂·m̂)²`, `v = c_thumb − mean(c_fingers)`, 1 row | thumb `T`, finger `T` | companion to Eq 2.16–2.17 |
+| `PreGraspCentroidFactor` | `T_wrist·c_local − (p_obj + h·n̂)`, 3 rows | `W`, `O` | — |
+
+The three pre-grasp factors differ from everything above them in *what they act
+on*: they are hand-level, they read only translations, and their real target is
+the **wrist** — the fingers appear only as the measurement of where the hand is
+pointing. `PreGraspAxisAlignmentFactor`'s squared dot product is deliberately
+sign-blind (`0` when the thumb–finger vector is colinear with `m̂` in *either*
+direction); the side assignment is the half-space's job, not this factor's.
+`PreGraspCentroidFactor` skips the fingers entirely and pushes a constant
+wrist-frame point (`config.HAND_PINCH_POSES`) onto the object, so it means
+something only for a digit combination that was actually measured.
 
 Two implementation details you will trip over if you don't know them:
 
@@ -344,6 +383,7 @@ exactly the pre-existing graph.
 |---|---|---|
 | `sdf_grid` / `ellipsoid_semi_axes` | which object surface the factors evaluate | §1.3 / §1.6.3 |
 | `object_pose_mean` / `_cov` | the `O` prior (1e-8 = rigidly pinned) | — |
+| `object_pose_per_step` | one `O` per trajectory step instead of one shared | — |
 | `target_contact_node`, `contact_node_radius` | terminal contact equality (witness for an SDF, center-direct for an ellipsoid) | Eq 1.35–1.39 |
 | `witness_point_seed` | override the ray-march seed (object-local) | — |
 | `collision_avoidance`, `collision_node_indices/_radii`, `collision_sigma` | the sphere set, plus the finger–OBJECT sphere–SDF inequalities | Eq 1.57 |
@@ -360,6 +400,9 @@ exactly the pre-existing graph.
 | `object_contact_center_direct` | forces the witness-free object equality — already the **default** for any ellipsoid contact in `TendonHandModel` | Eq 1.108 |
 | `contact_drop_normal_row` | 4-row witness contact | Eq 1.114–1.117 |
 | `witness_target/_cov` | soft geodesic pull on the witness point | Eq 1.118 |
+| `pregrasp_center_node`, `pregrasp_clearance_height/_normal` | hand-centering equality — thumb/finger midpoint onto `p_obj + h·n̂` | Eq 2.18–2.19 |
+| `pregrasp_align_node`, `pregrasp_align_axis` | short-axis alignment equality | Eq 2.16–2.17 |
+| `pregrasp_centroid_point` (**wrist frame**), `pregrasp_centroid_clearance/_normal` | pinch-centroid equality on the wrist alone | — |
 
 Culling caveat, straight from the header: `collision_cull_margin` is a
 **heuristic, not a sound bound** (~half the 5-finger trajectory graph is
@@ -392,7 +435,9 @@ environments.
   per-digit contact radius from the CAD distal tip width.
 * `disc_node_indices()` / `proximal_disc_flags()` — the collision sphere set.
 * **`attach_contact` / `attach_collision` / `attach_table` / `attach_half_space` /
-  `attach_witness_targets`** — the five env builders every script and solver class
+  `attach_witness_targets` / `attach_pregrasp_center` /
+  `attach_pregrasp_axis_alignment` / `attach_pregrasp_centroid`** — the env
+  builders every script and solver class
   shares. All mutate `configs` in place and return them for chaining. All accept
   `contact_fingers`, a per-finger bool mask: a masked-off finger still gets the
   env (so collision and plane avoidance keep protecting it) but **no**
@@ -422,6 +467,18 @@ environments.
   (None = auto, False = as derived, True = inverted) overrides it.
 * `rotation_from_two_axes()` — "point THIS at THAT, and roll so THIS OTHER lines
   up", used to build the pre-grasp orientation.
+* **`PinchPose` / `HAND_PINCH_POSES` / `pinch_pose()` / `pinch_pose_for_mask()`** —
+  a measured lookup table, not a model: for each of the 15 thumb-opposition digit
+  combinations, where the fingertips meet in the **wrist frame**, the per-finger
+  flexor tensions that close them there, and the tip-sphere gap achieved. It
+  exists because that geometry is cheap to measure and expensive to solve for —
+  see `fk_pinch_centroids.py`, which generated it, and the FK-independence gotcha
+  in §6. Two things callers get wrong: `pinch_pose()` returns **None** for any
+  set without the thumb (those digits are all on one side of the palm, so their
+  closest approach is a fist curl, not a pinch) and for fewer than two digits;
+  and `gap > 0` means the combination *never closes* — 7 of the 15 don't, so
+  `PinchPose.touches()` is the check, not `centroid is not None`. Some stored
+  tensions (pinky, up to 3.55 N) exceed the viewer's 3 N slider.
 
 **`scene.py` — objects and geometry.**
 `get_primitive_specs()` is the registry: baked-SDF primitives (`sphere`,
@@ -458,6 +515,33 @@ scrubber indexes them identically. `surface_gaps()`, `contact_witness()`,
 independent of the solver. `HandResult.state(k)` returns the raw
 `TendonHandMarginals` behind a frame — the form `HandSolveParams.initial_state`
 takes to warm-start a solve from a real posture instead of a straight hand.
+
+**Independent readouts.** Every constraint family has a module-level function
+that recomputes its residual from the *solved poses* rather than reading the
+solver's own number, which is what makes a stall diagnosable: `plane_witness()`
+and `free_sphere_plane_witness()` (table), `half_space_witness()`,
+`pregrasp_center_witness()`, `pregrasp_centroid_witness()`,
+`pregrasp_axis_witness()`, and `tip_gap_matrix()` (all-pairs fingertip
+separation). `orient_opposition_axis()` is the one that is *not* a readout — see
+the opposition-sign note under `config.py` above; every caller of
+`default_half_space_axis()` must pass its result through it.
+
+**Phase presets.** `PhasePreset` / `PHASE_PRESETS` / `apply_phase_preset(params,
+name)` are the named `HandSolveParams` override groups for the staged pipeline:
+`phase0` pre-grasp positioning (no contact at all — collision, table avoidance,
+half-space and the two pre-grasp constraints, wrist prior loosened to 1.0 so the
+hand can actually travel), `phase1` support contact (table contact on, all three
+pre-grasp constraints off, wrist tightened to 0.01 to settle), `phase2` object
+approach (object *and* table contact, wrist loose again at 1.0). `phase3` is not
+written yet. A preset touches **only** the fields it lists — wrist pose, flexor
+tensions, AL sliders and table height stay wherever the caller left them,
+because those are solver knobs rather than part of what defines a phase — and
+`apply_phase_preset` raises on an override naming a field `HandSolveParams`
+doesn't have, so a typo fails loudly instead of silently no-opping. Note
+`phase0` deliberately sets `pregrasp_centroid=False`: it already centers via
+`pregrasp_center`, and running both imposes two different targets (the achieved
+fingertip midpoint *and* the measured pinch point) that coincide only once the
+fingers are closed. See §6 for why phase0 → phase1 does not warm-start.
 
 #### Warm starts: continuing a solve across a rebuild
 
@@ -562,7 +646,15 @@ Two things in here are load-bearing beyond convenience:
   caller (the visualizers) which controls to grey out instead of crashing. Keys:
   `ellipsoid`, `table`, `collision_cull`, `k_touch`, `solve_iterates`,
   `ik_stepping`, `solver_seed` (`initial_state`), `dual_transfer`
-  (`set_initial_duals`). A control that silently does nothing is almost always a
+  (`set_initial_duals`), `self_collision`, `drop_normal_row`, `opposition`
+  (`half_space_enabled`), `half_space_margin` (the `d_min` standoff, newer than
+  the half-space itself), `half_space_standalone` (`half_space_node` — without
+  it the half-space only builds for fingers *also* driven onto the table, so
+  checking it alone builds nothing), `pregrasp_center`, `pregrasp_axis_align`,
+  `pregrasp_centroid`. Most probe `hasattr` on an `EnvironmentConfig` field;
+  `ik_stepping` probes `reset_al_duals` as a proxy, because its other half
+  (`TendonHandSolver` honoring `skip_marginals`) is a behavior change no
+  `hasattr` can see. A control that silently does nothing is almost always a
   False here — and the usual cause is not a missing rebuild but the stale
   in-tree `.so` shadowing the installed one (see *Running anything*).
 
@@ -571,6 +663,7 @@ Two things in here are load-bearing beyond convenience:
 | Script | Solver | Section | What it demonstrates |
 |---|---|---|---|
 | `fk_5f_sweep.py` | HandSolver (no contact) | §1.1 | Live animation, warm-started wrist sweep + flexor sweep |
+| `fk_pinch_centroids.py` | HandFKSolver | — | Generates `config.HAND_PINCH_POSES`: brute-forces where every thumb-opposition combination meets |
 | `ik_1f_contact.py` | FingerSolver | §1.3 | One finger, one SDF contact — the smallest contact test |
 | `ik_2f_contact.py` | HandSolver | §1.4 | Two opposed fingers, one wrist, one graph |
 | `ik_5f_contact.py` | HandSolver | §1.4 | Full 5-finger grasp, one shot |
@@ -586,7 +679,12 @@ Two things in here are load-bearing beyond convenience:
 | `viz_interactive.py` | HandFK + HandIKStepper | §1.4+§1.5 | viser workbench: pose with FK, then step the IK solve one AL iteration at a time and scrub it |
 | `debug_al_trace.py` | all three | — | Read-only AL trace dumper and parameter sweeper |
 | `debug_ik_step_trace.py` | HandIKStepper | §1.4+§1.5 | Headless replay of the GUI's *Step* button, one AL iteration at a time, fully logged |
+| `_sweep_pinch_centroid.py` | HandIKStepper + HandFKSolver | — | Verification harness for the pinch-centroid constraint: structure, convergence, table consistency |
+| `_sweep_pregrasp_pen.py` | HandIKStepper | — | Headless sweep of phase0 settings looking for a phase1 warm start that closes — **it does not find one, see §6** |
 | `notes_5f_contact.md` | — | — | Investigation notes: why small objects don't grasp |
+
+The `_`-prefixed scripts are ad-hoc diagnostics rather than demos: they answer
+one question about one constraint and are not maintained as examples.
 
 #### How the scripts are built
 
@@ -643,15 +741,39 @@ k=0 and never enters the penetrating basin.
 pure collision at every step; adding `--k-touch K` splits the horizon into the
 three §1.6.2 phases. `--no-table` recovers `traj_5f_contact_collision` exactly.
 
+**`fk_pinch_centroids.py`** — where `config.HAND_PINCH_POSES` came from. It scans
+a tension grid with no contact attached and reads the geometry off; the reason
+that is cheap is the FK-independence property in §6. It sweeps a **per-finger**
+tension, not a shared one: the thumb and index reach each other at very different
+curls (~1.25 N vs ~2.4 N), so a shared sweep bottoms out ~65 mm apart and makes
+the hand look incapable of opposition. `check_independence()` asserts the
+property rather than assuming it.
+
+**`_sweep_pinch_centroid.py`** — the model for how to verify a *new constraint*,
+worth copying: (1) STRUCTURE — the constraint reaches the graph, proved by
+`get_factor_error_summary()` with the toggle off vs on at `al_iters=1`, never by
+a pose differential (these scenes stall, and a hand that fails to move looks
+identical whether the constraint was added and ignored or never added); (2)
+CONVERGENCE — solving with it on drives the independent readout to zero; (3)
+CROSS-CHECK — commanding the combination's *stored* tensions through FK at the
+converged wrist closes the fingertips on the target, which is the only thing
+that proves the centroid and the tensions in `HAND_PINCH_POSES` describe the
+same pose.
+
 **`viz_interactive.py`** — one panel, four buttons: **FK** re-poses the hand from
 the wrist / tension sliders (which also re-solve FK live as they move), **Step**
 advances the IK solve by exactly one AL outer iteration, **Auto solve** keeps
 stepping to converged/stalled, **Stop** breaks out mid-run. Every step is kept, so
 the *Solve steps* scrubber replays the convergence (iterate 0 is the initial
-guess). Object contact, table contact, object collision and table collision are
-four independent switches over the shared *Contact fingers* mask — that is what
-makes a stalled grasp bisectable: solve for one surface, the other, or both, with
-or without either avoidance, and see which family refuses to close.
+guess). The *Constraints* folder groups every switch by family — *Collision*
+(object, finger–finger, plane avoidance), *Contact* (table geometry, object
+contact, table contact, drop-normal-row) and *Pre-grasp* (half-space with its
+side dropdown and margin, hand-centering with `h_clear`, pinch-centroid,
+short-axis alignment) — each independent, over the shared *Contact fingers*
+mask. That is what makes a stalled grasp bisectable: solve for one surface, the
+other, or both, with or without any given avoidance, and see which family
+refuses to close. The *Presets* folder's phase0/1/2 checkboxes apply
+`apply_phase_preset` to the whole panel at once.
 
 Changing any of those restarts the AL loop (the duals are positional). The
 **Warm start** latch is what lets you change one and carry on: while it is on,
@@ -709,7 +831,8 @@ collision, a tight flexor prior makes penetration the merit minimum and AL quits
 at `iters=1` — keep the flexor variance at 1e-1.
 
 **A cold-started IK solve hyperextends before it converges — `ik_settle_steps`
-is the fix, not a symptom to tune around.** `TendonRobotModel::get_initial_values`
+is the fix, not a symptom to tune around.** `TendonHandModel::get_initial_values`
+(via each `TendonFingerModel::get_initial_values`)
 seeds every tendon tension at Q = 0 on a rod already posed at its *commanded*
 shape — a guess that looks reasonable (tips land within a few mm of the FK pose)
 but is statically inconsistent. Against the tight-passive prior (σ = 1e-3, mean
@@ -759,6 +882,43 @@ stalling scenes.
 help says "tight by default" but `--sigma-wrist-pos/-rot` both default to `1e1`,
 which is loose. Pass explicit values if the wrist behaviour matters to your run.
 
+**`ik_5f_collision.py` fails its own self-check, and has for a while.** It prints
+FAIL with a clearance of −0.029 m and the AL loop quitting at `iters=4`. Verified
+pre-existing as of 2026-08-13 — if you see it after a change of yours, it is not
+your regression. `traj_5f_point_collision.py` is the collision demo that passes.
+
+**The opposition half-space's failure mode is a SIGN, not a tuning problem.**
+When `opposition_axis_from_object()` inherits a principal-axis direction that
+points the wrong way, the constraint asks the thumb and the fingers to *trade
+sides* — a ~180° roll of the hand about the object — and the AL stalls on
+iteration 3 without moving (measured on phase-0 pen: 32 mm demanded of the
+thumb, 70–75 mm of the fingers, violation 1.09e3). That signature — a stall at
+2–4 iterations with a violation three orders up and no motion at all — is the
+sign, every time. `orient_opposition_axis()` resolves it against the hand's
+actual posture; `HandSolveParams.half_space_flip` forces it either way.
+
+**Phase 0 → phase 1 does not warm-start, and no parameter fixes it.** Running
+pre-grasp positioning to convergence and then warm-starting phase 1 (table
+contact) from it hard-stalls the pen scene at a ~20–40 mm gap, with the full
+warm-start machinery of §5.1 in place. `_sweep_pregrasp_pen.py` was written to
+find settings that close it and found none. Two contributing causes are known
+and neither is sufficient: `pregrasp_axis_align` can leave the wrist in the
+wrong basin, and `al_transfer_mu_max` over-stiffens the newly-added table
+constraint (the transfer inherits a µ the new constraint never earned). The root
+cause is structural: a cold phase 1 reaches the goal over ~22 gradual outer
+iterations, and a warm start has no way to reproduce that ramp — it begins with
+the constraint already at full strength. Run phase 1 cold for now.
+
+**Contact-free FK makes the fingers kinematically independent, which is a tool.**
+With the wrist pinned and no contact attached, the only shared variable is the
+wrist, and nothing pulls it off its prior — so each fingertip is a function of
+that finger's own tension alone. A tension sweep is therefore a lookup table, and
+scanning every digit combination is array indexing rather than solving
+(`fk_pinch_centroids.py`). The corollary is the trap: **never sweep a single
+shared tension when you care about inter-finger geometry.** Different digits
+reach a meeting point at very different curls, so a shared sweep reports that the
+hand cannot oppose at all.
+
 ---
 
 ## 7. Reading order for someone new
@@ -769,3 +929,195 @@ which is loose. Pass explicit values if the wrist behaviour matters to your run.
    it is added.
 3. `EnvironmentFactors.h` — the residuals and their Jacobians, with the paper
    equation numbers in the comments.
+
+---
+
+## 8. The dependency graph — what the hand needs, and what it doesn't
+
+`crest-sparse` is a repo of six unrelated robot models that share a Cosserat rod
+and an optimizer. The tendon hand uses two of the six. This section is the
+transitive closure, so demos outside it can be pruned deliberately rather than
+guessed at.
+
+### 8.1 C++ — required
+
+Traced from `src/tendon_hand/pybind.cpp` through every `#include`.
+
+```
+tendon_hand/  TendonHandModel · TendonHandSolver · TendonHandTrajectoryPlanner · pybind
+      │
+      ├── tendon_finger/  TendonFingerModel · TendonFingerSolver
+      │                   TendonDiscWrenchFactor · TendonLengthFactor
+      │                   pybind.cpp   ← MANDATORY, see 8.3
+      │
+      ├── cosserat_rod/   CosseratRodModel
+      │                   + its 6 factors: Cosserat{Twist,Stress}Factor,
+      │                     BoundaryStressFactor, Root{CosseratTwist,
+      │                     CosseratStress,Boundary}StressFactor
+      │
+      ├── measurement/    PositionPriorFactor
+      │
+      ├── utils/          SolverBase · WarmAugmentedLagrangian ·
+      │                   EnvironmentFactors · Gaussians · MiscInline ·
+      │                   WrenchTransforms
+      │
+      └── pybind/         bindings.{h,cpp}   ← the PYBIND11_MODULE entry point
+```
+
+Read the `tendon_finger` edge precisely: the hand includes
+`TendonFingerSolver.h` **for the `TendonFingerSolverConfig` struct**, not for the
+`TendonFingerSolver` class. So if `ik_1f_contact.py` goes, `TendonFingerSolver.cpp`
+and its binding go with it while the header stays. Likewise
+`TendonFingerTrajectoryPlanner.{h,cpp}` (+ `TensionLimitFactor.h`, which nothing
+else includes) exists solely for `traj_1f_contact.py`.
+
+### 8.2 C++ — not in the chain
+
+| Path | Lines | Notes |
+|---|---|---|
+| `src/cosserat_dynamics/` | 389 | whole module — **but see 8.7 if dynamics is on the roadmap** |
+| `src/cosserat_shell/` | 501 | whole module |
+| `src/multi_robot/` | 447 | whole module |
+| `src/parallel_robot/` | 665 | whole module; sole user of `measurement/ActuationForceMeasFactor` |
+| `src/tendon_robot/` | 1353 | whole module — **but read 8.3 before deleting** |
+| `src/cosserat_rod/CosseratRodSolver.{h,cpp}`, `pybind.cpp` | 205 | the rod as a standalone solver; the hand uses `CosseratRodModel` directly |
+| `src/tendon_finger/TendonFingerEstimatorModel.*`, `TendonFingerIterativeSolver.*`, `KnuckleBendFactor.*` | 902 | the state-estimation path (`state_estimation_test.py`) |
+| `src/tendon_finger/TendonFingerTrajectoryPlanner.*`, `TensionLimitFactor.h` | 817 | only `traj_1f_contact.py` |
+| `src/measurement/ActuationForceMeasFactor.*` | 47 | only `parallel_robot` |
+| `src/measurement/FbgArrayMeasFactor.h` | 70 | **included by nothing at all** |
+| `src/utils/DistLoadSmoothingFactor.h` | 50 | **included by nothing at all** |
+
+That is ~5,400 of ~13,900 C++ lines.
+
+### 8.3 Three traps in the C++ prune
+
+**`CMakeLists.txt` globs.** It is `file(GLOB_RECURSE SOURCES "src/*.cpp")`, so a
+deleted directory needs no build-file edit — but a *stale* CMake cache will
+still list it. Reconfigure, don't rebuild.
+
+**`pybind/bindings.cpp` calls every module unconditionally.** Deleting a module
+means deleting its `bind_*(m)` call in `PYBIND11_MODULE` and its declaration in
+`bindings.h`, or the link fails.
+
+**`src/tendon_robot/pybind.cpp` registers types the hand needs.**
+`RoutingAngleFunction`, `RoutingFunctionParams`, `TendonInput` and
+`PerDiscTendonInput` are bound **there and nowhere else**, and
+`tests/tendon_finger/config.py` — which `config.py` imports, which every hand
+script imports — constructs them by those names. Delete `tendon_robot/` as-is
+and every hand script dies at import with `AttributeError: module 'crest_sparse'
+has no attribute 'TendonInput'`.
+
+The reason it works today is worth knowing, because it is also a latent bug:
+those four types are declared **twice, byte-identically, in the global
+namespace** — once in `tendon_robot/TendonRobotModel.h:16-47` and once in
+`tendon_finger/TendonFingerModel.h:17-48`. The two headers are never included in
+the same translation unit, so it links; pybind keys its registry on `typeid`, so
+the single registration from `tendon_robot/pybind.cpp` serves
+`TendonFingerSolverConfig` too. It is a one-definition-rule violation that
+currently happens to be benign.
+
+So the correct order is: **move those four `py::class_`/`py::enum_` blocks from
+`tendon_robot/pybind.cpp` into `tendon_finger/pybind.cpp` first, rebuild, run a
+hand script, and only then delete `src/tendon_robot/`.** Deleting the duplicate
+declaration from one of the two headers is a good follow-up while it is fresh —
+after the prune, `tendon_finger/TendonFingerModel.h` should be the only home.
+
+### 8.4 Python — required
+
+```
+python/crest_sparse/__init__.py          re-exports the extension
+
+python/tests/tendon_hand/                all of it — config, scene, solvers,
+                                         utils + the scripts you keep
+
+python/tests/tendon_finger/config.py     get_6tendon_config, get_base_config
+python/tests/tendon_finger/utils.py      PlannerLogger, log_planner_parameters,
+                                         log_conditioning_report
+
+python/tests/_plotting/  __init__ · utils · cosserat_rod_plotter ·
+                         tendon_hand_plotter · trajectory_plotter ·
+                         al_convergence_plotter · viser_hand
+                         (+ tendon_finger_plotter, for the two 1f scripts)
+
+python/tests/_objects/   make_*.py and the .vdb grids they bake
+```
+
+Note `tendon_hand/utils.py` and `tendon_finger/utils.py` both export
+`PlannerLogger` / `log_planner_parameters`, and the scripts import them from
+*both* — `traj_5f_contact.py` takes them from `tendon_finger.utils`,
+`debug_al_trace.py` from `tendon_hand.utils`. Consolidate before pruning, or the
+"unused" copy turns out to be the one half the scripts use.
+
+### 8.5 Python — not in the chain
+
+| Path | Lines | Notes |
+|---|---|---|
+| `python/tests/cosserat/` | 710 | |
+| `python/tests/multi_robot/` | 202 | |
+| `python/tests/parallel_robot/` | 507 | |
+| `python/tests/tendon_robot/` | 1066 | |
+| `python/tests/tendon_finger/` **except** `config.py`, `utils.py` | 2,057 | benchmark, kinematics/contact tests, state estimation, `.old/` |
+| `python/tests/_plotting/` — `cosserat_shell_plotter`, `multi_robot_plotter`, `parallel_robot_plotter`, `tendon_robot_plotter`, `state_estimation_plotter`, `solver_diagnostics_plotter` | 1,113 | |
+| `python/crest_sparse/configs/tendon_finger.py`, `python/crest_sparse/utils/tendon_finger.py` | — | **dead copies** of `tests/tendon_finger/{config,utils}.py`; nothing imports either |
+
+### 8.6 Hand scripts, ranked by how much you'd miss them
+
+Everything in this directory is a demo of the same three solver classes, so the
+prunable set is larger than it looks. In rough order of what to keep:
+
+* **Keep** — `config.py`, `scene.py`, `solvers.py`, `utils.py` (the shared
+  layer); `viz_interactive.py` and both `debug_*` (the only debugging tools);
+  `traj_5f_slide_grasp.py` (the most complete pipeline — `--no-table` reproduces
+  `traj_5f_contact_collision` exactly).
+* **Keep one of each family** — `ik_5f_contact.py` and `traj_5f_contact.py` are
+  the reference inline builds; the `_collision` / `_point` variants differ by a
+  handful of flags.
+* **Prunable, with a caveat** — `ik_1f_contact.py` and `traj_1f_contact.py` are
+  the *only* users of the single-finger C++ path, so deleting them is what makes
+  `TendonFingerTrajectoryPlanner` prunable too. `ik_2f_contact.py` is the only
+  user of `get_two_finger_opposition_configs`.
+* **Documents a known failure, keep as a record** — `ik_5f_point_collision.py`
+  and `ik_5f_collision.py` (§6).
+* **Regenerable** — `fk_pinch_centroids.py` produced `HAND_PINCH_POSES`; delete
+  it and that table can never be re-derived from anything in the tree.
+* **Ad-hoc** — `_sweep_pinch_centroid.py`, `_sweep_pregrasp_pen.py`.
+
+### 8.7 If dynamics is on the roadmap
+
+Keeping `cosserat_dynamics` costs **nothing beyond the module itself**. Its
+entire include closure is `cosserat_rod/CosseratRodModel.h`, `utils/SolverBase.h`
+and `utils/WrenchTransforms.h` — all three already mandatory for the hand. It
+pulls in no other robot model, so nothing else in 8.2 becomes un-prunable:
+
+* C++ keep-set grows by `src/cosserat_dynamics/` (389 lines). Prunable drops
+  from ~5,400 to ~5,000 of ~13,900.
+* Python keep-set grows by exactly one file, `tests/cosserat/dynamics_sim.py`
+  (178 lines). It is self-contained — its only local imports are `crest_sparse`
+  and `_plotting/cosserat_rod_plotter.py`, which the hand already needs for
+  `tendon_hand_plotter` (`CosseratRodMeshManager` and `CosseratRodPlotter` are
+  both in that file), and it carries its own `get_K_inv` rather than importing
+  `tests/cosserat/config.py`. **The rest of `tests/cosserat/` stays prunable.**
+
+Know which half you are keeping, because they are not equally useful:
+
+**`CosseratDynamicsFactor` is the reusable piece.** It is a plain node-level
+`NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6>` over the same node at three
+consecutive *time* steps plus its external wrench, parameterized by `dt`, linear
+/ rotational damping and inertia. It includes nothing but GTSAM headers. That is
+what hand dynamics would emit into the existing K+1-step planner graph, where
+the temporal structure and the wrench variables `D`/`F` already exist.
+
+**`CosseratDynamicsSolver` is a bare-rod demo, not a component.** It owns its
+own `CosseratDynamicsConfig` (`rod_length`, `num_nodes`, `num_time_steps`,
+`K_inv`) and builds `num_time_steps` independent rods — it has no notion of a
+tendon, a finger, a shared wrist, or contact. A hand-dynamics build extends
+`TendonHandTrajectoryPlanner`, it does not call this. Keep it as the reference
+for how the factor is wired and tuned; do not expect to reuse it.
+
+One practical wrinkle when you get there: `CosseratRodModel` numbers its key
+namespace from a **globally auto-incrementing `next_id_`**, so each step's
+`TendonHandModel` builds fingers with fresh rod ids and there is no formula
+mapping "node n of finger f" from step k to step k−1. The planner owns all K+1
+models, so it can pair them by calling `get_pose_key(n)` on each — but the
+pairing has to be built explicitly, unlike the wrist and tension GP priors that
+key off `Symbol('W', k)` and can just index by step.
