@@ -681,10 +681,40 @@ Two things in here are load-bearing beyond convenience:
 | `debug_ik_step_trace.py` | HandIKStepper | §1.4+§1.5 | Headless replay of the GUI's *Step* button, one AL iteration at a time, fully logged |
 | `_sweep_pinch_centroid.py` | HandIKStepper + HandFKSolver | — | Verification harness for the pinch-centroid constraint: structure, convergence, table consistency |
 | `_sweep_pregrasp_pen.py` | HandIKStepper | — | Headless sweep of phase0 settings looking for a phase1 warm start that closes — **it does not find one, see §6** |
+| `mount_onshape_fit.py` | none (CAD only) | — | Measures `T_flange<-wrist` from an Onshape assembly whose origin is the robot flange |
 | `notes_5f_contact.md` | — | — | Investigation notes: why small objects don't grasp |
 
 The `_`-prefixed scripts are ad-hoc diagnostics rather than demos: they answer
 one question about one constraint and are not maintained as examples.
+
+#### Putting the hand on a robot (`mount.py` + `mount_onshape_fit.py`)
+
+`DEFAULT_WRIST_XYZ/RPY` is a *demo* pose — chosen so the hand hovers over the
+grasp locus, not measured against hardware. `mount.py` supplies the missing link
+between the solver's wrist frame and the printed part:
+
+* the wrist origin **is** the OpenSCAD origin. `hand()` places digits at
+  `translate(o_finger[i])` with the palm untranslated, and `finger_base_offset()`
+  reuses those same numbers as wrist-frame translations — so `T_stl<-wrist` is a
+  pure rotation, and any translation you measure is purely where the STL sits in
+  your assembly;
+* that rotation is `R_WRIST_FROM_STL = Rz(+90) @ Rx(180)` — the `rotate([180,0,0])`
+  in `parameters.scad`, then the yaw carrying CAD growth `+X` onto solver growth
+  `+Y`. Offered as a hypothesis: `CANDIDATE_ROTATIONS` holds all four plausible
+  conventions and the fitter scores them against real part geometry;
+* `mounting_discrepancy()` quantifies a **known bug** — `finger_base_offset()`
+  rotates its digit *rotations* from CAD axes into solver axes but leaves the digit
+  *translations* unrotated, displacing each base by 1.5–5 mm (fingers) and 8.9 mm
+  (thumb). Not fixed here: correcting it would silently invalidate
+  `HAND_PINCH_POSES` and every constant measured against the current mounting.
+  Expect residuals of that size in any CAD comparison.
+
+`python -m python.tests.tendon_hand.mount` self-checks the above offline and prints
+the digit-base landmarks. `mount_onshape_fit.py` then reads the hand instance's
+occurrence transform from the Onshape API and prints `T_flange<-wrist` plus a
+paste-ready xyz/rpy pair. It takes credentials from `ONSHAPE_ACCESS_KEY` /
+`ONSHAPE_SECRET_KEY` / `ONSHAPE_URL` only — never flags, never a file in this repo;
+copy `mount_onshape_fit.sh.example` somewhere outside the repo and fill it in.
 
 #### How the scripts are built
 

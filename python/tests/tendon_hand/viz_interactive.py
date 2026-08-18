@@ -64,6 +64,7 @@ from .solvers import (
     pregrasp_centroid_witness, default_half_space_axis, PHASE_PRESETS,
     FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 from .config import pinch_pose
+from .mount import MOUNT_WRIST_XYZ, MOUNT_WRIST_RPY, measured_mount_pose
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
@@ -240,6 +241,43 @@ class HandVizApp:
         # part of the stepper's constraint set too.
         self._invalidate_stepper()
 
+    def _pose_at_mount(self, _=None):
+        """Drive the wrist sliders to the measured robot mount and re-pose.
+
+        With the wrist at ``T_flange<-wrist``, the viser world frame IS the flange
+        frame, so what you see is the hand as it hangs off the arm in the CAD
+        assembly -- the check the measurement actually needs. Turns the mount
+        frames on, since arriving here with them off shows nothing new.
+        """
+        for handle, value in zip(
+                (self.g_tx, self.g_ty, self.g_tz,
+                 self.g_roll, self.g_pitch, self.g_yaw),
+                tuple(MOUNT_WRIST_XYZ) + tuple(MOUNT_WRIST_RPY)):
+            # Sliders quantize to their step, so the pose actually solved is the
+            # rounded one; _render_mount draws from the sliders for that reason.
+            handle.value = float(value)
+        self.g_show_mount.value = True
+        self._sync_params()
+        self._fk_solve()
+
+    def _render_mount(self, res=None):
+        """Draw or clear the wrist/flange frame pair for the pose on screen.
+
+        Anchored on the SOLVED wrist, not ``params.wrist_pose``: the wrist is a
+        variable whose prior is soft, so contact pulling on the hand moves it tens
+        of millimetres off the commanded pose. Drawing the commanded pose leaves
+        the frames stranded while the hand they describe moves away from them --
+        and the flange is rigidly bolted to the wrist, so it must travel with it.
+        ``res`` is the iterate being rendered, so the frames track the convergence
+        scrubber too. Falls back to the commanded pose before the first solve.
+        """
+        if not self.g_show_mount.value:
+            self.scene.clear_mount_frames()
+            return
+        T_wrist = (solved_wrist_pose(self.fk_solver.configs, res.frames[0])
+                   if res is not None else self.params.wrist_pose)
+        self.scene.set_mount_frames(T_wrist, measured_mount_pose())
+
     def _sync_wrist(self):
         R = _euler_to_R(self.g_roll.value, self.g_pitch.value, self.g_yaw.value)
         T = np.eye(4)
@@ -338,12 +376,15 @@ class HandVizApp:
 
     def _render_frame(self):
         if self.result is None:
+            # Nothing solved yet, so the commanded wrist pose is all there is.
+            self._render_mount()
             return
         # Render whichever solve snapshot the convergence scrubber selects; with
         # no scrubber up this is the result itself, so the gap readouts below
         # describe the intermediate state without knowing about iterates at all.
         # Every result here is a single state, so there is only ever frame 0.
         res = self._iter_view()
+        self._render_mount(res)
         # Only the fingers this solve drove onto a surface get a gap line for it;
         # a distance readout on a finger nothing asked to touch is just noise.
         # The two sets are independent, so a finger can carry both lines, one, or
@@ -1084,7 +1125,7 @@ class HandVizApp:
                    self.g_table, self.g_plane_offset, self.g_plane_avoid,
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
                    self.g_show_contact, self.g_show_collision,
-                   self.g_show_discs, self.g_show_gaps])
+                   self.g_show_discs, self.g_show_gaps, self.g_show_mount])
 
     def _build_gui(self):
         gui = self.server.gui
@@ -1212,6 +1253,16 @@ class HandVizApp:
             self.g_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, yw0)
             self.g_sig_pos = gui.add_slider("log10 sigma_pos", -6, 2, 0.5, -2)
             self.g_sig_rot = gui.add_slider("log10 sigma_rot", -6, 2, 0.5, -2)
+            # The sliders above are a demo pose. This is the measured one: put the
+            # wrist here and the viser world origin becomes the robot flange, so
+            # the hand hangs exactly as it does in the CAD assembly.
+            self.g_mount = gui.add_button(
+                "Pose at measured robot mount",
+                hint="Set the six sliders to mount.MOUNT_WRIST_XYZ/RPY -- the "
+                     "wrist pose measured from the Onshape assembly. The world "
+                     "origin then IS the flange, and 'mount frames' below draws "
+                     "both frames so you can check the hand sits on the arm the "
+                     "way it does in CAD.")
 
         with gui.add_folder("Tensions (N)"):
             self.g_passive = gui.add_slider("passive", 0.0, 3.0, 0.05, 0.5)
@@ -1458,6 +1509,12 @@ class HandVizApp:
             self.g_show_contact = gui.add_checkbox("contact spheres", True)
             self.g_show_collision = gui.add_checkbox("collision spheres", True)
             self.g_show_discs = gui.add_checkbox("routing discs", False)
+            self.g_show_mount = gui.add_checkbox(
+                "mount frames", False,
+                hint="Draw the wrist frame and, offset from it by the measured "
+                     "mount transform, the robot flange frame the hand bolts to. "
+                     "Use with 'Pose at measured robot mount' to check the "
+                     "measurement against the CAD assembly by eye.")
             self.g_show_gaps = gui.add_checkbox(
                 "contact distance", True,
                 hint="Fingertip-to-surface gap/margin overlays in mm: object "
@@ -1499,9 +1556,11 @@ class HandVizApp:
                    self.g_yaw, self.g_passive] + self.g_flexors):
             h.on_update(self._live_fk)
 
+        self.g_mount.on_click(self._pose_at_mount)
+
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
-                  self.g_show_gaps):
+                  self.g_show_gaps, self.g_show_mount):
             h.on_update(lambda _: (self._sync_params(), self._render_frame()))
         # The contact checkboxes ride along only to keep self.params in sync;
         # like every other solver knob they take effect on the next solve, and

@@ -1,0 +1,43 @@
+#!/bin/sh
+# Measure T_flange<-wrist from the Onshape hand assembly.
+#
+# TEMPLATE ONLY -- never put real keys in this file, it is inside the repo.
+#
+#   cp .../tendon_hand/mount_onshape_fit.sh.example  <somewhere outside the repo>
+#   chmod 700 <that copy>
+#   <edit the copy, fill in the keys>
+#
+# gepetto_project/ is a good home: it is not a git repository (crest-sparse/ is),
+# so a wrapper there cannot be committed by accident. If a key ever leaks, revoke
+# it at https://dev-portal.onshape.com/keys and generate a new pair.
+#
+# ---------------------------------------------------------------------------
+# FILL THESE IN
+# ---------------------------------------------------------------------------
+# Onshape API keys: https://dev-portal.onshape.com/keys -> "Create new API key".
+# Grant it read scope on documents; nothing else is needed.
+ONSHAPE_ACCESS_KEY='PASTE_ACCESS_KEY_HERE'
+ONSHAPE_SECRET_KEY='PASTE_SECRET_KEY_HERE'
+
+# The assembly tab's browser URL, copied straight from the address bar while the
+# hand + actuation box assembly is open. Must look like
+#   https://cad.onshape.com/documents/<did>/w/<wid>/e/<eid>
+ONSHAPE_URL='PASTE_ASSEMBLY_URL_HERE'
+
+# ---------------------------------------------------------------------------
+export ONSHAPE_ACCESS_KEY ONSHAPE_SECRET_KEY ONSHAPE_URL
+
+# The tendon_hand package needs the built crest_sparse extension, which lives in
+# the crest_py11 conda env. Override with PYTHON=... if your env differs.
+PYTHON="${PYTHON:-$HOME/miniforge3/envs/crest_py11/bin/python}"
+
+# Run from crest-sparse/ as a module so the import resolves to the installed
+# extension rather than a stale in-tree .so. Adjust this path for wherever you put
+# your copy of this script.
+cd "$HOME/git_repos/gepetto_project/crest-sparse" || exit 1
+
+# Pass through any flags, e.g.:
+#   ./run_mount_fit.sh --list                 list every occurrence, then stop
+#   ./run_mount_fit.sh --instance hand        pick the hand by name substring
+#   ./run_mount_fit.sh --json /tmp/mount.json save the result
+exec "$PYTHON" -m python.tests.tendon_hand.mount_onshape_fit "$@"

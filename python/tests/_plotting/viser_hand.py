@@ -39,6 +39,7 @@ _DISC_RGB = (100, 149, 237)
 _TABLE_RGB = (150, 150, 160)
 _HALF_SPACE_RGB = (255, 140, 0)
 _CENTER_TARGET_RGB = (180, 60, 220)
+_MOUNT_RGB = (240, 240, 240)
 
 # Fingertip-to-object gap overlay: green within GAP_GREEN_MAX_M of the surface
 # (including interpenetration, which is simply "not far"), red beyond it.
@@ -54,6 +55,31 @@ _MARGIN_VIOLATED_RGB = _GAP_FAR_RGB
 # Pre-grasp short-axis alignment overlay: green within ANGLE_GREEN_MAX_DEG of
 # the target axis (either direction), red beyond it.
 ANGLE_GREEN_MAX_DEG = 10.0
+
+
+def _wxyz_from_R(R):
+    """viser's (w, x, y, z) quaternion from a 3x3 rotation.
+
+    Shepperd's method: pick the largest of the four diagonal combinations so the
+    square root is never taken of something near zero. The naive w-first formula
+    loses all precision at 180 deg rotations, and the mount transform is exactly
+    that kind of pose.
+    """
+    R = np.asarray(R, float)
+    t = np.trace(R)
+    if t > 0.0:
+        s = np.sqrt(t + 1.0) * 2.0
+        return (0.25 * s, (R[2, 1] - R[1, 2]) / s,
+                (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s)
+    i = int(np.argmax(np.diag(R)))
+    j, k = (i + 1) % 3, (i + 2) % 3
+    s = np.sqrt(1.0 + R[i, i] - R[j, j] - R[k, k]) * 2.0
+    q = [0.0, 0.0, 0.0, 0.0]
+    q[0] = (R[k, j] - R[j, k]) / s
+    q[1 + i] = 0.25 * s
+    q[1 + j] = (R[j, i] + R[i, j]) / s
+    q[1 + k] = (R[k, i] + R[i, k]) / s
+    return tuple(q)
 
 
 def _recenter(mesh):
@@ -206,6 +232,40 @@ class ViserHandScene:
                 self.scene.add_box(name, color=_HALF_SPACE_RGB,
                                    dimensions=tuple(extents), opacity=0.15,
                                    position=tuple(origin + side * margin * a))
+
+    def set_mount_frames(self, T_world_wrist, T_flange_wrist, *, axes_length=0.05):
+        """Draw the wrist frame and the robot flange frame it hangs off.
+
+        ``T_flange_wrist`` is the measured mount (``mount.measured_mount_pose()``),
+        so the flange sits at ``T_world_wrist @ inv(T_flange_wrist)``. Both frames
+        are drawn with axes plus a line between them, which is what makes a wrong
+        mount obvious: the flange should land where the metal bracket actually
+        bolts on, with its axes matching the CAD assembly's origin triad.
+        """
+        T_world_wrist = np.asarray(T_world_wrist, float)
+        T_world_flange = T_world_wrist @ np.linalg.inv(
+            np.asarray(T_flange_wrist, float))
+        for name, T, length in (("/mount/wrist", T_world_wrist, axes_length * 0.7),
+                                ("/mount/flange", T_world_flange, axes_length)):
+            self.scene.add_frame(name, show_axes=True, axes_length=length,
+                                 axes_radius=length * 0.03,
+                                 wxyz=_wxyz_from_R(T[:3, :3]),
+                                 position=tuple(T[:3, 3]))
+        self.scene.add_line_segments(
+            "/mount/link",
+            points=np.array([[T_world_flange[:3, 3], T_world_wrist[:3, 3]]]),
+            colors=np.array([[_MOUNT_RGB, _MOUNT_RGB]], dtype=np.uint8),
+            line_width=2.0)
+        self.scene.add_label("/mount/flange_label", "flange (robot mount)",
+                             position=tuple(T_world_flange[:3, 3]))
+
+    def clear_mount_frames(self):
+        for name in ("/mount/wrist", "/mount/flange", "/mount/link",
+                     "/mount/flange_label"):
+            try:
+                self.server.scene.remove_by_name(name)
+            except Exception:
+                pass
 
     def clear_half_space_plane(self):
         for name in ("/half_space_plane", "/half_space_margin_pos",
