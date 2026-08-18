@@ -12,9 +12,22 @@ scripts that *bake* the SDF ``.vdb`` level-set files. The specs here must stay
 consistent with the parameters those generators were run with.
 """
 
+import functools
+import json
 import os
 
 import numpy as np
+
+
+# Default LogSumExp sharpness for ellipsoid-set objects, mirroring the C++
+# EnvironmentConfig::ellipsoid_set_beta default. Distances are in metres, so the
+# smooth min understates by up to ln(K)/beta -- 1.4 mm at K=4 here. Kept in the
+# spec (not just on the env) because primitive_surface_gap has to reproduce the
+# solver's residual, and it can only do that if it uses the same beta.
+ELLIPSOID_SET_BETA = 1000.0
+
+# Where ycb/browser.py exports the committed decompositions.
+YCB_FITS_DIR = os.path.join(os.path.dirname(__file__), "..", "_objects", "ycb", "fits")
 
 
 # Object center, shared by all primitives: the p2p goal position used in the
@@ -34,11 +47,91 @@ def Rx(theta):
                      [0.0, s, c]])
 
 
+@functools.lru_cache(maxsize=1)
+def ycb_primitive_specs():
+    """Every committed YCB fit as an ``ellipsoid_set`` primitive, keyed ``ycb:<name>``.
+
+    Reads ``_objects/ycb/fits/*.json`` -- the decompositions exported by
+    ``tests._objects.ycb.browser``. Returns ``{}`` when nothing has been fitted,
+    so a checkout with an empty ``fits/`` simply has no YCB objects rather than
+    failing to import.
+
+    FRAME. The exported centers live in the browser's *display* frame: mesh
+    centered in XY, lowest point resting on z=0. Every other primitive in this
+    module puts its object-local origin at the object's own middle and lets
+    ``object_pose_mean`` place that in the world, so the members are re-centered
+    here on the midpoint of their own bounding box. Doing it once, at spec-build
+    time, keeps the offset out of the factor path -- the C++ side sees member
+    poses that are already correct relative to the object variable.
+
+    ``recenter`` is kept on the spec so a renderer can put the *mesh* in the same
+    frame as the shells; without it the two would be drawn a few cm apart.
+    """
+    directory = os.path.normpath(YCB_FITS_DIR)
+    if not os.path.isdir(directory):
+        return {}
+
+    specs = {}
+    for filename in sorted(os.listdir(directory)):
+        if not filename.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(directory, filename)) as handle:
+                blob = json.load(handle)
+            name = blob["object"]
+            raw = blob["ellipsoids"]
+            if not raw:
+                continue
+
+            # Bounding box of the union, from each member's own world AABB --
+            # the same half-extent formula as ycb.ellipsoids.Ellipsoid.aabb().
+            centers = np.array([m["center"] for m in raw], dtype=float)
+            radii = np.array([m["radii"] for m in raw], dtype=float)
+            rotations = np.array([m["rotation"] for m in raw], dtype=float)
+            half = np.sqrt(np.sum((rotations * radii[:, None, :]) ** 2, axis=2))
+            lo = (centers - half).min(axis=0)
+            hi = (centers + half).max(axis=0)
+            recenter = 0.5 * (lo + hi)
+
+            members = [
+                {"semi_axes": np.asarray(m["radii"], dtype=float),
+                 "center": np.asarray(m["center"], dtype=float) - recenter,
+                 "rotation": np.asarray(m["rotation"], dtype=float)}
+                for m in raw
+            ]
+            specs[f"ycb:{name}"] = {
+                "type": "ellipsoid_set",
+                "ycb": name,
+                "source": blob.get("source", ""),
+                "beta": ELLIPSOID_SET_BETA,
+                "members": members,
+                "extents": hi - lo,
+                "recenter": recenter,
+                "metrics": blob.get("metrics", {}),
+                "plot": (lambda c, _m=members: {
+                    "type": "ellipsoid_set", "center": c, "members": _m}),
+            }
+        except Exception:
+            # One malformed export must not take the whole object list down --
+            # the browser can rewrite it, and every other object still loads.
+            continue
+    return specs
+
+
 # Registry of supported object primitives. "vdb" is the level-set file produced
 # by the matching _objects/make_*.py script; the geometry fields must match the
 # parameters those scripts were generated with. "plot" describes how the
 # TendonFingerPlotter should render the primitive.
+#
+# YCB objects (ycb_primitive_specs) are merged in on top under "ycb:<name>" keys:
+# real scanned objects approximated by an ellipsoid SET, for the cases a single
+# hyper-ellipsoid cannot describe. They are data-driven, so which ones exist
+# depends on what has been fitted into _objects/ycb/fits/.
 def get_primitive_specs():
+    return {**_builtin_primitive_specs(), **ycb_primitive_specs()}
+
+
+def _builtin_primitive_specs():
     return {
         "sphere": {
             "type": "sphere",
@@ -190,15 +283,38 @@ def primitive_surface_gap(p_local, spec):
         # Taubin first-order distance to x^T M x = 1 (Section 1.6.3, Eq 1.91),
         # matching the C++ EllipsoidCollisionGapFactor so the reported gap agrees
         # with what the solver drives to zero. M = diag(a^-2, b^-2, c^-2).
-        a = np.asarray(spec["semi_axes"], dtype=float)
-        m_diag = 1.0 / (a * a)
-        x = np.asarray(p_local, dtype=float)
-        Mx = m_diag * x
-        g = np.linalg.norm(Mx)
-        if g < 1e-9:
-            g = 1e-9
-        return float((x @ Mx - 1.0) / (2.0 * g))
+        return _taubin_gap(p_local, spec["semi_axes"])
+    if ptype == "ellipsoid_set":
+        # LogSumExp smooth min over the members (Section 1.2, Eq 1.11), which is
+        # what EllipsoidSetCollisionGapFactor evaluates. It must be the smooth min
+        # and not a hard one: the two differ by up to ln(K)/beta (1.4 mm at K=4,
+        # beta=1000), and this number is compared against a solver residual that
+        # carries exactly that bias.
+        beta = float(spec.get("beta", ELLIPSOID_SET_BETA))
+        d = np.array([_taubin_gap(_to_member_frame(p_local, m), m["semi_axes"])
+                      for m in spec["members"]])
+        d_min = d.min()
+        # Shift by d_min so no exponent is positive -- same guard as the C++.
+        return float(d_min - np.log(np.exp(-beta * (d - d_min)).sum()) / beta)
     raise ValueError(f"Unknown primitive type: {ptype!r}")
+
+
+def _taubin_gap(x, semi_axes):
+    """Taubin's first-order distance from ``x`` to ``sum((x_i/a_i)^2) = 1``."""
+    a = np.asarray(semi_axes, dtype=float)
+    m_diag = 1.0 / (a * a)
+    x = np.asarray(x, dtype=float)
+    Mx = m_diag * x
+    g = np.linalg.norm(Mx)
+    if g < 1e-9:
+        g = 1e-9
+    return float((x @ Mx - 1.0) / (2.0 * g))
+
+
+def _to_member_frame(p_local, member):
+    """Object-local point into one set member's own frame: ``R_k^T (p - t_k)``."""
+    return np.asarray(member["rotation"], float).T @ (
+        np.asarray(p_local, float) - np.asarray(member["center"], float))
 
 
 def _primitive_surface_gradient(p_local, spec, h):
@@ -301,6 +417,30 @@ def primitive_surface_witness(p_local, spec, *, h=1e-6):
         sign = 1.0 if np.sum((x / a) ** 2) > 1.0 else -1.0
         return float(sign * np.linalg.norm(x - foot)), foot, n
 
+    if spec["type"] == "ellipsoid_set":
+        # Nearest point on the nearest MEMBER, each solved exactly and mapped back
+        # into the object frame. Deliberately a hard min, unlike
+        # primitive_surface_gap's smooth one: this answers "where on the object is
+        # the fingertip closest to", and a blended witness would sit off every
+        # actual surface -- there is no point in between two ellipsoids to draw a
+        # gap line to. The reported LENGTH still comes from this exact solve, so
+        # near a seam it can differ from the solver's smooth-min residual by up to
+        # ln(K)/beta; that is the standoff the smooth min buys, not an error.
+        best = None
+        for member in spec["members"]:
+            a = np.asarray(member["semi_axes"], dtype=float)
+            R = np.asarray(member["rotation"], dtype=float)
+            t = np.asarray(member["center"], dtype=float)
+            x_k = R.T @ (x - t)
+            foot_k = _ellipsoid_closest_point(x_k, a)
+            sign = 1.0 if np.sum((x_k / a) ** 2) > 1.0 else -1.0
+            d_k = float(sign * np.linalg.norm(x_k - foot_k))
+            if best is None or d_k < best[0]:
+                n_k = foot_k / (a * a)
+                n_k = n_k / (np.linalg.norm(n_k) or 1.0)
+                best = (d_k, R @ foot_k + t, R @ n_k)
+        return best
+
     d = primitive_surface_gap(x, spec)
     n = _primitive_surface_normal(x, spec, h)
     return float(d), x - d * n, n
@@ -314,12 +454,50 @@ def configure_object_surface(env, spec, objects_dir, primitive_name):
     if spec["type"] == "ellipsoid":
         env.ellipsoid_semi_axes = np.asarray(spec["semi_axes"], dtype=float)
         return
+    if spec["type"] == "ellipsoid_set":
+        attach_ellipsoid_set(env, spec)
+        return
     vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
     if not os.path.exists(vdb_path):
         raise FileNotFoundError(
             f"{vdb_path} not found. Generate it with "
             f"python -m tests._objects.make_{primitive_name} (run from the python/ dir).")
     env.load_sdf(vdb_path)
+
+
+def attach_ellipsoid_set(env, spec):
+    """Write an ``ellipsoid_set`` spec onto a ``crest_sparse.EnvironmentConfig``.
+
+    Each member becomes an ``EllipsoidPrimitive`` whose ``local_pose`` is its
+    constant pose in the OBJECT frame; the C++ side composes that with the one
+    optimized object pose, so the set adds no variables of its own.
+
+    Raises on a binding that predates ``ellipsoid_set`` rather than degrading
+    quietly. The usual ``_set_if`` treatment is wrong here: skipping this field
+    does not lose a tuning knob, it leaves the env with NO object surface at all,
+    and the solve then runs with the contact constraint silently missing. Callers
+    that need to stay up on an old binding should gate on
+    ``solvers.capabilities()["ellipsoid_set"]`` and not offer the object.
+    """
+    import crest_sparse
+
+    if not hasattr(env, "ellipsoid_set"):
+        raise AttributeError(
+            "this crest_sparse build has no EnvironmentConfig.ellipsoid_set, so "
+            f"the ellipsoid-set object {spec.get('ycb', '?')!r} cannot be built -- "
+            "rebuild it (pip install . from the crest-sparse root)")
+
+    members = []
+    for m in spec["members"]:
+        primitive = crest_sparse.EllipsoidPrimitive()
+        primitive.semi_axes = np.asarray(m["semi_axes"], dtype=float)
+        pose = np.eye(4)
+        pose[:3, :3] = np.asarray(m["rotation"], dtype=float)
+        pose[:3, 3] = np.asarray(m["center"], dtype=float)
+        primitive.local_pose = pose
+        members.append(primitive)
+    env.ellipsoid_set = members
+    env.ellipsoid_set_beta = float(spec.get("beta", ELLIPSOID_SET_BETA))
 
 
 def proxy_semi_axes(spec):
@@ -340,6 +518,13 @@ def proxy_semi_axes(spec):
     t = spec["type"]
     if t == "ellipsoid":
         return np.asarray(spec["semi_axes"], dtype=float)
+    if t == "ellipsoid_set":
+        # Axis-aligned semi-axes of the box bounding the union. Genuinely a
+        # BOUND, like the cube's sqrt(3) case: §1.7 wants the pre-grasp proxy to
+        # enclose the object so the approach never sees a concave seam between two
+        # members to stall on. Half the bounding box is the cheap such bound --
+        # looser than an MVEE over the members, and unlike one it needs no solve.
+        return 0.5 * np.asarray(spec["extents"], dtype=float)
     if t == "sphere":
         r = float(spec["radius"])
         return np.array([r, r, r])
@@ -429,6 +614,13 @@ def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name):
     """
     env.ellipsoid_semi_axes = proxy_semi_axes(spec)
     if spec["type"] == "ellipsoid":
+        return
+    if spec["type"] == "ellipsoid_set":
+        # The set IS the exact geometry here -- there is no baked SDF to servo on
+        # in phase 3 -- so attach it alongside the proxy. Note the C++ precedence
+        # (set beats ellipsoid_semi_axes) means the set wins wherever both are
+        # set, so the proxy above only takes effect in a phase that clears it.
+        attach_ellipsoid_set(env, spec)
         return
     vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
     if not os.path.exists(vdb_path):

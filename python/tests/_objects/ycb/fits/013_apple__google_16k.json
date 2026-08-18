@@ -1,0 +1,60 @@
+{
+ "object": "013_apple",
+ "source": "google_16k",
+ "backend": "gmm",
+ "coverage_target": 0.98,
+ "frame": {
+  "note": "Centers are in the displayed frame: the mesh centered in XY with its lowest point on z=0. Subtract ground_offset to get coordinates in the original mesh frame.",
+  "ground_offset": [
+   -0.0008589999999999987,
+   0.0037844999999999997,
+   0.000393
+  ]
+ },
+ "metrics": {
+  "k": 1,
+  "excess_volume_ratio": 1.2130055651126377,
+  "surface_coverage": 0.98675,
+  "union_volume": 0.00029912158181877606,
+  "mesh_volume": 0.0002465953911687125,
+  "volume_reliable": true
+ },
+ "ellipsoids": [
+  {
+   "center": [
+    -4.6026087140241e-05,
+    -0.0002371133271646308,
+    0.03814849464046669
+   ],
+   "radii": [
+    0.03892600625593886,
+    0.04033912170121085,
+    0.045435790422258926
+   ],
+   "rotation": [
+    [
+     0.12408901373558916,
+     0.9907778110414821,
+     -0.05441733012541575
+    ],
+    [
+     -0.9907888570208003,
+     0.1267136087868158,
+     0.04776088516388667
+    ],
+    [
+     0.05421584153681424,
+     0.04798948318195875,
+     0.9973753817045936
+    ]
+   ],
+   "quaternion_wxyz": [
+    0.7496962725375854,
+    7.623021030179815e-05,
+    -0.03622572755181444,
+    -0.660789822708815
+   ],
+   "volume": 0.0002988498094036411
+  }
+ ]
+}

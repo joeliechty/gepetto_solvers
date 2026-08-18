@@ -91,6 +91,10 @@ def capabilities():
     pc = crest_sparse.TendonHandTrajectoryPlannerConfig()
     return {
         "ellipsoid": hasattr(env, "ellipsoid_semi_axes"),
+        # Section 1.2 ellipsoid SETS (the YCB objects). Gated separately from
+        # "ellipsoid" because the set factor landed much later than the single
+        # one, so a binding can easily have one and not the other.
+        "ellipsoid_set": hasattr(env, "ellipsoid_set"),
         "table": hasattr(env, "plane_normal"),
         "collision_cull": hasattr(env, "collision_cull_margin"),
         "k_touch": hasattr(pc, "k_touch"),
@@ -231,17 +235,32 @@ def default_object_center(primitive, spec):
     """Default world center for a primitive, matching the demo scripts: the big
     grasp sphere, capsule and analytic ellipsoids sit at the flexed-fingertip
     locus (``GRASP_SPHERE_CENTER``); the smaller primitives stay at ``OBJECT_CENTER``."""
-    if primitive in ("big_sphere", "capsule") or spec["type"] == "ellipsoid":
+    if (primitive in ("big_sphere", "capsule")
+            or spec["type"] in ("ellipsoid", "ellipsoid_set")):
         return np.array(GRASP_SPHERE_CENTER, dtype=float)
     return np.array(OBJECT_CENTER, dtype=float)
 
 
-def object_extent_along(spec, normal):
-    """Approximate object half-size along ``normal`` (m) -- used to seat a default
-    support plane tangent to the object's underside. Only a default; the plane
-    height is user-adjustable."""
+def object_extent_along(spec, normal, rotation=None):
+    """Object half-size along ``normal`` (m) -- used to seat a default support
+    plane tangent to the object's underside.
+
+    ``rotation`` is the object's world orientation. It matters for the analytic
+    surfaces, whose geometry is stored in the OBJECT-LOCAL frame: a rotated
+    object presents a different profile to the plane, and ignoring that seats the
+    table at the wrong height. Most visible on a long thin object -- stand the
+    screwdriver on end and its along-normal half-size goes from ~19 mm to ~106 mm.
+    Passing None keeps the legacy axis-aligned reading.
+
+    The baked-SDF primitives (cylinder/capsule/cube) are deliberately left on
+    their existing special-cased handling: their specs carry a fixed ``rotation``
+    the generators were baked with, which the branches below already account for.
+    """
     n = np.asarray(normal, dtype=float)
     n = n / (np.linalg.norm(n) or 1.0)
+    # Into the object's own frame, where the stored semi-axes/members live.
+    n_local = (n if rotation is None
+               else np.asarray(rotation, float).T @ n)
     t = spec["type"]
     if t == "sphere":
         return float(spec["radius"])
@@ -254,7 +273,28 @@ def object_extent_along(spec, normal):
     if t == "cube":
         return float(np.abs(np.asarray(spec["half_extents"], float) * n).sum())
     if t == "ellipsoid":
-        return float(np.abs(np.asarray(spec["semi_axes"], float) * n).sum())
+        # Support function ||diag(a) n||, the exact half-width along n. (For an
+        # axis-aligned n -- the default +Z table -- this equals the L1 reading
+        # this used to use, so no existing scene moves.)
+        return float(np.linalg.norm(np.asarray(spec["semi_axes"], float) * n_local))
+    if t == "ellipsoid_set":
+        # Furthest any member reaches along n from the object origin: its center's
+        # offset that way, plus its own reach. The reach of a rotated ellipsoid
+        # along n is the support function ||diag(a) R^T n|| -- a norm, not the L1
+        # sum the axis-aligned branch above uses. That distinction is not cosmetic
+        # for these: a YCB fit's members are rotated to arbitrary angles, and L1
+        # over-estimates by up to sqrt(3), which would seat the table centimetres
+        # below a long thin object like the screwdriver.
+        #
+        # Max over members rather than sum, because they overlap by construction.
+        # Signed center offset, not |offset|: the deepest member is the one whose
+        # centre sits furthest AGAINST n, and taking the absolute value would let
+        # a member on the far side masquerade as the lowest one.
+        return max(
+            float(-(np.asarray(m["center"], float) @ n_local)
+                  + np.linalg.norm(np.asarray(m["semi_axes"], float)
+                                   * (np.asarray(m["rotation"], float).T @ n_local)))
+            for m in spec["members"])
     return 0.05
 
 
@@ -298,7 +338,12 @@ def auto_table_origin(params, spec, object_center):
     n = n / (np.linalg.norm(n) or 1.0)
     # getattr: params-like objects predating table_burial keep the old geometry.
     burial = float(getattr(params, "table_burial", 0.0))
-    depth = (1.0 - 2.0 * burial) * object_extent_along(spec, n)
+    # The object's world orientation, so a rotated object is seated on the
+    # profile it actually presents to the plane. Falls back to the primitive's
+    # own baked rotation when the caller has not overridden it.
+    rotation = (params.object_rotation if params.object_rotation is not None
+                else spec.get("rotation"))
+    depth = (1.0 - 2.0 * burial) * object_extent_along(spec, n, rotation)
     return np.asarray(object_center, float) - depth * n
 
 
@@ -683,6 +728,11 @@ class HandSolveParams:
     primitive: str = "mid_sphere_ellipsoid"
     object_center: Optional[np.ndarray] = None      # None => derive from primitive
     object_rotation: Optional[np.ndarray] = None     # None => primitive's rotation
+    # LogSumExp sharpness for an `ellipsoid_set` (ycb:) object; None keeps the
+    # spec's own value. Only the smooth-min standoff moves with it -- the
+    # constraint surface sits up to ln(K)/beta outside the true union. Inert for
+    # every other primitive type.
+    ellipsoid_set_beta: Optional[float] = None
 
     # --- Wrist start pose + prior ---
     # A palm-down HOVER above the object (see DEFAULT_WRIST_XYZ /
@@ -1462,7 +1512,8 @@ class HandSolverBase:
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
                        contact_fingers=self._object_contact_mask(),
-                       drop_normal_row=self.params.contact_drop_normal_row)
+                       drop_normal_row=self.params.contact_drop_normal_row,
+                       ellipsoid_set_beta=self.params.ellipsoid_set_beta)
 
     def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)
@@ -1473,7 +1524,7 @@ class HandSolverBase:
         and ``params.self_collision`` whether the finger-finger ones are; the
         spheres themselves are declared either way, because the support plane
         builds its own inequalities on the same set."""
-        vdb = (None if self.spec["type"] == "ellipsoid"
+        vdb = (None if self.spec["type"] in ("ellipsoid", "ellipsoid_set")
                else os.path.normpath(os.path.join(_OBJECTS_DIR, self.spec["vdb"])))
         attach_collision(self.configs, vdb, self.object_pose,
                          radius=self.params.collision_radius,

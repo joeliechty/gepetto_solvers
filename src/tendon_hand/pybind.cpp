@@ -74,7 +74,20 @@ void bind_tendon_hand(py::module& m) {
              "Restart the Augmented Lagrangian homotopy from the current "
              "posture: drops the carried multipliers and penalty weight but "
              "keeps the solved values. Only meaningful under "
-             "config.base.al_warm_start_duals.");
+             "config.base.al_warm_start_duals.")
+        .def("constraint_tags_eq",
+             [](const TendonHandSolver& s) { return s.constraint_tags().eq; },
+             "Identity tag of every EQUALITY constraint in the built graph, in "
+             "graph order (\"obj.center|f0\", \"obj.set|f0\", \"obj.witness|f0\", "
+             "\"table|f2\", ...). This is how a graph-STRUCTURE change is proved: "
+             "get_factor_error_summary() groups by C++ type, so every equality "
+             "shows up as one gtsam::ZeroCostConstraint bucket regardless of "
+             "which factor it wraps, and solved poses are confounded by whether "
+             "the scene converged at all.")
+        .def("constraint_tags_ineq",
+             [](const TendonHandSolver& s) { return s.constraint_tags().ineq; },
+             "The same for every INEQUALITY constraint (\"col.obj|f0|n3\", "
+             "\"col.self|f0|f1|...\", \"col.plane|...\").");
 
     // --- Trajectory Planner (Section 1.4) ---
 

@@ -124,6 +124,16 @@ public:
         return SolverBase::al_transfer_report();
     }
 
+    // The identity tag of every constraint in the built graph, in graph order.
+    // The private overrides below feed the dual-transfer machinery; this is the
+    // same data offered to a CALLER, which is how a graph-structure change gets
+    // proved from Python -- get_factor_error_summary() groups by C++ type, so
+    // every equality lands in one gtsam::ZeroCostConstraint bucket no matter
+    // which factor it wraps.
+    const TendonHandModel::ConstraintTags& constraint_tags() const {
+        return hand_->constraint_tags();
+    }
+
 private:
     void build_graph() override;
     void extract_solution() override;

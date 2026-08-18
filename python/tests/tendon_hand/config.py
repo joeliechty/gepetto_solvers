@@ -634,7 +634,7 @@ def _resolve_contact_mask(configs, contact_fingers):
 def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
                    tip_radii=None, radius=None, contact_fingers=None,
                    object_pose_cov=None, proxy_and_exact=False,
-                   drop_normal_row=False):
+                   drop_normal_row=False, ellipsoid_set_beta=None):
     """Attach the shared object surface + a terminal tip contact to every finger
     of a hand config list, in place. Returns ``configs`` for chaining.
 
@@ -662,6 +662,11 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     Default False keeps the single-surface behavior every existing caller relies
     on.
 
+    ``ellipsoid_set_beta`` overrides the LogSumExp sharpness for an
+    ``ellipsoid_set`` object (None = the spec's own value). Only the smooth-min
+    STANDOFF changes with it, not the geometry: the constraint surface sits up to
+    ln(K)/beta outside the true union. Inert for every other surface kind.
+
     ``drop_normal_row`` (Eq 2.12-2.15) selects the 4-row witness contact form
     [c_R, c_O, c_T1, c_T2] (c_N dropped) instead of the default 5-row form.
     Written for every finger regardless of ``contact_fingers`` -- it is a
@@ -682,6 +687,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     for i, (_, cfg) in enumerate(configs):
         env = crest_sparse.EnvironmentConfig()
         setup_surface(env, spec, objects_dir, primitive)
+        if ellipsoid_set_beta is not None and hasattr(env, "ellipsoid_set_beta"):
+            env.ellipsoid_set_beta = float(ellipsoid_set_beta)
         env.object_pose_mean = object_pose
         env.object_pose_cov = object_pose_cov
         env.object_pose_per_step = False

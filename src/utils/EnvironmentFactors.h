@@ -39,6 +39,24 @@ inline void frisvad_tangent_basis(const gtsam::Vector3& n,
     }
 }
 
+// One member of a hyper-ellipsoid SET (Section 1.2, Eq 1.10).
+//
+// semi_axes are (a, b, c) in THIS ellipsoid's own frame, so its shape matrix is
+// M_k = diag(a^-2, b^-2, c^-2) -- same convention as EllipsoidCollisionGapFactor's
+// single ellipsoid. local_pose is T_k, this ellipsoid's CONSTANT pose in the
+// OBJECT frame; Eq 1.10's world pose is therefore T_Ek = T_obj o T_k, with T_obj
+// the one optimized object Pose3 the rest of this header already shares. The set
+// is thus one rigid body made of K primitives -- it moves with the object
+// variable, and adds no variables of its own.
+//
+// Defined here, ahead of EnvironmentConfig, because that config owns a vector of
+// these; the factor that consumes them is further down (EllipsoidSetCollisionGapFactor).
+struct EllipsoidPrimitive {
+    gtsam::Vector3 semi_axes;
+    gtsam::Pose3   local_pose = gtsam::Pose3();
+};
+
+
 // Configuration for an OpenVDB-backed environment used by trajectory planners.
 // Implements the math in Section 3 of the underactuated object manipulation
 // formulation (cubic-polynomial barrier collision + dummy-point surface
@@ -131,6 +149,36 @@ struct EnvironmentConfig {
     // local minima of a baked SDF. norm()==0 (the default) => not an ellipsoid,
     // so existing SDF/plane envs build exactly the pre-existing graph.
     gtsam::Vector3 ellipsoid_semi_axes = gtsam::Vector3::Zero();
+
+    // --- Hyper-ellipsoid SET object surface (Section 1.2, Eq 1.10-1.13) ---
+    // K primitives rigidly placed in the OBJECT frame, whose UNION is the object:
+    // the generalization of ellipsoid_semi_axes to a shape one ellipsoid cannot
+    // represent (a screwdriver's fat handle joined to its thin shaft is two
+    // scales in one body, and the single MVEE over both is mostly air).
+    // EllipsoidSetCollisionGapFactor evaluates it, fusing the per-member Taubin
+    // distances with a LogSumExp smooth min so the surface stays C-infinity
+    // across the seams where the members meet -- which is where a sliding finger
+    // spends its time.
+    //
+    // PRECEDENCE, in the order has_object_surface() and the TendonHandModel
+    // builders test it: a non-empty ellipsoid_set wins over ellipsoid_semi_axes,
+    // which wins over sdf_grid. Empty (the default) => every existing env builds
+    // exactly the pre-existing graph.
+    //
+    // A set has NO witness-point contact form. The paper defines only the
+    // center-direct equality (Eq 1.13) for it, so TendonHandModel always takes
+    // that form here and rejects the two witness-only settings outright rather
+    // than silently falling back -- see uses_center_direct_contact().
+    std::vector<EllipsoidPrimitive> ellipsoid_set;
+
+    // LogSumExp sharpness for the set above. Distances are in METRES, so this is
+    // O(100-1000), not O(1). The smooth min understates by up to ln(K)/beta, so
+    // the constraint surface sits that far OUTSIDE the true union: at K=4 that is
+    // 1.4 mm here, 0.7 mm at beta=2000. Raising it shrinks the bias at the cost of
+    // a sharper (more min-like) gradient at the seams -- which is the smoothness
+    // the formulation exists to buy. See EllipsoidSetCollisionGapFactor's
+    // SMOOTH-MIN BIAS note for the full trade-off.
+    double ellipsoid_set_beta = 1000.0;
 
     // --- Support plane / "table" (Section 1.6) --------------------------
     // A world-fixed analytic half-space support surface, defined by an origin
@@ -311,6 +359,23 @@ struct EnvironmentConfig {
     double pregrasp_centroid_clearance = 0.0;
     gtsam::Vector3 pregrasp_centroid_normal = gtsam::Vector3::Zero();
 };
+
+
+// Does this env carry an object surface to contact or avoid, in any of its three
+// representations? THE one definition of that question.
+//
+// It used to be spelled inline at five sites in TendonHandModel, two of which
+// carry comments warning they must stay identical -- get_initial_values decides
+// whether the shared object variable is seeded at all, and build_graph decides
+// whether it is anchored, so a predicate that drifts between them anchors an
+// object that was never seeded and the system comes out indeterminate. Adding a
+// third representation to five copies is exactly how that drift happens, hence
+// the shared function.
+inline bool has_object_surface(const EnvironmentConfig& env) {
+    return !env.ellipsoid_set.empty() ||
+           env.ellipsoid_semi_axes.norm() > 0.0 ||
+           static_cast<bool>(env.sdf_grid);
+}
 
 
 // ---------------------------------------------------------------------------
@@ -507,21 +572,6 @@ public:
         return std::static_pointer_cast<gtsam::NonlinearFactor>(
             gtsam::NonlinearFactor::shared_ptr(new EllipsoidCollisionGapFactor(*this)));
     }
-};
-
-
-// One member of a hyper-ellipsoid SET (Section 1.2, Eq 1.10).
-//
-// semi_axes are (a, b, c) in THIS ellipsoid's own frame, so its shape matrix is
-// M_k = diag(a^-2, b^-2, c^-2) -- same convention as EllipsoidCollisionGapFactor's
-// single ellipsoid. local_pose is T_k, this ellipsoid's CONSTANT pose in the
-// OBJECT frame; Eq 1.10's world pose is therefore T_Ek = T_obj o T_k, with T_obj
-// the one optimized object Pose3 the rest of this header already shares. The set
-// is thus one rigid body made of K primitives -- it moves with the object
-// variable, and adds no variables of its own.
-struct EllipsoidPrimitive {
-    gtsam::Vector3 semi_axes;
-    gtsam::Pose3   local_pose = gtsam::Pose3();
 };
 
 

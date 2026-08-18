@@ -52,14 +52,17 @@ import argparse
 import math
 import sys
 import threading
+import traceback
 
 import numpy as np
 
-from .scene import get_primitive_specs, GRASP_FLEXOR_TENSION, TABLE_NORMAL
+from .scene import (get_primitive_specs, ycb_primitive_specs, proxy_semi_axes,
+                    GRASP_FLEXOR_TENSION, TABLE_NORMAL, ELLIPSOID_SET_BETA)
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
     euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
+    default_object_center,
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
     pregrasp_centroid_witness, default_half_space_axis, PHASE_PRESETS,
     FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
@@ -71,7 +74,15 @@ FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
 
 # This app's own startup object -- see HandVizApp.__init__ for why it's set
 # there rather than just changed on the dropdown widget.
-DEFAULT_OBJECT_PRIMITIVE = "pen"
+#
+# A YCB screwdriver, because it is the case the ellipsoid SET exists for: a fat
+# handle joined to a thin shaft is two scales in one rigid body, and the single
+# enclosing hyper-ellipsoid over both is mostly air. It also sits usefully against
+# the reach limit -- the ~38 mm handle is inside the graspable band even though the
+# ~210 mm whole object is not. Falls back automatically (see _build_gui) when the
+# binding has no ellipsoid_set or nothing has been fitted into _objects/ycb/fits/.
+DEFAULT_OBJECT_PRIMITIVE = "ycb:043_phillips_screwdriver"
+DEFAULT_OBJECT_FALLBACK = "mid_sphere_ellipsoid"
 
 # Display-only suffix for the baked-SDF spheres in the object dropdown, so they
 # read apart from the analytic ``*_sphere_ellipsoid`` look-alikes. The spec keys
@@ -183,7 +194,18 @@ class HandVizApp:
         # _refresh_object() run before the first _sync_params() and read
         # self.params.primitive directly; the dropdown's own default_label
         # computation already reads it too, so it follows automatically.
-        self.params.primitive = DEFAULT_OBJECT_PRIMITIVE
+        # What this installed binding supports, so we can gate controls a stale
+        # .so would crash on (ellipsoid objects, the table, cull margin).
+        self.caps = capabilities()
+        self.params.primitive = self._resolve_default_primitive()
+        # Seat the object ON the table rather than half-buried in it. Another of
+        # this app's own startup defaults (like the object above): HandSolveParams
+        # keeps 0.5 for the §1.8 low-profile-object case its docstring argues for,
+        # but for browsing arbitrary objects -- YCB scans included -- an object
+        # sunk halfway through the table reads as a bug in the scene. The seating
+        # rule derives the height from the object's own along-normal extent, so
+        # this is correct per object with nothing to re-tune per pick.
+        self.params.table_burial = 0.0
         # Which solver produced what is on screen: "FK" for a posed hand, "IK"
         # once the stepper has been driven. Gates the live FK re-solve and labels
         # the status readout; there is no mode picker.
@@ -202,9 +224,10 @@ class HandVizApp:
         # per-handle callbacks (live FK, object rebuild) sit out the restore and
         # the one solve at the end of it is the only one that runs.
         self._restoring = False
-        # What this installed binding supports, so we can gate controls a stale
-        # .so would crash on (ellipsoid objects, the table, cull margin).
-        self.caps = capabilities()
+        # Cached YCB catalog/browser state, built lazily by the YCB folder so the
+        # app starts without touching the network or the catalog file.
+        self._ycb_cache = None
+        self._ycb_busy = False
 
         from .._plotting.viser_hand import ViserHandScene
         self.scene = ViserHandScene(server, FINGER_LABELS)
@@ -220,6 +243,306 @@ class HandVizApp:
         self._rebuild_fk()
         self._refresh_object()
         self._fk_solve()
+
+    def _object_pose_from_sliders(self):
+        """``(center, rotation)`` for the object: its derived pose plus the
+        Object-pose slider offsets.
+
+        Resolved against the primitive's OWN default rather than the params'
+        current value -- reading back what was written last time would feed the
+        control's output into its input, and every sync would compound the offset.
+        (The support plane's ``auto_table_origin`` avoids the same trap the same
+        way.) All-zero sliders reproduce the derived pose exactly, so this is
+        equivalent to the previous ``object_center = None`` behaviour.
+        """
+        spec = get_primitive_specs()[self.params.primitive]
+        center = default_object_center(self.params.primitive, spec)
+        rotation = np.asarray(spec.get("rotation", np.eye(3)), float)
+
+        offset = np.array([self.g_obj_dx.value, self.g_obj_dy.value,
+                           self.g_obj_dz.value], float)
+        delta = _euler_to_R(self.g_obj_roll.value, self.g_obj_pitch.value,
+                            self.g_obj_yaw.value)
+        return center + offset, delta @ rotation
+
+    def _object_pose_changed(self, _=None):
+        """Re-place the object from the sliders.
+
+        The object pose is part of the CONSTRAINT SET -- it is the mean of the
+        object prior every contact and collision factor is written against -- so
+        moving it invalidates the stepper's Augmented Lagrangian duals, exactly
+        like changing the object itself. Re-solving with FK keeps the picture
+        honest about that rather than leaving a stale IK pose next to a moved
+        object.
+        """
+        if self._restoring:
+            return
+        self._sync_params()
+        self._refresh_object()
+        self._invalidate_stepper()
+        if self.mode == "FK":
+            self._live_fk()
+        else:
+            self._render_frame()
+
+    def _refresh_ycb_mesh(self, spec, center, rotation):
+        """Draw (or clear) the scanned mesh behind a ycb: object's shells.
+
+        The mesh has to be put in the SAME frame the shells were re-centered
+        into (see ``scene.ycb_primitive_specs``), or the two render a few cm
+        apart and the overlay is worse than useless. A missing mesh cache is not
+        an error -- the fits are committed but the meshes are not, so an object
+        can be perfectly loadable with nothing to draw behind it.
+        """
+        if spec["type"] != "ellipsoid_set" or not self.g_show_ycb_mesh.value:
+            self.scene.clear_object_mesh()
+            return
+        try:
+            from .._objects.ycb import Catalog, YcbCache, ground_and_center
+
+            cache = YcbCache(Catalog())
+            mesh = ground_and_center(
+                cache.load_mesh(spec["ycb"], spec["source"], max_texture=512))
+            mesh.apply_translation(-np.asarray(spec["recenter"], float))
+            self.scene.set_object_mesh(mesh, center, rotation)
+        except Exception as exc:
+            self.scene.clear_object_mesh()
+            print(f"[viz] no scan mesh for {spec.get('ycb')}: {exc}")
+
+    # -- YCB objects --------------------------------------------------------
+
+    def _build_ycb_folder(self, gui):
+        """Fetch-and-fit controls for the YCB object set.
+
+        The offline path (``python -m tests._objects.ycb.browser --fit <name>``)
+        remains the primary one and writes the same files; this exists so an
+        object can be brought in without leaving the app. Everything here is
+        gated on ``ellipsoid_set``: without it a fitted object could be written
+        but never loaded, so offering the button would be a trap.
+        """
+        available = self.caps.get("ellipsoid_set", False)
+        with gui.add_folder("YCB objects", expand_by_default=False):
+            if not available:
+                gui.add_markdown(
+                    "Needs a rebuilt `_crest_sparse` with "
+                    "`EnvironmentConfig.ellipsoid_set`.")
+                self.g_ycb_object = None
+                return
+
+            gui.add_markdown(
+                "Fit a YCB object to an ellipsoid **set** and add it to the "
+                "object list as `ycb:<name>`. First fetch of an object "
+                "downloads 4-12 MB and takes tens of seconds.")
+            self.g_ycb_object = gui.add_dropdown(
+                "catalog", self._ycb_labels(),
+                hint="Every YCB object with a usable textured mesh, with the "
+                     "download size of its best mesh.")
+            self.g_ycb_backend = gui.add_dropdown(
+                "backend", ["gmm", "kmeans", "coacd"], initial_value="gmm",
+                hint="gmm handles elongated parts; coacd respects concavity but "
+                     "is slow and is an optional dependency.")
+            self.g_ycb_k = gui.add_slider(
+                "ellipsoids (k, 0 = auto)", 0, 12, 1, 0,
+                hint="0 sweeps k and takes the smallest one near the best excess "
+                     "volume. Worth pinning: the sweep will happily spend 9 "
+                     "ellipsoids shaving 20% off a near-spherical object, and "
+                     "every member costs an evaluation in every collision factor.")
+            self.g_ycb_coverage = gui.add_slider(
+                "coverage target", 0.90, 1.0, 0.005, 0.98)
+            self.g_ycb_fit = gui.add_button(
+                "Fetch & fit", icon=self.viser.Icon.DOWNLOAD)
+            self.g_ycb_status = gui.add_markdown(
+                f"{len(self._ycb_fitted())} object(s) already fitted.")
+            self.g_ycb_fit.on_click(self._ycb_fit_clicked)
+
+    def _ycb_labels(self):
+        """Catalog dropdown labels, or a one-entry placeholder if it cannot load."""
+        try:
+            from .._objects.ycb import Catalog
+            return Catalog().labels()
+        except Exception as exc:
+            return [f"<catalog unavailable: {exc}>"]
+
+    def _ycb_fitted(self):
+        """Object keys already fitted and loadable, i.e. the ``ycb:`` specs."""
+        return [k for k in get_primitive_specs() if k.startswith("ycb:")]
+
+    def _ycb_fit_clicked(self, _event=None, name=None):
+        """Start a fit. ``name`` overrides the YCB folder's own picker, which is
+        how selecting an unfitted object straight from the object dropdown routes
+        through the same one worker."""
+        if self._ycb_busy:
+            return
+        self._ycb_busy = True
+        threading.Thread(target=self._ycb_fit_worker, args=(name,),
+                         daemon=True).start()
+
+    def _ycb_fit_worker(self, name=None):
+        """Download + fit one object on a worker thread, then offer it as an object.
+
+        Runs off the GUI thread because a cold fit is a download plus a k-sweep --
+        tens of seconds during which viser must stay responsive. It deliberately
+        does NOT take the solver's ``_solving`` latch: fitting touches no solver
+        state, so there is no reason it should block stepping an unrelated solve.
+        """
+        self.g_ycb_fit.disabled = True
+        try:
+            from .._objects.ycb import (Catalog, YcbCache, FITS_DIR,
+                                        ground_and_center, ground_offset)
+            from .._objects.ycb import ellipsoids as ye
+            from .scene import ycb_primitive_specs
+
+            catalog = Catalog()
+            if name is None:
+                name = catalog.name_from_label(self.g_ycb_object.value)
+            source = catalog.objects[name].sources[0]
+            backend = self.g_ycb_backend.value
+            coverage = float(self.g_ycb_coverage.value)
+            k = int(self.g_ycb_k.value) or None
+
+            def report(fraction, message):
+                # Mirrored to the main status bar as well: a fit started by
+                # picking an unfitted object from the object dropdown is watched
+                # there, not in the (collapsed by default) YCB folder.
+                text = f"**{name}** — {message}"
+                self.g_ycb_status.content = text
+                self._set_status(text)
+
+            report(0.0, f"fetching from `{source}`…")
+            cache = YcbCache(catalog)
+            mesh = cache.load_mesh(name, source, max_texture=512,
+                                   progress=report)
+            offset = ground_offset(mesh)
+            mesh = ground_and_center(mesh)
+
+            report(0.5, f"fitting with `{backend}`…")
+            if k is None:
+                result = ye.auto_fit(mesh, coverage=coverage, backend=backend,
+                                     progress=report)
+            else:
+                result = ye.fit(mesh, k, coverage=coverage, backend=backend)
+            result.ground_offset = offset
+            ye.export_json(FITS_DIR, name, source, result)
+
+            # The spec registry caches the directory listing, so a fit written
+            # after startup is invisible until that cache is dropped.
+            ycb_primitive_specs.cache_clear()
+            self._refresh_object_dropdown(select=f"ycb:{name}")
+            self.g_ycb_status.content = (
+                f"**{name}** · `{backend}`\n\n{result.metrics.summary()}\n\n"
+                "_Selected as the current object._")
+        except Exception as exc:
+            traceback.print_exc()
+            self.g_ycb_status.content = f"Fit failed:\n\n`{exc}`"
+            self._set_status(f"Fit of **{name}** failed: `{exc}`")
+        finally:
+            self.g_ycb_fit.disabled = False
+            self._ycb_busy = False
+
+    def _refresh_object_dropdown(self, select=None):
+        """Rebuild the object dropdown's options after the spec registry changed,
+        optionally selecting a key. Assigning ``options`` re-renders the widget in
+        place, so the rest of the GUI is untouched."""
+        labels, self._label_to_key = self._object_dropdown_labels()
+        self.g_object.options = labels
+        if select is not None and select in self._label_to_key.values():
+            label = SDF_DROPDOWN_LABELS.get(select, select)
+            if label in self._label_to_key:
+                # Fires on_update -> reloads the scene on the newly fitted object.
+                self.g_object.value = label
+
+    # Dropdown suffix for a catalog object with no committed fit yet. Selecting
+    # one downloads and fits it on the spot (see _on_object_selected).
+    UNFITTED_SUFFIX = "  [fit on select]"
+
+    def _on_object_selected(self, _=None):
+        """Load the picked object, fitting it first if it has never been fitted.
+
+        The fit runs on a worker thread and re-enters here once it has written
+        the export, so an unfitted pick is a slow version of a fitted one rather
+        than a separate mode the user has to know about.
+        """
+        if self._restoring:
+            return
+        label = self.g_object.value
+        if label in getattr(self, "_unfitted", {}):
+            # Leave the scene on the current object; the worker re-selects this
+            # one once its fit exists.
+            self._set_status(f"Fetching and fitting **{self._unfitted[label]}**… "
+                             "(first fetch downloads 4-12 MB)")
+            self._ycb_fit_clicked(name=self._unfitted[label])
+            return
+        self._load_selected_object()
+
+    def _load_selected_object(self):
+        self.params.primitive = self._label_to_key[self.g_object.value]
+        # The Object-pose sliders are offsets from each primitive's own default,
+        # so they carry over to the new object rather than being cleared;
+        # _sync_params re-resolves them against the new base pose.
+        self.params.object_center, self.params.object_rotation = \
+            self._object_pose_from_sliders()
+        self._rebuild_fk()      # FK solver carries the object for its result/spec
+        self._refresh_object()
+        self._aim_all_cameras()  # re-center on the new object's location
+        self._fk_solve()
+
+    def _object_dropdown_labels(self):
+        """Every object offerable, fitted or not, as ``(labels, label -> key)``.
+
+        The whole YCB catalog is listed, not just what has been fitted, so the
+        picker is the object set rather than a record of what happens to be
+        cached. An unfitted entry is marked and fits itself when chosen. The
+        alternative -- pre-fitting all ~97 up front -- costs a 0.6 GB download and
+        hours of k-sweeps to produce mostly objects that will never be picked.
+        """
+        keys = self._visible_primitive_keys()
+        mapping = {SDF_DROPDOWN_LABELS.get(k, k): k for k in keys}
+        self._unfitted = {}
+        if self.caps.get("ellipsoid_set", False):
+            try:
+                from .._objects.ycb import Catalog
+
+                catalog = Catalog()
+                for name in catalog.names():
+                    if f"ycb:{name}" in keys:
+                        continue           # already fitted, listed above
+                    label = f"ycb:{name}{self.UNFITTED_SUFFIX}"
+                    mapping[label] = f"ycb:{name}"
+                    self._unfitted[label] = name
+            except Exception as exc:
+                print(f"[viz] YCB catalog unavailable: {exc}")
+        return list(mapping), mapping
+
+    def _visible_primitive_keys(self):
+        """Object keys this binding can actually build, in dropdown order.
+
+        Both analytic surface kinds are gated: a single ellipsoid needs
+        ``ellipsoid_semi_axes``, an ellipsoid set needs ``ellipsoid_set``, and a
+        stale ``.so`` may have either without the other. Offering an object whose
+        env fields do not exist is worse than hiding it -- ``attach_ellipsoid_set``
+        raises rather than silently building a surface-less env, so the object
+        would simply fail to load with a traceback in the browser.
+        """
+        gates = {"ellipsoid": self.caps["ellipsoid"],
+                 "ellipsoid_set": self.caps.get("ellipsoid_set", False)}
+        return [k for k, v in get_primitive_specs().items()
+                if gates.get(v["type"], True)]
+
+    def _resolve_default_primitive(self):
+        """The startup object, falling back when it is unavailable.
+
+        Two ways the YCB default can be missing: a binding without
+        ``ellipsoid_set``, or a checkout whose ``_objects/ycb/fits/`` is empty (the
+        fits are committed, but a partial clone or a fresh branch may not have
+        them). Resolve here rather than only on the dropdown widget, because
+        ``_rebuild_fk`` reads ``params.primitive`` directly and would raise a bare
+        KeyError on a key the spec registry never produced.
+        """
+        keys = self._visible_primitive_keys()
+        for candidate in (DEFAULT_OBJECT_PRIMITIVE, DEFAULT_OBJECT_FALLBACK):
+            if candidate in keys:
+                return candidate
+        return keys[0]
 
     def _aim_camera(self, client):
         """Point one client's camera at the current object from the demo viewpoint."""
@@ -288,14 +611,13 @@ class HandVizApp:
     def _sync_params(self):
         p = self.params
         p.primitive = self._label_to_key[self.g_object.value]
-        # let center/rotation re-derive from the primitive
-        p.object_center = None
-        p.object_rotation = None
+        p.object_center, p.object_rotation = self._object_pose_from_sliders()
         self._sync_wrist()
         p.passive_tension = self.g_passive.value
         p.flexor_tensions = [s.value for s in self.g_flexors]
         p.flexor_tension_sigma = 10.0 ** self.g_flexor_sigma.value
         p.passive_tension_sigma = 10.0 ** self.g_passive_sigma.value
+        p.ellipsoid_set_beta = float(self.g_set_beta.value)
         p.contact_fingers = [c.value for c in self.g_contacts]
         p.object_contact = self.g_obj_contact.value
         p.table_contact = self.g_tbl_contact.value
@@ -360,6 +682,7 @@ class HandVizApp:
     def _refresh_object(self):
         spec, center, rotation, _pose = resolve_scene(self.params)
         self.scene.set_object(spec, center, rotation)
+        self._refresh_ycb_mesh(spec, center, rotation)
         if self.params.table:
             self.scene.set_table(self._table_origin(), self.params.plane_normal)
         else:
@@ -632,7 +955,49 @@ class HandVizApp:
         lines.extend(self._half_space_note())
         lines.extend(self._wrist_gauge_note())
         lines.extend(self._pinch_note())
+        lines.extend(self._object_size_note())
         self._set_status("  \n".join(lines))
+
+    # The fingertips ride a shell of roughly this radius about the hand base, and
+    # a curl can close on an object only a little smaller than it. Measured, not
+    # derived -- see the reachability investigation behind GRASP_SPHERE_CENTER.
+    FINGERTIP_SHELL_M = 0.055
+    GRASPABLE_MAX_M = 0.050
+
+    def _object_size_note(self):
+        """Warn when the selected object is outside what the hand can close on.
+
+        Real scanned objects are 60-300 mm; the hand closes on ~50 mm. That limit
+        is GEOMETRIC, so no amount of AL/prior/beta tuning moves it -- a stall on
+        a big object is the fingers not reaching, and without this line that
+        reads as a solver failure and gets debugged as one. Reported for every
+        object, since a hand-authored primitive can be oversized too.
+        """
+        spec = self.result.spec if self.result is not None else None
+        if spec is None:
+            return []
+        if spec["type"] == "ellipsoid_set":
+            largest = float(np.max(spec["extents"])) / 2.0
+            smallest = float(np.min(spec["extents"])) / 2.0
+        else:
+            try:
+                semi = proxy_semi_axes(spec)
+            except ValueError:
+                return []
+            largest, smallest = float(np.max(semi)), float(np.min(semi))
+        if largest <= self.GRASPABLE_MAX_M:
+            return []
+        # The narrowest axis is what a grasp actually has to span, so an object
+        # that is merely LONG (a screwdriver, a pen) is still graspable across
+        # its handle -- say which case this is instead of one blanket warning.
+        if smallest <= self.GRASPABLE_MAX_M:
+            return [f"_Object spans {2 * largest * 1000:.0f} mm at its longest "
+                    f"but only {2 * smallest * 1000:.0f} mm across; grasp it on "
+                    "the narrow axis._"]
+        return [f"**Object is {2 * smallest * 1000:.0f} mm across its narrowest "
+                f"axis** — past the ~{2 * self.GRASPABLE_MAX_M * 1000:.0f} mm the "
+                f"fingertips reach off their ~{self.FINGERTIP_SHELL_M * 1000:.0f} "
+                "mm shell. A stall here is geometric, not a tuning problem."]
 
     def _fingers_label(self, names):
         return ("none" if not names
@@ -1109,6 +1474,8 @@ class HandVizApp:
         """Every value-carrying control, in build order. Buttons and markdown are
         deliberately absent -- Reset restores values, not widgets."""
         return ([self.g_object, self.g_ik_max, self.g_ik_settle, self.g_carry_duals,
+                 self.g_obj_dx, self.g_obj_dy, self.g_obj_dz,
+                 self.g_obj_roll, self.g_obj_pitch, self.g_obj_yaw,
                  self.g_tx, self.g_ty, self.g_tz,
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
@@ -1122,32 +1489,29 @@ class HandVizApp:
                 + self.g_contacts
                 + [self.g_collision, self.g_self_collision,
                    self.g_coll_radius, self.g_coll_sigma, self.g_cull,
+                   self.g_set_beta,
                    self.g_table, self.g_plane_offset, self.g_plane_avoid,
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
+                   self.g_show_ycb_mesh,
                    self.g_show_contact, self.g_show_collision,
                    self.g_show_discs, self.g_show_gaps, self.g_show_mount])
 
     def _build_gui(self):
         gui = self.server.gui
-        # Ellipsoid objects need the analytic-surface env fields; hide them on a
-        # binding that lacks them.
-        keys = [k for k, v in get_primitive_specs().items()
-                if v["type"] != "ellipsoid" or self.caps["ellipsoid"]]
         # Map the displayed dropdown label back to the real spec key (identity
-        # except for the "_sdf"-suffixed baked spheres).
-        self._label_to_key = {SDF_DROPDOWN_LABELS.get(k, k): k for k in keys}
-        labels = list(self._label_to_key)
+        # except for the "_sdf"-suffixed baked spheres, and the "ycb:"-prefixed
+        # ellipsoid sets, which keep their prefix as the label so they group
+        # together and read as "not one of the hand-authored primitives").
+        labels, self._label_to_key = self._object_dropdown_labels()
 
         step_hint = (None if self.caps["ik_stepping"]
                      else "requires a rebuilt _crest_sparse with "
                           "TendonHandSolver.reset_al_duals")
 
         with gui.add_folder("Solver"):
-            # Opens on HandSolveParams' own default (the mid analytic sphere),
-            # so the GUI and a headless HandSolveParams() describe the same
-            # scene. Falls back to the first entry if that primitive is hidden
-            # -- an ellipsoid needs the analytic-surface env fields, which a
-            # stale binding may not have.
+            # Opens on whatever __init__ resolved (see _resolve_default_primitive,
+            # which already handled the object being unavailable), so the widget
+            # and self.params cannot disagree about which scene is loaded.
             default_label = SDF_DROPDOWN_LABELS.get(self.params.primitive,
                                                     self.params.primitive)
             if default_label not in self._label_to_key:
@@ -1238,6 +1602,25 @@ class HandVizApp:
                      "the warm start off, drop the stepped solve, and re-pose "
                      "with FK.")
             self.g_warm_status = gui.add_markdown("")
+
+        with gui.add_folder("Object pose"):
+            # OFFSETS from whatever the primitive resolves to on its own, not
+            # absolute coordinates. Two reasons: every object keeps its own
+            # sensible default placement (the grasp locus for the graspable ones,
+            # OBJECT_CENTER for the small ones), and switching objects therefore
+            # cannot fling the new one somewhere arbitrary just because the
+            # previous one had been dragged. All-zero == the derived pose, so the
+            # scene opens exactly as it did before these existed.
+            self.g_obj_dx = gui.add_slider("dx (m)", -0.15, 0.15, 0.001, 0.0)
+            self.g_obj_dy = gui.add_slider("dy (m)", -0.15, 0.15, 0.001, 0.0)
+            self.g_obj_dz = gui.add_slider("dz (m)", -0.15, 0.15, 0.001, 0.0)
+            self.g_obj_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, 0.0)
+            self.g_obj_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, 0.0)
+            self.g_obj_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, 0.0)
+            gui.add_markdown(
+                "_Rotation is applied about the object's own centre, on top of "
+                "the primitive's base orientation. Moving the object changes the "
+                "constraint set, so it restarts the IK loop._")
 
         with gui.add_folder("Wrist start pose"):
             # Seeded from the shared default (solvers.DEFAULT_WRIST_*) so the
@@ -1492,13 +1875,27 @@ class HandVizApp:
             self.g_coll_radius = gui.add_slider("sphere radius (m)", 0.001, 0.01, 0.0005, 0.003)
             self.g_coll_sigma = gui.add_slider("log10 sigma", -6, 0, 0.5, -4)
             self.g_cull = gui.add_slider("cull margin (m, 0 off)", 0.0, 0.1, 0.005, 0.0)
+            self.g_set_beta = gui.add_slider(
+                "ellipsoid-set beta", 100.0, 4000.0, 100.0, ELLIPSOID_SET_BETA,
+                disabled=not self.caps.get("ellipsoid_set", False),
+                hint="LogSumExp sharpness for a ycb: object (Eq 1.11). The smooth "
+                     "min understates by up to ln(K)/beta, so the constraint "
+                     "surface sits that far OUTSIDE the object -- 1.4 mm at K=4, "
+                     "beta=1000. Raising it tightens that standoff but sharpens "
+                     "the gradient at the seams between members, which is the "
+                     "smoothness the set formulation exists to buy. Inert for "
+                     "every non-ycb object.")
+
+        self._build_ycb_folder(gui)
 
         with gui.add_folder("Table"):
-            # Offset from the scene's own seating, which now half-buries the
-            # object (HandSolveParams.table_burial = 0.5) rather than resting it
-            # on the plane. Dial in -half_extent to recover the old geometry.
-            # -0.006 m is this app's own default seating for the pen.
-            self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, -0.006)
+            # Offset from the scene's own seating, which this app sets to rest
+            # the object ON the plane (table_burial = 0, see __init__). Zero
+            # default, so every object -- whatever its size, shape or rotation --
+            # opens sitting on the table rather than sunk through it. Drag
+            # negative to bury it (0.5 * extent reaches the half-buried §1.8
+            # geometry HandSolveParams still defaults to headlessly).
+            self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, 0.0)
 
         with gui.add_folder("Augmented Lagrangian"):
             self.g_al_mu = gui.add_slider("mu", 0.1, 10.0, 0.1, 1.0)
@@ -1506,6 +1903,13 @@ class HandVizApp:
             self.g_al_iters = gui.add_slider("max iters", 5, 100, 5, 40)
 
         with gui.add_folder("Display"):
+            self.g_show_ycb_mesh = gui.add_checkbox(
+                "ycb scan mesh", True,
+                hint="Overlay the real scanned mesh behind a ycb: object's "
+                     "ellipsoid shells. The shells are what the solver sees, so "
+                     "showing both is how the approximation gets judged -- where "
+                     "the fingers stop is set by the shells, and the mesh says "
+                     "how much object is actually there.")
             self.g_show_contact = gui.add_checkbox("contact spheres", True)
             self.g_show_collision = gui.add_checkbox("collision spheres", True)
             self.g_show_discs = gui.add_checkbox("routing discs", False)
@@ -1539,24 +1943,28 @@ class HandVizApp:
         self.g_phase1.on_update(lambda _: self._on_phase_toggle("phase1"))
         self.g_phase2.on_update(lambda _: self._on_phase_toggle("phase2"))
 
-        @self.g_object.on_update
-        def _(_):
-            if self._restoring:
-                return
-            self.params.primitive = self._label_to_key[self.g_object.value]
-            self.params.object_center = None
-            self.params.object_rotation = None
-            self._rebuild_fk()      # FK solver carries the object for its result/spec
-            self._refresh_object()
-            self._aim_all_cameras()  # re-center on the new object's location
-            self._fk_solve()
+        self.g_object.on_update(self._on_object_selected)
 
         # Live FK re-solve on the pose / tension sliders (fast, warm-started).
         for h in ([self.g_tx, self.g_ty, self.g_tz, self.g_roll, self.g_pitch,
                    self.g_yaw, self.g_passive] + self.g_flexors):
             h.on_update(self._live_fk)
 
+        # Object pose: re-places the object and restarts the IK loop (see
+        # _object_pose_changed for why it cannot just re-render).
+        for h in (self.g_obj_dx, self.g_obj_dy, self.g_obj_dz,
+                  self.g_obj_roll, self.g_obj_pitch, self.g_obj_yaw):
+            h.on_update(self._object_pose_changed)
+
         self.g_mount.on_click(self._pose_at_mount)
+
+        # The scan-mesh overlay is static scene geometry, not per-frame, so it
+        # goes through _refresh_object rather than the _render_frame path below.
+        @self.g_show_ycb_mesh.on_update
+        def _(_):
+            if self._restoring:
+                return
+            self._refresh_object()
 
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,

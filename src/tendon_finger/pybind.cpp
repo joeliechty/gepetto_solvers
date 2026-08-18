@@ -83,6 +83,21 @@ void bind_tendon_finger(py::module& m) {
 
     // --- Environment (collision/contact) ---
 
+    // One member of an ellipsoid set (Section 1.2). local_pose is exposed as a
+    // 4x4 matrix rather than a Pose3: gtsam::Pose3 is not bound anywhere in this
+    // module, and every other pose that crosses this boundary
+    // (object_pose_mean, Pose3Gaussian.mean, base_pose) is a Matrix4 already.
+    py::class_<crest_sparse::EllipsoidPrimitive>(m, "EllipsoidPrimitive")
+        .def(py::init<>())
+        .def_readwrite("semi_axes", &crest_sparse::EllipsoidPrimitive::semi_axes)
+        .def_property("local_pose",
+            [](const crest_sparse::EllipsoidPrimitive& p) {
+                return p.local_pose.matrix();
+            },
+            [](crest_sparse::EllipsoidPrimitive& p, const gtsam::Matrix4& m) {
+                p.local_pose = gtsam::Pose3(m);
+            });
+
     py::class_<crest_sparse::EnvironmentConfig>(m, "EnvironmentConfig")
         .def(py::init<>())
         .def_readwrite("object_pose_mean",     &crest_sparse::EnvironmentConfig::object_pose_mean)
@@ -99,6 +114,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("contact_node_radius", &crest_sparse::EnvironmentConfig::contact_node_radius)
         .def_readwrite("witness_point_seed",  &crest_sparse::EnvironmentConfig::witness_point_seed)
         .def_readwrite("ellipsoid_semi_axes", &crest_sparse::EnvironmentConfig::ellipsoid_semi_axes)
+        .def_readwrite("ellipsoid_set",       &crest_sparse::EnvironmentConfig::ellipsoid_set)
+        .def_readwrite("ellipsoid_set_beta",  &crest_sparse::EnvironmentConfig::ellipsoid_set_beta)
         .def_readwrite("plane_origin",        &crest_sparse::EnvironmentConfig::plane_origin)
         .def_readwrite("plane_normal",        &crest_sparse::EnvironmentConfig::plane_normal)
         .def_readwrite("plane_avoidance",     &crest_sparse::EnvironmentConfig::plane_avoidance)

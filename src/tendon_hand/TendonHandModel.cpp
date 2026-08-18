@@ -88,12 +88,12 @@ TendonHandModel::TendonHandModel(
             || c.sphere_contact.has_value())
             has_contact_ = true;
         // Collision => AL inequality constraints on this finger's spheres.
-        // The object surface may be a baked SDF grid or an analytic ellipsoid
-        // (Section 1.6.3); either provides the finger-object penetration gap.
+        // The object surface may be a baked SDF grid, an analytic ellipsoid
+        // (Section 1.6.3) or an ellipsoid SET (Section 1.2); each provides the
+        // finger-object penetration gap.
         if (c.sdf_contact.has_value() &&
             c.sdf_contact->collision_avoidance &&
-            (c.sdf_contact->sdf_grid ||
-             c.sdf_contact->ellipsoid_semi_axes.norm() > 0.0) &&
+            crest_sparse::has_object_surface(*c.sdf_contact) &&
             !c.sdf_contact->collision_node_indices.empty())
             has_collision_ = true;
         // Finger-finger, on the same spheres and gated on its own field. Each
@@ -176,6 +176,23 @@ bool TendonHandModel::uses_center_direct_contact(
 {
     // Collision-only env: no object contact of any kind to choose a form for.
     if (!env.target_contact_node.has_value()) return false;
+
+    // An ellipsoid SET (§1.2) has no witness form at all -- the paper defines only
+    // the center-direct equality Eq 1.13 for it, and there is no
+    // EllipsoidSetWitnessContactFactor to fall back to. So this is not a default
+    // that the two witness-only settings may override, the way it is for a single
+    // ellipsoid below; asking for either alongside a set is a caller error, and
+    // silently ignoring it would solve a different problem than the one requested.
+    if (!env.ellipsoid_set.empty()) {
+        if (env.contact_drop_normal_row || env.witness_target)
+            throw std::invalid_argument(
+                "TendonHandModel: contact_drop_normal_row / witness_target select a "
+                "witness-point contact form, which an ellipsoid_set does not have "
+                "(Section 1.2 defines only the center-direct equality, Eq 1.13). "
+                "Clear them, or use ellipsoid_semi_axes for a single ellipsoid.");
+        return true;
+    }
+
     // A baked SDF has no closed-form distance to constrain the center against,
     // so it can only be contacted through a witness point.
     if (env.ellipsoid_semi_axes.norm() <= 0.0) return false;
@@ -283,16 +300,31 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 // EQUALITY the sign is irrelevant, so its zero set is exactly
                 // Eq 1.101. Dropping the witness removes three variables and four
                 // residual rows per finger. This is the DEFAULT form for an
-                // analytic ellipsoid, not just the controller's phase 2 — see
-                // uses_center_direct_contact().
+                // analytic ellipsoid, not just the controller's phase 2, and the
+                // ONLY form for an ellipsoid set — see uses_center_direct_contact().
                 if (uses_center_direct_contact(env)) {
-                    auto center_contact =
-                        std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
-                            tip_key, object_key(), env.contact_node_radius,
-                            env.ellipsoid_semi_axes,
-                            noiseModel::Isotropic::Sigma(1, 1.0));
-                    add_eq(graph, center_contact,
-                           "obj.center|f" + std::to_string(i));
+                    gtsam::NoiseModelFactor::shared_ptr center_contact;
+                    std::string tag;
+                    if (!env.ellipsoid_set.empty()) {
+                        // Ellipsoid SET (§1.2, Eq 1.13): the same center-direct
+                        // equality against the smooth-min distance to the union.
+                        // Its own tag, so get_factor_error_summary() tells the two
+                        // surface kinds apart.
+                        center_contact =
+                            std::make_shared<crest_sparse::EllipsoidSetCollisionGapFactor>(
+                                tip_key, object_key(), env.contact_node_radius,
+                                env.ellipsoid_set, env.ellipsoid_set_beta,
+                                noiseModel::Isotropic::Sigma(1, 1.0));
+                        tag = "obj.set|f" + std::to_string(i);
+                    } else {
+                        center_contact =
+                            std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
+                                tip_key, object_key(), env.contact_node_radius,
+                                env.ellipsoid_semi_axes,
+                                noiseModel::Isotropic::Sigma(1, 1.0));
+                        tag = "obj.center|f" + std::to_string(i);
+                    }
+                    add_eq(graph, center_contact, tag);
                     return;
                 }
 
@@ -382,9 +414,8 @@ NonlinearFactorGraph TendonHandModel::build_graph(
     for (size_t i = 0; i < fingers_.size(); ++i) {
         if (!sdf_contacts_[i]) continue;
         const auto& env = *sdf_contacts_[i];
-        bool has_object_surface =
-            env.sdf_grid || env.ellipsoid_semi_axes.norm() > 0.0;
-        bool wants_object_collision = env.collision_avoidance && has_object_surface;
+        bool wants_object_collision =
+            env.collision_avoidance && crest_sparse::has_object_surface(env);
         bool wants_plane_collision  = env.plane_avoidance &&
                                       env.plane_normal.norm() > 0.0;
         bool wants_self_collision   = env.self_collision;
@@ -420,9 +451,9 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         // that actually asked for OBJECT avoidance builds these. This predicate
         // must stay identical to the has_col guard in get_initial_values(), which
         // decides whether the shared object variable is seeded at all -- anchoring
-        // an object that was never seeded is an indeterminate system.
-        if (!env.collision_avoidance ||
-            !(env.sdf_grid || env.ellipsoid_semi_axes.norm() > 0.0))
+        // an object that was never seeded is an indeterminate system. Both now
+        // call has_object_surface() so they cannot drift apart.
+        if (!env.collision_avoidance || !crest_sparse::has_object_surface(env))
             continue;
         if (!object_anchored) {
             graph.add(PriorFactor<Pose3>(
@@ -431,11 +462,20 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             object_anchored = true;
         }
         auto col_noise = noiseModel::Isotropic::Sigma(1, env.collision_sigma);
+        // Surface precedence, as documented on EnvironmentConfig::ellipsoid_set:
+        // set > single ellipsoid > baked SDF.
+        bool is_set       = !env.ellipsoid_set.empty();
         bool is_ellipsoid = env.ellipsoid_semi_axes.norm() > 0.0;
         for (const auto& s : finger_spheres[i]) {
             if (s.is_contact || s.is_root) continue;
             gtsam::NoiseModelFactor::shared_ptr gap;
-            if (is_ellipsoid) {
+            if (is_set) {
+                // Eq 1.12: the same residual as the contact equality above, read
+                // as an inequality c_pen = r - d_E <= 0.
+                gap = std::make_shared<crest_sparse::EllipsoidSetCollisionGapFactor>(
+                    s.key, object_key(), s.radius, env.ellipsoid_set,
+                    env.ellipsoid_set_beta, col_noise);
+            } else if (is_ellipsoid) {
                 gap = std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
                     s.key, object_key(), s.radius, env.ellipsoid_semi_axes, col_noise);
             } else {
@@ -753,9 +793,8 @@ Values TendonHandModel::get_initial_values(const Values* warm) const {
                 // a factor in build_graph: a terminal contact and/or active
                 // collision. An inert sdf env seeds nothing (avoids an orphan
                 // object variable with no factors).
-                bool has_object_surface =
-                    env.sdf_grid || env.ellipsoid_semi_axes.norm() > 0.0;
-                bool has_col = env.collision_avoidance && has_object_surface &&
+                bool has_col = env.collision_avoidance &&
+                               crest_sparse::has_object_surface(env) &&
                                !env.collision_node_indices.empty();
                 if (!env.target_contact_node.has_value() && !has_col) return;
 

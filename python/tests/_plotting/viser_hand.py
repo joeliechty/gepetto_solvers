@@ -33,6 +33,11 @@ _TENDON_RGB = [
 ]
 _ROD_RGB = (40, 90, 200)
 _OBJECT_RGB = (218, 165, 32)
+# The real scanned mesh behind an ellipsoid-set approximation. Deliberately a
+# different hue from _OBJECT_RGB: the two are drawn together so the fit can be
+# judged, and in one colour the shells would be indistinguishable from the mesh
+# they are approximating.
+_OBJECT_MESH_RGB = (120, 150, 190)
 _CONTACT_RGB = (80, 200, 120)
 _COLLISION_RGB = (230, 120, 60)
 _DISC_RGB = (100, 149, 237)
@@ -156,11 +161,21 @@ class ViserHandScene:
     # -- static scene: object + table --------------------------------------
 
     def set_object(self, spec, center, rotation=None):
-        """(Re)build the grasp object mesh. Sphere/cube/ellipsoid use native viser
-        primitives (translucent); cylinder/capsule fall back to a trimesh."""
+        """(Re)build the grasp object mesh. Sphere/cube/ellipsoid/ellipsoid_set use
+        native viser primitives (translucent); cylinder/capsule fall back to a
+        trimesh.
+
+        ``rotation`` is the object's world orientation (3x3). It matters for any
+        primitive that is not rotationally symmetric -- an ellipsoid drawn without
+        it appears axis-aligned no matter how the solver has it posed, and for an
+        ellipsoid SET it would scatter the members to the wrong places entirely.
+        """
         center = np.asarray(center, float)
+        R = np.eye(3) if rotation is None else np.asarray(rotation, float)
+        wxyz = tuple(_wxyz_from_R(R))
         t = spec["type"]
         name = "/object"
+        self.clear_object()
         if t == "sphere":
             self.scene.add_icosphere(name, radius=float(spec["radius"]),
                                      color=_OBJECT_RGB, opacity=0.35,
@@ -169,7 +184,20 @@ class ViserHandScene:
             a, b, c = (float(v) for v in spec["semi_axes"])
             self.scene.add_icosphere(name, radius=1.0, scale=(a, b, c),
                                      color=_OBJECT_RGB, opacity=0.35,
-                                     position=tuple(center))
+                                     position=tuple(center), wxyz=wxyz)
+        elif t == "ellipsoid_set":
+            # One shell per member (Section 1.2). Each member's pose is constant in
+            # the OBJECT frame, so the world placement is the object pose composed
+            # with it -- exactly what EllipsoidSetCollisionGapFactor evaluates, so
+            # what is drawn is the geometry the graph sees.
+            for index, member in enumerate(spec["members"]):
+                a, b, c = (float(v) for v in member["semi_axes"])
+                R_member = R @ np.asarray(member["rotation"], float)
+                pos = center + R @ np.asarray(member["center"], float)
+                self.scene.add_icosphere(
+                    f"{name}/e{index}", radius=1.0, scale=(a, b, c),
+                    color=_OBJECT_RGB, opacity=0.35,
+                    position=tuple(pos), wxyz=tuple(_wxyz_from_R(R_member)))
         elif t == "cube":
             hx, hy, hz = spec["half_extents"]
             self.scene.add_box(name, color=_OBJECT_RGB,
@@ -179,6 +207,49 @@ class ViserHandScene:
             mesh = _object_trimesh(spec, center)
             if mesh is not None:
                 self.scene.add_mesh_trimesh(name, mesh)
+
+    def clear_object(self):
+        """Drop the object geometry. Named removal is not enough on its own for an
+        ellipsoid set: its members are separate ``/object/eN`` nodes, and switching
+        from a K=7 object to a K=4 one would otherwise leave the last three shells
+        of the old object floating in the scene."""
+        try:
+            self.server.scene.remove_by_name("/object")
+        except Exception:
+            pass
+        for index in range(64):          # generous upper bound on set size
+            try:
+                self.server.scene.remove_by_name(f"/object/e{index}")
+            except Exception:
+                pass
+
+    def set_object_mesh(self, mesh, center, rotation=None, *, opacity=0.55):
+        """Overlay the object's real scanned mesh (a trimesh), posed like the
+        analytic geometry.
+
+        For a YCB object the shells are an APPROXIMATION of this, so showing both
+        is how the approximation gets judged: where the hand stops is set by the
+        shells, and the mesh says how much object is really there. Pass ``None``
+        to clear.
+        """
+        self.clear_object_mesh()
+        if mesh is None:
+            return
+        posed = mesh.copy()
+        transform = np.eye(4)
+        transform[:3, :3] = np.eye(3) if rotation is None else np.asarray(rotation, float)
+        transform[:3, 3] = np.asarray(center, float)
+        posed.apply_transform(transform)
+        posed.visual = trimesh.visual.ColorVisuals(
+            posed, vertex_colors=np.array(
+                [*_OBJECT_MESH_RGB, int(255 * opacity)], dtype=np.uint8))
+        self.scene.add_mesh_trimesh("/object_mesh", posed)
+
+    def clear_object_mesh(self):
+        try:
+            self.server.scene.remove_by_name("/object_mesh")
+        except Exception:
+            pass
 
     def set_table(self, origin, normal, *, span=0.3, thickness=0.005):
         """Draw the support-plane slab (visual aid; the solver uses the analytic

@@ -1,0 +1,7 @@
+# Downloaded YCB archives and extracted meshes. ~0.6 GB for the full set, and
+# every byte is re-fetchable from the S3 bucket -- see data.YcbCache.
+ycb_data/
+
+# The multi-fit signature cache (every backend/k/coverage combination ever tried
+# in the browser). Scratch: the CHOSEN decomposition is exported to fits/ instead.
+ellipsoids/
