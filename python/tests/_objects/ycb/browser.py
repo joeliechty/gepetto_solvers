@@ -41,6 +41,7 @@ from .data import (
     ground_offset,
     prefetch,
 )
+from .fitting import DEFAULT_K_MAX, fit_object
 
 TEXTURE_CHOICES: dict[str, int | None] = {
     "512 px": 512,
@@ -384,26 +385,12 @@ class YcbViewer:
             self.fit_status.content = f"**{name}** — {message}"
 
         try:
-            cached = ye.load_cached(self.cache.root, name, self._sources.get(name, ""),
-                                    backend, k, coverage)
-            if cached is not None:
-                report(1.0, "Using cached fit.")
-                result = cached
-            else:
-                report(0.05, f"Fitting with `{backend}`…")
-                mesh = self._meshes[name]
-                if automatic:
-                    result = ye.auto_fit(
-                        mesh, k_max=10, coverage=coverage, backend=backend, progress=report
-                    )
-                else:
-                    result = ye.fit(mesh, k, coverage=coverage, backend=backend)
-                result.ground_offset = self._offsets.get(name, np.zeros(3))
-                ye.save_cached(
-                    self.cache.root, name, self._sources.get(name, ""),
-                    backend, k, coverage, result,
-                )
-
+            # Shared with the --fit CLI and the hand visualizer's fit-on-select,
+            # so all three produce the same decomposition for the same settings.
+            result, _path = fit_object(
+                self.cache, name, self._sources.get(name, ""),
+                backend=backend, k=k, coverage=coverage, progress=report,
+            )
             self._fits[name] = result
             if not self.show_ellipsoids.value:
                 self.show_ellipsoids.value = True  # triggers a re-render
@@ -484,11 +471,12 @@ def main() -> None:
         "--k", type=int, default=None, help="Ellipsoid count; omit for automatic."
     )
     parser.add_argument(
-        "--k-max", type=int, default=8,
-        help="Largest k the automatic sweep will try (default 8). Worth lowering "
-             "for a batch: cost is linear in it, and the sweep will happily spend "
-             "9 ellipsoids shaving 20%% off a near-spherical object -- while every "
-             "extra member costs an evaluation in every collision factor, forever.",
+        "--k-max", type=int, default=DEFAULT_K_MAX,
+        help=f"Largest k the automatic sweep will try (default {DEFAULT_K_MAX}). "
+             "Changes WHICH fit is chosen, not just how long the search takes: "
+             "the sweep returns the smallest k within tolerance of the best k it "
+             "found, so a lower ceiling can move the answer. Leave it alone "
+             "unless you know why you are changing it.",
     )
     parser.add_argument(
         "--skip-existing", action="store_true",
@@ -512,23 +500,10 @@ def main() -> None:
                 continue
             started = time.time()
             try:
-                mesh = cache.load_mesh(name, source, max_texture=512)
-                offset = ground_offset(mesh)
-                mesh = ground_and_center(mesh)
-                if args.k is None:
-                    result = ye.auto_fit(
-                        mesh, k_max=args.k_max, coverage=args.coverage,
-                        backend=args.backend
-                    )
-                else:
-                    result = ye.fit(
-                        mesh, args.k, coverage=args.coverage, backend=args.backend
-                    )
-                result.ground_offset = offset
-                ye.save_cached(
-                    cache.root, name, source, args.backend, args.k, args.coverage, result
+                result, _path = fit_object(
+                    cache, name, source, backend=args.backend, k=args.k,
+                    coverage=args.coverage, k_max=args.k_max,
                 )
-                ye.export_json(FITS_DIR, name, source, result)
                 done += 1
                 print(f"  [{index}/{len(names)}] {name}: {result.metrics.summary()}"
                       f"  ({time.time() - started:.0f}s)", flush=True)

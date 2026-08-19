@@ -341,12 +341,17 @@ class HandVizApp:
                 "backend", ["gmm", "kmeans", "coacd"], initial_value="gmm",
                 hint="gmm handles elongated parts; coacd respects concavity but "
                      "is slow and is an optional dependency.")
+            # Same two controls as the browser's Fit panel, not a single
+            # "0 = auto" slider: an explicit mode leaves no way for the count to
+            # be read as a fit request when automatic was meant.
+            self.g_ycb_count = gui.add_dropdown(
+                "count", ["auto", "manual"], initial_value="auto",
+                hint="auto sweeps k and takes the smallest one near the best "
+                     "result. This is what produces a sensible multi-ellipsoid "
+                     "decomposition; manual pins the count below.")
             self.g_ycb_k = gui.add_slider(
-                "ellipsoids (k, 0 = auto)", 0, 12, 1, 0,
-                hint="0 sweeps k and takes the smallest one near the best excess "
-                     "volume. Worth pinning: the sweep will happily spend 9 "
-                     "ellipsoids shaving 20% off a near-spherical object, and "
-                     "every member costs an evaluation in every collision factor.")
+                "ellipsoids (k)", 1, 15, 1, 4,
+                hint="Only used when count is 'manual'.")
             self.g_ycb_coverage = gui.add_slider(
                 "coverage target", 0.90, 1.0, 0.005, 0.98)
             self.g_ycb_fit = gui.add_button(
@@ -387,9 +392,8 @@ class HandVizApp:
         """
         self.g_ycb_fit.disabled = True
         try:
-            from .._objects.ycb import (Catalog, YcbCache, FITS_DIR,
-                                        ground_and_center, ground_offset)
-            from .._objects.ycb import ellipsoids as ye
+            from .._objects.ycb import Catalog, YcbCache
+            from .._objects.ycb.fitting import fit_object
             from .scene import ycb_primitive_specs
 
             catalog = Catalog()
@@ -398,7 +402,10 @@ class HandVizApp:
             source = catalog.objects[name].sources[0]
             backend = self.g_ycb_backend.value
             coverage = float(self.g_ycb_coverage.value)
-            k = int(self.g_ycb_k.value) or None
+            # None => automatic sweep, which is the default and what gives a real
+            # multi-ellipsoid decomposition.
+            k = (None if self.g_ycb_count.value == "auto"
+                 else int(self.g_ycb_k.value))
 
             def report(fraction, message):
                 # Mirrored to the main status bar as well: a fit started by
@@ -408,21 +415,12 @@ class HandVizApp:
                 self.g_ycb_status.content = text
                 self._set_status(text)
 
-            report(0.0, f"fetching from `{source}`…")
-            cache = YcbCache(catalog)
-            mesh = cache.load_mesh(name, source, max_texture=512,
-                                   progress=report)
-            offset = ground_offset(mesh)
-            mesh = ground_and_center(mesh)
-
-            report(0.5, f"fitting with `{backend}`…")
-            if k is None:
-                result = ye.auto_fit(mesh, coverage=coverage, backend=backend,
-                                     progress=report)
-            else:
-                result = ye.fit(mesh, k, coverage=coverage, backend=backend)
-            result.ground_offset = offset
-            ye.export_json(FITS_DIR, name, source, result)
+            # The shared pipeline the browser and the --fit CLI use, so an object
+            # fitted here is identical to one fitted there.
+            result, _path = fit_object(
+                YcbCache(catalog), name, source, backend=backend, k=k,
+                coverage=coverage, progress=report,
+            )
 
             # The spec registry caches the directory listing, so a fit written
             # after startup is invisible until that cache is dropped.
