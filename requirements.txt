@@ -8,3 +8,7 @@ pyvista==0.46.4
 matplotlib==3.10.7
 vtk==9.5.2
 pybind11==3.0.1
+# viser: web-based interactive visualizer (python/tests/tendon_hand/viz_interactive.py,
+# python/tests/_objects/ycb/browser.py). Pulls in trimesh, which ycb/browser.py imports
+# directly. 1.1.0 is the latest release that still ships py3.10-compatible deps.
+viser==1.1.0
