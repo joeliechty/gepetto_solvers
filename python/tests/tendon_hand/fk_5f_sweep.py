@@ -109,6 +109,9 @@ def main():
         # --- Command the shared wrist pose (warm-start; no solver rebuild) ---
         wrist_pose = _wrist_pose(i)
         solver.set_wrist_pose(wrist_pose)
+        # Draw the commanded wrist base frame (RGB = x/y/z) so you can see the
+        # pose every finger is anchored to as it sweeps.
+        plotter.set_wrist_pose(wrist_pose)
 
         # --- Per-finger tendon tensions (staggered flexor sweep) ---
         all_tensions = []
@@ -147,7 +150,13 @@ def main():
             print(f"  {'finger':<{width}}  tension(N)  length(mm)")
             for name, tension, length in zip(finger_names, flexors, flexor_lengths):
                 print(f"  {name:<{width}}  {tension:>10.2f}  {1e3 * length:>10.2f}")
-            print(f"  Wrist pos: {wrist_pose[:3, 3]}")
+            rpy = np.degrees([
+                np.arctan2(wrist_pose[2, 1], wrist_pose[2, 2]),
+                np.arcsin(-wrist_pose[2, 0]),
+                np.arctan2(wrist_pose[1, 0], wrist_pose[0, 0]),
+            ])
+            print(f"  Wrist pos (mm): {1e3 * wrist_pose[:3, 3]}  "
+                  f"rpy (deg): {rpy}")
             print(f"  {finger_names[0]} tip pos: {tip[:3, 3]}")
 
     end_time = time.time()

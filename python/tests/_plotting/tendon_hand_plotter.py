@@ -134,6 +134,8 @@ class TendonHandPlotter:
                  plot_backbone_ellipsoids=True,
                  plot_world_axes=True,
                  world_axes_scale=0.03,
+                 plot_wrist_frame=True,
+                 wrist_frame_scale=0.04,
                  primitives=None,
                  **kwargs):
 
@@ -161,6 +163,16 @@ class TendonHandPlotter:
         self.plot_world_axes = plot_world_axes
         self.world_axes_scale = world_axes_scale
         self._world_axes_added = False
+
+        # Shared wrist base pose (world frame). The solver anchors every finger
+        # to it via a per-finger offset, so drawing it shows where the whole
+        # hand is rooted. Driven from outside through set_wrist_pose(); the
+        # actors are created lazily on the first update() so a caller that
+        # never commands a wrist pose pays nothing.
+        self.plot_wrist_frame = plot_wrist_frame
+        self.wrist_frame_scale = wrist_frame_scale
+        self._wrist_pose = np.eye(4)
+        self._wrist_transform = None
 
         self.rod_managers = {}
         self.tendon_managers = {}
@@ -198,6 +210,22 @@ class TendonHandPlotter:
                 shape=None, show_points=False)
         self._world_axes_added = True
 
+    def _add_wrist_frame(self):
+        """Add an RGB axes triad driven by a vtkTransform for the wrist pose."""
+        self._wrist_transform = vtk.vtkTransform()
+        axes = utils.get_axes_frame(length=self.wrist_frame_scale)
+        for arrow, color in zip(axes, utils.frame_arrow_colors):
+            actor = self.plotter.plotter.add_mesh(
+                arrow, color=color, lighting=False)
+            actor.SetUserTransform(self._wrist_transform)
+
+    def set_wrist_pose(self, wrist_pose):
+        """Command the wrist base pose (4x4 world-frame transform) to draw.
+
+        Call before update(); the triad is re-posed on the next render.
+        """
+        self._wrist_pose = np.asarray(wrist_pose, dtype=float)
+
     def update(self, solutions_dict):
         """Update all fingers and render.
 
@@ -216,6 +244,11 @@ class TendonHandPlotter:
 
         if self.plot_world_axes and not self._world_axes_added:
             self._add_world_axes()
+
+        if self.plot_wrist_frame:
+            if self._wrist_transform is None:
+                self._add_wrist_frame()
+            self._wrist_transform.SetMatrix(self._wrist_pose.flatten().tolist())
 
         first_solution = next(iter(solutions_dict.values()))
         self.plotter.update(first_solution)
