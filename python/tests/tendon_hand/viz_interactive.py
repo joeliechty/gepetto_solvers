@@ -57,7 +57,8 @@ import traceback
 import numpy as np
 
 from .scene import (get_primitive_specs, ycb_primitive_specs, proxy_semi_axes,
-                    GRASP_FLEXOR_TENSION, TABLE_NORMAL, ELLIPSOID_SET_BETA)
+                    GRASP_FLEXOR_TENSION, TABLE_NORMAL, ELLIPSOID_SET_BETA,
+                    TABLE_SPAN, TABLE_THICKNESS, table_corner)
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
@@ -691,16 +692,58 @@ class HandVizApp:
         spec, center, _rot, _pose = resolve_scene(self.params)
         return resolve_table_origin(self.params, spec, center)
 
+    def _refresh_table_readout(self, origin, corner):
+        """Publish the landmark's numbers: the square's size and where its corner
+        frame currently is, in world coordinates.
+
+        These have to be readable, not inferred. The whole point of the frame is
+        to be measured against a real bench, and a triad you can see but whose
+        coordinates you cannot read is not a landmark. The plane height is quoted
+        alongside because the table is seated from the object (see
+        ``auto_table_origin``), so it moves when the object changes -- this is
+        where you see that it did.
+        """
+        origin = np.asarray(origin, float).reshape(3)
+        corner = np.asarray(corner, float).reshape(3)
+        axis = int(np.argmax(np.abs(np.asarray(self.params.plane_normal, float))))
+        self.g_table_status.content = (
+            f"square **{TABLE_SPAN:.3f} x {TABLE_SPAN:.3f} m**, "
+            f"{TABLE_THICKNESS * 1e3:.0f} mm thick  \n"
+            f"plane (top face) {'xyz'[axis]} = {origin[axis]:+.4f} m  \n"
+            f"corner frame ({corner[0]:+.4f}, {corner[1]:+.4f}, "
+            f"{corner[2]:+.4f}) m")
+
     # -- rendering --
 
     def _refresh_object(self):
         spec, center, rotation, _pose = resolve_scene(self.params)
         self.scene.set_object(spec, center, rotation)
         self._refresh_ycb_mesh(spec, center, rotation)
-        if self.params.table:
-            self.scene.set_table(self._table_origin(), self.params.plane_normal)
+        # Reference frames. The world triad is fixed, but the object's rides on
+        # the pose resolved just above, so it is drawn here -- with the object
+        # itself -- rather than in _render_frame: the object moves when the
+        # scene is rebuilt, not once per solve iterate.
+        self.scene.set_world_frame(self.g_show_world.value)
+        if self.g_show_obj_frame.value:
+            self.scene.set_object_frame(center, rotation)
         else:
-            self.scene.clear_table()
+            self.scene.clear_object_frame()
+        # The slab is drawn UNCONDITIONALLY -- not gated on params.table, and not
+        # on caps["table"] either. It is a physical landmark for real-robot
+        # setup, and a landmark that disappears when you switch a constraint off
+        # (or when a stale .so cannot build the plane) is not one you can measure
+        # against. The checkbox governs the solver's half-space; this is a
+        # picture of where that plane is.
+        origin = self._table_origin()
+        self.scene.set_table(origin, self.params.plane_normal,
+                             span=TABLE_SPAN, thickness=TABLE_THICKNESS)
+        corner = table_corner(origin, self.params.plane_normal)
+        if self.g_show_table_frame.value:
+            self.scene.set_table_frame(
+                corner, label=f"table corner  {TABLE_SPAN:g} x {TABLE_SPAN:g} m")
+        else:
+            self.scene.clear_table_frame()
+        self._refresh_table_readout(origin, corner)
         if self.params.half_space:
             axis = (self.params.half_space_axis if self.params.half_space_axis is not None
                    else default_half_space_axis(spec, rotation, self.params.plane_normal))
@@ -1512,7 +1555,8 @@ class HandVizApp:
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
                    self.g_show_ycb_mesh,
                    self.g_show_contact, self.g_show_collision,
-                   self.g_show_discs, self.g_show_gaps, self.g_show_mount])
+                   self.g_show_discs, self.g_show_world, self.g_show_obj_frame,
+                   self.g_show_table_frame, self.g_show_gaps, self.g_show_mount])
 
     def _build_gui(self):
         gui = self.server.gui
@@ -1765,7 +1809,11 @@ class HandVizApp:
             with gui.add_folder("Contact (Eq 2.11-2.15)"):
                 self.g_table = gui.add_checkbox(
                     "table enabled", True, disabled=not self.caps["table"],
-                    hint=None if self.caps["table"]
+                    hint="Put the support plane in the factor graph. Affects the "
+                         "SOLVER only -- the table square is always drawn, since "
+                         "it doubles as the scene's landmark (see 'table frame' "
+                         "under Display)."
+                    if self.caps["table"]
                     else "requires a newer _crest_sparse build (plane env fields)")
                 self.g_obj_contact = gui.add_checkbox(
                     "object contact", True,
@@ -1914,6 +1962,8 @@ class HandVizApp:
             # negative to bury it (0.5 * extent reaches the half-buried §1.8
             # geometry HandSolveParams still defaults to headlessly).
             self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, 0.0)
+            # Filled by _refresh_table_readout on every re-place of the slab.
+            self.g_table_status = gui.add_markdown("")
 
         with gui.add_folder("Augmented Lagrangian"):
             self.g_al_mu = gui.add_slider("mu", 0.1, 10.0, 0.1, 1.0)
@@ -1931,8 +1981,34 @@ class HandVizApp:
             self.g_show_contact = gui.add_checkbox("contact spheres", True)
             self.g_show_collision = gui.add_checkbox("collision spheres", True)
             self.g_show_discs = gui.add_checkbox("routing discs", False)
+            # The three frame toggles all default ON: which frame anything is
+            # expressed in is the first question asked of this scene, and a
+            # triad you have to go and switch on answers it too late.
+            self.g_show_world = gui.add_checkbox(
+                "world frame", True,
+                hint="Triad at the world origin. Every position readout in this "
+                     "app is in this frame, and it is the frame the wrist pose "
+                     "sliders command -- so with the hand at the measured mount "
+                     "it doubles as the robot flange frame.")
+            self.g_show_obj_frame = gui.add_checkbox(
+                "object frame", True,
+                hint="Triad at the object's center, oriented by its rotation -- "
+                     "the pose the contact and collision factors are written "
+                     "against, and what the Object-pose sliders drive. The only "
+                     "way to see the orientation of a symmetric primitive, and "
+                     "for a ycb: set it is the frame its members sit in.")
+            self.g_show_table_frame = gui.add_checkbox(
+                "table frame", True,
+                hint=f"Triad on the table square's -X/-Y corner, on the top "
+                     f"face -- a pure translation of the world frame, so a "
+                     f"coordinate read off it is a world coordinate minus the "
+                     f"corner. The landmark to measure a real bench against. "
+                     f"The square is {TABLE_SPAN:g} x {TABLE_SPAN:g} m "
+                     f"whatever object is on it, but the plane is seated UNDER "
+                     f"the object, so the frame moves when you switch objects "
+                     f"-- the Table folder reports where it is.")
             self.g_show_mount = gui.add_checkbox(
-                "mount frames", False,
+                "mount frames", True,
                 hint="Draw the wrist frame and, offset from it by the measured "
                      "mount transform, the robot flange frame the hand bolts to. "
                      "Use with 'Pose at measured robot mount' to check the "
@@ -1976,13 +2052,18 @@ class HandVizApp:
 
         self.g_mount.on_click(self._pose_at_mount)
 
-        # The scan-mesh overlay is static scene geometry, not per-frame, so it
-        # goes through _refresh_object rather than the _render_frame path below.
-        @self.g_show_ycb_mesh.on_update
-        def _(_):
-            if self._restoring:
-                return
-            self._refresh_object()
+        # The scan-mesh overlay and the world/object triads are static scene
+        # geometry, not per-frame, so they go through _refresh_object rather
+        # than the _render_frame path below. (The mount frames are the exception
+        # among the frame toggles: they hang off the SOLVED wrist, which moves
+        # every iterate, so they render with the hand.)
+        for h in (self.g_show_ycb_mesh, self.g_show_world, self.g_show_obj_frame,
+                  self.g_show_table_frame):
+            @h.on_update
+            def _(_):
+                if self._restoring:
+                    return
+                self._refresh_object()
 
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
@@ -2051,6 +2132,12 @@ def main():
     missing = [k for k, v in app.caps.items() if not v]
     if missing:
         print(f"  capabilities MISSING from this build: {', '.join(missing)}")
+    # The landmark's dimensions, printed so they can be copied into a real-robot
+    # setup without opening the browser. The corner frame's position is scene
+    # state (it follows the object-seated plane), so that one lives in the GUI.
+    print(f"table square: {TABLE_SPAN:.3f} x {TABLE_SPAN:.3f} m, "
+          f"{TABLE_THICKNESS * 1e3:.0f} mm thick -- top face is the constraint "
+          f"plane, frame on its -X/-Y corner")
     print(f"viser hand visualizer running -- open http://localhost:{args.port}")
     import time
     while True:

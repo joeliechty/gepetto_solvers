@@ -251,17 +251,26 @@ class ViserHandScene:
         except Exception:
             pass
 
-    def set_table(self, origin, normal, *, span=0.3, thickness=0.005):
+    def set_table(self, origin, normal, *, span, thickness):
         """Draw the support-plane slab (visual aid; the solver uses the analytic
-        half-space). Thin along the dominant normal axis, matching
-        ``scene.table_plot_spec``."""
+        half-space). Thin along the dominant normal axis, and hung half a
+        thickness BELOW ``origin`` so its top face is the plane itself -- matching
+        ``scene.table_plot_spec`` / ``scene.table_slab_center``.
+
+        ``span``/``thickness`` are required rather than defaulted: the slab is a
+        measured landmark for real-robot setup, and a second set of dimensions
+        living here would be free to drift from ``scene.TABLE_SPAN``, which is
+        the one definition callers are supposed to pass.
+        """
         origin = np.asarray(origin, float).reshape(3)
         n = np.asarray(normal, float).reshape(3)
         axis = int(np.argmax(np.abs(n)))
         extents = [span, span, span]
         extents[axis] = thickness
+        center = origin.copy()
+        center[axis] -= np.sign(n[axis]) * thickness / 2.0
         self.scene.add_box("/table", color=_TABLE_RGB, dimensions=tuple(extents),
-                           opacity=0.4, position=tuple(origin))
+                           opacity=0.4, position=tuple(center))
 
     def clear_table(self):
         try:
@@ -303,6 +312,75 @@ class ViserHandScene:
                 self.scene.add_box(name, color=_HALF_SPACE_RGB,
                                    dimensions=tuple(extents), opacity=0.15,
                                    position=tuple(origin + side * margin * a))
+
+    def set_world_frame(self, show=True, *, axes_length=0.03):
+        """Show or hide the world-origin triad.
+
+        Toggled by re-adding the node with ``show_axes`` rather than removing
+        it: ``/world`` is the scene's root frame and pins the up-direction set
+        in ``__init__``, so it has to keep existing even when its axes are not
+        drawn.
+        """
+        self.scene.add_frame("/world", show_axes=bool(show),
+                             axes_length=axes_length, axes_radius=0.0008)
+
+    def set_object_frame(self, center, rotation=None, *, axes_length=0.04):
+        """Draw the object's own frame: the pose every contact and collision
+        factor is written against.
+
+        Worth seeing on its own because the object's ORIENTATION is otherwise
+        invisible on a rotationally symmetric primitive, and for an ellipsoid
+        set it is the frame the members are placed in -- so it is what the
+        Object-pose rotation sliders actually drive. Lives at ``/object_frame``,
+        a sibling of ``/object`` rather than a child, so :meth:`clear_object`
+        (which prunes ``/object/eN`` members) does not take it down with it.
+        """
+        R = np.eye(3) if rotation is None else np.asarray(rotation, float)
+        self.scene.add_frame("/object_frame", show_axes=True,
+                             axes_length=axes_length,
+                             axes_radius=axes_length * 0.03,
+                             wxyz=_wxyz_from_R(R),
+                             position=tuple(np.asarray(center, float).reshape(3)))
+
+    def clear_object_frame(self):
+        try:
+            self.server.scene.remove_by_name("/object_frame")
+        except Exception:
+            pass
+
+    def set_table_frame(self, corner, *, axes_length=0.06, label=None):
+        """Draw the table's landmark frame: a PURE TRANSLATION of the world frame
+        to ``corner`` -- same axis directions, no rotation, so a coordinate read
+        off this frame differs from a world coordinate by an offset alone.
+
+        That is the point of it. Setting up a real experiment means measuring the
+        bench, and a table corner is the one feature this scene and the physical
+        rig share; with the axes parallel to world, going between the two is a
+        subtraction rather than a change of basis. Drawn longer than the object
+        (0.04) and mount (0.05) frames because it is the scene-scale reference.
+
+        ``label`` is optional billboard text (the app passes the slab's
+        dimensions, so the numbers are legible from inside the 3D view).
+        """
+        self.scene.add_frame("/table_frame", show_axes=True,
+                             axes_length=axes_length,
+                             axes_radius=axes_length * 0.025,
+                             wxyz=(1.0, 0.0, 0.0, 0.0),   # world-aligned
+                             position=tuple(np.asarray(corner, float).reshape(3)))
+        try:
+            self.server.scene.remove_by_name("/table_frame_label")
+        except Exception:
+            pass
+        if label:
+            self.scene.add_label("/table_frame_label", label,
+                                 position=tuple(np.asarray(corner, float).reshape(3)))
+
+    def clear_table_frame(self):
+        for name in ("/table_frame", "/table_frame_label"):
+            try:
+                self.server.scene.remove_by_name(name)
+            except Exception:
+                pass
 
     def set_mount_frames(self, T_world_wrist, T_flange_wrist, *, axes_length=0.05):
         """Draw the wrist frame and the robot flange frame it hangs off.
