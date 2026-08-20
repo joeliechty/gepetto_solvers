@@ -864,6 +864,10 @@ def opposition_axis_from_object(plane_normal, e_long):
     as ``m_hat`` directly splits the two groups ACROSS the object's length
     (bisecting its short axis) instead of along it, putting the thumb near one
     end and the fingers near the other.
+
+    For an object with no long axis at all (a ball) ``e_long`` falls back to
+    world +Y, so ``m_hat`` comes out -X: thumb on the -X side of the object,
+    the opposing fingers on +X.
     """
     n = np.asarray(plane_normal, dtype=float).reshape(3)
     n = n / np.linalg.norm(n)
@@ -887,9 +891,11 @@ def opposition_directions(configs, *, thumb_index=-1, axis=None):
     thumb and ``-axis`` for every other finger, so the two groups are driven to
     opposite halves.
 
-    ``axis`` (default world +X; callers should prefer deriving it from the
-    object's shape via :func:`opposition_axis_from_object`, see
-    ``solvers.default_half_space_axis``) must lie IN the support plane -- the
+    ``axis`` (default world +X, which is thumb-on-+X and so the MIRROR of what
+    the derived path now produces for a shapeless object -- see
+    :func:`opposition_axis_from_object`; every live caller passes an explicit
+    axis from ``solvers.default_half_space_axis``, and new ones should too)
+    must lie IN the support plane -- the
     constraint is only radius-independent when ``n_table . m_hat = 0``, which
     is what makes its Jacobian constant. ``thumb_index`` defaults to the last
     config, matching :func:`get_default_hand_configs` (four fingers, then the

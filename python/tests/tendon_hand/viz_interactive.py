@@ -58,7 +58,8 @@ import numpy as np
 
 from .scene import (get_primitive_specs, ycb_primitive_specs, proxy_semi_axes,
                     GRASP_FLEXOR_TENSION, TABLE_NORMAL, ELLIPSOID_SET_BETA,
-                    TABLE_SPAN, TABLE_THICKNESS, table_corner)
+                    TABLE_SPAN, TABLE_THICKNESS, table_corner,
+                    object_principal_inplane_axis, INPLANE_DEGENERACY_RATIO)
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
@@ -76,13 +77,14 @@ FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
 # This app's own startup object -- see HandVizApp.__init__ for why it's set
 # there rather than just changed on the dropdown widget.
 #
-# A YCB screwdriver, because it is the case the ellipsoid SET exists for: a fat
-# handle joined to a thin shaft is two scales in one rigid body, and the single
-# enclosing hyper-ellipsoid over both is mostly air. It also sits usefully against
-# the reach limit -- the ~38 mm handle is inside the graspable band even though the
-# ~210 mm whole object is not. Falls back automatically (see _build_gui) when the
-# binding has no ellipsoid_set or nothing has been fitted into _objects/ycb/fits/.
-DEFAULT_OBJECT_PRIMITIVE = "ycb:043_phillips_screwdriver"
+# The megaminx: a 70 mm dodecahedron the factors see as its circumsphere, so it
+# is a single analytic surface (no ellipsoid SET, no fetched/fitted YCB scan
+# needed) that still carries hull_vertices -- the true solid is drawn inside the
+# shell, and the table seats on the solid rather than on the proxy sphere. It
+# also sits inside the graspable band, so the startup scene is one a 5-finger
+# grasp can actually close on. Falls back automatically (see _build_gui) when the
+# binding cannot build analytic ellipsoid surfaces at all.
+DEFAULT_OBJECT_PRIMITIVE = "megaminx"
 DEFAULT_OBJECT_FALLBACK = "mid_sphere_ellipsoid"
 
 # Display-only suffix for the baked-SDF spheres in the object dropdown, so they
@@ -562,10 +564,11 @@ class HandVizApp:
     def _resolve_default_primitive(self):
         """The startup object, falling back when it is unavailable.
 
-        Two ways the YCB default can be missing: a binding without
-        ``ellipsoid_set``, or a checkout whose ``_objects/ycb/fits/`` is empty (the
-        fits are committed, but a partial clone or a fresh branch may not have
-        them). Resolve here rather than only on the dropdown widget, because
+        The default (and its fallback) are analytic-ellipsoid objects, so both
+        drop out of the dropdown on a binding without ``ellipsoid_semi_axes``;
+        a YCB default would additionally need ``ellipsoid_set`` and a populated
+        ``_objects/ycb/fits/``. Resolve here rather than only on the dropdown
+        widget, because
         ``_rebuild_fk`` reads ``params.primitive`` directly and would raise a bare
         KeyError on a key the spec registry never produced.
         """
@@ -933,6 +936,7 @@ class HandVizApp:
                          f"the split "
                          f"({self.params.half_space_margin * 2000:.0f} mm "
                          f"corridor)")
+        lines.extend(self._split_axis_note())
         lines.extend(self._opposition_side_note())
         lines.extend(self._rotation_driver_note())
         return lines
@@ -993,6 +997,29 @@ class HandVizApp:
                 "one-sided inequality on positions (slack => no gradient) and "
                 "pinch-centroid is satisfiable by translation alone. Tick "
                 "**short-axis alignment** for the orientation constraint."]
+
+    def _split_axis_note(self):
+        """Which way the split LINE is pointing, and whether the object chose it.
+
+        The line is derived silently from the object's silhouette on the support
+        plane, and a derivation with no readout is one nobody can check: the
+        degenerate case (every ball, can and bowl) hands back a fixed world
+        direction that looks identical on screen to a measured one, so a wrong
+        axis and a defaulted axis are indistinguishable without the ratio."""
+        spec, _center, rotation, _pose = resolve_scene(self.params)
+        try:
+            e_long, ratio = object_principal_inplane_axis(
+                spec, rotation, self.params.plane_normal)
+        except ValueError:
+            return []
+        # Reported as the LINE (mod 180 deg), since the sign shown to the user is
+        # the side assignment, and _opposition_side_note already covers that.
+        deg = np.degrees(np.arctan2(e_long[1], e_long[0])) % 180.0
+        if ratio < INPLANE_DEGENERACY_RATIO:
+            return [f"split line: object is in-plane isotropic ({ratio:.2f}x), "
+                    f"so the default +Y split is used — thumb on the -X side"]
+        return [f"split line: {deg:.0f}° from +X in the table plane "
+                f"(object is {ratio:.1f}x longer that way)"]
 
     def _opposition_side_note(self):
         """How far the current posture is from the side assignment being asked
@@ -1457,8 +1484,9 @@ class HandVizApp:
         """Checking a phase preset applies it and unchecks every OTHER phase
         checkbox first -- they are mutually exclusive stages of the same
         pipeline, and leaving two checked at once would show a state whose
-        settings actually contradict each other (e.g. phase 0's half_space=
-        True vs. phase 1's False). Unchecking is a no-op -- the controls a
+        settings actually contradict each other (e.g. phase 0's
+        pregrasp_centroid=True vs. phase 1's False). Unchecking is a no-op --
+        the controls a
         preset wrote stay exactly where it left them, freely editable
         afterward; there is nothing to "undo" back to."""
         if self._restoring:
@@ -1759,9 +1787,11 @@ class HandVizApp:
             self.g_phase0 = gui.add_checkbox(
                 PHASE_PRESETS["phase0"].label, False,
                 hint="Apply the phase-0 preset: no object/table contact yet, "
-                     "collision avoidance on, all three pre-grasp constraints "
-                     "(opposition half-space, centering, short-axis "
-                     "alignment) on, a loose wrist prior (this is a big "
+                     "collision avoidance on, pinch-centroid centering + "
+                     "short-axis alignment on (the opposition half-space and "
+                     "fingertip-midpoint centering stay OFF -- the pinch "
+                     "centroid already positions the hand and the other two "
+                     "fight it), a loose wrist prior (this is a big "
                      "repositioning move), and a 3-finger pinch "
                      "(index/middle/thumb). Writes straight onto the "
                      "Constraints/Wrist controls -- check this, then press "

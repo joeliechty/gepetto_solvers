@@ -44,7 +44,10 @@ from .config import (
     attach_pregrasp_centroid, pinch_pose_for_mask)
 from .scene import (
     OBJECT_CENTER, GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL,
-    get_primitive_specs, primitive_surface_witness, object_principal_inplane_axis)
+    get_primitive_specs, primitive_surface_witness, object_principal_inplane_axis,
+    # Re-exported: pure spec geometry, and it lives in scene.py so the in-plane
+    # width sweep there can reach it. Callers still say solvers.object_extent_along.
+    object_extent_along)
 
 
 # The _objects/ directory holding the baked .vdb SDF grids (relative to this file).
@@ -241,75 +244,6 @@ def default_object_center(primitive, spec):
     return np.array(OBJECT_CENTER, dtype=float)
 
 
-def object_extent_along(spec, normal, rotation=None):
-    """Object half-size along ``normal`` (m) -- used to seat a default support
-    plane tangent to the object's underside.
-
-    ``rotation`` is the object's world orientation. It matters for the analytic
-    surfaces, whose geometry is stored in the OBJECT-LOCAL frame: a rotated
-    object presents a different profile to the plane, and ignoring that seats the
-    table at the wrong height. Most visible on a long thin object -- stand the
-    screwdriver on end and its along-normal half-size goes from ~19 mm to ~106 mm.
-    Passing None keeps the legacy axis-aligned reading.
-
-    The baked-SDF primitives (cylinder/capsule/cube) are deliberately left on
-    their existing special-cased handling: their specs carry a fixed ``rotation``
-    the generators were baked with, which the branches below already account for.
-    """
-    n = np.asarray(normal, dtype=float)
-    n = n / (np.linalg.norm(n) or 1.0)
-    # Into the object's own frame, where the stored semi-axes/members live.
-    n_local = (n if rotation is None
-               else np.asarray(rotation, float).T @ n)
-    t = spec["type"]
-    hull = spec.get("hull_vertices")
-    if hull is not None:
-        # The spec carries the REAL solid the analytic surface only proxies (the
-        # megaminx: a dodecahedron the factors see as its circumsphere). Seat the
-        # table on the solid, since that is what the object rests on: how far the
-        # lowest vertex reaches against n, which for a face-down solid is its
-        # inradius. Using the proxy's half-width instead would hold a 70 mm
-        # across-the-flats solid 88 mm tall -- balanced on a corner, which is a
-        # pose it cannot physically hold. The proxy sphere then sinks into the
-        # slab by the corner-vs-flat difference, which is correct: the sphere is
-        # a bound on the solid, not the object.
-        return float(np.max(-(np.asarray(hull, float) @ n_local)))
-    if t == "sphere":
-        return float(spec["radius"])
-    if t in ("cylinder", "capsule"):
-        # These primitives are rotated (Rx 90 deg) to stand their local Y axis
-        # along world +Z: half-height along Z, radius laterally.
-        cap = spec["radius"] if t == "capsule" else 0.0
-        along_z = spec["height"] / 2.0 + cap
-        return float(along_z if abs(n[2]) >= 0.5 else spec["radius"])
-    if t == "cube":
-        return float(np.abs(np.asarray(spec["half_extents"], float) * n).sum())
-    if t == "ellipsoid":
-        # Support function ||diag(a) n||, the exact half-width along n. (For an
-        # axis-aligned n -- the default +Z table -- this equals the L1 reading
-        # this used to use, so no existing scene moves.)
-        return float(np.linalg.norm(np.asarray(spec["semi_axes"], float) * n_local))
-    if t == "ellipsoid_set":
-        # Furthest any member reaches along n from the object origin: its center's
-        # offset that way, plus its own reach. The reach of a rotated ellipsoid
-        # along n is the support function ||diag(a) R^T n|| -- a norm, not the L1
-        # sum the axis-aligned branch above uses. That distinction is not cosmetic
-        # for these: a YCB fit's members are rotated to arbitrary angles, and L1
-        # over-estimates by up to sqrt(3), which would seat the table centimetres
-        # below a long thin object like the screwdriver.
-        #
-        # Max over members rather than sum, because they overlap by construction.
-        # Signed center offset, not |offset|: the deepest member is the one whose
-        # centre sits furthest AGAINST n, and taking the absolute value would let
-        # a member on the far side masquerade as the lowest one.
-        return max(
-            float(-(np.asarray(m["center"], float) @ n_local)
-                  + np.linalg.norm(np.asarray(m["semi_axes"], float)
-                                   * (np.asarray(m["rotation"], float).T @ n_local)))
-            for m in spec["members"])
-    return 0.05
-
-
 def resolve_scene(params):
     """Resolve (spec, center, rotation, 4x4 pose) for the object from the params,
     filling center/rotation from the primitive when left unset."""
@@ -482,13 +416,19 @@ def default_half_space_axis(spec, rotation, plane_normal):
 
     This is what makes the split LINE run along the object's length (e.g.
     lengthwise along a pen, thumb on one side and fingers on the other across
-    its diameter) instead of across it. Falls back to world +X only when the
-    object is in-plane isotropic (below the degeneracy ratio) --
+    its diameter) instead of across it. The length is measured off the object's
+    silhouette on the support plane, so it finds a direction that is not one of
+    the object's own frame axes -- a YCB screwdriver lying at 27 degrees to its
+    export frame gets 27 degrees, not the nearest axis. Falls back to world +Y
+    (giving ``m_hat = -X``, thumb on the -X side) only when the object is
+    in-plane isotropic (below the degeneracy ratio) --
     :func:`scene.object_principal_inplane_axis`'s own fallback.
 
     Returns the LINE, not the side assignment: the sign is inherited from the
-    object's principal-axis direction, which is an arbitrary convention (an
-    eigenvector's sign, or the +X fallback). Which half the THUMB is asked to
+    object's principal-axis direction, which is an arbitrary convention (which
+    end of the sweep the widest direction landed on, or the +Y fallback). The
+    fallback's sign is chosen to agree with the hand rather than fight it, but
+    the measured one cannot be. Which half the THUMB is asked to
     stay on is a statement about the hand, not the object -- see
     :func:`orient_opposition_axis`, which every caller must apply before
     building the constraint."""
@@ -1174,7 +1114,7 @@ class HandSolveParams:
     sigma_pregrasp_q_active: float = 1e-1
     # SUPERSEDED / unused: this used to gate deriving the Eq 1.92 half-space
     # axis from the object's longest in-plane axis as an opt-in, off by
-    # default (world +X). That derivation (m_hat = n_hat x e_long) is now
+    # default (world +X as m_hat). That derivation (m_hat = n_hat x e_long) is now
     # UNCONDITIONAL whenever half_space_axis is None -- see
     # HandSolverBase._attach_opposition() / default_half_space_axis() -- since
     # world +X turned out to be actively wrong for elongated objects (it
@@ -1382,14 +1322,24 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             collision=True,
             table=True,
             plane_avoidance=True,
-            half_space=True,
-            pregrasp_center=True,
+            # Centering is done by the PINCH CENTROID, not by the achieved
+            # fingertip midpoint: the measured hand-frame pinch point is a
+            # constraint on the wrist alone, so it positions the hand for a
+            # grasp whatever the fingers are doing now, while pregrasp_center
+            # only says something once they are nearly closed. The two impose
+            # different targets, so exactly one of them runs.
+            pregrasp_center=False,
+            pregrasp_centroid=True,
+            # Off with it: the opposition half-space keeps the thumb and the
+            # opposing fingers apart around the split, which the pinch centroid
+            # already implies (it places the hand so closing those digits closes
+            # them ON the object) -- and it is the constraint most prone to
+            # stalling the solve on a bad side assignment.
+            half_space=False,
+            # The one term here that actually rotates the wrist: the centroid
+            # constraint is satisfiable by translation alone.
             pregrasp_axis_align=True,
-            # Off: phase 0 already centers the hand via pregrasp_center, and
-            # running both would impose two different centering targets at
-            # once (the achieved fingertip midpoint AND the measured pinch
-            # point) that only coincide once the fingers are already closed.
-            pregrasp_centroid=False,
+            # Standoff above the object centroid for the pinch point.
             h_clear=0.07,
             contact_drop_normal_row=False,
             contact_fingers=[True, True, False, False, True],  # index, middle, thumb

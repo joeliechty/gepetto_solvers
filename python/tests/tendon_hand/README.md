@@ -464,7 +464,12 @@ environments.
   32 mm demanded of the thumb, 70–75 mm of the fingers, violation 1.09e3).
   `solvers.orient_opposition_axis()` resolves the sign against the hand's actual
   posture and every caller must apply it; `HandSolveParams.half_space_flip`
-  (None = auto, False = as derived, True = inverted) overrides it.
+  (None = auto, False = as derived, True = inverted) overrides it. The **line**
+  comes from the object's silhouette on the support plane
+  (`scene.object_principal_inplane_axis`), and for an object with no long axis
+  at all it falls back to world +Y ⇒ `m̂ = −X` ⇒ thumb on the −X side, which is
+  the side the default mount already reaches from, so *auto* and *as derived*
+  agree there.
 * `rotation_from_two_axes()` — "point THIS at THAT, and roll so THIS OTHER lines
   up", used to build the pre-grasp orientation.
 * **`PinchPose` / `HAND_PINCH_POSES` / `pinch_pose()` / `pinch_pose_for_mask()`** —
@@ -488,15 +493,19 @@ and `megaminx`, the circumsphere of a 70 mm face-to-face dodecahedron).
 A spec may also carry `hull_vertices`, the real solid the analytic surface only
 bounds (`dodecahedron_vertices` builds the megaminx's 20, face down). Two things
 read it: the viewer draws its convex hull inside the shell, and
-`solvers.object_extent_along` seats the support plane on it — so the megaminx
+`object_extent_along` seats the support plane on it — so the megaminx
 stands at its 35 mm inradius with the proxy sphere sunk 9 mm into the table,
 rather than being levitated to 44 mm to keep the sphere tangent, which is the
 solid balanced on a corner.
 Also `primitive_surface_gap` / `primitive_surface_witness` (analytic distance +
 closest point, used to report the achieved gap **independently of the solver**),
 `proxy_semi_axes` (the §1.7 bounding ellipsoid — `sqrt(3)·half_extents` for a box),
-`object_principal_inplane_axis` (the §1.8 longest-in-plane axis, with a degeneracy
-ratio because degeneracy is the common case), and the shared constants
+`object_extent_along` (support half-width along any direction, per primitive type —
+what seats the table), `object_inplane_widths` (that support function swept over the
+support plane: the object's silhouette there, vectorised for ellipsoid sets),
+`object_principal_inplane_axis` (the §1.8 longest-in-plane axis, read off that sweep,
+with a degeneracy ratio because degeneracy is the common case and a **world +Y**
+fallback when it trips), and the shared constants
 `OBJECT_CENTER`, `GRASP_SPHERE_CENTER`, `GRASP_FLEXOR_TENSION`, `TABLE_NORMAL`,
 `GRASP_GOALS`, `TENDON_NAMES`.
 
@@ -537,8 +546,8 @@ the opposition-sign note under `config.py` above; every caller of
 **Phase presets.** `PhasePreset` / `PHASE_PRESETS` / `apply_phase_preset(params,
 name)` are the named `HandSolveParams` override groups for the staged pipeline:
 `phase0` pre-grasp positioning (no contact at all — collision, table avoidance,
-half-space and the two pre-grasp constraints, wrist prior loosened to 1.0 so the
-hand can actually travel), `phase1` support contact (table contact on, all three
+pinch-centroid centering and short-axis alignment, wrist prior loosened to 1.0 so
+the hand can actually travel), `phase1` support contact (table contact on, all three
 pre-grasp constraints off, wrist tightened to 0.01 to settle), `phase2` object
 approach (object *and* table contact, wrist loose again at 1.0). `phase3` is not
 written yet. A preset touches **only** the fields it lists — wrist pose, flexor
@@ -546,10 +555,15 @@ tensions, AL sliders and table height stay wherever the caller left them,
 because those are solver knobs rather than part of what defines a phase — and
 `apply_phase_preset` raises on an override naming a field `HandSolveParams`
 doesn't have, so a typo fails loudly instead of silently no-opping. Note
-`phase0` deliberately sets `pregrasp_centroid=False`: it already centers via
-`pregrasp_center`, and running both imposes two different targets (the achieved
-fingertip midpoint *and* the measured pinch point) that coincide only once the
-fingers are closed. See §6 for why phase0 → phase1 does not warm-start.
+`phase0` deliberately sets `pregrasp_center=False` and `half_space=False`,
+centering on the measured pinch centroid instead: `pregrasp_center` and
+`pregrasp_centroid` impose two different targets (the achieved fingertip
+midpoint *and* the measured pinch point) that coincide only once the fingers
+are closed, so exactly one runs — and the pinch centroid is the one that
+constrains the **wrist** rather than waiting on the fingers. The half-space is
+redundant next to it (and the term most prone to stalling on a bad side
+assignment), leaving `pregrasp_axis_align` as the only phase-0 term that
+rotates the hand. See §6 for why phase0 → phase1 does not warm-start.
 
 #### Warm starts: continuing a solve across a rebuild
 
