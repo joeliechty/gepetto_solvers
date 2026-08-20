@@ -262,6 +262,18 @@ def object_extent_along(spec, normal, rotation=None):
     n_local = (n if rotation is None
                else np.asarray(rotation, float).T @ n)
     t = spec["type"]
+    hull = spec.get("hull_vertices")
+    if hull is not None:
+        # The spec carries the REAL solid the analytic surface only proxies (the
+        # megaminx: a dodecahedron the factors see as its circumsphere). Seat the
+        # table on the solid, since that is what the object rests on: how far the
+        # lowest vertex reaches against n, which for a face-down solid is its
+        # inradius. Using the proxy's half-width instead would hold a 70 mm
+        # across-the-flats solid 88 mm tall -- balanced on a corner, which is a
+        # pose it cannot physically hold. The proxy sphere then sinks into the
+        # slab by the corner-vs-flat difference, which is correct: the sphere is
+        # a bound on the solid, not the object.
+        return float(np.max(-(np.asarray(hull, float) @ n_local)))
     if t == "sphere":
         return float(spec["radius"])
     if t in ("cylinder", "capsule"):

@@ -483,7 +483,15 @@ environments.
 **`scene.py` — objects and geometry.**
 `get_primitive_specs()` is the registry: baked-SDF primitives (`sphere`,
 `big_sphere`, `cylinder`, `capsule`, `cube`) and analytic ellipsoids
-(`coin`, `credit_card`, `pen` from Table 1.1, plus `big/mid/small_sphere_ellipsoid`).
+(`coin`, `credit_card`, `pen` from Table 1.1, plus `big/mid/small_sphere_ellipsoid`
+and `megaminx`, the circumsphere of a 70 mm face-to-face dodecahedron).
+A spec may also carry `hull_vertices`, the real solid the analytic surface only
+bounds (`dodecahedron_vertices` builds the megaminx's 20, face down). Two things
+read it: the viewer draws its convex hull inside the shell, and
+`solvers.object_extent_along` seats the support plane on it — so the megaminx
+stands at its 35 mm inradius with the proxy sphere sunk 9 mm into the table,
+rather than being levitated to 44 mm to keep the sphere tangent, which is the
+solid balanced on a corner.
 Also `primitive_surface_gap` / `primitive_surface_witness` (analytic distance +
 closest point, used to report the achieved gap **independently of the solver**),
 `proxy_semi_axes` (the §1.7 bounding ellipsoid — `sqrt(3)·half_extents` for a box),

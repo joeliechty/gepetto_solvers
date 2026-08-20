@@ -302,8 +302,15 @@ class HandVizApp:
         else:
             self._render_frame()
 
-    def _refresh_ycb_mesh(self, spec, center, rotation):
-        """Draw (or clear) the scanned mesh behind a ycb: object's shells.
+    def _refresh_object_mesh(self, spec, center, rotation):
+        """Draw (or clear) the object's TRUE geometry behind the analytic surface
+        the solver actually sees.
+
+        Two kinds of object have one: a ycb: set, whose shells approximate a
+        scanned mesh, and a spec carrying ``hull_vertices`` -- the megaminx,
+        whose circumsphere encloses a dodecahedron. Both are the same question
+        ("how much object is really inside the surface the fingers stop on"), so
+        they share one toggle.
 
         The mesh has to be put in the SAME frame the shells were re-centered
         into (see ``scene.ycb_primitive_specs``), or the two render a few cm
@@ -311,7 +318,16 @@ class HandVizApp:
         an error -- the fits are committed but the meshes are not, so an object
         can be perfectly loadable with nothing to draw behind it.
         """
-        if spec["type"] != "ellipsoid_set" or not self.g_show_ycb_mesh.value:
+        if not self.g_show_true_mesh.value:
+            self.scene.clear_object_mesh()
+            return
+        hull = spec.get("hull_vertices")
+        if hull is not None:
+            # Local point set -> hull; set_object_mesh applies the object pose,
+            # so the solid lands inside its own shell however the object is posed.
+            self.scene.set_object_mesh(self.scene.hull_mesh(hull), center, rotation)
+            return
+        if spec["type"] != "ellipsoid_set":
             self.scene.clear_object_mesh()
             return
         try:
@@ -718,7 +734,7 @@ class HandVizApp:
     def _refresh_object(self):
         spec, center, rotation, _pose = resolve_scene(self.params)
         self.scene.set_object(spec, center, rotation)
-        self._refresh_ycb_mesh(spec, center, rotation)
+        self._refresh_object_mesh(spec, center, rotation)
         # Reference frames. The world triad is fixed, but the object's rides on
         # the pose resolved just above, so it is drawn here -- with the object
         # itself -- rather than in _render_frame: the object moves when the
@@ -1553,7 +1569,7 @@ class HandVizApp:
                    self.g_set_beta,
                    self.g_table, self.g_plane_offset, self.g_plane_avoid,
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
-                   self.g_show_ycb_mesh,
+                   self.g_show_true_mesh,
                    self.g_show_contact, self.g_show_collision,
                    self.g_show_discs, self.g_show_world, self.g_show_obj_frame,
                    self.g_show_table_frame, self.g_show_gaps, self.g_show_mount])
@@ -1971,13 +1987,15 @@ class HandVizApp:
             self.g_al_iters = gui.add_slider("max iters", 5, 100, 5, 40)
 
         with gui.add_folder("Display"):
-            self.g_show_ycb_mesh = gui.add_checkbox(
-                "ycb scan mesh", True,
-                hint="Overlay the real scanned mesh behind a ycb: object's "
-                     "ellipsoid shells. The shells are what the solver sees, so "
-                     "showing both is how the approximation gets judged -- where "
-                     "the fingers stop is set by the shells, and the mesh says "
-                     "how much object is actually there.")
+            self.g_show_true_mesh = gui.add_checkbox(
+                "true object mesh", True,
+                hint="Overlay the object's real geometry behind the analytic "
+                     "surface: the scanned mesh inside a ycb: object's ellipsoid "
+                     "shells, or the dodecahedron inside the megaminx's "
+                     "circumsphere. The analytic surface is what the solver sees, "
+                     "so showing both is how the approximation gets judged -- "
+                     "where the fingers stop is set by the surface, and the mesh "
+                     "says how much object is actually there.")
             self.g_show_contact = gui.add_checkbox("contact spheres", True)
             self.g_show_collision = gui.add_checkbox("collision spheres", True)
             self.g_show_discs = gui.add_checkbox("routing discs", False)
@@ -2057,7 +2075,7 @@ class HandVizApp:
         # than the _render_frame path below. (The mount frames are the exception
         # among the frame toggles: they hang off the SOLVED wrist, which moves
         # every iterate, so they render with the hand.)
-        for h in (self.g_show_ycb_mesh, self.g_show_world, self.g_show_obj_frame,
+        for h in (self.g_show_true_mesh, self.g_show_world, self.g_show_obj_frame,
                   self.g_show_table_frame):
             @h.on_update
             def _(_):

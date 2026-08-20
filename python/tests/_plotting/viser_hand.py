@@ -169,20 +169,33 @@ class ViserHandScene:
         primitive that is not rotationally symmetric -- an ellipsoid drawn without
         it appears axis-aligned no matter how the solver has it posed, and for an
         ellipsoid SET it would scatter the members to the wrong places entirely.
+
+        Every shape is drawn as a CHILD of ``/object``, never on ``/object``
+        itself, so that node stays a pure frame at the identity. viser keeps a
+        node's transform in its own persistent message, separate from the
+        geometry: removing a node drops the geometry but the position/orientation
+        messages survive in the broadcast buffer, and adding a child later
+        resurrects the parent as an implicit frame that those stale messages then
+        apply to. Drawing a single-shape object on ``/object`` therefore poisoned
+        the frame for the next ellipsoid SET -- its members are positioned in
+        world coordinates, so they all came back offset by the previous object's
+        centre. Keeping ``/object`` transform-free is what makes it safe to reuse
+        the name across object kinds.
         """
         center = np.asarray(center, float)
         R = np.eye(3) if rotation is None else np.asarray(rotation, float)
         wxyz = tuple(_wxyz_from_R(R))
         t = spec["type"]
         name = "/object"
+        shell = f"{name}/shell"          # single-shape objects; see above
         self.clear_object()
         if t == "sphere":
-            self.scene.add_icosphere(name, radius=float(spec["radius"]),
+            self.scene.add_icosphere(shell, radius=float(spec["radius"]),
                                      color=_OBJECT_RGB, opacity=0.35,
                                      position=tuple(center))
         elif t == "ellipsoid":
             a, b, c = (float(v) for v in spec["semi_axes"])
-            self.scene.add_icosphere(name, radius=1.0, scale=(a, b, c),
+            self.scene.add_icosphere(shell, radius=1.0, scale=(a, b, c),
                                      color=_OBJECT_RGB, opacity=0.35,
                                      position=tuple(center), wxyz=wxyz)
         elif t == "ellipsoid_set":
@@ -200,28 +213,25 @@ class ViserHandScene:
                     position=tuple(pos), wxyz=tuple(_wxyz_from_R(R_member)))
         elif t == "cube":
             hx, hy, hz = spec["half_extents"]
-            self.scene.add_box(name, color=_OBJECT_RGB,
+            self.scene.add_box(shell, color=_OBJECT_RGB,
                                dimensions=(2 * hx, 2 * hy, 2 * hz),
                                opacity=0.35, position=tuple(center))
         else:
             mesh = _object_trimesh(spec, center)
             if mesh is not None:
-                self.scene.add_mesh_trimesh(name, mesh)
+                self.scene.add_mesh_trimesh(shell, mesh)
 
     def clear_object(self):
-        """Drop the object geometry. Named removal is not enough on its own for an
-        ellipsoid set: its members are separate ``/object/eN`` nodes, and switching
-        from a K=7 object to a K=4 one would otherwise leave the last three shells
-        of the old object floating in the scene."""
+        """Drop the object geometry.
+
+        Removing ``/object`` takes its whole subtree with it, which is what makes
+        switching object KINDS safe: a K=7 ellipsoid set followed by a K=4 one
+        would otherwise leave the last three shells floating, and the single-shape
+        ``/object/shell`` would survive underneath a set."""
         try:
             self.server.scene.remove_by_name("/object")
         except Exception:
             pass
-        for index in range(64):          # generous upper bound on set size
-            try:
-                self.server.scene.remove_by_name(f"/object/e{index}")
-            except Exception:
-                pass
 
     def set_object_mesh(self, mesh, center, rotation=None, *, opacity=0.55):
         """Overlay the object's real scanned mesh (a trimesh), posed like the
@@ -229,8 +239,9 @@ class ViserHandScene:
 
         For a YCB object the shells are an APPROXIMATION of this, so showing both
         is how the approximation gets judged: where the hand stops is set by the
-        shells, and the mesh says how much object is really there. Pass ``None``
-        to clear.
+        shells, and the mesh says how much object is really there. Same role for
+        the megaminx's dodecahedron inside its circumsphere (see
+        :meth:`hull_mesh`). Pass ``None`` to clear.
         """
         self.clear_object_mesh()
         if mesh is None:
@@ -244,6 +255,14 @@ class ViserHandScene:
             posed, vertex_colors=np.array(
                 [*_OBJECT_MESH_RGB, int(255 * opacity)], dtype=np.uint8))
         self.scene.add_mesh_trimesh("/object_mesh", posed)
+
+    @staticmethod
+    def hull_mesh(vertices):
+        """Convex hull of ``vertices`` (object-local, m) as a trimesh, for a spec
+        that carries its real solid as a point set -- the megaminx's 20
+        dodecahedron corners. Feed the result to :meth:`set_object_mesh`, which
+        poses it exactly like the analytic shell it sits inside."""
+        return trimesh.Trimesh(vertices=np.asarray(vertices, float)).convex_hull
 
     def clear_object_mesh(self):
         try:
@@ -333,7 +352,7 @@ class ViserHandScene:
         set it is the frame the members are placed in -- so it is what the
         Object-pose rotation sliders actually drive. Lives at ``/object_frame``,
         a sibling of ``/object`` rather than a child, so :meth:`clear_object`
-        (which prunes ``/object/eN`` members) does not take it down with it.
+        (which prunes the whole ``/object`` subtree) does not take it down with it.
         """
         R = np.eye(3) if rotation is None else np.asarray(rotation, float)
         self.scene.add_frame("/object_frame", show_axes=True,
