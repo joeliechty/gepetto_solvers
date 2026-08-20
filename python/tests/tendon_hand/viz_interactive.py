@@ -187,25 +187,11 @@ class HandVizApp:
         import viser  # local import so --smoke needs no viser
         self.viser = viser
         self.server = server
-        self.params = HandSolveParams()
-        # This app's own startup default -- not HandSolveParams' own default,
-        # which stays whatever headless callers/other scripts expect. Set
-        # here (not just on the dropdown widget below) because _rebuild_fk()/
-        # _refresh_object() run before the first _sync_params() and read
-        # self.params.primitive directly; the dropdown's own default_label
-        # computation already reads it too, so it follows automatically.
         # What this installed binding supports, so we can gate controls a stale
         # .so would crash on (ellipsoid objects, the table, cull margin).
+        # Resolved before the params because _fresh_params reads it.
         self.caps = capabilities()
-        self.params.primitive = self._resolve_default_primitive()
-        # Seat the object ON the table rather than half-buried in it. Another of
-        # this app's own startup defaults (like the object above): HandSolveParams
-        # keeps 0.5 for the §1.8 low-profile-object case its docstring argues for,
-        # but for browsing arbitrary objects -- YCB scans included -- an object
-        # sunk halfway through the table reads as a bug in the scene. The seating
-        # rule derives the height from the object's own along-normal extent, so
-        # this is correct per object with nothing to re-tune per pick.
-        self.params.table_burial = 0.0
+        self.params = self._fresh_params()
         # Which solver produced what is on screen: "FK" for a posed hand, "IK"
         # once the stepper has been driven. Gates the live FK re-solve and labels
         # the status readout; there is no mode picker.
@@ -243,6 +229,36 @@ class HandVizApp:
         self._rebuild_fk()
         self._refresh_object()
         self._fk_solve()
+
+    def _fresh_params(self):
+        """A cold ``HandSolveParams`` plus this app's OWN scene defaults.
+
+        The single source of "defaults" for the fields no GUI control owns, so
+        startup and *Reset defaults* cannot drift apart. Reset used to build a
+        bare ``HandSolveParams()``, which restored the headless
+        ``table_burial = 0.5`` under sliders that still read 0 and re-seated the
+        table -- moving the object and its ellipsoids with it.
+
+        Only the not-GUI-backed fields belong here; everything a widget drives
+        is written by :meth:`_sync_params` from the (already restored) handles.
+        """
+        params = HandSolveParams()
+        # Not HandSolveParams' own default, which stays whatever headless
+        # callers/other scripts expect. Set on the params (not just on the
+        # dropdown widget) because _rebuild_fk()/_refresh_object() run before
+        # the first _sync_params() and read params.primitive directly; the
+        # dropdown's own default_label computation reads it too, so the widget
+        # follows automatically.
+        params.primitive = self._resolve_default_primitive()
+        # Seat the object ON the table rather than half-buried in it. Another of
+        # this app's own defaults (like the object above): HandSolveParams keeps
+        # 0.5 for the §1.8 low-profile-object case its docstring argues for, but
+        # for browsing arbitrary objects -- YCB scans included -- an object sunk
+        # halfway through the table reads as a bug in the scene. The seating rule
+        # derives the height from the object's own along-normal extent, so this
+        # is correct per object with nothing to re-tune per pick.
+        params.table_burial = 0.0
+        return params
 
     def _object_pose_from_sliders(self):
         """``(center, rotation)`` for the object: its derived pose plus the
@@ -1306,7 +1322,11 @@ class HandVizApp:
                 handle.value = value
         finally:
             self._restoring = False
-        self.params = HandSolveParams()
+        # _fresh_params, not a bare HandSolveParams(): the app's own scene
+        # defaults (object seating on the table) are not GUI-backed, so a bare
+        # one would put the table/object/ellipsoids somewhere the restored
+        # sliders do not describe.
+        self.params = self._fresh_params()
         self.warm_start = False     # a button, so not in _gui_defaults
         self._refresh_warm_start()
         self._sync_params()
