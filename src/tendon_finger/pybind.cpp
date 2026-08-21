@@ -64,10 +64,14 @@ void bind_tendon_finger(py::module& m) {
 
     py::class_<TendonFingerSolverDispatch>(m, "TendonFingerSolver")
         .def(py::init<const TendonFingerSolverConfig&>())
+        // GIL released for the duration, matching every other solver here (see
+        // the note on TendonHandSolver::solve). A single finger solve is far
+        // shorter than a hand's, but it is the same freeze in kind.
         .def("solve", &TendonFingerSolverDispatch::solve,
              py::arg("tensions"),
              py::arg("tip_force"),
-             py::arg("tip_meas"))
+             py::arg("tip_meas"),
+             py::call_guard<py::gil_scoped_release>())
         .def("get_factor_error_summary",
              &TendonFingerSolverDispatch::get_factor_error_summary)
         .def("get_factor_errors_by_type",

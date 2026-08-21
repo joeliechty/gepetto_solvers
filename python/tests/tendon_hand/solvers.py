@@ -156,6 +156,15 @@ def capabilities():
         # the object. Needs a rebuilt binding with
         # EnvironmentConfig.pregrasp_centroid_point.
         "pregrasp_centroid": hasattr(env, "pregrasp_centroid_point"),
+        # Whether TendonHandSolver.solve releases the GIL while the C++ solve
+        # runs. Without it the whole interpreter is frozen for the duration of
+        # every AL outer iteration (~1.4 s measured), so the visualizer's E-STOP
+        # cannot even be RECEIVED: viser dispatches button callbacks on a thread
+        # pool, and those threads are not queued behind the solve, they are
+        # unschedulable. The stop then lands only once the iteration ends, which
+        # is exactly when it has stopped being useful. Probed via a module
+        # attribute because a py::call_guard is invisible to hasattr.
+        "gil_release": getattr(crest_sparse, "solve_releases_gil", False),
     }
 
 

@@ -146,4 +146,11 @@ PYBIND11_MODULE(_crest_sparse, m) {
     bind_tendon_finger(m);
     bind_tendon_hand(m);
     bind_utils(m);
+
+    // Whether the solve() bindings drop the GIL for the duration of the C++
+    // solve. A capability flag rather than something a caller can introspect,
+    // because a py::call_guard leaves no trace hasattr can find -- and the
+    // difference matters to an interactive caller: without it the interpreter
+    // is frozen for the whole solve and a stop button cannot be serviced.
+    m.attr("solve_releases_gil") = true;
 }

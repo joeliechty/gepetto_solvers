@@ -38,8 +38,17 @@ void bind_tendon_hand(py::module& m) {
                 const std::vector<std::pair<std::string, TendonFingerSolverConfig>>&,
                 const TendonHandSolverConfig&>(),
              py::arg("finger_configs"), py::arg("config"))
+        // GIL released for the duration, as every other solver in this module
+        // does. Not an optimization: an AL outer iteration is ~1.4 s of C++, and
+        // holding the GIL across it freezes the whole interpreter -- an
+        // interactive caller's stop button cannot even be RECEIVED, since the
+        // thread that would run its callback is unschedulable. Safe because both
+        // arguments are taken by value (see TendonHandSolver.h), so pybind has
+        // finished converting them before the guard drops the GIL and the C++
+        // retains no Python references.
         .def("solve", &TendonHandSolver::solve,
-             py::arg("tensions"), py::arg("tip_wrenches"))
+             py::arg("tensions"), py::arg("tip_wrenches"),
+             py::call_guard<py::gil_scoped_release>())
         .def("set_wrist_pose", &TendonHandSolver::set_wrist_pose,
              py::arg("wrist_pose"),
              "Re-aim the shared wrist prior between solves (4x4, world frame) "

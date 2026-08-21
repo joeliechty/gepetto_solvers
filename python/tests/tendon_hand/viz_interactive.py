@@ -5,10 +5,27 @@ Exposes the solver knobs as live web GUI controls -- object picker, wrist start
 pose, per-finger flexor tensions, per-finger contact toggles, collision / table
 options, AL settings. *FK* re-poses the hand from the current sliders (and the
 pose / tension sliders re-solve it live as they move); *Step* advances the IK
-solve by exactly one Augmented Lagrangian outer iteration, *Auto solve* keeps
-stepping until it converges or stalls, and *Stop* breaks out of a running
-auto-solve. Every step is kept, so the *Solve steps* scrubber replays the
-convergence one iteration at a time (initial guess -> each outer iteration).
+solve by exactly one Augmented Lagrangian outer iteration, and *Auto solve* keeps
+stepping until it converges or stalls. Every step is kept, so the *Solve steps*
+scrubber replays the convergence one iteration at a time (initial guess -> each
+outer iteration).
+
+*E-STOP* is the software emergency stop, and it outranks everything else on the
+page. It latches: it breaks a running auto-solve out of its loop and then refuses
+every solve -- FK, Step, Auto, and the live re-solve the pose/tension sliders
+fire -- until *Rearm* is pressed, so nothing can restart the hand by accident.
+The button is never greyed out. Nothing is lost when it trips: the stepper keeps
+its multipliers, its penalty weight and its whole history, so *Rearm* + *Auto
+solve* resumes the same solve rather than restarting it.
+
+The stop is cooperative and lands at an AL iteration boundary -- one outer
+iteration is a single call into the C++ solver with no interrupt hook, so ~1.7 s
+is the measured worst case and a floor rather than a tuning knob. What makes the
+button nevertheless feel instant is that the solve bindings release the GIL
+(``capabilities()["gil_release"]``): the click is serviced while the last
+iteration is still running. Against a binding without it the whole interpreter is
+frozen for the duration of every iteration and the click cannot even be received
+until it ends -- the app says so on the button and in the startup banner.
 
 Changing the constraint set (object, contacts, collision, table) restarts the IK
 loop, because the Augmented Lagrangian duals it carries describe the constraints
@@ -122,6 +139,143 @@ def binding_path():
 
 
 # ---------------------------------------------------------------------------
+# Software e-stop.
+# ---------------------------------------------------------------------------
+
+class Refused(Exception):
+    """Raised by :meth:`EStop.admit` when a solve is not allowed to start --
+    either the latch is engaged or another solve already holds it."""
+
+
+class EStop:
+    """Latching software e-stop, and the single admission gate for every solve.
+
+    LATCHING, not momentary. A momentary stop lets the very next thing that
+    touches a slider restart the hand through the live-FK hook, which is
+    precisely what someone reaching for a stop button does not want. Tripped
+    stays tripped until :meth:`rearm`.
+
+    The stop is COOPERATIVE, and it lands at an Augmented Lagrangian iteration
+    boundary. One outer iteration is a single call into C++ with no interrupt
+    hook (GTSAM's inner loop, via ``WarmAugmentedLagrangianOptimizer``), so
+    nothing in Python can break into it -- ~1.7 s is the measured worst case and
+    it is a floor, not a tuning choice. What matters is that this is bounded and
+    that NO STATE IS LOST: the stepper keeps its multipliers, its penalty weight
+    and its whole history, so a rearm resumes the same solve rather than
+    restarting it.
+
+    What makes the button feel instant is the GIL release on the solve binding
+    (``capabilities()["gil_release"]``). With it the click is serviced while the
+    last iteration is still running -- the latch engages, the controls grey out
+    and the status updates at once. Without it the interpreter is frozen for the
+    whole iteration and none of that can happen until it ends.
+
+    Also the ONE place that decides whether a solve may start. It used to be a
+    bare ``_solving`` bool tested and set without a lock, which the live-FK hook
+    read while the auto-solve worker was writing it; folding the latch and the
+    busy flag into one lock-guarded object closes that race as a side effect.
+    """
+
+    def __init__(self):
+        # RLock rather than Lock: _refresh callbacks read the state while
+        # holding it, and re-entering must not deadlock the GUI thread.
+        self._lock = threading.RLock()
+        self._tripped = False
+        self._reason = ""
+        self._busy = None       # what currently holds the gate, or None
+
+    # -- the latch --
+
+    def trip(self, reason="E-STOP pressed"):
+        """Engage the latch. Runs on a viser callback thread, so it must never
+        block: it takes the lock only to flip two fields, and deliberately does
+        NOT wait for the running solve to notice."""
+        with self._lock:
+            if not self._tripped:
+                self._tripped = True
+                self._reason = reason
+            return True
+
+    def rearm(self):
+        """Release the latch. Refuses while a solve is still winding down, so
+        the GUI cannot come back to life around a solve that has not yet
+        returned -- the operator would rearm into a hand still moving."""
+        with self._lock:
+            if self._busy is not None:
+                return False
+            self._tripped = False
+            self._reason = ""
+            return True
+
+    def is_tripped(self):
+        """The poll predicate; handed straight to ``HandIKStepper.run`` as its
+        ``should_stop``. A method rather than a property because that is the
+        shape run() wants."""
+        with self._lock:
+            return self._tripped
+
+    @property
+    def reason(self):
+        with self._lock:
+            return self._reason
+
+    @property
+    def busy(self):
+        with self._lock:
+            return self._busy
+
+    def check(self):
+        """Raise if the latch is engaged. For polling inside a loop that has
+        work of its own between solver calls."""
+        if self.is_tripped():
+            raise Refused(self._reason)
+
+    # -- admission --
+
+    def admit(self, what):
+        """Claim the gate for one solve, or raise :class:`Refused`.
+
+        Claims EAGERLY -- the refusal comes out of this call, not out of a later
+        ``__enter__`` -- because the auto-solve hands its gate to a worker
+        thread and so cannot express the claim as a ``with`` block. Callers that
+        can still use one: ``with estop.admit(...)`` releases on the way out.
+
+        The check and the claim happen under one lock, which is the point: two
+        callbacks arriving on different viser worker threads cannot both see a
+        free gate and both start solving.
+        """
+        with self._lock:
+            if self._tripped:
+                raise Refused(f"E-STOP engaged: {self._reason}")
+            if self._busy is not None:
+                raise Refused(f"already running: {self._busy}")
+            self._busy = what
+        return _Gate(self)
+
+    def _release(self):
+        with self._lock:
+            self._busy = None
+
+
+class _Gate:
+    """The claim :meth:`EStop.admit` hands back. Releasing twice is harmless, so
+    a caller may ``release()`` early and still let a ``with`` block unwind."""
+
+    def __init__(self, estop):
+        self._estop = estop
+
+    def release(self):
+        self._estop._release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Headless smoke test -- validates the solver classes independently of viser.
 # ---------------------------------------------------------------------------
 
@@ -200,14 +354,17 @@ class HandVizApp:
         # the status readout; there is no mode picker.
         self.mode = "FK"
         self.result = None
-        self._solving = False
+        # The software e-stop, and the gate every solve has to pass to start.
+        # Replaces both the old _solving bool and the auto-run's private stop
+        # Event -- one object, so "is anything running" and "may anything start"
+        # cannot disagree. See EStop.
+        self.estop = EStop()
         # Cached IK stepper: it owns the AL outer loop being advanced one
         # iteration per Step, so it has to outlive a single step.
         self.stepper = None
         # Warm-start latch: while on, every (re)build of the stepper starts from
         # the state on screen rather than the cold guess. See _ensure_stepper.
         self.warm_start = False
-        self._auto_stop = threading.Event()
         self._auto_thread = None
         # True while Reset is writing the controls back to their defaults, so the
         # per-handle callbacks (live FK, object rebuild) sit out the restore and
@@ -773,7 +930,7 @@ class HandVizApp:
         else:
             self.scene.clear_half_space_plane()
 
-    def _render_frame(self):
+    def _render_frame(self, live=False):
         if self.result is None:
             # Nothing solved yet, so the commanded wrist pose is all there is.
             self._render_mount()
@@ -782,7 +939,7 @@ class HandVizApp:
         # no scrubber up this is the result itself, so the gap readouts below
         # describe the intermediate state without knowing about iterates at all.
         # Every result here is a single state, so there is only ever frame 0.
-        res = self._iter_view()
+        res = self._iter_view(live)
         self._render_mount(res)
         # Only the fingers this solve drove onto a surface get a gap line for it;
         # a distance readout on a finger nothing asked to touch is just noise.
@@ -802,7 +959,7 @@ class HandVizApp:
                      if self.params.pregrasp_axis_align else None)
         centroid_gap = (pregrasp_centroid_witness(self.params, res, 0)
                        if self.params.pregrasp_centroid else None)
-        self._report_iterate()
+        self._report_iterate(live)
         self.scene.update(res.frames[0],
                           tip_radii=res.tip_radii,
                           collision_radius=self.params.collision_radius,
@@ -841,51 +998,82 @@ class HandVizApp:
 
     # -- solve --
 
-    def _set_solving(self, solving):
-        """Grey out the solve buttons while a solve runs so it's clear the app is
-        busy; restore them when it finishes."""
-        self.g_fk.disabled = solving
-        self.g_fk.label = "Solving..." if solving else "FK"
-        # Step / Auto go grey too, so an auto-run cannot be re-entered; Stop is
-        # driven separately and stays live for exactly that run.
+    def _set_solving(self, solving=None):
+        """Put the control panel into the state the e-stop says it should be in.
+
+        Two things grey the panel out: a solve running (it is busy) and the
+        e-stop being engaged (it is refusing). Both are read off the latch, so
+        this can be called with no argument from anywhere -- the trip and rearm
+        handlers do exactly that -- and cannot disagree with what admit() will
+        actually allow. ``solving`` is accepted only to spare the callers that
+        already know the answer.
+        """
+        if solving is None:
+            solving = self.estop.busy is not None
+        tripped = self.estop.is_tripped()
+        # While the latch is engaged NOTHING may start, so every control that
+        # begins work greys out, not just the ones a running solve blocks.
+        blocked = solving or tripped
+        self.g_fk.disabled = blocked
+        # Names the state, not the button that caused it: labelling this one
+        # "E-STOP" would read as a second stop button sitting next to the real
+        # one.
+        self.g_fk.label = ("FK (stopped)" if tripped
+                           else "Solving..." if solving else "FK")
         for btn in (getattr(self, "g_ik_step", None), getattr(self, "g_ik_auto", None)):
             if btn is not None:
-                btn.disabled = solving or not self.caps["ik_stepping"]
+                btn.disabled = blocked or not self.caps["ik_stepping"]
         # Reset would pull the params out from under a running step, and flipping
         # the warm start mid-run cannot affect the loop already built, so both
         # wait it out rather than looking like they did something.
         if getattr(self, "g_warm", None) is not None:
-            self.g_warm.disabled = solving or not self.caps["solver_seed"]
+            self.g_warm.disabled = blocked or not self.caps["solver_seed"]
         if getattr(self, "g_reset", None) is not None:
-            self.g_reset.disabled = solving
+            self.g_reset.disabled = blocked
+        # Rearm is live only when there is something to rearm FROM, and only
+        # once the stopped solve has actually returned -- rearming around a
+        # solve still winding down would hand the controls back while the hand
+        # is still moving. EStop.rearm() enforces the same rule; this just makes
+        # the button agree with it.
+        if getattr(self, "g_rearm", None) is not None:
+            self.g_rearm.disabled = not tripped or solving
 
     def _fk_solve(self, _=None):
         """Re-pose the hand from the current sliders with the FK solver.
 
         Also the "start over" action for the IK loop: it drops any partially
         stepped solve. What the next Step then starts from is the warm-start
-        latch's business -- off, the cold guess; on, this FK pose."""
-        if self._solving:
-            return
-        self._solving = True
-        self._set_solving(True)
+        latch's business -- off, the cold guess; on, this FK pose.
+
+        Refused outright while the e-stop is engaged: an FK solve re-poses the
+        hand, which is exactly what a stopped app must not do."""
         try:
-            self._sync_params()
-            self._refresh_object()
-            self._invalidate_stepper()
-            self.mode = "FK"
-            self._set_status("Solving (FK)...")
-            # Reuse the cached FK solver (shares self.params) so this warm-starts.
-            self.result = self.fk_solver.solve()
-            self._rebuild_iter_slider()
-            self._render_frame()
-            self._report()
-        except Exception as exc:  # surface solver errors in the GUI, keep serving
-            self._error_status(exc)
-            raise
+            gate = self.estop.admit("FK solve")
+        except Refused:
+            return
+        try:
+            with gate:
+                self._set_solving(True)
+                try:
+                    self._sync_params()
+                    self._refresh_object()
+                    self._invalidate_stepper()
+                    self.mode = "FK"
+                    self._set_status("Solving (FK)...")
+                    # Reuse the cached FK solver (shares self.params) so this
+                    # warm-starts.
+                    self.result = self.fk_solver.solve()
+                    self._rebuild_iter_slider()
+                    self._render_frame()
+                    self._report()
+                except Exception as exc:  # surface it in the GUI, keep serving
+                    self._error_status(exc)
+                    raise
         finally:
-            self._set_solving(False)
-            self._solving = False
+            # Outside the gate, so it reads a released latch and can re-enable
+            # the controls (or leave them grey, if the e-stop tripped meanwhile).
+            self._set_solving()
+            self._report_estop()
 
     def _pinch_note(self):
         """Warn when pinch-centroid centering is checked but the selected
@@ -1247,7 +1435,7 @@ class HandVizApp:
         """Render one stepped state and update both status readouts. Called from
         the auto-run thread as well as the Step button."""
         self.result = result
-        self._render_frame()
+        self._render_frame(live=True)
         # Deliberately not _report(): during stepping the AL numbers below are
         # the interesting readout, and writing both just overwrites one with the
         # other every frame.
@@ -1262,8 +1450,8 @@ class HandVizApp:
                    "stalled": "**stalled** -- last step changed nothing; "
                               "Auto solve again to continue, FK to restart",
                    }[status.state]
-        if self._auto_stop.is_set() and status.state == "running":
-            verdict = "**stopped**"
+        if self.estop.is_tripped() and status.state == "running":
+            verdict = "**E-STOP** -- press Rearm to resume from here"
         gaps = [f"object {self.result.worst_gap(0):+.5f} m"] \
             if self.params.object_contact else []
         if self.result.table_contact_names():
@@ -1284,48 +1472,70 @@ class HandVizApp:
             + ("  \n" + "  \n".join(pinch) if pinch else ""))
 
     def _ik_step(self, _=None):
-        """One Augmented Lagrangian outer iteration, continuing the last one."""
-        if self._solving or not self.caps["ik_stepping"]:
+        """One Augmented Lagrangian outer iteration, continuing the last one.
+
+        Refused while the e-stop is engaged. The iteration itself is not
+        interruptible once started -- one step is one uninterruptible call into
+        C++ -- so the latch's job here is purely to refuse to begin."""
+        if not self.caps["ik_stepping"]:
             return
-        self._solving = True
-        self._set_solving(True)
         try:
-            self._sync_params()
-            self._refresh_object()
-            self.mode = "IK"
-            self._auto_stop.clear()
-            stepper = self._ensure_stepper()
-            self._show_step(stepper.step(), stepper.status())
-            self._rebuild_iter_slider()
-        except Exception as exc:
-            self._error_status(exc)
-            raise
+            gate = self.estop.admit("IK step")
+        except Refused:
+            return
+        try:
+            with gate:
+                self._set_solving(True)
+                try:
+                    self._sync_params()
+                    self._refresh_object()
+                    self.mode = "IK"
+                    stepper = self._ensure_stepper()
+                    self._show_step(stepper.step(), stepper.status())
+                    self._rebuild_iter_slider()
+                except Exception as exc:
+                    self._error_status(exc)
+                    raise
         finally:
-            self._set_solving(False)
-            self._solving = False
+            self._set_solving()
+            self._report_estop()
 
     def _ik_auto(self, _=None):
         """Step to convergence on a worker thread, redrawing after each iteration.
 
         The loop has to leave viser's callback thread free: run inline and the
-        Stop click would sit in the queue until the whole solve finished, which
-        is precisely when it stops being useful."""
-        if self._solving or not self.caps["ik_stepping"]:
+        E-STOP click would sit behind the whole solve, which is precisely when
+        it stops being useful.
+
+        This is the one path the e-stop can interrupt rather than merely refuse.
+        ``run()`` polls ``should_stop`` between iterations, so a trip breaks the
+        loop at the next boundary -- bounded by one AL iteration (~1.7 s worst
+        case measured), because that is a single call into C++ with no interrupt
+        hook. Everything the stepper holds (multipliers, mu, the full history)
+        survives, so Rearm + Auto solve resumes rather than restarts."""
+        if not self.caps["ik_stepping"]:
             return
-        self._sync_params()
-        self._refresh_object()
-        self.mode = "IK"
-        self._auto_stop.clear()
-        self._solving = True
-        self._set_solving(True)
-        self.g_ik_stop.disabled = False
-        stepper = self._ensure_stepper()
+        try:
+            gate = self.estop.admit("IK auto solve")
+        except Refused:
+            return
+        try:
+            self._set_solving(True)
+            self._sync_params()
+            self._refresh_object()
+            self.mode = "IK"
+            stepper = self._ensure_stepper()
+        except Exception as exc:
+            gate.release()
+            self._error_status(exc)
+            self._set_solving()
+            raise
 
         def worker():
             try:
                 status = stepper.run(max_steps=self.g_ik_max.value,
                                      on_step=self._show_step,
-                                     should_stop=self._auto_stop.is_set)
+                                     should_stop=self.estop.is_tripped)
                 self._report_step_status(status)
                 # Only now: rebuilding the slider once per frame mid-animation
                 # would tear a GUI handle down and re-add it every iteration.
@@ -1333,16 +1543,73 @@ class HandVizApp:
             except Exception as exc:
                 self._error_status(exc)
             finally:
-                self.g_ik_stop.disabled = True
-                self._set_solving(False)
-                self._solving = False
+                # Release the gate FIRST, so the refresh below sees an idle
+                # latch and can hand the controls back (or offer Rearm).
+                gate.release()
+                self._set_solving()
+                self._report_estop()
 
         self._auto_thread = threading.Thread(target=worker, daemon=True)
-        self._auto_thread.start()
+        try:
+            self._auto_thread.start()
+        except Exception as exc:
+            # Nothing else will ever release the gate if the worker never runs,
+            # and a gate held forever means the app refuses every solve for the
+            # rest of the session. Rare, but the failure mode is permanent.
+            gate.release()
+            self._error_status(exc)
+            self._set_solving()
+            raise
 
-    def _ik_stop(self, _=None):
-        """Ask a running auto-solve to stop; it breaks before the next step."""
-        self._auto_stop.set()
+    # -- e-stop --
+
+    def _estop(self, _=None):
+        """Engage the e-stop. Runs on a viser callback thread and must never
+        block: it flips the latch and repaints, and does NOT wait for the
+        running solve to notice. A running auto-solve breaks out at its next
+        iteration boundary; anything else is simply refused from here on."""
+        self.estop.trip("E-STOP pressed")
+        self._set_solving()
+        self._report_estop()
+
+    def _rearm(self, _=None):
+        """Release the e-stop and hand the controls back.
+
+        Refused while a stopped solve is still winding down -- rearming around
+        a solve that has not yet returned would re-enable the panel while the
+        hand is still moving, which is the one thing the button exists to
+        prevent."""
+        if not self.estop.rearm():
+            self._set_status(
+                "**E-STOP still engaged** -- the running solve has not returned "
+                "yet (it stops at the end of the current AL iteration). Try "
+                "again in a moment.")
+            return
+        self._set_solving()
+        # Put the real readout back: whatever the solve was showing when it was
+        # stopped is still on screen and still true.
+        if self.mode == "IK" and self.stepper is not None:
+            self._report_step_status(self.stepper.status())
+        elif self.result is not None:
+            self._report()
+        else:
+            self._set_status("**Rearmed.**")
+
+    def _report_estop(self):
+        """Write the e-stop banner over the status line, if engaged.
+
+        Called after every solve path returns so the last thing written is the
+        latch's state rather than a step readout that has been overtaken."""
+        if not self.estop.is_tripped():
+            return
+        note = ("" if self.caps["gil_release"] else
+                "  \n*this binding does not release the GIL during a solve, so "
+                "this click landed only when the iteration ended -- rebuild "
+                "with `pip install .` from the crest-sparse root*")
+        self._set_status(
+            f"# &#9888; E-STOP ENGAGED  \n{self.estop.reason} -- every solve is "
+            f"refused until you press **Rearm**. Nothing was lost: the solve is "
+            f"paused where it stopped and resumes from there." + note)
 
     # -- warm start and reset --
 
@@ -1399,8 +1666,12 @@ class HandVizApp:
 
         A full reset rather than a re-solve: fresh params (so the warm-start
         posture and any derived scene state go too), fresh FK solver, no
-        stepper, camera back on the default object."""
-        if self._solving:
+        stepper, camera back on the default object.
+
+        Refused while a solve is running, and while the e-stop is engaged: a
+        reset cold-starts, which would throw away exactly the state the stop was
+        protecting. Rearm first, deliberately."""
+        if self.estop.busy is not None or self.estop.is_tripped():
             return
         self._restoring = True
         try:
@@ -1508,8 +1779,13 @@ class HandVizApp:
 
         Only while the hand is FK-posed: once the stepper is running, the same
         sliders are read live by every step, and re-solving FK here would throw
-        that loop away mid-solve."""
-        if self.mode == "FK" and not self._solving and not self._restoring:
+        that loop away mid-solve.
+
+        The busy/e-stop test is _fk_solve's gate anyway, so this is belt and
+        braces -- but it is the reason the latch has to LATCH: this fires on
+        every slider drag, and a momentary stop would let the next twitch of a
+        tension slider re-pose the hand straight after the button was hit."""
+        if self.mode == "FK" and not self._restoring:
             self._fk_solve()
 
     # -- solve-iteration scrubber (IK) --
@@ -1554,21 +1830,44 @@ class HandVizApp:
                 self.g_iter_status = self.server.gui.add_markdown("")
             self.iter_slider.on_update(lambda _: self._render_frame())
 
-    def _iter_view(self):
+    def _iter_view(self, live=False):
         """The result to render: the selected snapshot when the scrubber is up,
-        otherwise the solve's own final state."""
-        if self.result is None or getattr(self, "iter_slider", None) is None:
+        otherwise the solve's own final state.
+
+        ``live`` is the animation talking. While a solve is actually stepping,
+        the newest state is the thing to draw -- not whatever index the scrubber
+        is parked on. The scrubber CANNOT follow along mid-run: a viser slider's
+        max is fixed at construction (there is no setter), which is why
+        _rebuild_iter_slider tears it down and re-creates it, and why that is
+        deliberately not done per frame. So during a run the slider still
+        describes the PREVIOUS run. Honouring it here pinned every frame of the
+        new solve to that stale index and the hand sat frozen until the run
+        ended and the slider was rebuilt.
+
+        The default stays scrubber-first, because _seed_state reads this to warm
+        start from a rewound iterate -- that is the rewind-and-branch feature,
+        and it must keep seeing the scrubbed state even though it is called from
+        inside a running solve.
+        """
+        if self.result is None or live:
+            return self.result
+        if getattr(self, "iter_slider", None) is None:
             return self.result
         return self.result.at_iterate(self._current_iterate())
 
-    def _report_iterate(self):
-        """The AL convergence numbers for the scrubbed iteration, as the stepper
-        labelled them when it took the step."""
+    def _report_iterate(self, live=False):
+        """The AL convergence numbers for the iteration on screen, as the stepper
+        labelled them when it took the step.
+
+        ``live`` follows _iter_view: mid-run the newest snapshot is being drawn,
+        so report THAT one. Reading the slider instead would label the picture
+        with the index of a frame it is not showing."""
         # Gated on the SLIDER, not the markdown: with no slider up the markdown
         # is carrying the "nothing recorded" note, which must survive re-renders.
         if getattr(self, "iter_slider", None) is None:
             return
-        i, n = self._current_iterate(), self.result.num_iterates()
+        n = self.result.num_iterates()
+        i = max(n - 1, 0) if live else self._current_iterate()
         notes = self.result.iterate_notes
         body = notes[i] if notes is not None else ""
         self.g_iter_status.content = f"iterate {i} / {n - 1}  \n{body}"
@@ -1645,10 +1944,35 @@ class HandVizApp:
                 hint=step_hint or (
                     "Keep stepping until the solve converges, stalls or hits "
                     "the cap, redrawing after every iteration."))
+            # NEVER disabled -- not while solving, not while idle, not on a
+            # binding missing every other capability. A stop button that can be
+            # greyed out is not a stop button; this one is always available and
+            # always the highest-priority thing on the page.
             self.g_ik_stop = gui.add_button(
-                "Stop", icon=self.viser.Icon.PLAYER_STOP, disabled=True,
-                hint="Break out of a running auto-solve before the next step; "
-                     "the steps already taken are kept.")
+                "E-STOP", icon=self.viser.Icon.ALERT_TRIANGLE, color="red",
+                hint="Software e-stop. Latches: it halts a running auto-solve "
+                     "and then REFUSES every solve -- FK, Step, Auto, and the "
+                     "live re-solve on the pose/tension sliders -- until you "
+                     "press Rearm, so nothing can restart the hand by accident. "
+                     "Nothing is lost: the solve pauses where it stopped, "
+                     "keeping its multipliers, penalty weight and full step "
+                     "history, and Rearm resumes from there rather than "
+                     "restarting. A running auto-solve stops at the end of the "
+                     "current AL outer iteration (~1.7 s worst case) -- one "
+                     "iteration is a single call into the C++ solver with no "
+                     "interrupt hook, so that is a floor, not a setting."
+                     + ("" if self.caps["gil_release"] else
+                        " WARNING: this binding does not release the GIL during "
+                        "a solve, so this click cannot even be received until "
+                        "the current iteration ends -- rebuild with `pip "
+                        "install .` from the crest-sparse root."))
+            self.g_rearm = gui.add_button(
+                "Rearm", icon=self.viser.Icon.LOCK_OPEN, disabled=True,
+                hint="Release the e-stop and hand the controls back. Live only "
+                     "while the latch is engaged AND the stopped solve has "
+                     "actually returned -- rearming around a solve still "
+                     "winding down would re-enable the panel while the hand is "
+                     "still moving.")
             self.g_ik_max = gui.add_slider(
                 "max steps", 5, 300, 5, 200,
                 disabled=not self.caps["ik_stepping"],
@@ -2078,7 +2402,8 @@ class HandVizApp:
         self.g_fk.on_click(self._fk_solve)
         self.g_ik_step.on_click(self._ik_step)
         self.g_ik_auto.on_click(self._ik_auto)
-        self.g_ik_stop.on_click(self._ik_stop)
+        self.g_ik_stop.on_click(self._estop)
+        self.g_rearm.on_click(self._rearm)
         self.g_warm.on_click(self._toggle_warm_start)
         self.g_reset.on_click(self._reset_defaults)
         self.g_phase0.on_update(lambda _: self._on_phase_toggle("phase0"))
