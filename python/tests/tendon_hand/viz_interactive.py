@@ -27,6 +27,19 @@ iteration is still running. Against a binding without it the whole interpreter i
 frozen for the duration of every iteration and the click cannot even be received
 until it ends -- the app says so on the button and in the startup banner.
 
+*ROS mode* (``HandVizApp(server, ros_mode=True, bridge=...)``, which
+``gepetto_control``'s ``viz_node`` does) adds a *Robot* folder that commands the
+real hardware: **Play solve on robot** exports the AL outer iterations as
+waypoints, interpolates them, and servos the arm (MoveIt Servo twists) and the
+hand (``finger_servo_node`` tendon jogs) along them; **Get robot state** reads
+the wrist pose and the measured tendon lengths back and makes them the state on
+screen. The scene registers against the robot through the table: the drawn square
+IS ``lbr_workspace_table_link``, so no transform has to be measured. Both channels
+open disabled, and the E-STOP above extends to them -- it halts the publishers,
+not just the solver. Nothing in this module imports rclpy; the bridge is
+duck-typed and the conversion lives in ``robot_plan.py``, which is pure numpy and
+is covered by ``--smoke``.
+
 Changing the constraint set (object, contacts, collision, table) restarts the IK
 loop, because the Augmented Lagrangian duals it carries describe the constraints
 it has been working on. *Warm start* is the way to change one anyway and keep the
@@ -87,9 +100,47 @@ from .solvers import (
     FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 from .config import pinch_pose
 from .mount import MOUNT_WRIST_XYZ, MOUNT_WRIST_RPY, measured_mount_pose
+from . import robot_plan
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
+
+# ---------------------------------------------------------------------------
+# ROS-mode constants.
+# ---------------------------------------------------------------------------
+#
+# The two speed sliders in the Robot folder are FRACTIONS of these, so the
+# numbers on screen mean "half of what the servo is configured to allow" rather
+# than a bare m/s the operator has to hold against a yaml file in their head.
+
+# MoveIt Servo's Cartesian scales, from lbr_bringup/config/moveit_servo.yaml.
+# The servo runs command_in_type "unitless", so a twist component of 1.0 IS this
+# many m/s (or rad/s) -- which is also why the bridge divides by them before
+# publishing.
+SERVO_SCALE_LINEAR = 0.4        # m/s
+SERVO_SCALE_ROTATIONAL = 0.8    # rad/s
+
+
+def _max_tendon_speed():
+    """HandConfig's tendon speed cap, or the documented value if gepetto_core is
+    not installed (this app runs on machines that have never seen the hardware).
+    finger_servo_node enforces its own copy regardless, so this only sets what the
+    slider means."""
+    try:
+        try:
+            from gepetto_core.config import HandConfig
+        except ImportError:
+            from gepetto.config import HandConfig
+        return float(HandConfig().max_tendon_speed)
+    except Exception:
+        return 0.065
+
+
+MAX_TENDON_SPEED = _max_tendon_speed()
+
+# The two playback sources, as they read on the dropdown.
+PLAY_HISTORY = "AL iterates (waypoints)"
+PLAY_FINAL = "final state only"
 
 # This app's own startup object -- see HandVizApp.__init__ for why it's set
 # there rather than just changed on the dropdown widget.
@@ -183,8 +234,37 @@ class EStop:
         self._tripped = False
         self._reason = ""
         self._busy = None       # what currently holds the gate, or None
+        self._listeners = []    # notified on every trip/rearm; see add_listener
 
     # -- the latch --
+
+    def add_listener(self, fn):
+        """Register ``fn(tripped, reason)``, called on every trip and rearm.
+
+        This is how the latch reaches things that are not solves. In ROS mode the
+        robot bridge registers here, so pressing E-STOP does not merely refuse the
+        next solve -- it halts the servo publishers, which is the only part of
+        this app that can move a physical robot. Anything registered must return
+        promptly and must not raise; see :meth:`_notify`.
+        """
+        with self._lock:
+            self._listeners.append(fn)
+
+    def _notify(self, tripped, reason):
+        """Fan the latch's new state out to the listeners.
+
+        Called with the lock RELEASED, deliberately. A listener publishes ROS
+        messages and may take locks of its own, and holding the e-stop's lock
+        across that is how a stop button ends up deadlocked against the thing it
+        is trying to stop. An exception is swallowed with a traceback for the
+        same reason: one listener failing must not stop the others being told,
+        and must never turn the stop button into a crash.
+        """
+        for fn in list(self._listeners):
+            try:
+                fn(tripped, reason)
+            except Exception:
+                traceback.print_exc()
 
     def trip(self, reason="E-STOP pressed"):
         """Engage the latch. Runs on a viser callback thread, so it must never
@@ -194,7 +274,8 @@ class EStop:
             if not self._tripped:
                 self._tripped = True
                 self._reason = reason
-            return True
+        self._notify(True, reason)
+        return True
 
     def rearm(self):
         """Release the latch. Refuses while a solve is still winding down, so
@@ -205,7 +286,8 @@ class EStop:
                 return False
             self._tripped = False
             self._reason = ""
-            return True
+        self._notify(False, "")
+        return True
 
     def is_tripped(self):
         """The poll predicate; handed straight to ``HandIKStepper.run`` as its
@@ -330,8 +412,65 @@ def _smoke():
             print(f"  [{label:>8}] steps={st.steps} state={st.state} "
                   f"snapshots={n} [{status}] | violation={st.violation:.3e} "
                   f"cost={st.cost:.4g}{extra}")
+    ok = _smoke_robot_plan() and ok
     print("Smoke test:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+def _smoke_robot_plan():
+    """Check the robot-plan export the way the Robot folder uses it, headlessly.
+
+    This is the half of the ROS integration that can be tested with no ROS, no
+    hardware and no browser, and it is the half that decides which way the
+    fingers move -- so it is worth running every time the solver changes, not
+    only when someone opens the app.
+    """
+    print("Smoke-testing the robot plan export...")
+    ok = True
+
+    params = HandSolveParams()
+    open_lengths = robot_plan.open_tendon_lengths(params)
+    notes, sign_ok = robot_plan.check_open_lengths(open_lengths, params)
+    ok = ok and sign_ok
+    print(f"  [    open] {', '.join(f'{k} {v * 1e3:.1f}' for k, v in open_lengths.items())} mm "
+          f"[{'ok' if sign_ok else 'BAD'}]")
+    for note in notes:
+        print(f"           - {note}")
+
+    if not capabilities()["ik_stepping"]:
+        print("  [    plan] skipped -- binding cannot step an IK solve")
+        return ok
+
+    # A short stepped solve, so the plan has real AL iterates to walk.
+    stepper = HandIKStepper(HandSolveParams())
+    last = {}
+    stepper.run(max_steps=3, on_step=lambda r, s: last.update(res=r))
+    result = last.get("res")
+    spec, center, _rot, _pose = resolve_scene(stepper.params)
+    corner = table_corner(
+        resolve_table_origin(stepper.params, spec, center),
+        np.asarray(stepper.params.plane_normal, float))
+
+    plan = robot_plan.build_plan(result, stepper.configs, corner, open_lengths)
+    plan, clamp_notes = robot_plan.clamp_to_travel(plan)
+    # The approach segment the bridge prepends at play time: pretend the robot is
+    # at the hand-open pose, which is the worst case for the first segment.
+    plan = robot_plan.prepend_current(
+        plan, plan.waypoints[0].wrist_pose, {n: 0.0 for n in plan.finger_names})
+    samples = robot_plan.interpolate(plan, hz=100.0)
+
+    # Every sample must be finite and the last must land ON the final waypoint,
+    # or the robot would be commanded somewhere the solve never asked for.
+    final = plan.waypoints[-1]
+    landed = np.allclose(samples[-1].wrist_pose, final.wrist_pose, atol=1e-9)
+    finite = all(np.all(np.isfinite(s.wrist_pose)) for s in samples)
+    status = "ok" if landed and finite and len(samples) > 1 else "BAD"
+    ok = ok and status == "ok"
+    print(f"  [    plan] waypoints={len(plan.waypoints)} samples={len(samples)} "
+          f"duration={samples[-1].t:.2f}s [{status}] | {robot_plan.summarize(plan)}")
+    for note in clamp_notes:
+        print(f"           - {note}")
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -340,10 +479,25 @@ def _smoke():
 
 class HandVizApp:
 
-    def __init__(self, server):
+    def __init__(self, server, ros_mode=False, bridge=None):
         import viser  # local import so --smoke needs no viser
         self.viser = viser
         self.server = server
+        # ROS mode adds the Robot folder -- play a solve on the hardware, read the
+        # hardware back -- and extends the e-stop to the servo publishers. Off by
+        # default so the standalone app is byte-for-byte the app it was; the
+        # bridge is DUCK-TYPED (play / read_state / stop / status), so nothing in
+        # crest-sparse imports rclpy and the ROS side stays in gepetto_control.
+        self.ros_mode = bool(ros_mode) and bridge is not None
+        self.bridge = bridge if self.ros_mode else None
+        # Cached hand-open tendon lengths, the zero every commanded displacement
+        # is measured from. Built lazily on the first robot action (it costs an FK
+        # solve plus the sign self-check) and dropped whenever the hand's
+        # morphology-independent scene changes cannot affect it -- see
+        # _open_lengths.
+        self._open_lengths_cache = None
+        self._open_notes = []
+        self._play_thread = None
         # What this installed binding supports, so we can gate controls a stale
         # .so would crash on (ellipsoid objects, the table, cull margin).
         # Resolved before the params because _fresh_params reads it.
@@ -389,6 +543,12 @@ class HandVizApp:
         self._rebuild_fk()
         self._refresh_object()
         self._fk_solve()
+
+        # Last, so a bridge that publishes on registration cannot fire into a
+        # half-built app: the latch now reaches the servo publishers.
+        if self.ros_mode:
+            self.estop.add_listener(self._on_estop_change)
+            self._refresh_robot_status()
 
     def _fresh_params(self):
         """A cold ``HandSolveParams`` plus this app's OWN scene defaults.
@@ -1037,6 +1197,10 @@ class HandVizApp:
         # the button agree with it.
         if getattr(self, "g_rearm", None) is not None:
             self.g_rearm.disabled = not tripped or solving
+        # The two buttons that move a physical robot follow exactly the same
+        # rule -- they are admitted through the same gate, so they must grey out
+        # with everything else.
+        self._set_robot_busy(solving)
 
     def _fk_solve(self, _=None):
         """Re-pose the hand from the current sliders with the FK solver.
@@ -1054,26 +1218,37 @@ class HandVizApp:
         try:
             with gate:
                 self._set_solving(True)
-                try:
-                    self._sync_params()
-                    self._refresh_object()
-                    self._invalidate_stepper()
-                    self.mode = "FK"
-                    self._set_status("Solving (FK)...")
-                    # Reuse the cached FK solver (shares self.params) so this
-                    # warm-starts.
-                    self.result = self.fk_solver.solve()
-                    self._rebuild_iter_slider()
-                    self._render_frame()
-                    self._report()
-                except Exception as exc:  # surface it in the GUI, keep serving
-                    self._error_status(exc)
-                    raise
+                self._fk_solve_admitted()
         finally:
             # Outside the gate, so it reads a released latch and can re-enable
             # the controls (or leave them grey, if the e-stop tripped meanwhile).
             self._set_solving()
             self._report_estop()
+
+    def _fk_solve_admitted(self):
+        """The FK solve itself, for a caller that ALREADY HOLDS the gate.
+
+        Split out because the gate is not re-entrant, by design -- it is what
+        stops two solves running at once. A caller that has already been admitted
+        for a longer operation (reading the robot's state, which is a whole
+        series of FK solves) therefore cannot go through :meth:`_fk_solve`: its
+        admit() would be refused as "already running", and refusal there is
+        silent, so the hand would simply never be re-posed.
+        """
+        try:
+            self._sync_params()
+            self._refresh_object()
+            self._invalidate_stepper()
+            self.mode = "FK"
+            self._set_status("Solving (FK)...")
+            # Reuse the cached FK solver (shares self.params) so this warm-starts.
+            self.result = self.fk_solver.solve()
+            self._rebuild_iter_slider()
+            self._render_frame()
+            self._report()
+        except Exception as exc:  # surface it in the GUI, keep serving
+            self._error_status(exc)
+            raise
 
     def _pinch_note(self):
         """Warn when pinch-centroid centering is checked but the selected
@@ -1872,7 +2047,452 @@ class HandVizApp:
         body = notes[i] if notes is not None else ""
         self.g_iter_status.content = f"iterate {i} / {n - 1}  \n{body}"
 
+    # -- robot (ROS mode only) --
+    #
+    # Everything below is dead code with ros_mode off: the Robot folder is not
+    # built, so nothing calls it. The division of labour is that this side knows
+    # about SOLVES and viser, the bridge knows about ROS and frames, and
+    # robot_plan.py -- which neither imports -- is the pure conversion between
+    # them.
+
+    def _open_lengths(self):
+        """The hand-open tendon lengths every commanded displacement is measured
+        from, built once and cached.
+
+        Costs two FK solves (the open pose, plus the probe that proves flexion
+        SHORTENS the actuated tendon), so it is not done at startup: an app opened
+        to look at a solve should not pay for hardware it may never talk to. The
+        cache is never invalidated because it cannot go stale -- it depends on the
+        hand's morphology, which is loaded once from gepetto_core and is not a
+        control on this page.
+
+        Raises if the sign check fails: every displacement in a plan would have
+        the wrong sign, which on real hardware means driving the fingers into the
+        extension stop.
+        """
+        if self._open_lengths_cache is None:
+            lengths = robot_plan.open_tendon_lengths(self.params, self.fk_solver)
+            notes, ok = robot_plan.check_open_lengths(lengths, self.params)
+            if not ok:
+                self._open_notes = notes
+                raise RuntimeError("  \n".join(notes))
+            self._open_lengths_cache, self._open_notes = lengths, notes
+        return self._open_lengths_cache
+
+    def _corner_viz(self):
+        """The table square's minimum corner in viser world coordinates -- this
+        app's half of the registration against the physical bench.
+
+        Read live rather than cached: the support plane is seated UNDER the
+        object (see ``auto_table_origin``), so switching objects moves it, and a
+        stale corner would silently offset every pose sent to the robot by
+        however far the table had moved."""
+        return table_corner(self._table_origin(),
+                            np.asarray(self.params.plane_normal, float))
+
+    def _robot_speeds(self):
+        """The two speed sliders resolved into real units.
+
+        The sliders are FRACTIONS of each channel's own limit, so they keep
+        meaning something if MoveIt Servo's scales or HandConfig's tendon speed
+        are ever retuned -- and so the numbers on screen are directly comparable
+        to the configured maxima rather than to nothing."""
+        arm = float(self.g_arm_speed.value)
+        hand = float(self.g_hand_speed.value)
+        return dict(max_linear=arm * SERVO_SCALE_LINEAR,
+                    max_angular=arm * SERVO_SCALE_ROTATIONAL,
+                    max_tendon=hand * MAX_TENDON_SPEED)
+
+    def _speed_note(self):
+        speeds = self._robot_speeds()
+        return (f"arm {speeds['max_linear']:.2f} m/s / "
+                f"{speeds['max_angular']:.2f} rad/s &nbsp; "
+                f"hand {speeds['max_tendon'] * 1e3:.1f} mm/s")
+
+    def _set_robot_status(self, text):
+        self.g_robot_status.content = text
+
+    def _refresh_robot_status(self, extra=None):
+        """The Robot folder's own readout: what the bridge can see, and what the
+        buttons would do right now. Separate from the solver status line because
+        the two answer different questions and overwrite each other otherwise."""
+        # The transient message LEADS: it is the answer to whatever the operator
+        # just pressed (playing, refused, failed), and the standing readout below
+        # it is the same three lines every time. Buried under them it reads as
+        # part of the furniture.
+        lines = [extra] if extra else []
+        try:
+            lines.append(self.bridge.status())
+        except Exception as exc:
+            lines.append(f"**bridge unavailable:** `{exc}`")
+        channels = [name for name, handle in (("arm", self.g_enable_arm),
+                                              ("hand", self.g_enable_hand))
+                    if handle.value]
+        lines.append(f"channels enabled: **{', '.join(channels) or 'none'}** "
+                     f"&nbsp; {self._speed_note()}")
+        lines.extend(self._open_notes)
+        self._set_robot_status("  \n".join(lines))
+
+    def _set_robot_busy(self, busy=None):
+        """Grey the robot buttons in step with the rest of the panel.
+
+        Same rule as :meth:`_set_solving`, which is what actually calls this: a
+        robot action is admitted through the very same gate a solve is, so
+        "something is running" and "the latch is engaged" both have to disable
+        these two buttons as well."""
+        if not self.ros_mode:
+            return
+        if busy is None:
+            busy = self.estop.busy is not None
+        blocked = busy or self.estop.is_tripped()
+        self.g_play.disabled = blocked
+        self.g_get_state.disabled = blocked
+
+    def _on_estop_change(self, tripped, reason):
+        """The latch moved -- tell the bridge, so the publishers stop.
+
+        Registered on ``EStop`` rather than hung off the button handler because
+        the latch has several sources (the button, an abort from the playback
+        watchdog, a trip arriving over ROS) and every one of them has to reach
+        the hardware. Called on whatever thread tripped it, with no locks held.
+
+        Both directions go through one call: engaging halts the publishers and
+        latches the cell-wide e-stop topic, releasing clears it. A rearm that did
+        not clear the topic would leave every other node in the cell refusing to
+        move while this app looked live again.
+        """
+        self.bridge.set_estop(tripped, reason)
+        self._set_robot_busy()
+
+    def _play_on_robot(self, _=None):
+        """Send the solve on screen to the robot.
+
+        Claims the SAME gate a solve does, which is the point: a playback and a
+        solve can never overlap, the latch already refuses both, and the panel
+        greys out for one exactly as it does for the other. The work runs on a
+        worker thread for the same reason auto-solve does -- a viser callback
+        thread that blocks for the length of a trajectory cannot service the
+        E-STOP click.
+        """
+        if not self.ros_mode:
+            return
+        if not (self.g_enable_arm.value or self.g_enable_hand.value):
+            self._refresh_robot_status(
+                "**nothing enabled** -- tick *arm* and/or *hand* first.")
+            return
+        try:
+            gate = self.estop.admit("robot playback")
+        except Refused as exc:
+            self._refresh_robot_status(f"**refused:** {exc}")
+            return
+
+        def worker():
+            try:
+                self._set_solving(True)
+                plan = self._build_robot_plan()
+                self.bridge.play(
+                    plan,
+                    enable_arm=self.g_enable_arm.value,
+                    enable_hand=self.g_enable_hand.value,
+                    speeds=self._robot_speeds(),
+                    on_progress=lambda text: self._refresh_robot_status(text),
+                    should_stop=self.estop.is_tripped)
+            except Exception as exc:
+                traceback.print_exc()
+                self._refresh_robot_status(f"**playback failed:** `{exc}`")
+            finally:
+                # Gate first, so the refreshes below see an idle latch and can
+                # hand the controls back -- the auto-solve worker's ordering.
+                gate.release()
+                self._set_solving()
+                self._report_estop()
+
+        self._play_thread = threading.Thread(target=worker, daemon=True)
+        try:
+            self._play_thread.start()
+        except Exception:
+            # A gate never released refuses every solve for the rest of the
+            # session; the same failure _ik_auto guards against.
+            gate.release()
+            self._set_solving()
+            raise
+
+    def _build_robot_plan(self):
+        """The plan for whatever is on screen, clamped to the hand's real travel."""
+        source = "final" if self.g_play_source.value == PLAY_FINAL else "history"
+        if self.result is None:
+            raise RuntimeError("nothing solved yet -- press FK, Step or Auto solve")
+        plan = robot_plan.build_plan(
+            self.result, self.fk_solver.configs, self._corner_viz(),
+            self._open_lengths(), source=source,
+            # Play from where the scrubber is parked, so rewinding and replaying
+            # a section works the same way warm-starting from an iterate does.
+            start=self._current_iterate())
+        plan, notes = robot_plan.clamp_to_travel(plan)
+        if notes:
+            self._refresh_robot_status("  \n".join(notes))
+        return plan
+
+    def _get_robot_state(self, _=None):
+        """Adopt the robot's measured state as the visualizer's state.
+
+        The wrist is a direct write (the bridge hands it over already in viser
+        coordinates). The tendons are not: this app's kinematic input is TENSION,
+        and the hardware reports LENGTH, so the tensions that produce the measured
+        lengths have to be recovered -- see :meth:`_tensions_for_displacement`.
+
+        Runs on a worker thread and through the solve gate, because the recovery
+        is a series of FK solves.
+        """
+        if not self.ros_mode:
+            return
+        try:
+            gate = self.estop.admit("read robot state")
+        except Refused as exc:
+            self._refresh_robot_status(f"**refused:** {exc}")
+            return
+
+        def worker():
+            try:
+                self._set_solving(True)
+                state = self.bridge.read_state(self._corner_viz())
+                notes = self._adopt_robot_state(state)
+                self._refresh_robot_status("  \n".join(notes))
+            except Exception as exc:
+                traceback.print_exc()
+                self._refresh_robot_status(f"**read failed:** `{exc}`")
+            finally:
+                gate.release()
+                self._set_solving()
+                self._report_estop()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # How far past a measured wrist value to grow the slider when the value falls
+    # outside its range, as a fraction of how far outside it fell -- headroom
+    # enough that the widened slider is still draggable either side of where the
+    # robot actually is, rather than pinned against its own new end stop.
+    _WRIST_RANGE_MARGIN = 0.25
+
+    def _fit_wrist_range(self, handle, value):
+        """Grow ``handle``'s range until it contains ``value``. Returns the new
+        ``(min, max)`` if the range moved, else None.
+
+        The wrist sliders open on a DEMO range (+-0.1 m) that says nothing about
+        where the robot is: a read comes back in the scene frame, whose origin is
+        the table corner, so a wrist a third of a metre above the table is an
+        ordinary measurement rather than an error. Clamping it into the range drew
+        the hand somewhere the robot is not -- the one thing this readout must
+        never do -- so the range yields to the measurement instead. The new bound
+        is snapped OUT to a whole step, since a bound off the step grid leaves the
+        end of the track unreachable by dragging.
+        """
+        lo, hi = float(handle.min), float(handle.max)
+        if lo <= value <= hi:
+            return None
+        step = float(handle.step or 1e-3)
+        if value < lo:
+            lo = math.floor(
+                (value - max((lo - value) * self._WRIST_RANGE_MARGIN, step)) / step
+            ) * step
+        else:
+            hi = math.ceil(
+                (value + max((value - hi) * self._WRIST_RANGE_MARGIN, step)) / step
+            ) * step
+        handle.min, handle.max = lo, hi
+        return lo, hi
+
+    def _adopt_robot_state(self, state):
+        """Write one :class:`RobotState` onto the controls. Returns status lines."""
+        notes = []
+        T = np.asarray(state.wrist_pose, float)
+        roll, pitch, yaw = R_to_euler(T[:3, :3])
+        widened = []
+        self._restoring = True   # our writes; no live-FK re-solve per slider
+        try:
+            for handle, value, label in zip(
+                    (self.g_tx, self.g_ty, self.g_tz,
+                     self.g_roll, self.g_pitch, self.g_yaw),
+                    (*T[:3, 3], roll, pitch, yaw),
+                    ("x", "y", "z", "roll", "pitch", "yaw")):
+                value = float(value)
+                grown = self._fit_wrist_range(handle, value)
+                if grown is not None:
+                    widened.append(
+                        f"{label} to [{grown[0]:+.3f}, {grown[1]:+.3f}]")
+                # The MEASURED number, not a rounded or bounded one: viser does
+                # not snap a programmatic write to the step grid, and _sync_wrist
+                # rebuilds params.wrist_pose straight off these six handles, so
+                # what is written here is exactly the pose that gets solved and
+                # drawn. See _adopt_solved_wrist, which writes the same way.
+                handle.value = value
+        finally:
+            self._restoring = False
+        if widened:
+            notes.append(
+                f"_wrist slider range widened ({', '.join(widened)}) so it holds "
+                f"the measured pose -- the robot is outside the volume this "
+                f"scene's demo sliders cover. The hand on screen IS where the "
+                f"robot is; if that looks wrong, check the table registration._")
+        notes.append(f"wrist read at ({T[0, 3]:+.6f}, {T[1, 3]:+.6f}, "
+                     f"{T[2, 3]:+.6f}) m in the scene frame")
+
+        if state.tendon_disp:
+            notes.extend(self._tensions_for_displacement(state.tendon_disp))
+        else:
+            notes.append("_no tendon state on "
+                         "`/finger_servo_node/measured_state` -- tensions left "
+                         "as they were._")
+        if state.age is not None and state.age > 1.0:
+            notes.append(f"**tendon state is {state.age:.1f} s old** -- is "
+                         "finger_servo_node still running?")
+        # Already admitted (the whole read holds the gate), so this must not try
+        # to claim it again -- see _fk_solve_admitted.
+        self._fk_solve_admitted()
+        return notes
+
+    # Bisection budget for the tension recovery below. 14 halvings of the 0-3 N
+    # slider range resolve tension to 0.2 mN, far finer than the ~0.1 mm of
+    # displacement the hardware can distinguish, so the tolerance is what
+    # actually ends it.
+    _TENSION_BISECT_STEPS = 14
+    _TENSION_BISECT_TOL_M = 5e-4
+
+    def _tensions_for_displacement(self, measured):
+        """Recover the flexor tensions that reproduce the MEASURED tendon
+        displacements, and put them on the sliders.
+
+        The visualizer poses the hand from tension; the hardware measures length.
+        There is no inverse in the solver -- the FK graph runs tension to length
+        -- so this inverts it numerically. Bisection rather than anything cleverer
+        because the map is monotone (more flexor tension pulls more tendon in,
+        which ``robot_plan.check_open_lengths`` proves rather than assumes) and
+        because a bisection cannot diverge on a finger whose measurement is
+        outside what the model can reach: it simply converges onto the nearest
+        end of the slider range and the residual reported below says so.
+
+        All five digits are bisected TOGETHER: one FK solve poses the whole hand,
+        so five independent searches would cost five times the solves for the same
+        answer. Each solve is warm-started off the last (the cached FK solver), so
+        the whole recovery is ~14 cheap solves.
+        """
+        open_lengths = self._open_lengths()
+        names = [n for n in self.fk_solver.finger_names if n in measured]
+        if not names:
+            return ["_no measured finger matched the model's digits._"]
+
+        lo = {n: float(self.g_flexors[0].min) for n in names}
+        hi = {n: float(self.g_flexors[0].max) for n in names}
+        # Preserve whatever the sliders hold for digits the robot did not report,
+        # so a partial readback does not silently zero the rest of the hand.
+        tensions = list(self.params.flexor_tensions)
+        index_of = {n: i for i, n in enumerate(self.fk_solver.finger_names)}
+        residual = {}
+
+        for _ in range(self._TENSION_BISECT_STEPS):
+            for name in names:
+                tensions[index_of[name]] = 0.5 * (lo[name] + hi[name])
+            self.params.flexor_tensions = list(tensions)
+            result = self.fk_solver.solve()
+            lengths = dict(zip(result.finger_names, result.tendon_lengths(0)))
+            for name in names:
+                got = open_lengths[name] - float(lengths[name][FLEXOR_IDX])
+                residual[name] = got - measured[name]
+                # Monotone increasing: too little displacement means not enough
+                # tension, so the answer is in the upper half.
+                if got < measured[name]:
+                    lo[name] = 0.5 * (lo[name] + hi[name])
+                else:
+                    hi[name] = 0.5 * (lo[name] + hi[name])
+            if max(abs(v) for v in residual.values()) <= self._TENSION_BISECT_TOL_M:
+                break
+
+        self._restoring = True
+        try:
+            for handle, value in zip(self.g_flexors, tensions):
+                handle.value = float(min(max(value, handle.min), handle.max))
+        finally:
+            self._restoring = False
+        self.params.flexor_tensions = list(tensions)
+
+        worst = max(residual, key=lambda n: abs(residual[n]))
+        line = (f"tendons matched to "
+                f"{abs(residual[worst]) * 1e3:.2f} mm (worst: {worst}); "
+                f"measured " + ", ".join(f"{n} {measured[n] * 1e3:.1f}"
+                                         for n in names) + " mm")
+        if abs(residual[worst]) > 10 * self._TENSION_BISECT_TOL_M:
+            line = (f"**{line}** -- {worst} is outside what the model reaches "
+                    f"within the 0-{self.g_flexors[0].max:g} N slider range")
+        return [line]
+
     # -- GUI construction --
+
+    def _build_robot_folder(self, gui):
+        """The Robot folder: play a solve on the hardware, read the hardware back.
+
+        Built only in ROS mode. Both channels open DISABLED -- an operator has to
+        say, per channel, that the arm or the hand may move, because everything
+        else on this page is a picture and these two are not.
+        """
+        with gui.add_folder("Robot"):
+            gui.add_markdown(
+                "Commands the **real robot**. The scene's table square is "
+                "registered against `lbr_workspace_table_link`, so the hand on "
+                "screen and the hand on the arm are the same hand.")
+            self.g_enable_arm = gui.add_checkbox(
+                "arm", False,
+                hint="Allow this folder to publish arm twists to MoveIt Servo "
+                     "(`/lbr/servo_node/delta_twist_cmds`). Off by default: the "
+                     "wrist waypoints are simply not sent while it is unticked, "
+                     "so hand-only playback is the default first run.")
+            self.g_enable_hand = gui.add_checkbox(
+                "hand", False,
+                hint="Allow this folder to publish tendon jogs to "
+                     "`finger_servo_node` (`~/delta_tendon_cmds`). Off by "
+                     "default. Run finger_servo_node with `dry_run:=true` to "
+                     "exercise the whole path with no motors attached.")
+            self.g_play_source = gui.add_dropdown(
+                "waypoints", [PLAY_HISTORY, PLAY_FINAL],
+                initial_value=PLAY_HISTORY,
+                hint="What to play. *AL iterates* walks the solve the way the "
+                     "Solve steps scrubber does, one waypoint per Augmented "
+                     "Lagrangian outer iteration, starting from wherever the "
+                     "scrubber is parked -- these are OPTIMIZER iterations, so "
+                     "early ones can move oddly before the solve settles. "
+                     "*final state only* makes one interpolated move to the "
+                     "converged state and ignores the path.")
+            self.g_arm_speed = gui.add_slider(
+                "arm speed (fraction)", 0.05, 1.0, 0.05, 0.50,
+                hint=f"Ceiling on wrist speed, as a fraction of MoveIt Servo's "
+                     f"configured scale ({SERVO_SCALE_LINEAR} m/s linear, "
+                     f"{SERVO_SCALE_ROTATIONAL} rad/s rotational). A ceiling, "
+                     f"not a setpoint: each segment takes as long as its slowest "
+                     f"channel needs.")
+            self.g_hand_speed = gui.add_slider(
+                "hand speed (fraction)", 0.05, 1.0, 0.05, 0.25,
+                hint=f"Ceiling on tendon speed, as a fraction of "
+                     f"HandConfig.max_tendon_speed ({MAX_TENDON_SPEED} m/s). "
+                     f"finger_servo_node rate-limits to the same cap on its own "
+                     f"side, so this can only ever be the slower of the two.")
+            self.g_play = gui.add_button(
+                "Play solve on robot", icon=self.viser.Icon.ROBOT,
+                hint="Export the solve on screen as waypoints, interpolate them "
+                     "at the speeds above, and servo the robot along them. Goes "
+                     "through the same admission gate as a solve, so it cannot "
+                     "run alongside one and the E-STOP refuses it outright.")
+            self.g_get_state = gui.add_button(
+                "Get robot state", icon=self.viser.Icon.DOWNLOAD,
+                hint="Read the wrist pose (TF) and the measured tendon lengths "
+                     "(finger_servo_node) and make them the state on screen. The "
+                     "tendon lengths are inverted back into flexor tensions -- "
+                     "this app poses from tension -- so the sliders move too.")
+            self.g_robot_status = gui.add_markdown("")
+
+        self.g_play.on_click(self._play_on_robot)
+        self.g_get_state.on_click(self._get_robot_state)
+        for handle in (self.g_enable_arm, self.g_enable_hand,
+                       self.g_arm_speed, self.g_hand_speed):
+            handle.on_update(lambda _: self._refresh_robot_status())
 
     def _input_handles(self):
         """Every value-carrying control, in build order. Buttons and markdown are
@@ -1993,6 +2613,11 @@ class HandVizApp:
                      "consistent, and pinning its tendons back to the commanded "
                      "means is exactly what would undo it.")
             self.g_status = gui.add_markdown("")
+
+        # Directly under Solver, so the buttons that move a physical robot sit
+        # next to the E-STOP that stops them rather than pages away.
+        if self.ros_mode:
+            self._build_robot_folder(gui)
 
         # The scrubber over the steps taken. The slider and its readout are built
         # per step by _rebuild_iter_slider().
