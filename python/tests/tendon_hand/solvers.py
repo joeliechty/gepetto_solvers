@@ -1707,12 +1707,50 @@ class HandSolverBase:
 
 
 class HandFKSolver(HandSolverBase):
-    """Pure-kinematics hand solve driven by tensions (no contact). Builds its
-    ``TendonHandSolver`` once and re-commands the wrist each solve, so repeated
-    calls warm-start from the previous solution (``fk_5f_sweep.py``)."""
+    """Pure-kinematics hand solve driven by tensions (no contact). Re-commands the
+    wrist each solve so repeated calls warm-start from the previous solution
+    (``fk_5f_sweep.py``), and cold-restarts when the wrist jumps too far for that
+    to be safe -- see :attr:`_WARM_START_MAX_POS_M`."""
+
+    # What a warm start actually retains is the previous solve's ROD NODES, and
+    # set_wrist_pose moves only the PRIOR. So a wrist that jumps leaves the whole
+    # hand sitting where it used to be, a long way from the pose a sigma-1e-4
+    # prior is now pulling it to, and the optimizer has to drag every node across
+    # that gap before it can do any kinematics. Measured on this hand, jumping
+    # from the default hover: fine to 0.15 m; from 0.2 m it throws
+    # IndeterminantLinearSystem on W0 (the wrist), and jumps that do NOT throw can
+    # instead stall at max_iterations having left the hand 96-131 mm from the pose
+    # it was told to be at -- silently, since nothing in the result says
+    # "not converged". Rotation goes the same way past ~2 rad.
+    #
+    # A COLD start does not have the problem at all: every node is seeded at
+    # T_wrist o offset, so it begins at the commanded pose and the iteration count
+    # comes out identical whether the jump was 0.2 m or 1.0 m. It costs one graph
+    # rebuild, and the warm start only buys anything for the small moves a slider
+    # drag makes, so these sit well under where the trouble starts rather than
+    # near it.
+    #
+    # The caller that jumps is a robot readback (viz_interactive's "Get robot
+    # state"), where the measured wrist can be a third of a metre from wherever
+    # the app's hand happened to be.
+    _WARM_START_MAX_POS_M = 0.05
+    _WARM_START_MAX_ROT_RAD = 0.5
+
+    # How far the SOLVED wrist may sit from the commanded one before the solve is
+    # treated as failed. Nothing pulls on the wrist in an FK solve -- no contact,
+    # so nothing to trade against the prior -- and a healthy solve lands within a
+    # few microns of the commanded pose, where a stalled one lands tens of
+    # millimetres away. Anything between the two separates them; 1 mm is nowhere
+    # near either.
+    _WRIST_TRACKING_TOL_M = 1e-3
 
     def __init__(self, params: Optional[HandSolveParams] = None):
         super().__init__(params)
+        self._build()
+
+    def _build(self):
+        """Build (or rebuild) the underlying solver, cold-started at the params'
+        current wrist pose."""
         cfg = crest_sparse.TendonHandSolverConfig()
         cfg.wrist_pose = self.params.wrist_pose
         cfg.sigma_wrist_pos = self.params.sigma_wrist_pos
@@ -1720,22 +1758,71 @@ class HandFKSolver(HandSolverBase):
         cfg.base.linear_solver_type = "MULTIFRONTAL_QR"
         cfg.base.max_iterations = 500
         self._solver = crest_sparse.TendonHandSolver(self.configs, cfg)
+        # Where the values this solver is holding actually sit. None = nothing
+        # worth warm-starting from (a solve that failed left them wherever it
+        # gave up), which forces the next solve to rebuild.
+        self._warm_wrist = np.array(self.params.wrist_pose, float)
 
-    def solve(self) -> HandResult:
-        # Re-aim the shared wrist prior (warm start; no rebuild).
-        self._solver.set_wrist_pose(self.params.wrist_pose)
+    def _warm_start_holds(self, T):
+        """Whether the retained values are close enough to ``T`` to start from."""
+        if self._warm_wrist is None:
+            return False
+        if (np.linalg.norm(T[:3, 3] - self._warm_wrist[:3, 3])
+                > self._WARM_START_MAX_POS_M):
+            return False
+        # Rotation angle of the residual R_warm^T R, via the trace. Clipped
+        # because a cosine a rounding step outside [-1, 1] is an ordinary result
+        # for two nearly equal rotations, not a bad matrix.
+        cos = 0.5 * (np.trace(self._warm_wrist[:3, :3].T @ T[:3, :3]) - 1.0)
+        return float(np.arccos(np.clip(cos, -1.0, 1.0))) <= self._WARM_START_MAX_ROT_RAD
+
+    def _solve_once(self):
         # Uniform prior on every tendon: a tight-passive/loose-flexor prior is
         # underdetermined without contact (IndeterminantLinearSystem on the
         # tension variable) -- see fk_5f_sweep.py.
         cov = (1e-2) ** 2 * np.eye(6)
         sol = self._solver.solve(self._tension_priors(cov), self._tip_wrenches())
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)
-        # FK constrains no finger, but the mask still rides along: it is read
-        # live off params (not baked in at construction), and the goal overlays
-        # drawn over an FK pose -- p_bar, the opposition split, the support-plane
-        # equalities -- are all statements about the DESIGNATED contact set.
-        return self._result([frame], sol.meta, self.params.contact_fingers,
-                            [sol.marginals])
+        return frame, sol
+
+    def solve(self) -> HandResult:
+        T = np.asarray(self.params.wrist_pose, float)
+        if self._warm_start_holds(T):
+            self._solver.set_wrist_pose(T)   # re-aim the prior; keep the posture
+        else:
+            self._build()                    # too far to drag the hand: start there
+
+        # The thresholds above are where the trouble STARTS, not a proof, and a
+        # bad warm start can be a bad one for reasons that have nothing to do with
+        # the wrist. So the result is checked and a cold restart tried once --
+        # which is cheap, and turns the whole failure mode into a slower solve
+        # rather than a raised exception or, worse, a hand drawn somewhere the
+        # robot is not.
+        for last_attempt in (False, True):
+            try:
+                frame, sol = self._solve_once()
+                offset = float(np.linalg.norm(
+                    solved_wrist_pose(self.configs, frame)[:3, 3] - T[:3, 3]))
+                if offset <= self._WRIST_TRACKING_TOL_M:
+                    self._warm_wrist = T.copy()
+                    # FK constrains no finger, but the mask still rides along: it
+                    # is read live off params (not baked in at construction), and
+                    # the goal overlays drawn over an FK pose -- p_bar, the
+                    # opposition split, the support-plane equalities -- are all
+                    # statements about the DESIGNATED contact set.
+                    return self._result([frame], sol.meta,
+                                        self.params.contact_fingers, [sol.marginals])
+                why = (f"stalled with the wrist {offset * 1e3:.0f} mm from the "
+                       f"commanded pose after {sol.meta.iterations} iterations")
+            except RuntimeError as exc:
+                why = f"failed ({str(exc).strip().splitlines()[0]})"
+            self._warm_wrist = None          # these values are not startable-from
+            if last_attempt:
+                raise RuntimeError(
+                    f"FK solve {why}. This was already a cold start, so it is not "
+                    f"the warm-start jump -- check the tensions and the wrist pose "
+                    f"being commanded.")
+            self._build()                    # drop the values, retry cold
 
 
 # The tight-passive/loose-flexor prior itself now lives on

@@ -2062,9 +2062,13 @@ class HandVizApp:
         Costs two FK solves (the open pose, plus the probe that proves flexion
         SHORTENS the actuated tendon), so it is not done at startup: an app opened
         to look at a solve should not pay for hardware it may never talk to. The
-        cache is never invalidated because it cannot go stale -- it depends on the
-        hand's morphology, which is loaded once from gepetto_core and is not a
-        control on this page.
+        cache is never invalidated because it cannot go stale -- the open pose is
+        the hand's morphology posed at the calibrated open-hand tensions
+        (``HandConfig.zero_bend_flexor_tensions``), both loaded from gepetto_core
+        and neither of them a control on this page. In particular it does NOT
+        follow the tension sliders: those say how hard THIS solve is pulling, and
+        the zero every displacement is measured from has to stay put while they
+        move.
 
         Raises if the sign check fails: every displacement in a plan would have
         the wrong sign, which on real hardware means driving the fingers into the

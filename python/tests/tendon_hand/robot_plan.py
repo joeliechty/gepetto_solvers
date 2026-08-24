@@ -67,6 +67,15 @@ OPEN_LENGTH_WARN_M = 0.005
 # that the resulting length change dwarfs solver noise.
 _FLEXION_PROBE_TENSION = 1.5
 
+# Fallback copy of HandConfig's open-pose tension set (zero_bend_passive_tension /
+# zero_bend_flexor_tensions), for a machine with no gepetto_core install. Keyed by
+# SOLVER digit. Keep in step with gepetto_core/config.py -- these two agreeing is
+# what makes the model's open hand and the hardware's the same hand.
+_OPEN_PASSIVE_TENSION = 0.5
+_OPEN_FLEXOR_TENSIONS = {
+    "index": 0.85, "middle": 0.80, "ring": 0.90, "pinky": 0.95, "thumb": 0.85,
+}
+
 
 @dataclass
 class Waypoint:
@@ -126,9 +135,20 @@ def open_tendon_lengths(params: Optional[HandSolveParams] = None,
     the subtraction come from the same kinematics, so only the *change* is
     commanded, and the change is what the integrating servo node consumes.
 
-    "Open" is every flexor tension at zero, which is what the hardware's own open
-    pose is calibrated against. The passive tendons keep their commanded
-    background hold -- they are spring-backed and are not zero on a real hand.
+    "Open" is the tension set the hardware's open pose was CALIBRATED AT --
+    ``HandConfig.zero_bend_flexor_tensions`` / ``zero_bend_passive_tension``, see
+    :func:`open_pose_tensions` -- not every flexor at zero. A real open hand
+    carries its flexors' background pull, and the zero-tension model hyperextends
+    ~3.3 mm of tendon past it (5.6 mm on the thumb): measuring from there biases
+    every commanded displacement by that much in the FLEXING direction, and sends
+    a robot readback of an open hand back to a hyperextended posture the hardware
+    cannot reach. At the calibrated tensions the model reproduces
+    ``HandConfig.zero_bend_lengths`` to within 0.04 mm, which is what
+    :func:`check_open_lengths` then measures.
+
+    The tensions come from the calibration and NOT from ``params``, so this is a
+    property of the hand rather than of whatever the GUI's sliders happen to hold
+    -- which is what lets a caller cache the answer for the life of the process.
 
     Solves on a COPY of the params (``replace``), so a caller's live params object
     -- the one the GUI is mutating from another thread -- is never touched. Pass
@@ -137,19 +157,48 @@ def open_tendon_lengths(params: Optional[HandSolveParams] = None,
     its live solver would otherwise find its hand had fallen open.
     """
     params = params or HandSolveParams()
-    open_params = replace(params, flexor_tensions=[0.0] * len(params.flexor_tensions))
     if solver is None:
-        solver = HandFKSolver(open_params)
+        solver = HandFKSolver(replace(params))
+    borrowed = solver.params
+    solver.params = _open_pose_params(params, solver.finger_names)
+    try:
         result = solver.solve()
-    else:
-        borrowed = solver.params
-        solver.params = open_params
-        try:
-            result = solver.solve()
-        finally:
-            solver.params = borrowed
+    finally:
+        solver.params = borrowed
     return {name: float(lengths[FLEXOR_IDX])
             for name, lengths in zip(result.finger_names, result.tendon_lengths(0))}
+
+
+def open_pose_tensions():
+    """``(passive, {solver digit: flexor tension})`` for the calibrated open hand.
+
+    From ``HandConfig`` when gepetto_core is importable, else the fallback copy
+    below -- same degrade-to-a-note rule as :func:`_hardware_open_lengths`, except
+    that this one is load-bearing rather than a cross-check, so the fallback is a
+    real copy of the numbers rather than a None.
+    """
+    config = _hand_config()
+    if config is None:
+        return _OPEN_PASSIVE_TENSION, dict(_OPEN_FLEXOR_TENSIONS)
+    flexors = {solver_name: float(config.zero_bend_flexor_tensions[hardware_name])
+               for solver_name, hardware_name in HARDWARE_FINGER_NAMES.items()
+               if hardware_name in config.zero_bend_flexor_tensions}
+    return float(config.zero_bend_passive_tension), flexors
+
+
+def _open_pose_params(params, finger_names):
+    """``params`` posed at the calibrated open hand, as a copy.
+
+    ``finger_names`` is the solver's own digit order, since ``flexor_tensions`` is
+    positional: keying the calibration by name and re-ordering it here is what
+    keeps this correct if the hand is ever built with its fingers in another
+    order, or with a digit missing. A digit the calibration says nothing about
+    keeps whatever ``params`` holds for it.
+    """
+    passive, flexors = open_pose_tensions()
+    tensions = [float(flexors.get(name, held))
+                for name, held in zip(finger_names, params.flexor_tensions)]
+    return replace(params, flexor_tensions=tensions, passive_tension=passive)
 
 
 def check_open_lengths(open_lengths, params=None):
@@ -219,12 +268,12 @@ def check_open_lengths(open_lengths, params=None):
     return notes, ok
 
 
-def _hardware_open_lengths():
-    """``HandConfig.zero_bend_lengths`` keyed by SOLVER digit name, or None.
+def _hand_config():
+    """A ``HandConfig``, or None where gepetto_core is not installed.
 
     Optional on purpose: the visualizer runs on machines with no gepetto_core
-    install, and a missing cross-check must degrade to a note rather than stop a
-    plan being built."""
+    install, and a missing hardware config must degrade to a note (or to the
+    fallback tensions above) rather than stop a plan being built."""
     try:
         try:
             from gepetto_core.config import HandConfig
@@ -232,7 +281,14 @@ def _hardware_open_lengths():
             from gepetto.config import HandConfig
     except ImportError:
         return None
-    config = HandConfig()
+    return HandConfig()
+
+
+def _hardware_open_lengths():
+    """``HandConfig.zero_bend_lengths`` keyed by SOLVER digit name, or None."""
+    config = _hand_config()
+    if config is None:
+        return None
     out = {}
     for solver_name, hardware_name in HARDWARE_FINGER_NAMES.items():
         if hardware_name in config.finger_names:
@@ -248,14 +304,9 @@ def hardware_travel_limits():
     ``zero_bend - fully_flexed``: about 17.8 mm on index. A solve can easily ask
     for more than that -- the model has no motor -- so whoever publishes the plan
     clamps to this and says it did."""
-    try:
-        try:
-            from gepetto_core.config import HandConfig
-        except ImportError:
-            from gepetto.config import HandConfig
-    except ImportError:
+    config = _hand_config()
+    if config is None:
         return None
-    config = HandConfig()
     out = {}
     for solver_name, hardware_name in HARDWARE_FINGER_NAMES.items():
         if hardware_name not in config.finger_names:

@@ -284,6 +284,15 @@ onto the AL path.
 warm-starts from the last solution — only the first solve pays the cold-start
 cost. This is what makes `fk_5f_sweep.py` animate smoothly at high flexion.
 
+It re-aims the *prior*, though, not the retained *nodes*: they stay where the
+last solve left them. So it is for a **sweep**, not a **jump** — past ~0.2 m the
+hand starts too far from the pose the prior is pulling it to and the solve either
+throws `IndeterminantLinearSystem` on `W0` or stalls at `max_iterations` tens of
+millimetres off the commanded pose. Anything that re-commands the wrist
+discontinuously (a robot readback, say) wants a fresh solver instead, seeded via
+`initial_state` if the posture is worth keeping; `HandFKSolver` in `solvers.py`
+does this automatically above `_WARM_START_MAX_POS_M`.
+
 `initial_state` covers the case retention cannot: a *new* solver, built because
 the constraint set changed. Without it `get_initial_values()` returns the
 straight-rod, Q = 0 guess; with it the solve starts where the hand already is.
