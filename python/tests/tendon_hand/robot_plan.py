@@ -35,12 +35,37 @@ SIGN, everywhere in this module: positive tendon displacement = tendon pulled in
 """
 
 from dataclasses import dataclass, field, replace
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 
-from .solvers import (FLEXOR_IDX, HandFKSolver, HandSolveParams,
-                      solved_wrist_pose)
+#: Index of the actuated flexor in a finger's tendon-length vector. Duplicated
+#: from `solvers` rather than imported so that the TIMING half of this module --
+#: `plan_schedule`, `sample_at`, `interpolate` -- needs nothing but numpy. See
+#: `_solvers` below, which checks the two still agree.
+FLEXOR_IDX = 5
+
+
+def _solvers():
+    """The solver module, imported on use rather than at import time.
+
+    Everything in this file that BUILDS a plan needs the compiled `crest_sparse`
+    binding; nothing that TIMES one does. `gepetto_control`'s executor node
+    imports this module for `plan_schedule` and `sample_at` alone, and it should
+    not have to carry a factor-graph solver into a real-time control loop to get
+    them -- the whole point of moving that loop out of the visualizer was to stop
+    it sharing a process with heavy machinery.
+
+    The constant above is checked against the real one here, so the duplication
+    cannot silently drift.
+    """
+    from . import solvers
+    if solvers.FLEXOR_IDX != FLEXOR_IDX:
+        raise RuntimeError(
+            f"FLEXOR_IDX disagrees: robot_plan says {FLEXOR_IDX}, solvers says "
+            f"{solvers.FLEXOR_IDX}. Every tendon displacement in this module is "
+            f"read at that index.")
+    return solvers
 
 
 # Solver digit -> the finger name the hardware knows it by (HandConfig.finger_names).
@@ -125,9 +150,14 @@ class SolvePlan:
         return len(self.waypoints)
 
 
-def open_tendon_lengths(params: Optional[HandSolveParams] = None,
-                        solver: Optional[HandFKSolver] = None):
+def open_tendon_lengths(params=None, solver=None):
     """Per-finger actuated-tendon length with the hand OPEN, from the model itself.
+
+    ``params`` is a ``solvers.HandSolveParams`` and ``solver`` a
+    ``solvers.HandFKSolver``; they are unannotated because `solvers` is imported
+    on use rather than at module scope (see :func:`_solvers`), and an annotation
+    naming a type this module never imports is a forward reference that resolves
+    to nothing.
 
     This is the zero every displacement in a plan is measured from, and taking it
     from the model rather than from ``HandConfig.zero_bend_lengths`` is what lets
@@ -156,9 +186,10 @@ def open_tendon_lengths(params: Optional[HandSolveParams] = None,
     since ``HandFKSolver`` reads them on every solve and a caller that handed us
     its live solver would otherwise find its hand had fallen open.
     """
-    params = params or HandSolveParams()
+    solvers = _solvers()
+    params = params or solvers.HandSolveParams()
     if solver is None:
-        solver = HandFKSolver(replace(params))
+        solver = solvers.HandFKSolver(replace(params))
     borrowed = solver.params
     solver.params = _open_pose_params(params, solver.finger_names)
     try:
@@ -222,10 +253,11 @@ def check_open_lengths(open_lengths, params=None):
     notes, ok = [], True
 
     # -- the sign, measured --
-    params = params or HandSolveParams()
+    solvers = _solvers()
+    params = params or solvers.HandSolveParams()
     n = len(params.flexor_tensions)
     probe = replace(params, flexor_tensions=[_FLEXION_PROBE_TENSION] * n)
-    flexed = HandFKSolver(probe).solve()
+    flexed = solvers.HandFKSolver(probe).solve()
     deltas = {name: open_lengths[name] - float(lengths[FLEXOR_IDX])
               for name, lengths in zip(flexed.finger_names, flexed.tendon_lengths(0))
               if name in open_lengths}
@@ -347,6 +379,7 @@ def build_plan(result, configs, corner_viz, open_lengths, source="history",
         notes = [(raw[i] if raw is not None and i < len(raw) else f"iterate {i}")
                  for i in range(start, n)]
 
+    solved_wrist_pose = _solvers().solved_wrist_pose
     waypoints = []
     for view, note in zip(views, notes):
         lengths = view.tendon_lengths(0)
@@ -426,6 +459,101 @@ def segment_durations(plan, max_linear, max_angular, max_tendon, min_duration=0.
     return durations
 
 
+@dataclass
+class PathSchedule:
+    """A plan's timing, precomputed once so the path can be sampled at any ``t``.
+
+    :func:`interpolate` walks a plan on a fixed grid, which is all an open-loop
+    player needs. A player that PACES ITSELF against the robot -- slowing the path
+    down when the arm falls behind, which is what keeps every waypoint fully
+    interpolated at any speed -- cannot use a fixed grid, because its clock
+    advances by a different amount every tick. It needs to ask "where should the
+    wrist be at time t" for arbitrary t, and that is what this plus
+    :func:`sample_at` answer.
+
+    Durations are QUANTIZED to whole control periods. Two reasons: it makes
+    :func:`interpolate` exactly a walk of :func:`sample_at` over the grid, so the
+    two can never drift apart, and it makes the per-segment feed-forward rate the
+    rate the target actually moves at rather than the rate it was asked to move
+    at -- which is the number a resolved-rate controller is fed.
+    """
+    durations: List[float]              # per segment, seconds, whole periods
+    edges: np.ndarray                   # segment start times, len = n_seg + 1
+    total: float                        # seconds
+    linear_velocity: List[np.ndarray]   # per segment, m/s, viser world frame
+    angular_velocity: List[np.ndarray]  # per segment, rad/s, viser world frame
+
+
+def plan_schedule(plan, hz=100.0, max_linear=0.2, max_angular=0.4,
+                  max_tendon=0.0163, min_duration=0.05):
+    """Time ``plan`` at the given speed ceilings, quantized to the ``hz`` grid.
+
+    Speed arguments are CEILINGS, not setpoints -- see :func:`segment_durations`.
+    A plan of fewer than two waypoints has no segments and yields an empty
+    schedule of zero duration, which :func:`sample_at` handles as "go here".
+    """
+    period = 1.0 / float(hz)
+    raw = segment_durations(plan, max_linear, max_angular, max_tendon,
+                            min_duration)
+
+    durations, linear, angular = [], [], []
+    for k, duration in enumerate(raw):
+        a, b = plan.waypoints[k], plan.waypoints[k + 1]
+        duration = max(1, int(round(duration / period))) * period
+        durations.append(duration)
+        linear.append((b.wrist_pose[:3, 3] - a.wrist_pose[:3, 3]) / duration)
+        angular.append(_rotation_error(b.wrist_pose[:3, :3],
+                                       a.wrist_pose[:3, :3]) / duration)
+
+    edges = np.concatenate([[0.0], np.cumsum(durations)]) if durations \
+        else np.zeros(1)
+    return PathSchedule(durations=durations, edges=edges,
+                        total=float(edges[-1]),
+                        linear_velocity=linear, angular_velocity=angular)
+
+
+def sample_at(plan, schedule, t):
+    """Where the robot should be at time ``t`` along ``schedule``.
+
+    ``t`` is clamped to ``[0, schedule.total]``: before the start is the first
+    waypoint, at or past the end is the last one held with ZERO feed-forward,
+    which is exactly what a settle phase wants to command.
+    """
+    if not plan.waypoints:
+        raise ValueError("empty plan has no samples")
+
+    if not schedule.durations:
+        w = plan.waypoints[0]
+        return Sample(0.0, np.asarray(w.wrist_pose, float), dict(w.tendon_disp),
+                      np.zeros(3), np.zeros(3), 0)
+
+    t = float(np.clip(t, 0.0, schedule.total))
+    # -1 because searchsorted returns the insertion point; clipped to the last
+    # segment so t == total lands on s == 1.0 of it rather than off the end.
+    k = int(np.clip(np.searchsorted(schedule.edges, t, side="right") - 1,
+                    0, len(schedule.durations) - 1))
+    s = float(np.clip((t - schedule.edges[k]) / schedule.durations[k], 0.0, 1.0))
+
+    a, b = plan.waypoints[k], plan.waypoints[k + 1]
+    p_a, p_b = a.wrist_pose[:3, 3], b.wrist_pose[:3, 3]
+    T = np.eye(4)
+    T[:3, :3] = _slerp(a.wrist_pose[:3, :3], b.wrist_pose[:3, :3], s)
+    T[:3, 3] = p_a + s * (p_b - p_a)
+
+    # Held at the end, not still travelling: a feed-forward past the last
+    # waypoint would walk the arm straight through it.
+    at_end = t >= schedule.total
+    return Sample(
+        t=t,
+        wrist_pose=T,
+        tendon_disp={name: (a.tendon_disp.get(name, 0.0)
+                            + s * (value - a.tendon_disp.get(name, 0.0)))
+                     for name, value in b.tendon_disp.items()},
+        linear_velocity=(np.zeros(3) if at_end else schedule.linear_velocity[k]),
+        angular_velocity=(np.zeros(3) if at_end else schedule.angular_velocity[k]),
+        waypoint=k + 1)
+
+
 def interpolate(plan, hz=100.0, max_linear=0.2, max_angular=0.4, max_tendon=0.0163,
                 min_duration=0.05):
     """Time the plan and sample it at ``hz``, with feed-forward rates.
@@ -437,52 +565,24 @@ def interpolate(plan, hz=100.0, max_linear=0.2, max_angular=0.4, max_tendon=0.01
 
     A single-waypoint plan yields one sample with zero velocity: "go here", which
     is what a resolved-rate controller needs to servo to a static target.
+
+    This is now a walk of :func:`sample_at` over the fixed grid rather than its
+    own copy of the interpolation -- the last tick of each segment still falls
+    out naturally as the first tick of the next, and the final waypoint is still
+    emitted exactly once, at ``schedule.total``.
     """
     if not plan.waypoints:
         return []
-    if len(plan.waypoints) == 1:
-        w = plan.waypoints[0]
-        return [Sample(0.0, np.asarray(w.wrist_pose, float), dict(w.tendon_disp),
-                       np.zeros(3), np.zeros(3), 0)]
+
+    schedule = plan_schedule(plan, hz, max_linear, max_angular, max_tendon,
+                             min_duration)
+    if not schedule.durations:
+        return [sample_at(plan, schedule, 0.0)]
 
     period = 1.0 / float(hz)
-    durations = segment_durations(plan, max_linear, max_angular, max_tendon,
-                                  min_duration)
-    samples, t0 = [], 0.0
-
-    for k, (a, b) in enumerate(zip(plan.waypoints, plan.waypoints[1:])):
-        duration = durations[k]
-        # Rates are constant within a segment (the interpolation is linear in s),
-        # so they are computed once per segment rather than per tick.
-        p_a, p_b = a.wrist_pose[:3, 3], b.wrist_pose[:3, 3]
-        rotvec = _rotation_error(b.wrist_pose[:3, :3], a.wrist_pose[:3, :3])
-        linear_velocity = (p_b - p_a) / duration
-        angular_velocity = rotvec / duration
-
-        # The last tick of a segment is dropped -- it is the first tick of the
-        # next one, and emitting both would stall a tick on every waypoint. The
-        # final waypoint is appended once, after the loop.
-        ticks = max(1, int(round(duration / period)))
-        for i in range(ticks):
-            s = i / ticks
-            T = np.eye(4)
-            T[:3, :3] = _slerp(a.wrist_pose[:3, :3], b.wrist_pose[:3, :3], s)
-            T[:3, 3] = p_a + s * (p_b - p_a)
-            samples.append(Sample(
-                t=t0 + i * period,
-                wrist_pose=T,
-                tendon_disp={name: (a.tendon_disp.get(name, 0.0)
-                                    + s * (value - a.tendon_disp.get(name, 0.0)))
-                             for name, value in b.tendon_disp.items()},
-                linear_velocity=linear_velocity,
-                angular_velocity=angular_velocity,
-                waypoint=k + 1))
-        t0 += ticks * period
-
-    last = plan.waypoints[-1]
-    samples.append(Sample(t0, np.asarray(last.wrist_pose, float),
-                          dict(last.tendon_disp), np.zeros(3), np.zeros(3),
-                          len(plan.waypoints) - 1))
+    ticks = int(round(schedule.total / period))
+    samples = [sample_at(plan, schedule, i * period) for i in range(ticks)]
+    samples.append(sample_at(plan, schedule, schedule.total))
     return samples
 
 

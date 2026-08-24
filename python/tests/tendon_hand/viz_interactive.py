@@ -497,6 +497,9 @@ class HandVizApp:
         # _open_lengths.
         self._open_lengths_cache = None
         self._open_notes = []
+        # The lower, unchanging half of the Robot folder's readout, cached so
+        # playback feedback does not re-poll the bridge ten times a second.
+        self._standing_status = None
         self._play_thread = None
         # What this installed binding supports, so we can gate controls a stale
         # .so would crash on (ellipsoid objects, the table, cull margin).
@@ -2116,25 +2119,37 @@ class HandVizApp:
     def _set_robot_status(self, text):
         self.g_robot_status.content = text
 
-    def _refresh_robot_status(self, extra=None):
+    def _refresh_robot_status(self, extra=None, standing=True):
         """The Robot folder's own readout: what the bridge can see, and what the
         buttons would do right now. Separate from the solver status line because
-        the two answer different questions and overwrite each other otherwise."""
+        the two answer different questions and overwrite each other otherwise.
+
+        ``standing=False`` reuses the cached lower half instead of re-polling the
+        bridge. Playback feedback arrives about ten times a second and every poll
+        is a pair of TF lookups for three lines that cannot have changed since the
+        run started -- worth skipping even now that the robot is not waiting on
+        this thread.
+        """
         # The transient message LEADS: it is the answer to whatever the operator
         # just pressed (playing, refused, failed), and the standing readout below
         # it is the same three lines every time. Buried under them it reads as
         # part of the furniture.
         lines = [extra] if extra else []
-        try:
-            lines.append(self.bridge.status())
-        except Exception as exc:
-            lines.append(f"**bridge unavailable:** `{exc}`")
-        channels = [name for name, handle in (("arm", self.g_enable_arm),
-                                              ("hand", self.g_enable_hand))
-                    if handle.value]
-        lines.append(f"channels enabled: **{', '.join(channels) or 'none'}** "
-                     f"&nbsp; {self._speed_note()}")
-        lines.extend(self._open_notes)
+        if standing or self._standing_status is None:
+            standing_lines = []
+            try:
+                standing_lines.append(self.bridge.status())
+            except Exception as exc:
+                standing_lines.append(f"**bridge unavailable:** `{exc}`")
+            channels = [name for name, handle in (("arm", self.g_enable_arm),
+                                                  ("hand", self.g_enable_hand))
+                        if handle.value]
+            standing_lines.append(
+                f"channels enabled: **{', '.join(channels) or 'none'}** "
+                f"&nbsp; {self._speed_note()}")
+            standing_lines.extend(self._open_notes)
+            self._standing_status = standing_lines
+        lines.extend(self._standing_status)
         self._set_robot_status("  \n".join(lines))
 
     def _set_robot_busy(self, busy=None):
@@ -2199,7 +2214,8 @@ class HandVizApp:
                     enable_arm=self.g_enable_arm.value,
                     enable_hand=self.g_enable_hand.value,
                     speeds=self._robot_speeds(),
-                    on_progress=lambda text: self._refresh_robot_status(text),
+                    on_progress=lambda text: self._refresh_robot_status(
+                        text, standing=False),
                     should_stop=self.estop.is_tripped)
             except Exception as exc:
                 traceback.print_exc()
