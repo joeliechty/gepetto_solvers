@@ -83,8 +83,8 @@ from .solvers import (
     euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
     default_object_center,
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
-    pregrasp_centroid_witness, default_half_space_axis, PHASE_PRESETS,
-    FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
+    pregrasp_centroid_witness, finger_plane_witness, default_half_space_axis,
+    PHASE_PRESETS, FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 from .config import pinch_pose
 from .mount import MOUNT_WRIST_XYZ, MOUNT_WRIST_RPY, measured_mount_pose
 
@@ -860,6 +860,7 @@ class HandVizApp:
         self.scene.show_contact_spheres = self.g_show_contact.value
         self.scene.show_collision_spheres = self.g_show_collision.value
         self.scene.show_gap_lines = self.g_show_gaps.value
+        self.scene.show_finger_planes = self.g_show_finger_planes.value
 
     def _table_origin(self):
         """The rendered slab's origin -- reads straight off ``params.plane_origin``,
@@ -959,6 +960,12 @@ class HandVizApp:
                      if self.params.pregrasp_axis_align else None)
         centroid_gap = (pregrasp_centroid_witness(self.params, res, 0)
                        if self.params.pregrasp_centroid else None)
+        # Purely a picture of the posture on screen, so unlike the overlays
+        # above it is gated on its own display checkbox rather than on a
+        # constraint being switched on -- the plane is worth looking at exactly
+        # when nothing is enforcing anything about it.
+        planes = (finger_plane_witness(res, 0)
+                  if self.g_show_finger_planes.value else None)
         self._report_iterate(live)
         self.scene.update(res.frames[0],
                           tip_radii=res.tip_radii,
@@ -975,7 +982,8 @@ class HandVizApp:
                           half_space_gaps=half_gaps,
                           center_gap=center_gap,
                           axis_align=axis_align,
-                          centroid_gap=centroid_gap)
+                          centroid_gap=centroid_gap,
+                          finger_planes=planes)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -1098,6 +1106,32 @@ class HandVizApp:
             # never actually meet there.
             return [f"pinch-centroid: these digits close to "
                     f"{pose.gap * 1000:.1f} mm apart (they never touch)"]
+        return []
+
+    def _finger_plane_note(self):
+        """Say when the pinch-plane overlay is switched on but has no plane to
+        draw -- the same measured-pinch-pose dependency :meth:`_pinch_note`
+        covers, hit from the display side.
+
+        Worth its own line because here there is no constraint to blame: the
+        checkbox is ticked, the hand is on screen, and nothing appears. The
+        planes are anchored on the centroid of the digits the SOLVE designated,
+        so a thumbless selection leaves them undefined.
+
+        Reads the result's digits, not the checkboxes -- unlike
+        :meth:`_pinch_note`, which describes the constraint the NEXT solve will
+        attach. This describes an overlay on the posture already drawn, and
+        that overlay is keyed off the same ``contact_names`` the result carries,
+        so a contact box unticked since the last solve must not change this line
+        while the hand it describes is still on screen."""
+        if not self.g_show_finger_planes.value or self.result is None:
+            return []
+        names = self.result.contact_names()
+        if pinch_pose(names) is None:
+            return [f"**finger pinch planes: NOTHING DRAWN** -- no measured "
+                    f"pinch pose for ({', '.join(names) or 'no fingers'}); the "
+                    f"planes pass through that centroid, and only combinations "
+                    f"including the thumb were measured"]
         return []
 
     def _half_space_note(self):
@@ -1243,6 +1277,7 @@ class HandVizApp:
         lines.extend(self._half_space_note())
         lines.extend(self._wrist_gauge_note())
         lines.extend(self._pinch_note())
+        lines.extend(self._finger_plane_note())
         lines.extend(self._object_size_note())
         self._set_status("  \n".join(lines))
 
@@ -1899,7 +1934,8 @@ class HandVizApp:
                    self.g_show_true_mesh,
                    self.g_show_contact, self.g_show_collision,
                    self.g_show_discs, self.g_show_world, self.g_show_obj_frame,
-                   self.g_show_table_frame, self.g_show_gaps, self.g_show_mount])
+                   self.g_show_table_frame, self.g_show_gaps, self.g_show_mount,
+                   self.g_show_finger_planes])
 
     def _build_gui(self):
         gui = self.server.gui
@@ -2392,6 +2428,17 @@ class HandVizApp:
                      "opposition half-space (green = correct side, red = "
                      "violating), and pre-grasp centering (green under 15 mm "
                      "to target).")
+            self.g_show_finger_planes = gui.add_checkbox(
+                "finger pinch planes", False,
+                hint="Per finger, the plane through its metacarpal base, its "
+                     "fingertip and the pinch centroid the checked digits "
+                     "close on (config.HAND_PINCH_POSES, carried through the "
+                     "solved wrist). One colour per finger; the outlined "
+                     "triangle is the three defining points. Off by default -- "
+                     "five translucent sheets sit right where the grasp is. "
+                     "Nothing enforces these planes; they describe the posture "
+                     "on screen. Needs a measured pinch pose, so only digit "
+                     "sets INCLUDING THE THUMB draw anything.")
 
         # Every value-carrying control, captured as built: this IS the definition
         # of "defaults" that Reset restores, so the two cannot drift.
@@ -2440,7 +2487,7 @@ class HandVizApp:
 
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
-                  self.g_show_gaps, self.g_show_mount):
+                  self.g_show_gaps, self.g_show_mount, self.g_show_finger_planes):
             h.on_update(lambda _: (self._sync_params(), self._render_frame()))
         # The contact checkboxes ride along only to keep self.params in sync;
         # like every other solver knob they take effect on the next solve, and

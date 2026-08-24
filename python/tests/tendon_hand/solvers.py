@@ -669,6 +669,57 @@ def pregrasp_axis_witness(params, result, k=0):
     return (c_thumb, c_others, angle_deg)
 
 
+def finger_plane_witness(result, k=0):
+    """Per-finger ``{name: (base_pt, tip_pt, pinch_pt)}`` at frame ``k`` -- the
+    three world points that span that finger's *pinch plane* -- or None if the
+    checked digits have no measured pinch pose (:func:`config.pinch_pose`).
+
+    The three points are the finger's METACARPAL BASE (rod node 0, where the
+    finger meets the palm), its FINGERTIP (rod node -1, the contact node), and
+    the pinch centroid the checked digits close on. The first two move with the
+    posture; the third is the hand-frame constant from
+    :data:`config.HAND_PINCH_POSES` carried through the solved wrist pose,
+    exactly as :func:`pregrasp_centroid_witness` carries it -- so all fingers
+    share one pinch point and their planes form a fan through it.
+
+    Read it as the plane that finger has to sweep *in* to reach the meeting
+    point: the finger's own curl plane is base + tip plus the flexor's pull
+    direction, and how far this plane tilts out of it is how much of the closure
+    is happening sideways, where the tendons have no authority.
+
+    None rather than a default when the combination was never measured -- the
+    same contract :func:`config.pinch_pose` documents. A per-finger entry is
+    still returned when the three points are COLLINEAR (a finger whose tip
+    happens to point at the centroid); the plane is undefined there, and the
+    renderer -- not this function -- decides what to do about it, since only it
+    knows what it was going to draw.
+
+    Rendering only: nothing here is a constraint the solver saw.
+    """
+    from .config import pinch_pose
+
+    pose = pinch_pose(result.contact_names())
+    if pose is None:
+        return None
+
+    frame = result.frames[k]
+    # Same reconstruction pregrasp_centroid_witness makes: the centroid is in the
+    # WRIST frame, so it only becomes a world point through the SOLVED wrist.
+    T = solved_wrist_pose(get_default_hand_configs(), frame)
+    c_local = np.asarray(pose.centroid, dtype=float).reshape(3)
+    pinch_pt = T[:3, :3] @ c_local + T[:3, 3]
+
+    out = {}
+    for name in result.finger_names:
+        if name not in frame:
+            continue
+        states = frame[name].marginals.rod.states
+        base = np.asarray(states[0].pose.mean, float)[:3, 3]
+        tip = np.asarray(states[-1].pose.mean, float)[:3, 3]
+        out[name] = (base, tip, pinch_pt)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Params / results.
 # ---------------------------------------------------------------------------
