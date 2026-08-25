@@ -15,7 +15,8 @@ compute (``_plotting/tendon_hand_plotter.py``):
 * backbone  -- node translations ``rod.states[n].pose.mean[:3, 3]``.
 * tendons   -- ``R @ hole + t`` for each active hole, with the disc pose
   ``rod.states[tendon_config.disc_pose_idx[disc]]``.
-* discs / collision spheres -- one per disc node (``disc_pose_idx``).
+* discs / disc frames / collision spheres -- one per disc node
+  (``disc_pose_idx``); the frame is the body frame its hole locations are in.
 
 Nodes are addressed by stable scene-tree names; re-adding a name upserts it, and
 handles for a frame's dynamic geometry are tracked so toggled-off / vanished
@@ -130,7 +131,8 @@ class ViserHandScene:
     """
 
     def __init__(self, server, finger_names, *, backbone_width=4.0,
-                 show_discs=False, show_contact_spheres=True,
+                 show_discs=False, show_disc_frames=False,
+                 show_contact_spheres=True,
                  show_collision_spheres=True, show_gap_lines=True,
                  show_finger_planes=False, show_planar_gap=False):
         self.server = server
@@ -138,6 +140,7 @@ class ViserHandScene:
         self.finger_names = list(finger_names)
         self.backbone_width = backbone_width
         self.show_discs = show_discs
+        self.show_disc_frames = show_disc_frames
         self.show_contact_spheres = show_contact_spheres
         self.show_collision_spheres = show_collision_spheres
         self.show_gap_lines = show_gap_lines
@@ -573,6 +576,11 @@ class ViserHandScene:
             if self.show_discs:
                 keep |= self._update_discs(name, fm, poses)
 
+            # The disc nodes' own frames -- what the hole locations, and every
+            # other per-disc quantity, are expressed in.
+            if self.show_disc_frames:
+                keep |= self._update_disc_frames(name, fm, poses)
+
             # Pinch plane through base / tip / pinch centroid.
             if self.show_finger_planes and finger_planes and name in finger_planes:
                 keep |= self._update_finger_plane(name, *finger_planes[name],
@@ -901,6 +909,43 @@ class ViserHandScene:
             mesh.visual.vertex_colors = np.array([*_DISC_RGB, 90], dtype=np.uint8)
             n = f"/hand/{name}/disc/{di}"
             self._dynamic[n] = self.scene.add_mesh_trimesh(n, mesh)
+            keep.add(n)
+        return keep
+
+    def _update_disc_frames(self, name, fm, poses):
+        """A triad on every disc node, in that disc's own body frame.
+
+        This is the frame the routing geometry is written in: a hole location
+        ``tendon_config.hole_locations[disc][tendon]`` is a body-frame vector on
+        this triad, and the world tendon point drawn by :meth:`_update_tendons`
+        is ``R @ hole + t`` off exactly these axes. Seeing them is what turns a
+        wrong-looking tendon path into a readable one -- a routing angle
+        measured from the wrong axis, or a whole finger's discs rolled 180
+        degrees, is invisible in the disc cylinders (rotationally symmetric) and
+        obvious the moment the axes are drawn.
+
+        Unlike :meth:`_update_discs` the BASE disc is included. It is skipped
+        there because its cylinder sits inside the palm and only adds clutter,
+        but its frame is the finger's mounting frame -- the one thing on the
+        chain you can check against the CAD assembly -- so dropping it would
+        hide the frame most worth seeing, and would silently shift the numbering
+        of every triad on screen relative to ``disc_pose_idx``.
+        """
+        keep = set()
+        tc = fm.tendon_config
+        # Sized off the disc rather than fixed: the axes have to read against the
+        # disc they sit on (drawn at 1.3 * routing_radius) at any finger scale,
+        # and just past its rim is where they are legible without swamping the
+        # neighbouring disc.
+        length = 2.0 * tc.routing_radius
+        for di, node_idx in enumerate(tc.disc_pose_idx):
+            T = poses[node_idx]
+            n = f"/hand/{name}/disc_frame/{di}"
+            self._dynamic[n] = self.scene.add_frame(
+                n, show_axes=True, axes_length=float(length),
+                axes_radius=float(length) * 0.04,
+                wxyz=_wxyz_from_R(T[:3, :3]),
+                position=tuple(T[:3, 3]))
             keep.add(n)
         return keep
 

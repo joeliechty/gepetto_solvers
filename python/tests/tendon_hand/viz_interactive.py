@@ -876,6 +876,7 @@ class HandVizApp:
                 self.g_plane_offset.value * np.array(TABLE_NORMAL, float))
         # display toggles
         self.scene.show_discs = self.g_show_discs.value
+        self.scene.show_disc_frames = self.g_show_disc_frames.value
         self.scene.show_contact_spheres = self.g_show_contact.value
         self.scene.show_collision_spheres = self.g_show_collision.value
         self.scene.show_gap_lines = self.g_show_gaps.value
@@ -2086,7 +2087,8 @@ class HandVizApp:
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
                    self.g_show_true_mesh,
                    self.g_show_contact, self.g_show_collision,
-                   self.g_show_discs, self.g_show_world, self.g_show_obj_frame,
+                   self.g_show_discs, self.g_show_disc_frames,
+                   self.g_show_world, self.g_show_obj_frame,
                    self.g_show_table_frame, self.g_show_gaps, self.g_show_mount,
                    self.g_show_finger_planes, self.g_show_planar_gap])
 
@@ -2566,6 +2568,15 @@ class HandVizApp:
             self.g_show_contact = gui.add_checkbox("contact spheres", True)
             self.g_show_collision = gui.add_checkbox("collision spheres", True)
             self.g_show_discs = gui.add_checkbox("routing discs", False)
+            self.g_show_disc_frames = gui.add_checkbox(
+                "disc frames", False,
+                hint="A triad on every disc node of every finger, including the "
+                     "base disc -- the body frame the routing hole locations are "
+                     "expressed in, so the tendon path is those axes plus "
+                     "`R @ hole + t`. Off by default: five fingers' worth of "
+                     "triads is dense, so this is for checking routing "
+                     "orientation (a hole angle measured off the wrong axis is "
+                     "invisible on the rotationally symmetric disc cylinders).")
             # The three frame toggles all default ON: which frame anything is
             # expressed in is the first question asked of this scene, and a
             # triad you have to go and switch on answers it too late.
@@ -2683,6 +2694,7 @@ class HandVizApp:
 
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
+                  self.g_show_disc_frames,
                   self.g_show_gaps, self.g_show_mount, self.g_show_finger_planes,
                   self.g_show_planar_gap):
             h.on_update(lambda _: (self._sync_params(), self._render_frame()))
