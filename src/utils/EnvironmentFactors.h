@@ -180,6 +180,45 @@ struct EnvironmentConfig {
     // SMOOTH-MIN BIAS note for the full trade-off.
     double ellipsoid_set_beta = 1000.0;
 
+    // --- Tendon-aligned in-plane object contact (Eq 11 / Eq 13) ----------
+    // Swap the object CONTACT equality from the full 3D distance to the distance
+    // measured inside the finger's pulling plane -- EllipsoidSetPlanarGapFactor
+    // instead of EllipsoidSetCollisionGapFactor, everything else identical:
+    // the same center-direct form, the same residual convention (zero set
+    // d = contact_node_radius), and the same exemption of the contact sphere from
+    // the Eq 12 collision inequality. Only the distance metric differs.
+    //
+    // COLLISION IS NEVER PROJECTED. Eq 12 keeps the 3D distance for every free
+    // sphere, here and everywhere else: the in-plane distance is always the
+    // LARGER of the two, so an inequality on it would report clearance while the
+    // finger is really inside the object.
+    //
+    // Needs an ellipsoid surface (a set, or ellipsoid_semi_axes, which is used as
+    // a one-member set) -- a baked SDF has no plane cross-section to cut, and
+    // uses_center_direct_contact() rejects the combination rather than silently
+    // contacting something else.
+    bool object_contact_in_plane = false;
+
+    // Eq 11's p_centroid: the point, CONSTANT IN THE WRIST FRAME, where the
+    // participating digits are measured to meet (HAND_PINCH_POSES). Required when
+    // object_contact_in_plane is set -- it is the third point of the plane, and
+    // which point it is depends on which digits are pinching, something the C++
+    // side has no way to know. The other two points are the fingertip (a variable)
+    // and the finger's metacarpal base, which is NOT a field here: that is
+    // hand_base_offsets_[i], the model's own mounting data, so it cannot drift
+    // from where the finger is actually mounted.
+    std::optional<gtsam::Vector3> contact_plane_centroid;
+
+    // The factor's two smoothstep fallback bands, defaulted to its own values.
+    // Exposed here so they can be tuned from Python without a recompile:
+    //   rho in [lo, hi] blends to 3D as the plane stops reaching a member;
+    //   gap in [lo, hi] (metres) blends to 3D as the tip approaches the
+    //   base->centroid axis, where Eq 11's normal stops being defined.
+    double contact_plane_rho_lo = 0.90;
+    double contact_plane_rho_hi = 1.00;
+    double contact_plane_gap_lo = 0.002;
+    double contact_plane_gap_hi = 0.010;
+
     // --- Support plane / "table" (Section 1.6) --------------------------
     // A world-fixed analytic half-space support surface, defined by an origin
     // point and an OUTWARD unit normal: SDF_table(p) = (p - plane_origin) .

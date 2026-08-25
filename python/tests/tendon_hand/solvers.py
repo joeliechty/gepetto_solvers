@@ -156,6 +156,11 @@ def capabilities():
         # the object. Needs a rebuilt binding with
         # EnvironmentConfig.pregrasp_centroid_point.
         "pregrasp_centroid": hasattr(env, "pregrasp_centroid_point"),
+        # Eq 13 in-plane object CONTACT -- the constraint, as opposed to
+        # "planar_gap" below, which is only the query. Separate probes because
+        # they landed separately: a binding can measure the in-plane distance
+        # without being able to solve against it.
+        "planar_contact": hasattr(env, "object_contact_in_plane"),
         # Eq 11/13 tendon-aligned planar distance, as a QUERY -- the visualizer's
         # in-plane overlay. A module-level free function rather than a config
         # field, because nothing in the graph builds this factor yet: it is
@@ -945,6 +950,18 @@ class HandSolveParams:
     # there is nothing to touch and it is silently inert.
     object_contact: bool = True
     table_contact: bool = False
+    # Eq 13: measure the OBJECT contact equality inside each finger's pulling
+    # plane (Eq 11) instead of in 3D. A different distance METRIC for the same
+    # constraint, not an extra constraint -- same center-direct form, same zero
+    # set (d = tip radius), one factor per contact finger either way. So it is
+    # meaningful only with object_contact on, and the two are mutually exclusive
+    # as contact FORMS: the visualizer enforces that with its checkboxes, and a
+    # script setting both gets the in-plane form -- this flag selects the FORM,
+    # object_contact selects whether there is a contact at all.
+    #
+    # Needs an ellipsoid-form object and a measured pinch pose for the checked
+    # digits; attach_contact RAISES rather than falling back if either is missing.
+    object_contact_in_plane: bool = False
     # Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, c_T2] SDF witness contact
     # form (c_N dropped) instead of the default 5-row form. Only affects a
     # non-ellipsoid (SDF) object's witness contact -- inert for the analytic
@@ -1677,13 +1694,24 @@ class HandSolverBase:
         as the terminal contact (``ik_5f_contact.py`` block). Fingers masked off
         get a collision-only env instead -- which is also what every finger gets
         with ``params.object_contact`` off, leaving the object present as
-        collision geometry but with nothing driven onto it."""
+        collision geometry but with nothing driven onto it.
+
+        ``object_contact_in_plane`` selects the contact FORM (Eq 13's in-plane
+        distance in place of the 3D one), so it needs the pinch centroid of the
+        digits actually being CONTACTED -- keyed off the same mask the contact
+        nodes come from, not the raw finger selection, so unchecking a finger
+        moves the plane's third point exactly as it moves the constraint set."""
+        mask = self._object_contact_mask()
+        in_plane = self.params.object_contact and self.params.object_contact_in_plane
+        pinch = pinch_pose_for_mask(self.configs, mask) if in_plane else None
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
-                       contact_fingers=self._object_contact_mask(),
+                       contact_fingers=mask,
                        drop_normal_row=self.params.contact_drop_normal_row,
-                       ellipsoid_set_beta=self.params.ellipsoid_set_beta)
+                       ellipsoid_set_beta=self.params.ellipsoid_set_beta,
+                       in_plane=in_plane,
+                       pinch_centroid=(pinch.centroid if pinch is not None else None))
 
     def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)

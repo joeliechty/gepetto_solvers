@@ -372,6 +372,10 @@ class HandVizApp:
         # per-handle callbacks (live FK, object rebuild) sit out the restore and
         # the one solve at the end of it is the only one that runs.
         self._restoring = False
+        # Latch for the object-contact form guard: it settles the two mutually
+        # exclusive boxes by writing the other one, whose callback lands right
+        # back in the guard. See _enforce_object_contact.
+        self._contact_guard = False
         # Cached YCB catalog/browser state, built lazily by the YCB folder so the
         # app starts without touching the network or the catalog file.
         self._ycb_cache = None
@@ -386,6 +390,10 @@ class HandVizApp:
         server.on_client_connect(lambda client: self._aim_camera(client))
 
         self._build_gui()
+        # Decide up front whether the opening object supports the in-plane
+        # contact form, so the box is never offered live for a scene the solve
+        # would refuse.
+        self._refresh_planar_contact_gate()
         # A cached FK solver so wrist/tension tweaks warm-start (rebuilt on object
         # change only).
         self._rebuild_fk()
@@ -673,6 +681,10 @@ class HandVizApp:
         # _sync_params re-resolves them against the new base pose.
         self.params.object_center, self.params.object_rotation = \
             self._object_pose_from_sliders()
+        # Whether the in-plane contact form is even possible is a property of the
+        # object (it needs an ellipsoid cross-section), so re-decide it here
+        # rather than leaving a live checkbox the next solve would refuse.
+        self._refresh_planar_contact_gate()
         self._rebuild_fk()      # FK solver carries the object for its result/spec
         self._refresh_object()
         self._aim_all_cameras()  # re-center on the new object's location
@@ -812,7 +824,12 @@ class HandVizApp:
         p.passive_tension_sigma = 10.0 ** self.g_passive_sigma.value
         p.ellipsoid_set_beta = float(self.g_set_beta.value)
         p.contact_fingers = [c.value for c in self.g_contacts]
-        p.object_contact = self.g_obj_contact.value
+        p.object_contact = self.g_obj_contact.value or self.g_obj_contact_plane.value
+        # Which FORM, once object contact is on at all. The two boxes are kept
+        # mutually exclusive by _enforce_object_contact, so this cannot be read
+        # as "both": object_contact says whether there is a contact,
+        # object_contact_in_plane says which distance it is measured with.
+        p.object_contact_in_plane = self.g_obj_contact_plane.value
         p.table_contact = self.g_tbl_contact.value
         p.contact_drop_normal_row = self.g_drop_normal_row.value
         p.half_space = self.g_half_space.value
@@ -1145,6 +1162,85 @@ class HandVizApp:
                     f"including the thumb were measured"]
         return []
 
+    def _enforce_object_contact(self, source):
+        """Keep the two object-contact FORMS mutually exclusive.
+
+        3D and in-plane are two metrics for one constraint -- one factor per
+        contact finger either way -- so "both" is not a state the graph has.
+        Rather than silently preferring one at build time, the box you just
+        touched wins and the other clears, which is the same rule stated in the
+        hints and visible the moment you click.
+
+        ``source`` is the handle that changed. Re-entrant by construction (it
+        writes the OTHER handle, whose own callback lands right back here), so
+        it is latched; it also sits out :attr:`_restoring`, since Reset and the
+        phase presets write both boxes as one batch and settle it themselves at
+        the end.
+        """
+        if self._restoring or self._contact_guard:
+            return
+        other = (self.g_obj_contact_plane if source is self.g_obj_contact
+                 else self.g_obj_contact)
+        if not (source.value and other.value):
+            return
+        self._contact_guard = True
+        try:
+            other.value = False
+        finally:
+            self._contact_guard = False
+
+    def _planar_contact_available(self):
+        """``(ok, reason)`` for whether Eq 13 in-plane contact can be built for
+        the scene AS SET UP IN THE GUI -- checked before a solve rather than
+        after, so an impossible request never reaches the solver.
+
+        Mirrors the three refusals in :func:`config.attach_contact` exactly. The
+        two live here as well because the GUI knows the answer while the box is
+        still being offered, and greying a control is a better way to say "not
+        for this object" than an exception after Auto solve."""
+        if not self.caps["planar_contact"]:
+            return False, ("this binding cannot build it (no "
+                           "EnvironmentConfig.object_contact_in_plane)")
+        # Through resolve_scene, so the answer is read off the SAME spec the next
+        # solve will build from rather than a second lookup that could disagree.
+        spec = resolve_scene(self.params)[0]
+        if ellipsoid_members(spec) is None:
+            return False, (f"a `{spec['type']}` object has no ellipsoid "
+                           f"cross-section for the pulling plane to cut")
+        names = [n for n, c in zip(FINGER_LABELS, self.g_contacts) if c.value]
+        if pinch_pose(names) is None:
+            return False, (f"no measured pinch pose for "
+                           f"({', '.join(names) or 'no fingers'}), so Eq 11 has "
+                           f"no centroid to span the plane with")
+        return True, ""
+
+    def _refresh_planar_contact_gate(self):
+        """Grey the in-plane contact box -- and clear it if it was on -- whenever
+        the current object or digit set cannot support it.
+
+        Clearing rather than leaving it checked-but-disabled is deliberate: a
+        ticked box that the next solve would refuse is a lie about what is in the
+        graph. The status line says why (see :meth:`_planar_contact_note`)."""
+        ok, _reason = self._planar_contact_available()
+        self.g_obj_contact_plane.disabled = not ok
+        if not ok and self.g_obj_contact_plane.value:
+            # Only this box is cleared -- the 3D box is deliberately NOT ticked
+            # in compensation. Substituting the other metric for the one that was
+            # asked for is exactly the silent fallback attach_contact refuses to
+            # make; object contact simply goes off, and the status line says why.
+            self._contact_guard = True
+            try:
+                self.g_obj_contact_plane.value = False
+            finally:
+                self._contact_guard = False
+
+    def _planar_contact_note(self):
+        """Say why the in-plane contact box is greyed, when it is."""
+        ok, reason = self._planar_contact_available()
+        if ok:
+            return []
+        return [f"*in-plane object contact unavailable: {reason}*"]
+
     def _planar_gap_note(self):
         """Say when the in-plane overlay is on but has nothing to measure.
 
@@ -1313,6 +1409,7 @@ class HandVizApp:
         lines.extend(self._wrist_gauge_note())
         lines.extend(self._pinch_note())
         lines.extend(self._finger_plane_note())
+        lines.extend(self._planar_contact_note())
         lines.extend(self._planar_gap_note())
         lines.extend(self._object_size_note())
         self._set_status("  \n".join(lines))
@@ -1757,6 +1854,7 @@ class HandVizApp:
         self.params = self._fresh_params()
         self.warm_start = False     # a button, so not in _gui_defaults
         self._refresh_warm_start()
+        self._refresh_planar_contact_gate()   # restored object may not support it
         self._sync_params()
         self._rebuild_fk()          # also drops the stepper
         self._refresh_object()
@@ -1773,6 +1871,7 @@ class HandVizApp:
         which :meth:`_apply_phase_preset` special-cases itself)."""
         return {
             "object_contact": self.g_obj_contact,
+            "object_contact_in_plane": self.g_obj_contact_plane,
             "table_contact": self.g_tbl_contact,
             "collision": self.g_collision,
             "self_collision": self.g_self_collision,
@@ -1800,6 +1899,18 @@ class HandVizApp:
                 if field == "contact_fingers":
                     for handle, v in zip(self.g_contacts, value):
                         handle.value = bool(v)
+                elif field == "object_contact":
+                    # A preset says WHETHER the object is contacted; it has no
+                    # opinion on which metric, so the form the user picked
+                    # survives it. Off clears both boxes (otherwise a checked
+                    # in-plane form would keep contact alive through a phase that
+                    # asked for none); on writes the 3D box only if no form is
+                    # selected yet.
+                    if not value:
+                        self.g_obj_contact.value = False
+                        self.g_obj_contact_plane.value = False
+                    elif not self.g_obj_contact_plane.value:
+                        self.g_obj_contact.value = True
                 elif field == "sigma_wrist_pos":
                     self.g_sig_pos.value = math.log10(value)
                 elif field == "sigma_wrist_rot":
@@ -1810,6 +1921,11 @@ class HandVizApp:
                     self._preset_widget(field).value = value
         finally:
             self._restoring = False
+        # The batch write above ran with every per-handle callback suppressed, so
+        # The batch ran with every per-handle callback suppressed, and a preset's
+        # contact_fingers may have just taken the thumb away -- which is what the
+        # in-plane form's plane is keyed off.
+        self._refresh_planar_contact_gate()
         self._sync_params()
         self._invalidate_stepper()
         self._refresh_object()
@@ -1957,7 +2073,8 @@ class HandVizApp:
                 + self.g_flexors
                 + [self.g_flexor_sigma, self.g_passive_sigma,
                    self.g_phase0, self.g_phase1, self.g_phase2]
-                + [self.g_obj_contact, self.g_tbl_contact, self.g_drop_normal_row,
+                + [self.g_obj_contact, self.g_obj_contact_plane,
+                   self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_half_sides, self.g_half_margin,
                    self.g_pregrasp_center, self.g_h_clear,
                    self.g_pregrasp_centroid, self.g_axis_align]
@@ -2265,11 +2382,28 @@ class HandVizApp:
                     if self.caps["table"]
                     else "requires a newer _crest_sparse build (plane env fields)")
                 self.g_obj_contact = gui.add_checkbox(
-                    "object contact", True,
+                    "object contact (3D)", True,
                     hint="Drive the checked fingertips onto the OBJECT "
-                         "surface. Turn off to leave the object as pure "
-                         "collision geometry -- the way to see what the "
-                         "table constraints do on their own.")
+                         "surface, measuring the full 3D distance to it. Turn "
+                         "off to leave the object as pure collision geometry -- "
+                         "the way to see what the table constraints do on their "
+                         "own. Mutually exclusive with the in-plane form below: "
+                         "they are two metrics for the SAME constraint, so "
+                         "checking one clears the other.")
+                self.g_obj_contact_plane = gui.add_checkbox(
+                    "object contact (in-plane)", False,
+                    disabled=not self.caps["planar_contact"],
+                    hint="Eq 13: the same fingertip-onto-object equality, but "
+                         "with the distance measured inside each finger's "
+                         "pulling plane (Eq 11: metacarpal base, fingertip, "
+                         "pinch centroid) -- the plane a tendon can actually "
+                         "pull along, so the solve is not asked for "
+                         "out-of-plane torsion the hand cannot produce. Same "
+                         "factor count and the same zero set (distance = tip "
+                         "radius); only the metric differs. Needs an ellipsoid "
+                         "or ycb: object and a digit set INCLUDING THE THUMB, "
+                         "and greys out when the scene cannot support it. "
+                         "Watch it with 'in-plane distance' under Display.")
                 self.g_tbl_contact = gui.add_checkbox(
                     "table contact", False,
                     hint="Drive the checked fingertips onto the SUPPORT "
@@ -2558,7 +2692,18 @@ class HandVizApp:
         # until then. They do change the stepper's constraint set, though -- which
         # surface a finger is driven onto IS that set, so a carried dual is
         # meaningless and the loop has to restart.
-        for h in self.g_contacts + [self.g_obj_contact, self.g_tbl_contact]:
+        # The two object-contact FORMS additionally settle each other first (they
+        # are mutually exclusive), and the per-finger boxes re-check whether the
+        # in-plane form is still buildable -- its plane is keyed off the pinch
+        # centroid of exactly these digits, so unchecking the thumb can take it
+        # away.
+        for h in (self.g_obj_contact, self.g_obj_contact_plane):
+            h.on_update(lambda _, src=h: self._enforce_object_contact(src))
+        for h in self.g_contacts:
+            h.on_update(lambda _: self._refresh_planar_contact_gate())
+        for h in (self.g_contacts
+                  + [self.g_obj_contact, self.g_obj_contact_plane,
+                     self.g_tbl_contact]):
             h.on_update(lambda _: (self._sync_params(),
                                    self._invalidate_stepper(),
                                    self._render_frame()))

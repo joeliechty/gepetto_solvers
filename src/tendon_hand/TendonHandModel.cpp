@@ -177,6 +177,31 @@ bool TendonHandModel::uses_center_direct_contact(
     // Collision-only env: no object contact of any kind to choose a form for.
     if (!env.target_contact_node.has_value()) return false;
 
+    // In-plane contact (Eq 13) is a center-direct form -- it constrains the tip
+    // sphere's CENTER, with no witness variable -- so it is decided here with the
+    // others. Its two incompatibilities are rejected rather than ignored, on the
+    // same reasoning as the ellipsoid_set case below: silently dropping the
+    // caller's request would solve a different problem than the one asked for.
+    if (env.object_contact_in_plane) {
+        if (env.contact_drop_normal_row || env.witness_target)
+            throw std::invalid_argument(
+                "TendonHandModel: contact_drop_normal_row / witness_target select a "
+                "witness-point contact form, which the in-plane contact (Eq 13) is "
+                "not -- it constrains the sphere center against the plane's "
+                "cross-section. Clear them, or clear object_contact_in_plane.");
+        if (env.ellipsoid_set.empty() && env.ellipsoid_semi_axes.norm() <= 0.0)
+            throw std::invalid_argument(
+                "TendonHandModel: object_contact_in_plane needs an ellipsoid surface "
+                "(ellipsoid_set or ellipsoid_semi_axes) -- a baked SDF has no "
+                "closed-form cross-section for the pulling plane to cut.");
+        if (!env.contact_plane_centroid.has_value())
+            throw std::invalid_argument(
+                "TendonHandModel: object_contact_in_plane needs "
+                "contact_plane_centroid, the wrist-frame point Eq 11 spans the "
+                "pulling plane with; without it the plane is undefined.");
+        return true;
+    }
+
     // An ellipsoid SET (§1.2) has no witness form at all -- the paper defines only
     // the center-direct equality Eq 1.13 for it, and there is no
     // EllipsoidSetWitnessContactFactor to fall back to. So this is not a default
@@ -305,7 +330,44 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 if (uses_center_direct_contact(env)) {
                     gtsam::NoiseModelFactor::shared_ptr center_contact;
                     std::string tag;
-                    if (!env.ellipsoid_set.empty()) {
+                    if (env.object_contact_in_plane) {
+                        // Eq 13: the same center-direct equality, with the
+                        // distance measured inside the finger's pulling plane
+                        // (Eq 11) instead of in 3D. A single analytic ellipsoid
+                        // goes in as a one-member set -- K=1 with an identity
+                        // local_pose reduces exactly to it, so there is one code
+                        // path rather than two.
+                        //
+                        // The plane's third point, the metacarpal base, is taken
+                        // from hand_base_offsets_[i] rather than from the env:
+                        // it IS this finger's mounting offset, so reading it here
+                        // makes it impossible for the plane to be built about a
+                        // base the finger is not actually on.
+                        std::vector<crest_sparse::EllipsoidPrimitive> members;
+                        if (!env.ellipsoid_set.empty()) {
+                            members = env.ellipsoid_set;
+                        } else {
+                            crest_sparse::EllipsoidPrimitive one;
+                            one.semi_axes = env.ellipsoid_semi_axes;
+                            members.push_back(one);
+                        }
+                        center_contact =
+                            std::make_shared<crest_sparse::EllipsoidSetPlanarGapFactor>(
+                                tip_key, object_key(), wrist_key(step_),
+                                env.contact_node_radius, members,
+                                env.ellipsoid_set_beta,
+                                hand_base_offsets_[i].translation(),
+                                gtsam::Point3(*env.contact_plane_centroid),
+                                noiseModel::Isotropic::Sigma(1, 1.0),
+                                env.contact_plane_rho_lo, env.contact_plane_rho_hi,
+                                env.contact_plane_gap_lo, env.contact_plane_gap_hi);
+                        // Its own tag, and that matters twice over:
+                        // get_factor_error_summary() tells the two forms apart,
+                        // and the AL dual transfer matches by tag -- so switching
+                        // forms correctly DROPS the old multipliers instead of
+                        // carrying them onto a constraint that means something else.
+                        tag = "obj.planar|f" + std::to_string(i);
+                    } else if (!env.ellipsoid_set.empty()) {
                         // Ellipsoid SET (§1.2, Eq 1.13): the same center-direct
                         // equality against the smooth-min distance to the union.
                         // Its own tag, so get_factor_error_summary() tells the two

@@ -120,6 +120,19 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("ellipsoid_semi_axes", &crest_sparse::EnvironmentConfig::ellipsoid_semi_axes)
         .def_readwrite("ellipsoid_set",       &crest_sparse::EnvironmentConfig::ellipsoid_set)
         .def_readwrite("ellipsoid_set_beta",  &crest_sparse::EnvironmentConfig::ellipsoid_set_beta)
+        // --- Tendon-aligned in-plane object contact (Eq 11 / Eq 13) ---
+        .def_readwrite("object_contact_in_plane",
+                       &crest_sparse::EnvironmentConfig::object_contact_in_plane)
+        .def_readwrite("contact_plane_centroid",
+                       &crest_sparse::EnvironmentConfig::contact_plane_centroid)
+        .def_readwrite("contact_plane_rho_lo",
+                       &crest_sparse::EnvironmentConfig::contact_plane_rho_lo)
+        .def_readwrite("contact_plane_rho_hi",
+                       &crest_sparse::EnvironmentConfig::contact_plane_rho_hi)
+        .def_readwrite("contact_plane_gap_lo",
+                       &crest_sparse::EnvironmentConfig::contact_plane_gap_lo)
+        .def_readwrite("contact_plane_gap_hi",
+                       &crest_sparse::EnvironmentConfig::contact_plane_gap_hi)
         .def_readwrite("plane_origin",        &crest_sparse::EnvironmentConfig::plane_origin)
         .def_readwrite("plane_normal",        &crest_sparse::EnvironmentConfig::plane_normal)
         .def_readwrite("plane_avoidance",     &crest_sparse::EnvironmentConfig::plane_avoidance)
