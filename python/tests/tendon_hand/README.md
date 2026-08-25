@@ -550,7 +550,12 @@ pinch-centroid centering and short-axis alignment, wrist prior loosened to 1.0 s
 the hand can actually travel), `phase1` support contact (table contact on, all three
 pre-grasp constraints off, wrist tightened to 0.01 to settle), `phase2` object
 approach (object *and* table contact, wrist loose again at 1.0). `phase3` is not
-written yet. A preset touches **only** the fields it lists — wrist pose, flexor
+written yet. Both contact phases set `plane_avoidance=False` — a deliberate
+departure from the paper, which keeps the table collision inequality on
+throughout: phases 1 and 2 drive the fingers **onto** the plane, so the
+avoidance half-space would be fighting the contact those phases exist to make.
+`table` itself stays on (`table_contact` is built against that plane), and
+object/finger–finger collision are untouched. A preset touches **only** the fields it lists — wrist pose, flexor
 tensions, AL sliders and table height stay wherever the caller left them,
 because those are solver knobs rather than part of what defines a phase — and
 `apply_phase_preset` raises on an override naming a field `HandSolveParams`

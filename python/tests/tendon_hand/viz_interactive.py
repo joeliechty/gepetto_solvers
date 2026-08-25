@@ -2195,19 +2195,26 @@ class HandVizApp:
             self.g_phase1 = gui.add_checkbox(
                 PHASE_PRESETS["phase1"].label, False,
                 hint="Apply the phase-1 preset: table contact ON (object "
-                     "contact stays off), the three pre-grasp constraints "
-                     "(opposition half-space, centering, short-axis "
-                     "alignment) turned back OFF now that they've done their "
-                     "job, and a tighter wrist prior than phase 0 (held "
-                     "closer to where it ended up, not free to roam). Same "
-                     "3-finger pinch. Writes straight onto the "
-                     "Constraints/Wrist controls -- check this, then press "
-                     "Auto solve. Unchecking is a no-op.")
+                     "contact stays off), table COLLISION avoidance OFF -- a "
+                     "deliberate departure from the paper, since this phase "
+                     "drives the fingers onto the plane the avoidance "
+                     "half-space would push them off (the table itself stays "
+                     "on; object/self collision are untouched) -- the three "
+                     "pre-grasp constraints (opposition half-space, "
+                     "centering, short-axis alignment) turned back OFF now "
+                     "that they've done their job, and a tighter wrist prior "
+                     "than phase 0 (held closer to where it ended up, not "
+                     "free to roam). Same 3-finger pinch. Writes straight "
+                     "onto the Constraints/Wrist controls -- check this, then "
+                     "press Auto solve. Unchecking is a no-op.")
             self.g_phase2 = gui.add_checkbox(
                 PHASE_PRESETS["phase2"].label, False,
                 hint="Apply the phase-2 preset: object contact turned back "
                      "ON alongside table contact (approaching the object "
-                     "while still sliding on the table), pre-grasp "
+                     "while still sliding on the table), table collision "
+                     "avoidance still OFF as in phase 1 (contact with the "
+                     "plane is maintained here, so the half-space would "
+                     "fight it; object collision stays on), pre-grasp "
                      "constraints still off, and the wrist prior loosened "
                      "back to phase 0's level -- object approach is another "
                      "significant motion, not phase 1's small settle. Same "
@@ -2476,7 +2483,11 @@ class HandVizApp:
                      "on screen. Needs a measured pinch pose, so only digit "
                      "sets INCLUDING THE THUMB draw anything.")
             self.g_show_planar_gap = gui.add_checkbox(
-                "in-plane distance", False,
+                # On by default, but only where the binding can actually
+                # measure it: a hard True would tick a DISABLED box on an
+                # older .so, and the readout would then permanently report
+                # "in-plane distance: UNAVAILABLE" with no way to turn it off.
+                "in-plane distance", self.caps["planar_gap"],
                 disabled=not self.caps["planar_gap"],
                 hint="Eq 11/13: the distance from each fingertip to the object "
                      "measured INSIDE that finger's pulling plane, which is what "
@@ -2488,7 +2499,8 @@ class HandVizApp:
                      "missed the object entirely and the number has fallen back "
                      "to the ordinary 3D distance. Spheres, ellipsoids and ycb: "
                      "sets only -- cube/cylinder/capsule have no ellipsoid "
-                     "cross-section. Measurement only: no solve uses this yet.")
+                     "cross-section. On by default wherever the binding "
+                     "supports it. Measurement only: no solve uses this yet.")
 
         # Every value-carrying control, captured as built: this IS the definition
         # of "defaults" that Reset restores, so the two cannot drift.

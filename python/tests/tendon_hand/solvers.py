@@ -1559,7 +1559,12 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             table_contact=True,
             collision=True,
             table=True,
-            plane_avoidance=True,
+            # Table COLLISION off (a deliberate departure from the paper, which
+            # keeps it on): phase 1 drives the fingers deliberately onto the
+            # plane, so the avoidance half-space is pushing against the very
+            # contact this phase exists to make. `table` stays on -- the plane
+            # itself is still needed, table_contact is built against it.
+            plane_avoidance=False,
             # The three pre-grasp-only constraints did their job getting the
             # hand into position in phase 0; phase 1 slides the fingers onto
             # the table and doesn't need them anymore.
@@ -1589,7 +1594,11 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             table_contact=True,
             collision=True,
             table=True,
-            plane_avoidance=True,
+            # Off for the same reason as phase 1: table contact is maintained
+            # here, so the avoidance half-space would fight it. Object
+            # collision (`collision`) stays on -- only the PLANE's avoidance
+            # is dropped.
+            plane_avoidance=False,
             half_space=False,
             pregrasp_center=False,
             pregrasp_axis_align=False,
