@@ -533,6 +533,96 @@ def primitive_surface_witness(p_local, spec, *, h=1e-6):
     return float(d), x - d * n, n
 
 
+def ellipsoid_members(spec):
+    """The object as a list of analytic ellipsoids -- ``[(semi_axes, R, center), ...]``
+    in the OBJECT frame -- or None for a primitive that has no such form.
+
+    One entry for an ``ellipsoid`` or a ``sphere`` (both with an identity member
+    pose), one per member for an ``ellipsoid_set``. None for ``cube`` /
+    ``cylinder`` / ``capsule``: they have no closed-form ellipsoid cross-section,
+    and the C++ planar factor takes an ellipsoid set, so there is nothing to hand
+    it.
+
+    A ``sphere`` is answered analytically whether or not it also carries a baked
+    ``vdb`` grid -- the same approximation :meth:`HandResult.contact_witness`
+    already makes, measuring the analytic look-alike rather than the .vdb, and it
+    differs only inside the grid's edge fillets.
+
+    This is the ellipsoid-set view of an object, which is exactly what
+    :func:`attach_ellipsoid_set` writes into the env -- kept next to it so the two
+    cannot disagree about what a spec's members are.
+    """
+    if spec["type"] == "ellipsoid":
+        return [(np.asarray(spec["semi_axes"], dtype=float), np.eye(3), np.zeros(3))]
+    if spec["type"] == "sphere":
+        r = float(spec["radius"])
+        return [(np.array([r, r, r]), np.eye(3), np.zeros(3))]
+    if spec["type"] == "ellipsoid_set":
+        return [(np.asarray(m["semi_axes"], dtype=float),
+                 np.asarray(m["rotation"], dtype=float),
+                 np.asarray(m["center"], dtype=float))
+                for m in spec["members"]]
+    return None
+
+
+def plane_ellipse_section(semi_axes, rotation, center, plane_point, plane_normal,
+                          *, num=96):
+    """Sample the ellipse where a plane cuts one ellipsoid, or None if it misses.
+
+    Everything is in ONE frame (the caller's -- the visualizer passes world, having
+    already composed the object pose with the member's local pose): ``rotation`` and
+    ``center`` place the ellipsoid, ``plane_point``/``plane_normal`` the plane.
+    Returns an ``(num, 3)`` array of points on the intersection curve, closed
+    (last point repeats the first) so it draws as a loop.
+
+    This is the picture of ``G_planar`` in Eq 13 -- the 2D cross-section the in-plane
+    distance is measured against. It is EXACT, unlike the factor's Taubin distance to
+    it, which is the whole reason to draw it: the outline says where the cross-section
+    really is, the factor's number says what the solver would think.
+
+    Method: write points in the plane as ``p = c0 + u e1 + v e2`` and substitute into
+    ``q^T M q = 1``. That gives a 2D conic ``[u v] Q [u v]^T + 2 [D E] [u v]^T + F``
+    with ``Q`` positive definite (M is), so the section is an ellipse, an empty set,
+    or a point. Completing the square gives its centre; eigen-decomposing ``Q`` gives
+    its axes.
+    """
+    a = np.asarray(semi_axes, dtype=float).reshape(3)
+    R = np.asarray(rotation, dtype=float).reshape(3, 3)
+    c = np.asarray(center, dtype=float).reshape(3)
+    q0 = np.asarray(plane_point, dtype=float).reshape(3) - c
+    n = np.asarray(plane_normal, dtype=float).reshape(3)
+    n = n / (np.linalg.norm(n) or 1.0)
+
+    M = R @ np.diag(1.0 / (a * a)) @ R.T
+
+    # Any orthonormal in-plane basis will do -- the curve is the same set of points
+    # whichever one is chosen; only the sampling phase changes.
+    e1 = np.cross(n, [1.0, 0.0, 0.0])
+    if np.linalg.norm(e1) < 1e-8:
+        e1 = np.cross(n, [0.0, 1.0, 0.0])
+    e1 = e1 / np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+
+    Q = np.array([[e1 @ M @ e1, e1 @ M @ e2],
+                  [e2 @ M @ e1, e2 @ M @ e2]])
+    b = np.array([e1 @ M @ q0, e2 @ M @ q0])
+    F = float(q0 @ M @ q0) - 1.0
+
+    p0 = -np.linalg.solve(Q, b)          # section centre, in (u, v)
+    F0 = F + float(b @ p0)               # value at that centre
+    if F0 >= 0.0:
+        return None                      # the plane misses this ellipsoid
+
+    evals, evecs = np.linalg.eigh(Q)
+    if np.any(evals <= 0.0):
+        return None                      # degenerate; nothing sensible to draw
+    radii = np.sqrt(-F0 / evals)
+
+    t = np.linspace(0.0, 2.0 * np.pi, num)
+    uv = p0 + (evecs @ np.stack([radii[0] * np.cos(t), radii[1] * np.sin(t)])).T
+    return c + q0 + uv[:, :1] * e1 + uv[:, 1:] * e2
+
+
 def configure_object_surface(env, spec, objects_dir, primitive_name):
     """Attach the object surface to a ``crest_sparse.EnvironmentConfig`` from a
     primitive spec: an analytic hyper-ellipsoid (Section 1.6.3, no VDB) or a

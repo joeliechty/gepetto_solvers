@@ -76,15 +76,17 @@ import numpy as np
 from .scene import (get_primitive_specs, ycb_primitive_specs, proxy_semi_axes,
                     GRASP_FLEXOR_TENSION, TABLE_NORMAL, ELLIPSOID_SET_BETA,
                     TABLE_SPAN, TABLE_THICKNESS, table_corner,
-                    object_principal_inplane_axis, INPLANE_DEGENERACY_RATIO)
+                    object_principal_inplane_axis, INPLANE_DEGENERACY_RATIO,
+                    ellipsoid_members)
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, capabilities,
     euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
     default_object_center,
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
-    pregrasp_centroid_witness, finger_plane_witness, default_half_space_axis,
-    PHASE_PRESETS, FLEXOR_IDX, DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
+    pregrasp_centroid_witness, finger_plane_witness, planar_gap_witness,
+    default_half_space_axis, PHASE_PRESETS, FLEXOR_IDX,
+    DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 from .config import pinch_pose
 from .mount import MOUNT_WRIST_XYZ, MOUNT_WRIST_RPY, measured_mount_pose
 
@@ -861,6 +863,7 @@ class HandVizApp:
         self.scene.show_collision_spheres = self.g_show_collision.value
         self.scene.show_gap_lines = self.g_show_gaps.value
         self.scene.show_finger_planes = self.g_show_finger_planes.value
+        self.scene.show_planar_gap = self.g_show_planar_gap.value
 
     def _table_origin(self):
         """The rendered slab's origin -- reads straight off ``params.plane_origin``,
@@ -966,6 +969,13 @@ class HandVizApp:
         # when nothing is enforcing anything about it.
         planes = (finger_plane_witness(res, 0)
                   if self.g_show_finger_planes.value else None)
+        # Same gating, one step further: the in-plane distance also needs a
+        # binding that can evaluate the factor and an object with an analytic
+        # ellipsoid form. planar_gap_witness returns None on either, so the
+        # overlay simply does not appear rather than the render failing.
+        planar = (planar_gap_witness(self.params, res, 0)
+                  if (self.g_show_planar_gap.value and self.caps["planar_gap"])
+                  else None)
         self._report_iterate(live)
         self.scene.update(res.frames[0],
                           tip_radii=res.tip_radii,
@@ -983,7 +993,8 @@ class HandVizApp:
                           center_gap=center_gap,
                           axis_align=axis_align,
                           centroid_gap=centroid_gap,
-                          finger_planes=planes)
+                          finger_planes=planes,
+                          planar_gaps=planar)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -1134,6 +1145,30 @@ class HandVizApp:
                     f"including the thumb were measured"]
         return []
 
+    def _planar_gap_note(self):
+        """Say when the in-plane overlay is on but has nothing to measure.
+
+        Three ways to get an empty overlay, none of them a failure: a binding
+        that cannot evaluate the factor, an object with no ellipsoid form
+        (cube/cylinder/capsule -- the factor takes an ellipsoid set), or solved
+        digits with no measured pinch pose, which leaves Eq 11 without its
+        centroid and so without a plane."""
+        if not self.g_show_planar_gap.value or self.result is None:
+            return []
+        if not self.caps["planar_gap"]:
+            return ["**in-plane distance: UNAVAILABLE** -- this binding has no "
+                    "`ellipsoid_set_planar_gap`; rebuild it (`pip install .` "
+                    "from the crest-sparse root)"]
+        if ellipsoid_members(self.result.spec) is None:
+            return [f"**in-plane distance: NOTHING DRAWN** -- a "
+                    f"`{self.result.spec['type']}` object has no ellipsoid "
+                    f"cross-section; use a sphere, an ellipsoid or a ycb: object"]
+        if pinch_pose(self.result.contact_names()) is None:
+            return ["**in-plane distance: NOTHING DRAWN** -- no measured pinch "
+                    "pose for the solved digits, so Eq 11 has no plane to cut "
+                    "the object with"]
+        return []
+
     def _half_space_note(self):
         """The opposition half-space's own status line: inert when no finger is
         checked for it, and the standoff it is holding when there is one.
@@ -1278,6 +1313,7 @@ class HandVizApp:
         lines.extend(self._wrist_gauge_note())
         lines.extend(self._pinch_note())
         lines.extend(self._finger_plane_note())
+        lines.extend(self._planar_gap_note())
         lines.extend(self._object_size_note())
         self._set_status("  \n".join(lines))
 
@@ -1935,7 +1971,7 @@ class HandVizApp:
                    self.g_show_contact, self.g_show_collision,
                    self.g_show_discs, self.g_show_world, self.g_show_obj_frame,
                    self.g_show_table_frame, self.g_show_gaps, self.g_show_mount,
-                   self.g_show_finger_planes])
+                   self.g_show_finger_planes, self.g_show_planar_gap])
 
     def _build_gui(self):
         gui = self.server.gui
@@ -2439,6 +2475,20 @@ class HandVizApp:
                      "Nothing enforces these planes; they describe the posture "
                      "on screen. Needs a measured pinch pose, so only digit "
                      "sets INCLUDING THE THUMB draw anything.")
+            self.g_show_planar_gap = gui.add_checkbox(
+                "in-plane distance", False,
+                disabled=not self.caps["planar_gap"],
+                hint="Eq 11/13: the distance from each fingertip to the object "
+                     "measured INSIDE that finger's pulling plane, which is what "
+                     "a tendon can actually pull along. Draws the cross-section "
+                     "the plane cuts out of the object (exact) plus a line to the "
+                     "nearest point on it; the mm label is the C++ factor's own "
+                     "first-order value, so a visible mismatch between line and "
+                     "label IS the approximation error. '(3D)' means the plane "
+                     "missed the object entirely and the number has fallen back "
+                     "to the ordinary 3D distance. Spheres, ellipsoids and ycb: "
+                     "sets only -- cube/cylinder/capsule have no ellipsoid "
+                     "cross-section. Measurement only: no solve uses this yet.")
 
         # Every value-carrying control, captured as built: this IS the definition
         # of "defaults" that Reset restores, so the two cannot drift.
@@ -2487,7 +2537,8 @@ class HandVizApp:
 
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
-                  self.g_show_gaps, self.g_show_mount, self.g_show_finger_planes):
+                  self.g_show_gaps, self.g_show_mount, self.g_show_finger_planes,
+                  self.g_show_planar_gap):
             h.on_update(lambda _: (self._sync_params(), self._render_frame()))
         # The contact checkboxes ride along only to keep self.params in sync;
         # like every other solver knob they take effect on the next solve, and

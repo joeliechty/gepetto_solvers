@@ -132,7 +132,7 @@ class ViserHandScene:
     def __init__(self, server, finger_names, *, backbone_width=4.0,
                  show_discs=False, show_contact_spheres=True,
                  show_collision_spheres=True, show_gap_lines=True,
-                 show_finger_planes=False):
+                 show_finger_planes=False, show_planar_gap=False):
         self.server = server
         self.scene = server.scene
         self.finger_names = list(finger_names)
@@ -145,6 +145,7 @@ class ViserHandScene:
         # grasp hide the fingertips and the object surface behind them, so this
         # is something you switch on to answer a question, not scene furniture.
         self.show_finger_planes = show_finger_planes
+        self.show_planar_gap = show_planar_gap
 
         # name -> handle, for dynamic (per-frame) geometry so we can prune it.
         self._dynamic = {}
@@ -462,7 +463,7 @@ class ViserHandScene:
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
                collision=False, gaps=None, table_gaps=None,
                half_space_gaps=None, center_gap=None, axis_align=None,
-               centroid_gap=None, finger_planes=None):
+               centroid_gap=None, finger_planes=None, planar_gaps=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
 
@@ -510,6 +511,12 @@ class ViserHandScene:
         (``self.show_finger_planes``) rather than riding on the gap toggle,
         because it is opaque geometry rather than a thin measurement line -- it
         occludes the very contact it is drawn around.
+
+        ``planar_gaps`` is the IN-PLANE distance overlay that goes with it: a
+        ``{finger: solvers.PlanarGap}`` map (from ``solvers.planar_gap_witness``)
+        or None, drawn under ``self.show_planar_gap``. Separate switch again,
+        and separate from the plane patches too -- the cross-sections are worth
+        looking at without five translucent sheets over them.
 
         Rendering only -- nothing here feeds the solver."""
         keep = set()
@@ -570,6 +577,11 @@ class ViserHandScene:
             if self.show_finger_planes and finger_planes and name in finger_planes:
                 keep |= self._update_finger_plane(name, *finger_planes[name],
                                                   rgb=plane_rgb[name])
+
+            # What the object looks like inside that plane, and how far away it is.
+            if self.show_planar_gap and planar_gaps and name in planar_gaps:
+                keep |= self._update_planar_gap(name, planar_gaps[name],
+                                                rgb=plane_rgb[name])
 
         # Pre-grasp centering (Eq 2.18-2.19): a HAND-level overlay, drawn once
         # rather than per finger.
@@ -814,6 +826,50 @@ class ViserHandScene:
         lb = f"/hand/{name}/pinch_plane/label"
         self._dynamic[lb] = self.scene.add_label(
             lb, name, position=tuple(p.mean(axis=0)), anchor="center-center")
+        keep.add(lb)
+        return keep
+
+    def _update_planar_gap(self, name, gap, *, rgb):
+        """One finger's in-plane distance (Eq 11 / Eq 13): the cross-section the
+        pulling plane cuts out of the object, and the distance to it.
+
+        Three pieces, each saying a different thing:
+
+        * the cross-section outlines -- ``G_planar``, drawn in the finger's own
+          plane colour so it is obvious which plane cut them. This is EXACT
+          geometry;
+        * the line from the contact sphere to the nearest point on that outline,
+          coloured near/far like every other gap overlay;
+        * the label, which is the FACTOR's number, not the line's length. The two
+          differ by the Taubin approximation error, and seeing that difference is
+          the point of drawing both. In fallback (the plane missed everything, or
+          it is degenerate) the label says so, because then the number is the
+          ordinary 3D distance and the plane is not involved at all.
+        """
+        keep = set()
+        for index, curve in enumerate(gap.sections):
+            pts = np.asarray(curve, float)
+            sn = f"/hand/{name}/planar_gap/section/{index}"
+            self._dynamic[sn] = self.scene.add_line_segments(
+                sn, np.stack([pts[:-1], pts[1:]], axis=1), colors=rgb,
+                line_width=2.0)
+            keep.add(sn)
+
+        p0 = np.asarray(gap.sphere_pt, float).reshape(3)
+        p1 = np.asarray(gap.foot, float).reshape(3)
+        rgb_line = _GAP_NEAR_RGB if gap.gap < GAP_GREEN_MAX_M else _GAP_FAR_RGB
+
+        ln = f"/hand/{name}/planar_gap/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb_line, line_width=3.0)
+        keep.add(ln)
+
+        text = f"{gap.gap * 1000.0:.1f} mm"
+        if gap.fallback:
+            text += " (3D)"
+        lb = f"/hand/{name}/planar_gap/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, text, position=tuple(0.5 * (p0 + p1)), anchor="center-center")
         keep.add(lb)
         return keep
 

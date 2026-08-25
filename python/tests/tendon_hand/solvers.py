@@ -156,6 +156,12 @@ def capabilities():
         # the object. Needs a rebuilt binding with
         # EnvironmentConfig.pregrasp_centroid_point.
         "pregrasp_centroid": hasattr(env, "pregrasp_centroid_point"),
+        # Eq 11/13 tendon-aligned planar distance, as a QUERY -- the visualizer's
+        # in-plane overlay. A module-level free function rather than a config
+        # field, because nothing in the graph builds this factor yet: it is
+        # measurement only, so a binding without it loses the overlay and
+        # nothing else.
+        "planar_gap": hasattr(crest_sparse, "ellipsoid_set_planar_gap"),
         # Whether TendonHandSolver.solve releases the GIL while the C++ solve
         # runs. Without it the whole interpreter is frozen for the duration of
         # every AL outer iteration (~1.4 s measured), so the visualizer's E-STOP
@@ -717,6 +723,139 @@ def finger_plane_witness(result, k=0):
         base = np.asarray(states[0].pose.mean, float)[:3, 3]
         tip = np.asarray(states[-1].pose.mean, float)[:3, 3]
         out[name] = (base, tip, pinch_pt)
+    return out
+
+
+class PlanarGap(NamedTuple):
+    """One finger's tendon-aligned in-plane distance readout (Eq 11 / Eq 13).
+
+    ``sphere_pt``  world point on the contact sphere's surface, aimed at ``foot``
+                   -- the same convention :meth:`HandResult.contact_witness` uses,
+                   so the two overlays start from the same place.
+    ``foot``       the EXACT nearest point on the drawn cross-section (or, in
+                   fallback, the exact 3D surface witness).
+    ``gap``        the FACTOR's number, as a surface gap: ``d_planar - r``, zero at
+                   Eq 13's zero set, negative once the sphere is through the
+                   cross-section.
+    ``fallback``   True when no member is being measured in-plane -- the plane
+                   missed everything, or it is degenerate -- so ``gap`` is the
+                   ordinary 3D distance and the plane is telling you nothing.
+    ``sections``   one ``(N, 3)`` world polyline per member the plane actually
+                   cuts; empty in fallback.
+
+    Note the deliberate split: the LINE is exact geometry, the LABEL is the
+    factor's first-order approximation of it. Where they visibly disagree, that
+    disagreement is the approximation error the solver would be working with,
+    which is the thing worth being able to see.
+    """
+    sphere_pt: np.ndarray
+    foot: np.ndarray
+    gap: float
+    fallback: bool
+    sections: list
+
+
+def planar_gap_witness(params, result, k=0):
+    """Per-finger :class:`PlanarGap` at frame ``k``, or None when there is nothing
+    to measure.
+
+    None (rather than a partial answer) when any of the three requirements is
+    missing, each of which is a real "this cannot be drawn" rather than a failure:
+
+      * the installed binding has no ``ellipsoid_set_planar_gap``
+        (``capabilities()["planar_gap"]``),
+      * the object has no analytic ellipsoid form (:func:`scene.ellipsoid_members`
+        returns None for the baked-SDF and box/cylinder primitives),
+      * the designated digits have no measured pinch pose, so Eq 11 has no
+        centroid and therefore no plane -- the same contract
+        :func:`config.pinch_pose` documents.
+
+    The distance itself comes from the C++ factor, not from a NumPy re-derivation:
+    the whole point of the overlay is to show what that factor would report.
+    """
+    import crest_sparse
+
+    from .config import pinch_pose
+    from .scene import (ellipsoid_members, plane_ellipse_section,
+                        ELLIPSOID_SET_BETA)
+
+    if not hasattr(crest_sparse, "ellipsoid_set_planar_gap"):
+        return None
+    members = ellipsoid_members(result.spec)
+    if members is None:
+        return None
+    pose = pinch_pose(result.contact_names())
+    if pose is None:
+        return None
+
+    configs = get_default_hand_configs()
+    by_name = dict(configs)
+    frame = result.frames[k]
+    T_wrist = solved_wrist_pose(configs, frame)
+
+    center = np.asarray(result.object_center, dtype=float)
+    R_obj = np.asarray(result.object_rotation, dtype=float)
+    T_obj = np.eye(4)
+    T_obj[:3, :3] = R_obj
+    T_obj[:3, 3] = center
+
+    # The same members, twice over: as EllipsoidPrimitives for the C++ number, and
+    # posed into the world for the cross-section outlines.
+    prims = []
+    for semi_axes, R_m, c_m in members:
+        p = crest_sparse.EllipsoidPrimitive()
+        p.semi_axes = semi_axes
+        local = np.eye(4)
+        local[:3, :3] = R_m
+        local[:3, 3] = c_m
+        p.local_pose = local
+        prims.append(p)
+    beta = float(params.ellipsoid_set_beta
+                 if params.ellipsoid_set_beta is not None
+                 else result.spec.get("beta", ELLIPSOID_SET_BETA))
+    c_local = np.asarray(pose.centroid, dtype=float).reshape(3)
+
+    out = {}
+    for name, radius in zip(result.finger_names, result.tip_radii):
+        cfg = by_name.get(name)
+        if name not in frame or cfg is None:
+            continue
+        T_tip = np.asarray(frame[name].marginals.rod.states[-1].pose.mean, float)
+        tip = T_tip[:3, 3]
+        # Eq 11's p_base, in the WRIST frame -- the finger's mounting offset, not a
+        # solved node pose (node 0 has no key of its own under root reparameterization).
+        base_local = np.asarray(cfg.hand_base_offset, dtype=float)[:3, 3]
+
+        rep = crest_sparse.ellipsoid_set_planar_gap(
+            T_tip, T_obj, T_wrist, float(radius), prims, beta, base_local, c_local)
+        gap = float(rep["distance"]) - float(radius)
+        fallback = not any(w > 0.0 for w in rep["weight"])
+
+        sections = []
+        n_hat = np.asarray(rep["normal"], dtype=float).reshape(3)
+        if np.linalg.norm(n_hat) > 0.0:
+            for (semi_axes, R_m, c_m), w in zip(members, rep["weight"]):
+                if w <= 0.0:
+                    continue        # the plane misses this member: no section to draw
+                curve = plane_ellipse_section(semi_axes, R_obj @ R_m,
+                                              center + R_obj @ c_m, tip, n_hat)
+                if curve is not None:
+                    sections.append(curve)
+
+        if sections:
+            stacked = np.vstack(sections)
+            foot = stacked[int(np.argmin(np.linalg.norm(stacked - tip, axis=1)))]
+        else:
+            # Nothing in-plane to aim at, so land the line on the real 3D surface --
+            # which is also what the reported number has fallen back to.
+            _d, foot_local, _n = primitive_surface_witness(
+                R_obj.T @ (tip - center), result.spec)
+            foot = center + R_obj @ foot_local
+
+        direction = foot - tip
+        norm = np.linalg.norm(direction)
+        sphere_pt = tip + (radius * direction / norm) if norm > 1e-12 else tip
+        out[name] = PlanarGap(sphere_pt, foot, gap, fallback, sections)
     return out
 
 
