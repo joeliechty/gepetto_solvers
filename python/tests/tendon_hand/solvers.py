@@ -1605,16 +1605,29 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
     "phase2": PhasePreset(
         label="Phase 2: object approach",
         overrides=dict(
-            # The only real change from phase 1: the object is now ALSO a
-            # contact target, approached while table contact is maintained.
+            # The change from phase 1: the object becomes the contact target
+            # and the table stops being one. Phase 1 put the fingers ON the
+            # plane; phase 2 hands them off to the object, so keeping the
+            # table equalities would pin the fingertips to the plane while
+            # the object constraint tries to lift them onto its surface.
             object_contact=True,
-            table_contact=True,
+            table_contact=False,
+            # Eq 13: measure the fingertip-onto-object equality inside each
+            # finger's pulling plane rather than in full 3D. Same factor
+            # count and the same zero set -- but the solve is not asked for
+            # out-of-plane torsion the tendons cannot produce, which is what
+            # the approach actually has to execute. Needs an ellipsoid/ycb
+            # object and a digit set including the thumb (both hold for the
+            # contact_fingers below); see the gate in viz_interactive.
+            object_contact_in_plane=True,
             collision=True,
+            self_collision=True,
             table=True,
-            # Off for the same reason as phase 1: table contact is maintained
-            # here, so the avoidance half-space would fight it. Object
-            # collision (`collision`) stays on -- only the PLANE's avoidance
-            # is dropped.
+            # Off as in phase 1. Table contact is no longer requested here,
+            # but the fingers arrive at the object still lying on the plane
+            # they slid in on, so the avoidance half-space would be violated
+            # from the first step. Object collision (`collision`) stays on --
+            # only the PLANE's avoidance is dropped.
             plane_avoidance=False,
             half_space=False,
             pregrasp_center=False,
@@ -1622,13 +1635,21 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             pregrasp_centroid=False,
             contact_drop_normal_row=False,
             contact_fingers=[True, True, False, False, True],  # index, middle, thumb
-            # Loose again, like phase 0 -- object approach (sliding across
-            # the table toward the object while keeping table contact) is
-            # another significant motion, not the small settle phase 1's
-            # 0.01 assumes.
-            sigma_wrist_pos=1.0,
-            sigma_wrist_rot=1.0,
+            # Tight, as in phase 1 rather than phase 0's 1.0: the big
+            # repositioning move belongs to phase 0. With the pre-grasp terms
+            # off, a loose wrist lets the object equality drag the whole hand
+            # onto the object instead of closing the fingers around it, so
+            # the wrist is held near where phase 1 left it and the FINGERS
+            # make the approach.
+            sigma_wrist_pos=0.01,
+            sigma_wrist_rot=0.01,
             flexor_tension_sigma=0.1 ** 0.5,
+            # Stated for the same reason as the flexor sigma above: the
+            # passive tendons stay at their tight default rather than
+            # inheriting whatever the slider was last dragged to. Do not go
+            # much below this against the flexor's far looser scale -- see
+            # the IndeterminantLinearSystem note on the field itself.
+            passive_tension_sigma=1e-3,
             # h_clear intentionally omitted, as in phase1 -- pregrasp_center
             # is off, so a clearance value would be inert and misleading.
         ),

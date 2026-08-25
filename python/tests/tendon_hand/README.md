@@ -549,13 +549,24 @@ name)` are the named `HandSolveParams` override groups for the staged pipeline:
 pinch-centroid centering and short-axis alignment, wrist prior loosened to 1.0 so
 the hand can actually travel), `phase1` support contact (table contact on, all three
 pre-grasp constraints off, wrist tightened to 0.01 to settle), `phase2` object
-approach (object *and* table contact, wrist loose again at 1.0). `phase3` is not
+approach (object contact **on** in the Eq 13 in-plane form, table contact back
+**off** — the fingers are handed from the plane to the object — with the wrist
+still tight at 0.01). `phase3` is not
 written yet. Both contact phases set `plane_avoidance=False` — a deliberate
 departure from the paper, which keeps the table collision inequality on
-throughout: phases 1 and 2 drive the fingers **onto** the plane, so the
-avoidance half-space would be fighting the contact those phases exist to make.
-`table` itself stays on (`table_contact` is built against that plane), and
-object/finger–finger collision are untouched. A preset touches **only** the fields it lists — wrist pose, flexor
+throughout: phase 1 drives the fingers **onto** the plane, so the avoidance
+half-space would be fighting the contact that phase exists to make, and phase 2
+inherits fingers that are still lying on it, so re-arming the half-space would
+start that phase already in violation.
+`table` itself stays on (`table_contact` is built against that plane in phase 1,
+and phase 2's fingers are still resting on it), and
+object/finger–finger collision are untouched. Phase 2 keeps the wrist prior at
+phase 1's tight 0.01 rather than reopening it to phase 0's 1.0: with every
+pre-grasp term off, a loose wrist lets the object equality drag the whole hand
+onto the object instead of closing the fingers around it, so the approach is
+made by the FINGERS. It also states both tendon sigmas explicitly
+(`flexor_tension_sigma=0.1**0.5`, `passive_tension_sigma=1e-3`) so a phase does
+not inherit whatever the viser sliders were last dragged to. A preset touches **only** the fields it lists — wrist pose, flexor
 tensions, AL sliders and table height stay wherever the caller left them,
 because those are solver knobs rather than part of what defines a phase — and
 `apply_phase_preset` raises on an override naming a field `HandSolveParams`
@@ -830,15 +841,24 @@ short-axis alignment) — each independent, over the shared *Contact fingers*
 mask. That is what makes a stalled grasp bisectable: solve for one surface, the
 other, or both, with or without any given avoidance, and see which family
 refuses to close. The *Presets* folder's phase0/1/2 checkboxes apply
-`apply_phase_preset` to the whole panel at once.
+`apply_phase_preset` to the whole panel at once. The panel **opens in
+`DEFAULT_PHASE`** (`phase0`): that box is ticked at build time *and* its preset
+is written for real by `_apply_default_phase()`, since a build-time tick fires no
+callback and would otherwise be a claim the constraint controls below it do not
+back.
 
 Changing any of those restarts the AL loop (the duals are positional). The
 **Warm start** latch is what lets you change one and carry on: while it is on,
 every rebuild starts from the state on screen and carries the wrist pose, the
 flexor tensions and — with *carry AL duals* ticked — the multipliers, reporting
 `duals carried: 547/550 constraints` in the status. It is a latch, not a capture,
-so press order does not matter. **Reset defaults** puts every control back to the
-value it opened with and cold-starts. The startup line names the `crest_sparse`
+so press order does not matter, and it defaults **on** (the staged pipeline is a
+chain of continuations; off only where the binding has no `initial_state`).
+*carry AL duals* defaults **off**: carried multipliers stiffen a constraint the
+new stage may need to move, so the posture is carried on its own unless you ask
+for both. **Reset defaults** puts every control back to the
+value it opened with — warm start and the opening phase preset included, restored
+to their startup state rather than to off — and cold-starts. The startup line names the `crest_sparse`
 that actually got loaded plus any capability missing from it, because a
 capability-gated control that is silently disabled looks exactly like a broken
 feature. The trajectory planner is deliberately *not* here — see the `traj_*`
