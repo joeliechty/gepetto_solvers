@@ -92,6 +92,7 @@ def capabilities():
     unsupported controls instead of crashing on a stale build."""
     env = crest_sparse.EnvironmentConfig()
     pc = crest_sparse.TendonHandTrajectoryPlannerConfig()
+    fc = crest_sparse.TendonFingerSolverConfig()
     return {
         "ellipsoid": hasattr(env, "ellipsoid_semi_axes"),
         # Section 1.2 ellipsoid SETS (the YCB objects). Gated separately from
@@ -147,6 +148,11 @@ def capabilities():
         # is whatever the object/table collision toggles imply and cannot be
         # turned off.
         "self_collision": hasattr(env, "self_collision"),
+        # Planar-bending approximation: PlanarBendFactor per rod segment, keeping
+        # each finger in its own flexion plane. Probed on the FINGER config
+        # because that is where the switch rides -- the sigmas are per-finger rod
+        # physics, like sigma_twist_rot, not a hand-level environment setting.
+        "planar_bending": hasattr(fc, "planar_bending"),
         "drop_normal_row": hasattr(env, "contact_drop_normal_row"),
         # Pre-grasp short-axis alignment (companion to Eq 2.16-2.17). Needs a
         # rebuilt binding with EnvironmentConfig.pregrasp_align_node.
@@ -156,6 +162,17 @@ def capabilities():
         # the object. Needs a rebuilt binding with
         # EnvironmentConfig.pregrasp_centroid_point.
         "pregrasp_centroid": hasattr(env, "pregrasp_centroid_point"),
+        # Eq 13 in-plane object CONTACT -- the constraint, as opposed to
+        # "planar_gap" below, which is only the query. Separate probes because
+        # they landed separately: a binding can measure the in-plane distance
+        # without being able to solve against it.
+        "planar_contact": hasattr(env, "object_contact_in_plane"),
+        # Eq 11/13 tendon-aligned planar distance, as a QUERY -- the visualizer's
+        # in-plane overlay. A module-level free function rather than a config
+        # field, because nothing in the graph builds this factor yet: it is
+        # measurement only, so a binding without it loses the overlay and
+        # nothing else.
+        "planar_gap": hasattr(crest_sparse, "ellipsoid_set_planar_gap"),
         # Whether TendonHandSolver.solve releases the GIL while the C++ solve
         # runs. Without it the whole interpreter is frozen for the duration of
         # every AL outer iteration (~1.4 s measured), so the visualizer's E-STOP
@@ -669,6 +686,190 @@ def pregrasp_axis_witness(params, result, k=0):
     return (c_thumb, c_others, angle_deg)
 
 
+def finger_plane_witness(result, k=0):
+    """Per-finger ``{name: (base_pt, tip_pt, pinch_pt)}`` at frame ``k`` -- the
+    three world points that span that finger's *pinch plane* -- or None if the
+    checked digits have no measured pinch pose (:func:`config.pinch_pose`).
+
+    The three points are the finger's METACARPAL BASE (rod node 0, where the
+    finger meets the palm), its FINGERTIP (rod node -1, the contact node), and
+    the pinch centroid the checked digits close on. The first two move with the
+    posture; the third is the hand-frame constant from
+    :data:`config.HAND_PINCH_POSES` carried through the solved wrist pose,
+    exactly as :func:`pregrasp_centroid_witness` carries it -- so all fingers
+    share one pinch point and their planes form a fan through it.
+
+    Read it as the plane that finger has to sweep *in* to reach the meeting
+    point: the finger's own curl plane is base + tip plus the flexor's pull
+    direction, and how far this plane tilts out of it is how much of the closure
+    is happening sideways, where the tendons have no authority.
+
+    None rather than a default when the combination was never measured -- the
+    same contract :func:`config.pinch_pose` documents. A per-finger entry is
+    still returned when the three points are COLLINEAR (a finger whose tip
+    happens to point at the centroid); the plane is undefined there, and the
+    renderer -- not this function -- decides what to do about it, since only it
+    knows what it was going to draw.
+
+    Rendering only: nothing here is a constraint the solver saw.
+    """
+    from .config import pinch_pose
+
+    pose = pinch_pose(result.contact_names())
+    if pose is None:
+        return None
+
+    frame = result.frames[k]
+    # Same reconstruction pregrasp_centroid_witness makes: the centroid is in the
+    # WRIST frame, so it only becomes a world point through the SOLVED wrist.
+    T = solved_wrist_pose(get_default_hand_configs(), frame)
+    c_local = np.asarray(pose.centroid, dtype=float).reshape(3)
+    pinch_pt = T[:3, :3] @ c_local + T[:3, 3]
+
+    out = {}
+    for name in result.finger_names:
+        if name not in frame:
+            continue
+        states = frame[name].marginals.rod.states
+        base = np.asarray(states[0].pose.mean, float)[:3, 3]
+        tip = np.asarray(states[-1].pose.mean, float)[:3, 3]
+        out[name] = (base, tip, pinch_pt)
+    return out
+
+
+class PlanarGap(NamedTuple):
+    """One finger's tendon-aligned in-plane distance readout (Eq 11 / Eq 13).
+
+    ``sphere_pt``  world point on the contact sphere's surface, aimed at ``foot``
+                   -- the same convention :meth:`HandResult.contact_witness` uses,
+                   so the two overlays start from the same place.
+    ``foot``       the EXACT nearest point on the drawn cross-section (or, in
+                   fallback, the exact 3D surface witness).
+    ``gap``        the FACTOR's number, as a surface gap: ``d_planar - r``, zero at
+                   Eq 13's zero set, negative once the sphere is through the
+                   cross-section.
+    ``fallback``   True when no member is being measured in-plane -- the plane
+                   missed everything, or it is degenerate -- so ``gap`` is the
+                   ordinary 3D distance and the plane is telling you nothing.
+    ``sections``   one ``(N, 3)`` world polyline per member the plane actually
+                   cuts; empty in fallback.
+
+    Note the deliberate split: the LINE is exact geometry, the LABEL is the
+    factor's first-order approximation of it. Where they visibly disagree, that
+    disagreement is the approximation error the solver would be working with,
+    which is the thing worth being able to see.
+    """
+    sphere_pt: np.ndarray
+    foot: np.ndarray
+    gap: float
+    fallback: bool
+    sections: list
+
+
+def planar_gap_witness(params, result, k=0):
+    """Per-finger :class:`PlanarGap` at frame ``k``, or None when there is nothing
+    to measure.
+
+    None (rather than a partial answer) when any of the three requirements is
+    missing, each of which is a real "this cannot be drawn" rather than a failure:
+
+      * the installed binding has no ``ellipsoid_set_planar_gap``
+        (``capabilities()["planar_gap"]``),
+      * the object has no analytic ellipsoid form (:func:`scene.ellipsoid_members`
+        returns None for the baked-SDF and box/cylinder primitives),
+      * the designated digits have no measured pinch pose, so Eq 11 has no
+        centroid and therefore no plane -- the same contract
+        :func:`config.pinch_pose` documents.
+
+    The distance itself comes from the C++ factor, not from a NumPy re-derivation:
+    the whole point of the overlay is to show what that factor would report.
+    """
+    import crest_sparse
+
+    from .config import pinch_pose
+    from .scene import (ellipsoid_members, plane_ellipse_section,
+                        ELLIPSOID_SET_BETA)
+
+    if not hasattr(crest_sparse, "ellipsoid_set_planar_gap"):
+        return None
+    members = ellipsoid_members(result.spec)
+    if members is None:
+        return None
+    pose = pinch_pose(result.contact_names())
+    if pose is None:
+        return None
+
+    configs = get_default_hand_configs()
+    by_name = dict(configs)
+    frame = result.frames[k]
+    T_wrist = solved_wrist_pose(configs, frame)
+
+    center = np.asarray(result.object_center, dtype=float)
+    R_obj = np.asarray(result.object_rotation, dtype=float)
+    T_obj = np.eye(4)
+    T_obj[:3, :3] = R_obj
+    T_obj[:3, 3] = center
+
+    # The same members, twice over: as EllipsoidPrimitives for the C++ number, and
+    # posed into the world for the cross-section outlines.
+    prims = []
+    for semi_axes, R_m, c_m in members:
+        p = crest_sparse.EllipsoidPrimitive()
+        p.semi_axes = semi_axes
+        local = np.eye(4)
+        local[:3, :3] = R_m
+        local[:3, 3] = c_m
+        p.local_pose = local
+        prims.append(p)
+    beta = float(params.ellipsoid_set_beta
+                 if params.ellipsoid_set_beta is not None
+                 else result.spec.get("beta", ELLIPSOID_SET_BETA))
+    c_local = np.asarray(pose.centroid, dtype=float).reshape(3)
+
+    out = {}
+    for name, radius in zip(result.finger_names, result.tip_radii):
+        cfg = by_name.get(name)
+        if name not in frame or cfg is None:
+            continue
+        T_tip = np.asarray(frame[name].marginals.rod.states[-1].pose.mean, float)
+        tip = T_tip[:3, 3]
+        # Eq 11's p_base, in the WRIST frame -- the finger's mounting offset, not a
+        # solved node pose (node 0 has no key of its own under root reparameterization).
+        base_local = np.asarray(cfg.hand_base_offset, dtype=float)[:3, 3]
+
+        rep = crest_sparse.ellipsoid_set_planar_gap(
+            T_tip, T_obj, T_wrist, float(radius), prims, beta, base_local, c_local)
+        gap = float(rep["distance"]) - float(radius)
+        fallback = not any(w > 0.0 for w in rep["weight"])
+
+        sections = []
+        n_hat = np.asarray(rep["normal"], dtype=float).reshape(3)
+        if np.linalg.norm(n_hat) > 0.0:
+            for (semi_axes, R_m, c_m), w in zip(members, rep["weight"]):
+                if w <= 0.0:
+                    continue        # the plane misses this member: no section to draw
+                curve = plane_ellipse_section(semi_axes, R_obj @ R_m,
+                                              center + R_obj @ c_m, tip, n_hat)
+                if curve is not None:
+                    sections.append(curve)
+
+        if sections:
+            stacked = np.vstack(sections)
+            foot = stacked[int(np.argmin(np.linalg.norm(stacked - tip, axis=1)))]
+        else:
+            # Nothing in-plane to aim at, so land the line on the real 3D surface --
+            # which is also what the reported number has fallen back to.
+            _d, foot_local, _n = primitive_surface_witness(
+                R_obj.T @ (tip - center), result.spec)
+            foot = center + R_obj @ foot_local
+
+        direction = foot - tip
+        norm = np.linalg.norm(direction)
+        sphere_pt = tip + (radius * direction / norm) if norm > 1e-12 else tip
+        out[name] = PlanarGap(sphere_pt, foot, gap, fallback, sections)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Params / results.
 # ---------------------------------------------------------------------------
@@ -715,6 +916,31 @@ class HandSolveParams:
     sigma_wrist_pos: float = 1e-4
     sigma_wrist_rot: float = 1e-3
 
+    # --- Rod physics: planar bending ---
+    #
+    # The discs are keyed to the backbone, so a finger bends about its local +y
+    # axis and neither deflects sideways nor twists. The Cosserat rod does not
+    # know that, and spends the free out-of-plane DOFs to satisfy contact,
+    # collision and the four passive tendons routed at +/-90 deg -- which is the
+    # sideways splay visible in a phase-2 approach. PlanarBendFactor states the
+    # constraint; see its header for the residual.
+    #
+    # On by default: this is a property of the hardware, not an experiment. The
+    # sigmas are curvatures (rad/m), directly comparable to sigma_twist_rot
+    # (1e-2 in the finger configs).
+    #
+    # Asymmetric on purpose -- soft bend, tight twist. Twist is the CAUSE (the
+    # spiral-routed lateral tendons inject it, and it rotates the material frame
+    # so the next segment's flexion lands out of plane); out-of-plane bend is the
+    # symptom. Constraining torsion alone collapses the splay 8-200x across
+    # big_sphere / mid_sphere / knife / power_drill while COSTING no reach -- the
+    # finger curls further instead of splaying. Making the bend row equally tight
+    # buys nothing extra and costs ~10 mm of reach, and stalls the AL outright on
+    # the power drill. See TendonFingerSolverConfig for the measured table.
+    planar_bending: bool = True
+    sigma_planar_bend: float = 1e-2
+    sigma_planar_twist: float = 1e-4
+
     # --- Tensions (per-finger flexor + shared passive background) ---
     passive_tension: float = 0.5
     flexor_tensions: List[float] = field(
@@ -755,6 +981,18 @@ class HandSolveParams:
     # there is nothing to touch and it is silently inert.
     object_contact: bool = True
     table_contact: bool = False
+    # Eq 13: measure the OBJECT contact equality inside each finger's pulling
+    # plane (Eq 11) instead of in 3D. A different distance METRIC for the same
+    # constraint, not an extra constraint -- same center-direct form, same zero
+    # set (d = tip radius), one factor per contact finger either way. So it is
+    # meaningful only with object_contact on, and the two are mutually exclusive
+    # as contact FORMS: the visualizer enforces that with its checkboxes, and a
+    # script setting both gets the in-plane form -- this flag selects the FORM,
+    # object_contact selects whether there is a contact at all.
+    #
+    # Needs an ellipsoid-form object and a measured pinch pose for the checked
+    # digits; attach_contact RAISES rather than falling back if either is missing.
+    object_contact_in_plane: bool = False
     # Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, c_T2] SDF witness contact
     # form (c_N dropped) instead of the default 5-row form. Only affects a
     # non-ellipsoid (SDF) object's witness contact -- inert for the analytic
@@ -1369,7 +1607,12 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             table_contact=True,
             collision=True,
             table=True,
-            plane_avoidance=True,
+            # Table COLLISION off (a deliberate departure from the paper, which
+            # keeps it on): phase 1 drives the fingers deliberately onto the
+            # plane, so the avoidance half-space is pushing against the very
+            # contact this phase exists to make. `table` stays on -- the plane
+            # itself is still needed, table_contact is built against it.
+            plane_avoidance=False,
             # The three pre-grasp-only constraints did their job getting the
             # hand into position in phase 0; phase 1 slides the fingers onto
             # the table and doesn't need them anymore.
@@ -1393,26 +1636,51 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
     "phase2": PhasePreset(
         label="Phase 2: object approach",
         overrides=dict(
-            # The only real change from phase 1: the object is now ALSO a
-            # contact target, approached while table contact is maintained.
+            # The change from phase 1: the object becomes the contact target
+            # and the table stops being one. Phase 1 put the fingers ON the
+            # plane; phase 2 hands them off to the object, so keeping the
+            # table equalities would pin the fingertips to the plane while
+            # the object constraint tries to lift them onto its surface.
             object_contact=True,
-            table_contact=True,
+            table_contact=False,
+            # Eq 13: measure the fingertip-onto-object equality inside each
+            # finger's pulling plane rather than in full 3D. Same factor
+            # count and the same zero set -- but the solve is not asked for
+            # out-of-plane torsion the tendons cannot produce, which is what
+            # the approach actually has to execute. Needs an ellipsoid/ycb
+            # object and a digit set including the thumb (both hold for the
+            # contact_fingers below); see the gate in viz_interactive.
+            object_contact_in_plane=True,
             collision=True,
+            self_collision=True,
             table=True,
-            plane_avoidance=True,
+            # Off as in phase 1. Table contact is no longer requested here,
+            # but the fingers arrive at the object still lying on the plane
+            # they slid in on, so the avoidance half-space would be violated
+            # from the first step. Object collision (`collision`) stays on --
+            # only the PLANE's avoidance is dropped.
+            plane_avoidance=False,
             half_space=False,
             pregrasp_center=False,
             pregrasp_axis_align=False,
             pregrasp_centroid=False,
             contact_drop_normal_row=False,
             contact_fingers=[True, True, False, False, True],  # index, middle, thumb
-            # Loose again, like phase 0 -- object approach (sliding across
-            # the table toward the object while keeping table contact) is
-            # another significant motion, not the small settle phase 1's
-            # 0.01 assumes.
-            sigma_wrist_pos=1.0,
-            sigma_wrist_rot=1.0,
+            # Tight, as in phase 1 rather than phase 0's 1.0: the big
+            # repositioning move belongs to phase 0. With the pre-grasp terms
+            # off, a loose wrist lets the object equality drag the whole hand
+            # onto the object instead of closing the fingers around it, so
+            # the wrist is held near where phase 1 left it and the FINGERS
+            # make the approach.
+            sigma_wrist_pos=0.01,
+            sigma_wrist_rot=0.01,
             flexor_tension_sigma=0.1 ** 0.5,
+            # Stated for the same reason as the flexor sigma above: the
+            # passive tendons stay at their tight default rather than
+            # inheriting whatever the slider was last dragged to. Do not go
+            # much below this against the flexor's far looser scale -- see
+            # the IndeterminantLinearSystem note on the field itself.
+            passive_tension_sigma=1e-3,
             # h_clear intentionally omitted, as in phase1 -- pregrasp_center
             # is off, so a clearance value would be inert and misleading.
         ),
@@ -1451,8 +1719,20 @@ class HandSolverBase:
         self.configs = get_default_hand_configs(self.dims)
         self.tip_radii = default_hand_tip_radii(self.dims)
         self.finger_names = [name for name, _ in self.configs]
+        self._attach_planar_bending()
         self.spec, self.object_center, self.object_rotation, self.object_pose = \
             resolve_scene(self.params)
+
+    def _attach_planar_bending(self):
+        """Rod physics, so it rides on the per-finger config rather than the
+        environment. Attached from ``__init__`` rather than
+        ``_attach_environment`` because it is not environment-dependent and
+        because ``HandFKSolver`` builds its ``TendonHandSolver`` in its own
+        ``__init__`` -- a later attach would miss FK entirely."""
+        for _, cfg in self.configs:
+            _set_if(cfg, "planar_bending", self.params.planar_bending)
+            _set_if(cfg, "sigma_planar_bend", self.params.sigma_planar_bend)
+            _set_if(cfg, "sigma_planar_twist", self.params.sigma_planar_twist)
 
     # -- contact masks --
     #
@@ -1478,13 +1758,24 @@ class HandSolverBase:
         as the terminal contact (``ik_5f_contact.py`` block). Fingers masked off
         get a collision-only env instead -- which is also what every finger gets
         with ``params.object_contact`` off, leaving the object present as
-        collision geometry but with nothing driven onto it."""
+        collision geometry but with nothing driven onto it.
+
+        ``object_contact_in_plane`` selects the contact FORM (Eq 13's in-plane
+        distance in place of the 3D one), so it needs the pinch centroid of the
+        digits actually being CONTACTED -- keyed off the same mask the contact
+        nodes come from, not the raw finger selection, so unchecking a finger
+        moves the plane's third point exactly as it moves the constraint set."""
+        mask = self._object_contact_mask()
+        in_plane = self.params.object_contact and self.params.object_contact_in_plane
+        pinch = pinch_pose_for_mask(self.configs, mask) if in_plane else None
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
-                       contact_fingers=self._object_contact_mask(),
+                       contact_fingers=mask,
                        drop_normal_row=self.params.contact_drop_normal_row,
-                       ellipsoid_set_beta=self.params.ellipsoid_set_beta)
+                       ellipsoid_set_beta=self.params.ellipsoid_set_beta,
+                       in_plane=in_plane,
+                       pinch_centroid=(pinch.centroid if pinch is not None else None))
 
     def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)

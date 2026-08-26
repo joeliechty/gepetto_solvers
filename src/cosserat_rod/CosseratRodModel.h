@@ -87,6 +87,17 @@ public:
 
     bool uses_root() const { return use_root_; }
 
+    // Planar-bending approximation (off by default). The physical finger's discs
+    // are keyed to the backbone, so it bends about its local +y axis and reacts
+    // out-of-plane bending and torsion structurally instead of deflecting. When
+    // enabled, build_graph adds a PlanarBendFactor per segment penalising the
+    // out-of-plane and torsional components of Log(R_i^T R_j)/ds; flexion is
+    // untouched. Sigmas are curvatures in rad/m, directly comparable to the
+    // twist_noise rotation sigma. See PlanarBendFactor.h.
+    void set_planar_bending(double sigma_bend, double sigma_twist);
+
+    bool uses_planar_bending() const { return planar_bend_noise_ != nullptr; }
+
     gtsam::Key get_root_base_key() const { return root_base_key_; }
 
     const gtsam::Pose3& get_root_offset() const { return root_offset_; }
@@ -119,6 +130,9 @@ private:
     std::vector<gtsam::Key> stress_keys_;
     std::vector<gtsam::Key> wrench_keys_;
     gtsam::Key dummy_wrench_key_;
+
+    // Planar-bending noise model; null => the factor is not emitted at all.
+    gtsam::SharedDiagonal planar_bend_noise_;
 
     // Hand-base reparameterization state (off by default; legacy node-0 path).
     bool use_root_ = false;

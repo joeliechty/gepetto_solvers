@@ -5,8 +5,9 @@ Pure rendering: given a viser server and one solved hand *frame* (the
 ``{finger_name: solution}`` shim the solvers produce), it draws each finger's
 Cosserat backbone, its tendons, and -- optionally -- the routing discs, the
 per-fingertip contact spheres, the disc-node collision spheres, the grasp
-object, and the support-plane "table". No solving and no GUI live here; the
-interactive app (``tendon_hand/viz_interactive.py``) owns those.
+object, the support-plane "table", and the per-finger pinch planes. No solving
+and no GUI live here; the interactive app (``tendon_hand/viz_interactive.py``)
+owns those.
 
 The world-frame geometry reproduces exactly what the PyVista mesh managers
 compute (``_plotting/tendon_hand_plotter.py``):
@@ -14,7 +15,8 @@ compute (``_plotting/tendon_hand_plotter.py``):
 * backbone  -- node translations ``rod.states[n].pose.mean[:3, 3]``.
 * tendons   -- ``R @ hole + t`` for each active hole, with the disc pose
   ``rod.states[tendon_config.disc_pose_idx[disc]]``.
-* discs / collision spheres -- one per disc node (``disc_pose_idx``).
+* discs / disc frames / collision spheres -- one per disc node
+  (``disc_pose_idx``); the frame is the body frame its hole locations are in.
 
 Nodes are addressed by stable scene-tree names; re-adding a name upserts it, and
 handles for a frame's dynamic geometry are tracked so toggled-off / vanished
@@ -45,6 +47,14 @@ _TABLE_RGB = (150, 150, 160)
 _HALF_SPACE_RGB = (255, 140, 0)
 _CENTER_TARGET_RGB = (180, 60, 220)
 _MOUNT_RGB = (240, 240, 240)
+# Per-finger pinch-plane patches, in finger_names order (index, middle, ring,
+# pinky, thumb). One colour per finger rather than one for the overlay: the five
+# planes all pass through the same pinch point, so a single colour would draw
+# five sheets fanned about one line with no way to tell whose is whose.
+_FINGER_PLANE_RGB = [
+    (231, 76, 60), (241, 196, 15), (46, 204, 113), (52, 152, 219),
+    (155, 89, 182),
+]
 
 # Fingertip-to-object gap overlay: green within GAP_GREEN_MAX_M of the surface
 # (including interpenetration, which is simply "not far"), red beyond it.
@@ -121,16 +131,24 @@ class ViserHandScene:
     """
 
     def __init__(self, server, finger_names, *, backbone_width=4.0,
-                 show_discs=False, show_contact_spheres=True,
-                 show_collision_spheres=True, show_gap_lines=True):
+                 show_discs=False, show_disc_frames=False,
+                 show_contact_spheres=True,
+                 show_collision_spheres=True, show_gap_lines=True,
+                 show_finger_planes=False, show_planar_gap=False):
         self.server = server
         self.scene = server.scene
         self.finger_names = list(finger_names)
         self.backbone_width = backbone_width
         self.show_discs = show_discs
+        self.show_disc_frames = show_disc_frames
         self.show_contact_spheres = show_contact_spheres
         self.show_collision_spheres = show_collision_spheres
         self.show_gap_lines = show_gap_lines
+        # Off by default: five translucent sheets through the middle of the
+        # grasp hide the fingertips and the object surface behind them, so this
+        # is something you switch on to answer a question, not scene furniture.
+        self.show_finger_planes = show_finger_planes
+        self.show_planar_gap = show_planar_gap
 
         # name -> handle, for dynamic (per-frame) geometry so we can prune it.
         self._dynamic = {}
@@ -448,7 +466,7 @@ class ViserHandScene:
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
                collision=False, gaps=None, table_gaps=None,
                half_space_gaps=None, center_gap=None, axis_align=None,
-               centroid_gap=None):
+               centroid_gap=None, finger_planes=None, planar_gaps=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
 
@@ -486,11 +504,27 @@ class ViserHandScene:
         things -- distance to a target vs. angle off an axis -- so they are
         never merged into one draw call).
 
-        All gated on ``self.show_gap_lines`` (the existing "contact distance"
-        display toggle) -- one category of overlay, one switch. Rendering only
-        -- nothing here feeds the solver."""
+        All the above are gated on ``self.show_gap_lines`` (the existing
+        "contact distance" display toggle) -- one category of overlay, one
+        switch.
+
+        ``finger_planes`` is the per-finger PINCH-PLANE overlay: a
+        ``{finger: (base_pt, tip_pt, pinch_pt)}`` map (as returned by
+        ``solvers.finger_plane_witness``) or None. It gets its own switch
+        (``self.show_finger_planes``) rather than riding on the gap toggle,
+        because it is opaque geometry rather than a thin measurement line -- it
+        occludes the very contact it is drawn around.
+
+        ``planar_gaps`` is the IN-PLANE distance overlay that goes with it: a
+        ``{finger: solvers.PlanarGap}`` map (from ``solvers.planar_gap_witness``)
+        or None, drawn under ``self.show_planar_gap``. Separate switch again,
+        and separate from the plane patches too -- the cross-sections are worth
+        looking at without five translucent sheets over them.
+
+        Rendering only -- nothing here feeds the solver."""
         keep = set()
         tip_radii = tip_radii or [None] * len(self.finger_names)
+        plane_rgb = dict(zip(self.finger_names, _FINGER_PLANE_RGB * len(self.finger_names)))
 
         for name, radius in zip(self.finger_names, tip_radii):
             if name not in frame:
@@ -542,6 +576,21 @@ class ViserHandScene:
             if self.show_discs:
                 keep |= self._update_discs(name, fm, poses)
 
+            # The disc nodes' own frames -- what the hole locations, and every
+            # other per-disc quantity, are expressed in.
+            if self.show_disc_frames:
+                keep |= self._update_disc_frames(name, fm, poses)
+
+            # Pinch plane through base / tip / pinch centroid.
+            if self.show_finger_planes and finger_planes and name in finger_planes:
+                keep |= self._update_finger_plane(name, *finger_planes[name],
+                                                  rgb=plane_rgb[name])
+
+            # What the object looks like inside that plane, and how far away it is.
+            if self.show_planar_gap and planar_gaps and name in planar_gaps:
+                keep |= self._update_planar_gap(name, planar_gaps[name],
+                                                rgb=plane_rgb[name])
+
         # Pre-grasp centering (Eq 2.18-2.19): a HAND-level overlay, drawn once
         # rather than per finger.
         if self.show_gap_lines and center_gap is not None:
@@ -554,6 +603,10 @@ class ViserHandScene:
         # Pre-grasp pinch-centroid centering: also HAND-level, drawn once.
         if self.show_gap_lines and centroid_gap is not None:
             keep |= self._update_centroid(*centroid_gap)
+
+        # The point the finger planes fan about -- one marker for all of them.
+        if self.show_finger_planes and finger_planes:
+            keep |= self._update_pinch_point(next(iter(finger_planes.values()))[2])
 
         self._prune(keep)
 
@@ -714,6 +767,135 @@ class ViserHandScene:
         keep.add(lb)
         return keep
 
+    def _update_finger_plane(self, name, base_pt, tip_pt, pinch_pt, *, rgb,
+                             margin=0.25, min_pad=0.01):
+        """One finger's pinch plane: the plane through its metacarpal base, its
+        fingertip and the pinch centroid, drawn as a translucent quad with the
+        defining triangle outlined on top of it and the finger's name at the
+        triangle's middle.
+
+        A plane is unbounded, so what is drawn is a choice: the smallest
+        axis-aligned rectangle *in the plane's own basis* that contains all
+        three defining points, padded by ``margin`` of its own size (at least
+        ``min_pad`` metres, so a nearly-degenerate triangle still shows as a
+        patch rather than a sliver). Sizing it off the points themselves keeps
+        the sheet around the grasp instead of across the whole scene, and makes
+        it grow with the finger as it reaches.
+
+        The outline is what makes the patch readable -- the quad's own edges are
+        arbitrary, the triangle's are the actual inputs, so the triangle is what
+        you check when the plane looks wrong.
+
+        Returns an EMPTY set when the three points are collinear (within 0.1 mm
+        of the base-tip line): no plane exists there, and drawing the quad from
+        a near-zero second basis vector would show one at an arbitrary
+        orientation. Returning nothing lets ``_prune`` take last frame's patch
+        down, so the plane disappears rather than lying."""
+        p = np.stack([np.asarray(q, float).reshape(3)
+                      for q in (base_pt, tip_pt, pinch_pt)])
+
+        e1 = p[1] - p[0]
+        len1 = np.linalg.norm(e1)
+        if len1 < 1e-9:
+            return set()
+        e1 = e1 / len1
+        w = p[2] - p[0]
+        e2 = w - (w @ e1) * e1          # component of the centroid off the finger axis
+        off = np.linalg.norm(e2)
+        if off < 1e-4:
+            return set()
+        e2 = e2 / off
+
+        # The three points in the plane's own (u, v) coordinates, origin at the base.
+        uv = np.stack([(p - p[0]) @ e1, (p - p[0]) @ e2], axis=1)
+        lo, hi = uv.min(axis=0), uv.max(axis=0)
+        pad = np.maximum(margin * (hi - lo), min_pad)
+        lo, hi = lo - pad, hi + pad
+        corners = np.array([[lo[0], lo[1]], [hi[0], lo[1]],
+                            [hi[0], hi[1]], [lo[0], hi[1]]])
+        verts = p[0] + corners[:, :1] * e1 + corners[:, 1:] * e2
+        faces = np.array([[0, 1, 2], [0, 2, 3]])
+
+        keep = set()
+        pn = f"/hand/{name}/pinch_plane/patch"
+        # Two-sided: a one-sided patch vanishes as the camera orbits past it,
+        # which for a plane reads as the overlay having switched itself off.
+        self._dynamic[pn] = self.scene.add_mesh_simple(
+            pn, verts, faces, color=rgb, opacity=0.18, side="double",
+            flat_shading=True, cast_shadow=False)
+        keep.add(pn)
+
+        ol = f"/hand/{name}/pinch_plane/outline"
+        self._dynamic[ol] = self.scene.add_line_segments(
+            ol, np.stack([p, np.roll(p, -1, axis=0)], axis=1), colors=rgb,
+            line_width=2.0)
+        keep.add(ol)
+
+        lb = f"/hand/{name}/pinch_plane/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, name, position=tuple(p.mean(axis=0)), anchor="center-center")
+        keep.add(lb)
+        return keep
+
+    def _update_planar_gap(self, name, gap, *, rgb):
+        """One finger's in-plane distance (Eq 11 / Eq 13): the cross-section the
+        pulling plane cuts out of the object, and the distance to it.
+
+        Three pieces, each saying a different thing:
+
+        * the cross-section outlines -- ``G_planar``, drawn in the finger's own
+          plane colour so it is obvious which plane cut them. This is EXACT
+          geometry;
+        * the line from the contact sphere to the nearest point on that outline,
+          coloured near/far like every other gap overlay;
+        * the label, which is the FACTOR's number, not the line's length. The two
+          differ by the Taubin approximation error, and seeing that difference is
+          the point of drawing both. In fallback (the plane missed everything, or
+          it is degenerate) the label says so, because then the number is the
+          ordinary 3D distance and the plane is not involved at all.
+        """
+        keep = set()
+        for index, curve in enumerate(gap.sections):
+            pts = np.asarray(curve, float)
+            sn = f"/hand/{name}/planar_gap/section/{index}"
+            self._dynamic[sn] = self.scene.add_line_segments(
+                sn, np.stack([pts[:-1], pts[1:]], axis=1), colors=rgb,
+                line_width=2.0)
+            keep.add(sn)
+
+        p0 = np.asarray(gap.sphere_pt, float).reshape(3)
+        p1 = np.asarray(gap.foot, float).reshape(3)
+        rgb_line = _GAP_NEAR_RGB if gap.gap < GAP_GREEN_MAX_M else _GAP_FAR_RGB
+
+        ln = f"/hand/{name}/planar_gap/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb_line, line_width=3.0)
+        keep.add(ln)
+
+        text = f"{gap.gap * 1000.0:.1f} mm"
+        if gap.fallback:
+            text += " (3D)"
+        lb = f"/hand/{name}/planar_gap/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, text, position=tuple(0.5 * (p0 + p1)), anchor="center-center")
+        keep.add(lb)
+        return keep
+
+    def _update_pinch_point(self, pinch_pt):
+        """The pinch centroid every finger plane passes through, marked once.
+
+        Hand-level, not per finger: it is one point from
+        ``config.HAND_PINCH_POSES``, and drawing it per finger would stack five
+        spheres on it. Deliberately NOT the same node as
+        ``/pregrasp_centroid/pinch`` -- that one only exists while the
+        pinch-centroid CONSTRAINT is on, and this overlay has to stand on its
+        own."""
+        n = "/finger_plane/pinch"
+        self._dynamic[n] = self.scene.add_icosphere(
+            n, radius=0.005, color=_CENTER_TARGET_RGB, opacity=0.6,
+            position=tuple(np.asarray(pinch_pt, float).reshape(3)))
+        return {n}
+
     def _update_discs(self, name, fm, poses):
         keep = set()
         tc = fm.tendon_config
@@ -727,6 +909,43 @@ class ViserHandScene:
             mesh.visual.vertex_colors = np.array([*_DISC_RGB, 90], dtype=np.uint8)
             n = f"/hand/{name}/disc/{di}"
             self._dynamic[n] = self.scene.add_mesh_trimesh(n, mesh)
+            keep.add(n)
+        return keep
+
+    def _update_disc_frames(self, name, fm, poses):
+        """A triad on every disc node, in that disc's own body frame.
+
+        This is the frame the routing geometry is written in: a hole location
+        ``tendon_config.hole_locations[disc][tendon]`` is a body-frame vector on
+        this triad, and the world tendon point drawn by :meth:`_update_tendons`
+        is ``R @ hole + t`` off exactly these axes. Seeing them is what turns a
+        wrong-looking tendon path into a readable one -- a routing angle
+        measured from the wrong axis, or a whole finger's discs rolled 180
+        degrees, is invisible in the disc cylinders (rotationally symmetric) and
+        obvious the moment the axes are drawn.
+
+        Unlike :meth:`_update_discs` the BASE disc is included. It is skipped
+        there because its cylinder sits inside the palm and only adds clutter,
+        but its frame is the finger's mounting frame -- the one thing on the
+        chain you can check against the CAD assembly -- so dropping it would
+        hide the frame most worth seeing, and would silently shift the numbering
+        of every triad on screen relative to ``disc_pose_idx``.
+        """
+        keep = set()
+        tc = fm.tendon_config
+        # Sized off the disc rather than fixed: the axes have to read against the
+        # disc they sit on (drawn at 1.3 * routing_radius) at any finger scale,
+        # and just past its rim is where they are legible without swamping the
+        # neighbouring disc.
+        length = 2.0 * tc.routing_radius
+        for di, node_idx in enumerate(tc.disc_pose_idx):
+            T = poses[node_idx]
+            n = f"/hand/{name}/disc_frame/{di}"
+            self._dynamic[n] = self.scene.add_frame(
+                n, show_axes=True, axes_length=float(length),
+                axes_radius=float(length) * 0.04,
+                wxyz=_wxyz_from_R(T[:3, :3]),
+                position=tuple(T[:3, 3]))
             keep.add(n)
         return keep
 

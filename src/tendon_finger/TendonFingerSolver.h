@@ -75,6 +75,34 @@ struct TendonFingerSolverConfig{
     double sigma_base_pos;
     double sigma_base_rot;
 
+    // Planar-bending approximation. The Cosserat rod bends in any direction and
+    // twists freely; the physical finger does not, because its discs are keyed to
+    // the backbone. When true, every rod segment gets a PlanarBendFactor
+    // penalising the out-of-plane and torsional components of Log(R_i^T R_j)/ds
+    // while leaving flexion (rotation about local +y) free.
+    //
+    // The sigmas are curvatures in rad/m, so they are directly comparable to
+    // sigma_twist_rot: at sigma_planar_bend == sigma_twist_rot this is roughly
+    // what an anisotropic K_inv already buys (see get_K_inv's
+    // lateral_stiffness_scale), and tightening below it is the point of having a
+    // separate factor.
+    //
+    // The defaults are deliberately ASYMMETRIC -- soft bend, tight twist -- and
+    // that is the whole trick. Measured over four grasp scenes: TWIST is the
+    // cause and out-of-plane bend is the symptom. The spiral-routed lateral
+    // tendons inject torsion, torsion rotates the material frame, and the next
+    // segment's flexion then lands out of plane. Constrain torsion at the source
+    // and the out-of-plane bend collapses with it (13x on big_sphere) while the
+    // rod keeps the freedom it needs to reach -- it curls further instead of
+    // splaying. Constraining the BEND row hard instead fights the accumulated
+    // result rather than the cause: it buys the same planarity but costs ~10 mm
+    // of reach, and on the power-drill scene it over-constrains badly enough
+    // that the AL stalls at 7 outer iterations. The soft bend row is kept only
+    // so a DIRECT lateral load still meets resistance.
+    bool   planar_bending      = false;
+    double sigma_planar_bend   = 1e-2;
+    double sigma_planar_twist  = 1e-4;
+
     // Simple global routing (backward-compatible). Used when per_disc_tendon_input is not populated.
     TendonInput tendon_input;
 

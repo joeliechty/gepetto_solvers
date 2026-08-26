@@ -6,6 +6,7 @@
 #include "RootCosseratTwistFactor.h"
 #include "RootCosseratStressFactor.h"
 #include "RootBoundaryStressFactor.h"
+#include "PlanarBendFactor.h"
 #include <gtsam/base/Vector.h>
 
 using namespace gtsam;
@@ -81,6 +82,16 @@ void CosseratRodModel::set_root_reparameterization(const Pose3& offset,
     // A shared_key overrides this so several rods can reference one common base
     // variable (e.g. all fingers of a hand sharing a floating wrist).
     root_base_key_ = shared_key.value_or(Symbol('H', 1000 * id_));
+}
+
+
+void CosseratRodModel::set_planar_bending(double sigma_bend, double sigma_twist) {
+    if (sigma_bend <= 0.0 || sigma_twist <= 0.0)
+        throw std::runtime_error(
+            "CosseratRodModel::set_planar_bending: sigmas must be positive");
+
+    planar_bend_noise_ = noiseModel::Diagonal::Sigmas(
+        (Vector2() << sigma_bend, sigma_twist).finished());
 }
 
 
@@ -176,6 +187,22 @@ NonlinearFactorGraph CosseratRodModel::build_graph(
     // Cosserat kinematics and mechanics factors
     for (int i = 0; i + 1 < num_nodes_; ++i) {
         Key wrench_key = (i == num_nodes_ - 2) ? dummy_wrench_key_ : wrench_keys_[i + 1];
+
+        // Planar-bending approximation. Emitted before the root branch below so
+        // it is not skipped by that branch's `continue`.
+        //
+        // Segment 0 is dropped under the reparameterization rather than getting a
+        // Root* variant: node 0's pose is not a Values variable there, and segment
+        // 0 lies inside the proximal bone, whose K_inv is scaled down by
+        // bone_stiffness_scale (1e-10 in the hand configs). It cannot bend in ANY
+        // direction, so constraining it out of plane would buy nothing.
+        if (planar_bend_noise_ && !(use_root_ && i == 0)) {
+            graph.add(PlanarBendFactor(
+                pose_keys_[i],
+                pose_keys_[i + 1],
+                ds[i],
+                planar_bend_noise_));
+        }
 
         // When reparameterized, node 0's pose is the hand base composed with the
         // fixed offset (T_0 = T_base o offset), so the factors that touch node 0

@@ -109,6 +109,12 @@ TendonFingerSolver<N>::TendonFingerSolver(const TendonFingerSolverConfig& config
         robot_->set_hand_base(Pose3(config.hand_base_offset));
     }
 
+    // Planar-bending approximation. Also before get_initial_values(), for the same
+    // reason: it changes what build_graph() emits.
+    if (config.planar_bending) {
+        robot_->set_planar_bending(config.sigma_planar_bend, config.sigma_planar_twist);
+    }
+
     get_initial_values();
 }
 

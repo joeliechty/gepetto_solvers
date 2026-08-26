@@ -144,6 +144,14 @@ public:
     // shared hand base itself with a single prior. Default true (legacy path).
     void set_emit_base_prior(bool emit) { emit_base_prior_ = emit; }
 
+    // Enable the planar-bending approximation on this finger's rod: the discs are
+    // keyed to the backbone, so it bends about local +y and does not deflect
+    // sideways or twist. Must be called before build_graph()/build_graph_kinematic().
+    // Sigmas are curvatures in rad/m. See CosseratRodModel::set_planar_bending.
+    void set_planar_bending(double sigma_bend, double sigma_twist) {
+        rod_->set_planar_bending(sigma_bend, sigma_twist);
+    }
+
     gtsam::Values get_initial_values() const;
 
     gtsam::NonlinearFactorGraph build_graph(const VectorNGaussian<N>& tensions) const;
