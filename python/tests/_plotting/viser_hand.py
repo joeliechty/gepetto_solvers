@@ -47,6 +47,9 @@ _TABLE_RGB = (150, 150, 160)
 _HALF_SPACE_RGB = (255, 140, 0)
 _CENTER_TARGET_RGB = (180, 60, 220)
 _MOUNT_RGB = (240, 240, 240)
+# Darker than the slab it is drawn on, so the grid reads as ruled lines on the
+# table rather than as another translucent overlay floating above it.
+_TABLE_GRID_RGB = (90, 90, 100)
 # Per-finger pinch-plane patches, in finger_names order (index, middle, ring,
 # pinky, thumb). One colour per finger rather than one for the overlay: the five
 # planes all pass through the same pinch point, so a single colour would draw
@@ -315,6 +318,63 @@ class ViserHandScene:
         except Exception:
             pass
 
+    def set_table_grid(self, origin, normal, *, span, spacing):
+        """Rule the table's top face into a grid, matching the one drawn on the
+        physical bench.
+
+        The point is comparison by eye: the real table carries a grid at this
+        spacing, so a landmark commanded to an intersection here can be read
+        against the same intersection there without measuring anything. Lines run
+        corner to corner of the same square :meth:`set_table` draws -- the
+        in-plane axes come from the same dominant-normal rule -- and are lifted a
+        hair ABOVE the top face, because coplanar geometry z-fights the
+        translucent slab and the grid flickers in and out as the camera moves.
+
+        ``origin`` is the PLANE origin -- the same argument :meth:`set_table`
+        takes, which sits at the middle of the square, not at its corner. Taking
+        it in that form rather than pre-cornered is deliberate: the two methods
+        are called with the same value from the same place, so the grid cannot end
+        up describing a different square from the slab it is ruled on.
+
+        ``span``/``spacing`` are required for the reason :meth:`set_table`'s
+        dimensions are: a second copy of the bench's numbers living here would be
+        free to drift from the caller's.
+        """
+        origin = np.asarray(origin, float).reshape(3)
+        n = np.asarray(normal, float).reshape(3)
+        axis = int(np.argmax(np.abs(n)))
+        u, v = [i for i in range(3) if i != axis]
+        # The minimum corner, by the same rule ``scene.table_corner`` uses, lifted
+        # clear of the top face.
+        base = origin.copy()
+        base[u] -= span / 2.0
+        base[v] -= span / 2.0
+        base[axis] += np.sign(n[axis]) * 5e-4
+
+        # Inclusive of both edges, so the square's own border is a grid line and
+        # the count reads as span/spacing + 1 the way a ruled sheet does.
+        steps = int(round(span / spacing))
+        segments = []
+        for i in range(steps + 1):
+            offset = i * spacing
+            for along, across in ((u, v), (v, u)):
+                a, b = base.copy(), base.copy()
+                a[along] += offset
+                b[along] += offset
+                b[across] += span
+                segments.append([a, b])
+        colors = np.tile(np.array(_TABLE_GRID_RGB, dtype=np.uint8),
+                         (len(segments), 2, 1))
+        self.scene.add_line_segments(
+            "/table_grid", points=np.array(segments, dtype=np.float32),
+            colors=colors, line_width=1.5)
+
+    def clear_table_grid(self):
+        try:
+            self.server.scene.remove_by_name("/table_grid")
+        except Exception:
+            pass
+
     def set_half_space_plane(self, split_point, axis, *, margin=0.0, span=0.25,
                              thickness=0.003):
         """Draw the Eq 2.16-2.17 opposition split plane -- a thin translucent
@@ -414,6 +474,40 @@ class ViserHandScene:
 
     def clear_table_frame(self):
         for name in ("/table_frame", "/table_frame_label"):
+            try:
+                self.server.scene.remove_by_name(name)
+            except Exception:
+                pass
+
+    def set_calibration_frame(self, T, *, axes_length=0.05, label=None):
+        """Draw the calibration target: where a chosen hand landmark is being
+        asked to go.
+
+        Unlike :meth:`set_table_frame` this carries a full ORIENTATION, because
+        the thing it is aligned against is a disc's body frame and not just a
+        point -- so the triad has to show which way the landmark will be facing
+        when it lands, not only where.
+
+        ``label`` is optional billboard text; the app passes the target's
+        table-frame coordinates, which is what you compare against the grid
+        printed on the bench.
+        """
+        T = np.asarray(T, float)
+        self.scene.add_frame("/calibration_frame", show_axes=True,
+                             axes_length=axes_length,
+                             axes_radius=axes_length * 0.03,
+                             wxyz=_wxyz_from_R(T[:3, :3]),
+                             position=tuple(T[:3, 3]))
+        try:
+            self.server.scene.remove_by_name("/calibration_frame_label")
+        except Exception:
+            pass
+        if label:
+            self.scene.add_label("/calibration_frame_label", label,
+                                 position=tuple(T[:3, 3]))
+
+    def clear_calibration_frame(self):
+        for name in ("/calibration_frame", "/calibration_frame_label"):
             try:
                 self.server.scene.remove_by_name(name)
             except Exception:

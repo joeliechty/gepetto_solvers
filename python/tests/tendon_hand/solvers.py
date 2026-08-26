@@ -237,6 +237,65 @@ def solved_wrist_pose(configs, frame):
     return T0 @ np.linalg.inv(np.asarray(cfg.hand_base_offset, float))
 
 
+def disc_pose(frame, finger_name, disc):
+    """World pose of one routing disc's body frame, as a 4x4.
+
+    The same ``disc_pose_idx`` walk ``_plotting/viser_hand._update_disc_frames``
+    does, so this returns exactly the frame the *disc frames* display toggle
+    draws a triad on -- which is what makes it usable as a landmark you can point
+    at on screen and then find on the physical hand.
+    """
+    fm = frame[finger_name].marginals
+    node = fm.tendon_config.disc_pose_idx[disc]
+    return np.asarray(fm.rod.states[node].pose.mean, float)
+
+
+def wrist_to_disc(configs, frame, finger_name, disc):
+    """``T_wrist<-disc`` for one disc, measured off a solved frame."""
+    return (np.linalg.inv(solved_wrist_pose(configs, frame))
+            @ disc_pose(frame, finger_name, disc))
+
+
+def wrist_pose_for_disc_target(configs, frame, finger_name, disc, T_target):
+    """The wrist pose that puts ``disc``'s frame at ``T_target``.
+
+    ONLY VALID FOR A DISC ON THE METACARPAL -- one ``config.proximal_disc_flags``
+    marks rigid, i.e. disc 0 or 1. Those two are bolted to the palm, so
+    ``T_wrist<-disc`` is a constant of the morphology rather than a function of
+    the posture, and inverting it is an exact placement:
+
+        T_wrist = T_target o inv(T_wrist<-disc)
+
+    Measured, not assumed: across the full 0 -> 2.5 N flexor range disc 1 moves
+    13-29 um in the wrist frame on every digit, while disc 2 (the first one past
+    the MCP joint) moves 4.5-13.8 mm. So the residual left by a single
+    application of this is micrometres, and one refinement pass -- re-solve,
+    re-measure ``T_wrist<-disc``, re-apply -- clears even that.
+
+    Handed a disc past the MCP it would still return a pose, but the transform it
+    inverted describes only the posture it was measured in; callers gate on
+    ``proximal_disc_flags`` rather than letting that pass silently.
+    """
+    return np.asarray(T_target, float) @ np.linalg.inv(
+        wrist_to_disc(configs, frame, finger_name, disc))
+
+
+def disc_frame_error(T_actual, T_target):
+    """``(position_mm, rotation_deg)`` between two frames, for a residual readout.
+
+    The rotation is the geodesic angle of ``R_target^T R_actual`` -- one number
+    for "how far off is the orientation", which is what a calibration readout
+    wants, rather than three Euler components that trade against each other.
+    """
+    A = np.asarray(T_actual, float)
+    B = np.asarray(T_target, float)
+    pos = float(np.linalg.norm(A[:3, 3] - B[:3, 3])) * 1e3
+    # Clipped because a trace a hair outside [-1, 3] from round-off makes arccos
+    # return nan, which reads as a broken solve rather than a perfect one.
+    cos = (np.trace(B[:3, :3].T @ A[:3, :3]) - 1.0) / 2.0
+    return pos, float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+
+
 # The default hand base pose: lifted 75 mm along the support normal and pitched
 # -1.22 rad about +Y. The mount puts the palm along the base frame's -x, so that
 # pitch swings the palm to face roughly -z -- i.e. the hand hovers palm-down over

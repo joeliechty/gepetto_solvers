@@ -4,9 +4,11 @@ solve.
 Exposes the solver knobs as live web GUI controls -- object picker, wrist start
 pose, per-finger flexor tensions, per-finger contact toggles, collision / table
 options, AL settings. *FK* re-poses the hand from the current sliders (and the
-pose / tension sliders re-solve it live as they move); *Step* advances the IK
-solve by exactly one Augmented Lagrangian outer iteration, and *Auto solve* keeps
-stepping until it converges or stalls. Every step is kept, so the *Solve steps*
+pose / tension sliders re-solve it live as they move); the *Tensions* folder
+prints back the actuated tendon length each solve reached, under the sliders
+that commanded it. *Step* advances the IK solve by exactly one Augmented
+Lagrangian outer iteration, and *Auto solve* keeps stepping until it converges
+or stalls. Every step is kept, so the *Solve steps*
 scrubber replays the convergence one iteration at a time (initial guess -> each
 outer iteration).
 
@@ -39,6 +41,27 @@ open disabled, and the E-STOP above extends to them -- it halts the publishers,
 not just the solver. Nothing in this module imports rclpy; the bridge is
 duck-typed and the conversion lives in ``robot_plan.py``, which is pure numpy and
 is covered by ``--smoke``.
+
+The *Calibration* folder tests the one number in this stack that was NOT measured
+from CAD: where the workspace table sits, which came off a ruler
+(``workspace_table_description.xacro``). Pick a landmark on the hand -- a
+metacarpal routing disc of any digit -- and a point on the table's grid, press
+*Align hand to frame*, then play it on the robot and look at where the landmark
+physically lands. A constant offset across several grid points is a wrong table
+origin; an error that grows with distance from the corner is a wrong yaw or a
+swapped axis. The x/y sliders ARE grid coordinates, because the viser world and
+``lbr_workspace_table_link`` differ by a pure translation (see
+``gepetto_control.frames``), and the 10 cm grid is drawn on the square to match
+the one on the bench.
+
+That alignment is CLOSED FORM, not a solve, despite the button. The metacarpal is
+bolted to the palm -- measured: disc 1 moves 13-29 um in the wrist frame over the
+whole 0-2.5 N flexor range, while disc 2, the first past the MCP joint, moves
+4.5-13.8 mm -- so the wrist pose that puts the landmark on the target is one
+matrix inverse, exact to the micrometre and independent of the constraint set. An
+IK solve with a loosened wrist prior would be slower, approximate, and would let
+whatever contact and pre-grasp constraints happen to be ticked drag the landmark
+off the target, which is precisely the error being measured.
 
 Changing the constraint set (object, contacts, collision, table) restarts the IK
 loop, because the Augmented Lagrangian duals it carries describe the constraints
@@ -99,13 +122,48 @@ from .solvers import (
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
     pregrasp_centroid_witness, finger_plane_witness, planar_gap_witness,
     default_half_space_axis, PHASE_PRESETS, FLEXOR_IDX,
+    disc_pose, wrist_to_disc, wrist_pose_for_disc_target, disc_frame_error,
     DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
-from .config import pinch_pose
+from .config import pinch_pose, proximal_disc_flags
 from .mount import MOUNT_WRIST_XYZ, MOUNT_WRIST_RPY, measured_mount_pose
 from . import robot_plan
 
 
 FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
+
+# ---------------------------------------------------------------------------
+# Table-grid calibration.
+# ---------------------------------------------------------------------------
+#
+# The URDF's hand geometry came from CAD, but where the workspace table SITS was
+# measured with a ruler (workspace_table_description.xacro). The Calibration
+# folder tests that measurement: command a known hand landmark to a known
+# intersection of the grid drawn on the real table, then look at where it
+# physically lands. A consistent offset is a wrong table origin; a rotation that
+# grows with distance from the corner is a wrong yaw or a swapped axis.
+
+# Spacing of the lines ruled on the physical table, and therefore of the grid
+# drawn on the viser square. The square itself is scene.TABLE_SPAN (0.4 m), so
+# this gives the 4x4 of 10 cm cells that is actually on the bench.
+CAL_GRID_SPACING = 0.1
+
+# The discs offerable as the landmark, disc index -> label.
+#
+# ONLY THE METACARPAL ONES. config.proximal_disc_flags marks discs 0 and 1
+# rigidly attached to the palm, which is what makes the alignment a closed-form
+# wrist placement rather than an IK solve: T_wrist<-disc is a constant of the
+# morphology. Measured, not assumed -- across the whole 0-2.5 N flexor range disc
+# 1 moves 13-29 um in the wrist frame, while disc 2 (the first past the MCP
+# joint) moves 4.5-13.8 mm. Disc 1 is the default because it is the one you can
+# actually find on the hardware: the far end of the metacarpal, where the MCP
+# joint starts. Disc 0 is buried in the palm.
+CAL_DISCS = {1: "distal metacarpal", 0: "metacarpal base"}
+CAL_DEFAULT_DISC = 1
+
+# How many times the placement re-measures and re-applies. The first pass is
+# already micrometre-accurate; the second absorbs the last of the ~25 um of
+# tension-dependence, and costs one FK solve.
+CAL_REFINE_PASSES = 2
 
 # ---------------------------------------------------------------------------
 # ROS-mode constants.
@@ -420,9 +478,83 @@ def _smoke():
             print(f"  [{label:>8}] steps={st.steps} state={st.state} "
                   f"snapshots={n} [{status}] | violation={st.violation:.3e} "
                   f"cost={st.cost:.4g}{extra}")
+    ok = _smoke_calibration() and ok
     ok = _smoke_robot_plan() and ok
     print("Smoke test:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+# What "landed on the target" has to mean for the Calibration folder to be
+# measuring the TABLE rather than its own error. The bench's grid is drawn to
+# maybe a millimetre; anything at these tolerances is two orders below that and
+# so contributes nothing to what is being calibrated.
+_CAL_SMOKE_POS_MM = 0.05
+_CAL_SMOKE_ROT_DEG = 0.01
+
+# The premise the closed form rests on: a metacarpal disc does not move in the
+# wrist frame when the tendons pull, and the first disc past the MCP does. Both
+# halves are asserted -- a test that only checked the rigid one would still pass
+# against a build where every disc had been welded to the palm.
+_CAL_RIGID_TOL_MM = 0.1
+_CAL_ARTICULATED_MIN_MM = 1.0
+
+
+def _smoke_calibration():
+    """Check the closed-form landmark placement the Calibration folder is built on.
+
+    The whole feature is one number -- how far the landmark ends up from where it
+    was sent -- so that number is what this measures, with no viser and no
+    hardware. It also tests the PREMISE separately: the placement is exact only
+    because a metacarpal disc is rigid to the wrist, and if that ever stopped
+    being true the residual check alone would not say why.
+    """
+    print("Smoke-testing the calibration landmark placement...")
+    ok = True
+    finger, disc = FINGER_LABELS[0], CAL_DEFAULT_DISC
+
+    params = HandSolveParams()
+    params.table_burial = 0.0
+    solver = HandFKSolver(params)
+
+    # -- the premise: which discs move when the tendons pull --
+    def transforms(tension):
+        params.flexor_tensions = [tension] * len(FINGER_LABELS)
+        frame = solver.solve().frames[0]
+        return {name: [wrist_to_disc(solver.configs, frame, name, d)
+                       for d in (disc, disc + 1)]
+                for name in FINGER_LABELS}
+
+    slack, pulled = transforms(0.0), transforms(2.5)
+    rigid_mm = max(np.linalg.norm(slack[n][0][:3, 3] - pulled[n][0][:3, 3])
+                   for n in FINGER_LABELS) * 1e3
+    moved_mm = min(np.linalg.norm(slack[n][1][:3, 3] - pulled[n][1][:3, 3])
+                   for n in FINGER_LABELS) * 1e3
+    premise = (rigid_mm < _CAL_RIGID_TOL_MM and moved_mm > _CAL_ARTICULATED_MIN_MM)
+    ok = ok and premise
+    print(f"  [ rigidity] disc {disc} moves {rigid_mm * 1e3:.1f} um, disc "
+          f"{disc + 1} moves {moved_mm:.2f} mm over 0-2.5 N "
+          f"[{'ok' if premise else 'BAD'}]")
+
+    # -- the placement itself --
+    params.flexor_tensions = list(HandSolveParams().flexor_tensions)
+    frame = solver.solve().frames[0]
+    # A target well away from where the landmark already is, and rotated, so a
+    # placement that silently did nothing could not pass.
+    target = disc_pose(frame, finger, disc).copy()
+    target[:3, 3] += np.array([0.05, -0.05, 0.05])
+    target[:3, :3] = euler_to_R(0.0, 0.0, np.deg2rad(15.0)) @ target[:3, :3]
+
+    for _ in range(CAL_REFINE_PASSES):
+        params.wrist_pose = wrist_pose_for_disc_target(
+            solver.configs, frame, finger, disc, target)
+        frame = solver.solve().frames[0]
+
+    pos_mm, rot_deg = disc_frame_error(disc_pose(frame, finger, disc), target)
+    landed = pos_mm < _CAL_SMOKE_POS_MM and rot_deg < _CAL_SMOKE_ROT_DEG
+    ok = ok and landed
+    print(f"  [    align] residual {pos_mm:.5f} mm / {rot_deg:.5f} deg after "
+          f"{CAL_REFINE_PASSES} passes [{'ok' if landed else 'BAD'}]")
+    return ok
 
 
 def _smoke_robot_plan():
@@ -1119,6 +1251,15 @@ class HandVizApp:
         origin = self._table_origin()
         self.scene.set_table(origin, self.params.plane_normal,
                              span=TABLE_SPAN, thickness=TABLE_THICKNESS)
+        # Ruled on the slab's top face, matching the grid on the physical bench,
+        # so a landmark commanded to an intersection here can be read against the
+        # same intersection there. Drawn with the slab for the same reason the
+        # slab is drawn unconditionally: it is part of the landmark.
+        if self.g_show_grid.value:
+            self.scene.set_table_grid(origin, self.params.plane_normal,
+                                      span=TABLE_SPAN, spacing=CAL_GRID_SPACING)
+        else:
+            self.scene.clear_table_grid()
         corner = table_corner(origin, self.params.plane_normal)
         if self.g_show_table_frame.value:
             self.scene.set_table_frame(
@@ -1126,6 +1267,10 @@ class HandVizApp:
         else:
             self.scene.clear_table_frame()
         self._refresh_table_readout(origin, corner)
+        # The calibration target is measured FROM the corner just resolved, so it
+        # has to be re-placed whenever the table moves -- which the object seating
+        # makes it do on every object change.
+        self._refresh_calibration_frame()
         if self.params.half_space:
             axis = (self.params.half_space_axis if self.params.half_space_axis is not None
                    else default_half_space_axis(spec, rotation, self.params.plane_normal))
@@ -1140,6 +1285,7 @@ class HandVizApp:
         if self.result is None:
             # Nothing solved yet, so the commanded wrist pose is all there is.
             self._render_mount()
+            self._report_tendon_lengths(None)
             return
         # Render whichever solve snapshot the convergence scrubber selects; with
         # no scrubber up this is the result itself, so the gap readouts below
@@ -1147,6 +1293,7 @@ class HandVizApp:
         # Every result here is a single state, so there is only ever frame 0.
         res = self._iter_view(live)
         self._render_mount(res)
+        self._report_tendon_lengths(res)
         # Only the fingers this solve drove onto a surface get a gap line for it;
         # a distance readout on a finger nothing asked to touch is just noise.
         # The two sets are independent, so a finger can carry both lines, one, or
@@ -2304,6 +2451,60 @@ class HandVizApp:
         body = notes[i] if notes is not None else ""
         self.g_iter_status.content = f"iterate {i} / {n - 1}  \n{body}"
 
+    TENDON_IDLE = "_press **FK** to read the actuated tendon lengths_"
+
+    def _report_tendon_lengths(self, res):
+        """The ACTUATED (flexor) tendon length the solve arrived at, per finger,
+        printed under the tension sliders that commanded it.
+
+        The sliders say what the hand is being pulled with; this says what came
+        back -- the L half of the state a control tick anchors on
+        (``HandResult.tendon_lengths``), which until now was only visible after
+        an export to the robot. ``res`` is the frame being drawn, so scrubbing
+        the convergence slider walks the lengths through the solve too.
+
+        The tension is re-read from the RESULT rather than from the slider
+        because IK treats the flexor tension as a variable with a soft prior:
+        past the first iterate the tension that produced this length is the
+        solver's, not the slider's, and printing the slider's next to a solved
+        length would be a pairing that never happened.
+
+        Displacement from the open hand -- the quantity actually commanded to
+        the hardware -- is appended only once :meth:`_open_lengths` has been
+        computed for some other reason (ROS mode). Deriving it here would cost
+        an FK solve on the shared warm solver from whichever thread happens to
+        be rendering, and this is a readout, not a reason to solve.
+        """
+        handle = getattr(self, "g_tendon_lengths", None)
+        if handle is None:
+            return  # rendered before the GUI was built
+        if res is None:
+            handle.content = self.TENDON_IDLE
+            return
+        lengths = dict(zip(res.finger_names, res.tendon_lengths(0)))
+        open_lengths = self._open_lengths_cache
+        # Whole lines as code spans: markdown collapses runs of spaces
+        # everywhere else, and the columns are the point of the readout.
+        lines = [f"**actuated tendon ({self.mode})**"]
+        for name in res.finger_names:
+            tension = float(np.asarray(
+                res.frames[0][name].marginals.tensions.mean,
+                float)[FLEXOR_IDX])
+            length = float(lengths[name][FLEXOR_IDX])
+            row = f"{name:<6} {tension:5.2f} N   {length * 1e3:7.2f} mm"
+            if open_lengths is not None and name in open_lengths:
+                # Signed the way robot_plan commands it: POSITIVE is tendon
+                # pulled in from the open hand, negative is paid back out.
+                # Snapped to zero inside half a displayed digit, so the open
+                # hand reads a column of +0.00 rather than a mix of +0.00 and
+                # the "-0.00" a solver residual of -1e-9 would otherwise print.
+                disp = (open_lengths[name] - length) * 1e3
+                if abs(disp) < 0.005:
+                    disp = 0.0
+                row += f"   {disp:+6.2f} mm vs open"
+            lines.append(f"`{row}`")
+        handle.content = "  \n".join(lines)
+
     # -- robot (ROS mode only) --
     #
     # Everything below is dead code with ros_mode off: the Robot folder is not
@@ -2552,6 +2753,11 @@ class HandVizApp:
         """Grow ``handle``'s range until it contains ``value``. Returns the new
         ``(min, max)`` if the range moved, else None.
 
+        Named for the caller it was written for, but it is a plain "make this
+        handle able to hold this number": the Calibration folder uses it for the
+        same reason, on both the wrist sliders it commands and its own x/y/z when
+        a captured landmark falls outside the table square.
+
         The wrist sliders open on a DEMO range (+-0.1 m) that says nothing about
         where the robot is: a read comes back in the scene frame, whose origin is
         the table corner, so a wrist a third of a metre above the table is an
@@ -2699,7 +2905,314 @@ class HandVizApp:
                     f"within the 0-{self.g_flexors[0].max:g} N slider range")
         return [line]
 
+    # -- table-grid calibration --
+    #
+    # See the CAL_* constants at module scope for what this is FOR. The short
+    # version: the hand's geometry is from CAD and the table's placement is from
+    # a ruler, so the way to test the ruler is to send a CAD-known landmark to a
+    # grid intersection and look at where it physically ends up.
+
+    def _cal_finger(self):
+        return self.g_cal_finger.value
+
+    def _cal_disc(self):
+        """The selected disc's INDEX, back out of its dropdown label."""
+        return self._cal_disc_labels[self.g_cal_disc.value]
+
+    def _cal_config(self):
+        """The selected finger's ``TendonFingerConfig``.
+
+        ``fk_solver.configs`` is a list of ``(name, cfg)`` pairs -- the shape
+        ``solved_wrist_pose`` unpacks -- so a named lookup has to walk it.
+        """
+        for name, cfg in self.fk_solver.configs:
+            if name == self._cal_finger():
+                return cfg
+        raise KeyError(f"no finger named {self._cal_finger()!r}")
+
+    def _cal_check_rigid(self):
+        """The reason this alignment is closed-form, checked rather than assumed.
+
+        Returns a complaint string if the selected disc is NOT rigidly attached to
+        the palm, else None. ``CAL_DISCS`` only offers discs that are, so this
+        cannot normally fire -- it exists because the thing it guards is a silent
+        wrong answer rather than an exception: a disc past the MCP joint still has
+        a ``T_wrist<-disc``, it just describes the one posture it was measured in,
+        and the hand would land somewhere plausible-looking and wrong.
+        """
+        disc = self._cal_disc()
+        flags = proximal_disc_flags(self._cal_config())
+        if disc < len(flags) and flags[disc]:
+            return None
+        return (f"disc {disc} is not rigidly attached to the palm, so there is no "
+                f"constant wrist-to-disc transform to invert. Pick one of: "
+                f"{', '.join(str(d) for d in sorted(CAL_DISCS))}.")
+
+    def _calibration_target(self):
+        """The target frame in VISER WORLD coordinates.
+
+        The sliders are in the TABLE frame, which is the useful one: the
+        registration against the robot is a pure translation (see
+        ``gepetto_control.frames``), so the viser world and
+        ``lbr_workspace_table_link`` share axis directions and a table-frame
+        coordinate is just a world coordinate minus the corner. That makes the x/y
+        sliders read directly as positions on the grid drawn on the bench, with
+        [0, TABLE_SPAN] spanning the square.
+        """
+        T = np.eye(4)
+        T[:3, :3] = _euler_to_R(self.g_cal_roll.value, self.g_cal_pitch.value,
+                                self.g_cal_yaw.value)
+        T[:3, 3] = self._corner_viz() + np.array(
+            [self.g_cal_x.value, self.g_cal_y.value, self.g_cal_z.value], float)
+        return T
+
+    def _refresh_calibration_frame(self, _=None):
+        """Draw (or clear) the target triad. NO SOLVE -- this is the feedback while
+        you pick where the frame goes, so it has to be free enough to fire on
+        every slider drag.
+
+        Also called from :meth:`_refresh_object`, because the support plane is
+        seated under the object: changing the object moves the table corner the
+        sliders are measured from, and a target left where it was would silently
+        stop meaning what the sliders say.
+        """
+        if not self.g_cal_show.value:
+            self.scene.clear_calibration_frame()
+            return
+        self.scene.set_calibration_frame(
+            self._calibration_target(),
+            label=f"calibration  ({self.g_cal_x.value:.3f}, "
+                  f"{self.g_cal_y.value:.3f}, {self.g_cal_z.value:.3f}) m "
+                  f"in table frame")
+
+    def _cal_landmark_pose(self):
+        """World pose of the selected landmark on the hand right now, or None
+        before anything has been solved.
+
+        Read off the scrubbed iterate rather than ``self.result`` so it describes
+        the hand ON SCREEN -- the same rule ``_adopt_solved_wrist`` follows.
+        """
+        res = self._iter_view()
+        if res is None:
+            return None
+        return disc_pose(res.frames[0], self._cal_finger(), self._cal_disc())
+
+    def _write_wrist_sliders(self, T):
+        """Put a wrist pose on the six Wrist-start-pose sliders.
+
+        The idiom is ``_adopt_robot_state``'s, for its reasons: ``_restoring``
+        latched so the per-slider live-FK hook does not fire six times on the way
+        through, ``_fit_wrist_range`` to grow the +-0.1 m demo range (essential
+        here -- the scene origin is the object, and the table corner is 200 mm
+        away from it before the target offset is added), and the raw float
+        written, since viser does not snap a programmatic write to the step grid
+        and ``_sync_wrist`` rebuilds ``params.wrist_pose`` straight off these
+        handles. Returns the labels of any sliders whose range had to grow.
+        """
+        roll, pitch, yaw = R_to_euler(T[:3, :3])
+        widened = []
+        self._restoring = True
+        try:
+            for handle, value, label in zip(
+                    (self.g_tx, self.g_ty, self.g_tz,
+                     self.g_roll, self.g_pitch, self.g_yaw),
+                    (*T[:3, 3], roll, pitch, yaw),
+                    ("x", "y", "z", "roll", "pitch", "yaw")):
+                value = float(value)
+                if self._fit_wrist_range(handle, value) is not None:
+                    widened.append(label)
+                handle.value = value
+        finally:
+            self._restoring = False
+        return widened
+
+    def _capture_calibration(self, _=None):
+        """Fill the six calibration sliders from where the landmark is NOW.
+
+        This is what makes the orientation sliders usable. Absolute roll/pitch/yaw
+        against the table frame is the honest parameterisation, but there is no
+        way to guess from cold which triple points the hand at the table rather
+        than through it -- so grab the orientation the hand is already in, then
+        drive across the grid on x/y alone and the move stays a pure translation.
+        """
+        T = self._cal_landmark_pose()
+        if T is None:
+            self.g_cal_status.content = (
+                "**nothing solved yet** -- press *FK* first, so there is a hand "
+                "pose to capture the landmark from.")
+            return
+        local = T[:3, 3] - self._corner_viz()
+        roll, pitch, yaw = R_to_euler(T[:3, :3])
+        self._restoring = True
+        try:
+            for handle, value in zip(
+                    (self.g_cal_x, self.g_cal_y, self.g_cal_z,
+                     self.g_cal_roll, self.g_cal_pitch, self.g_cal_yaw),
+                    (*local, roll, pitch, yaw)):
+                value = float(value)
+                self._fit_wrist_range(handle, value)
+                handle.value = value
+        finally:
+            self._restoring = False
+        self._refresh_calibration_frame()
+        off_grid = not (0.0 <= local[0] <= TABLE_SPAN and 0.0 <= local[1] <= TABLE_SPAN)
+        self.g_cal_status.content = (
+            f"captured **{self._cal_finger()}** disc {self._cal_disc()} at "
+            f"({local[0]:+.4f}, {local[1]:+.4f}, {local[2]:+.4f}) m in the table "
+            f"frame" + ("  \n_that is outside the 0.4 x 0.4 m square -- the "
+                        "sliders' range was widened to hold it._" if off_grid else ""))
+
+    def _align_to_calibration(self, _=None):
+        """Place the hand so the selected landmark lands on the calibration frame.
+
+        A CLOSED-FORM PLACEMENT, not a solve, even though it sits under a button
+        that says solve. The landmark is on the metacarpal, which is bolted to the
+        palm, so ``T_wrist<-disc`` is a constant of the morphology and the wrist
+        pose that puts the disc at the target is one matrix inverse
+        (:func:`solvers.wrist_pose_for_disc_target`). Doing it as an IK solve with
+        a loosened wrist prior would be slower, approximate, and -- worse -- would
+        let whatever contact and pre-grasp constraints happen to be ticked drag
+        the landmark off the target it was asked to hit, which is exactly the
+        error this feature exists to measure.
+
+        Still goes through the e-stop gate and greys the panel, because it re-poses
+        the hand (and in ROS mode that pose is one press away from the arm).
+        """
+        try:
+            gate = self.estop.admit("calibration align")
+        except Refused as exc:
+            self.g_cal_status.content = f"**refused:** {exc}"
+            return
+        try:
+            with gate:
+                self._set_solving(True)
+                self._align_to_calibration_admitted()
+        except Exception as exc:
+            traceback.print_exc()
+            self.g_cal_status.content = f"**align failed:** `{exc}`"
+        finally:
+            self._set_solving()
+            self._report_estop()
+
+    def _align_to_calibration_admitted(self):
+        complaint = self._cal_check_rigid()
+        if complaint:
+            self.g_cal_status.content = f"**cannot align:** {complaint}"
+            return
+
+        # The placement measures T_wrist<-disc off a SOLVED frame, so there has to
+        # be one. A cold app has already solved in __init__; this covers the case
+        # where a failed solve left self.result None.
+        if self._iter_view() is None:
+            self._fk_solve_admitted()
+
+        target = self._calibration_target()
+        widened = []
+        for _ in range(CAL_REFINE_PASSES):
+            res = self._iter_view()
+            T_wrist = wrist_pose_for_disc_target(
+                self.fk_solver.configs, res.frames[0],
+                self._cal_finger(), self._cal_disc(), target)
+            widened += [lbl for lbl in self._write_wrist_sliders(T_wrist)
+                        if lbl not in widened]
+            # Re-solves at the CURRENT tensions, which is what makes the second
+            # pass worth its solve: the first pass's transform was measured at the
+            # posture the hand was in before it moved.
+            self._fk_solve_admitted()
+
+        landed = self._cal_landmark_pose()
+        pos_mm, rot_deg = disc_frame_error(landed, target)
+        lines = [
+            f"**{self._cal_finger()}** disc {self._cal_disc()} "
+            f"({CAL_DISCS[self._cal_disc()]}) aligned to "
+            f"({self.g_cal_x.value:.3f}, {self.g_cal_y.value:.3f}, "
+            f"{self.g_cal_z.value:.3f}) m in the table frame",
+            f"residual **{pos_mm:.4f} mm** / **{rot_deg:.4f} deg** "
+            f"after {CAL_REFINE_PASSES} passes",
+        ]
+        # A tenth of a millimetre is an order of magnitude worse than the ~25 um
+        # of tension-dependence this is correcting for, so it means the premise
+        # broke rather than that the refinement needs another pass.
+        if pos_mm > 0.1 or rot_deg > 0.05:
+            lines.append(
+                "**residual is larger than expected** -- the landmark should be "
+                "rigid to the wrist. Check that the FK solve converged.")
+        if widened:
+            lines.append(
+                f"_wrist slider range widened ({', '.join(widened)}) to hold the "
+                f"commanded pose._")
+        if self.ros_mode:
+            lines.append(
+                "_To send it: Robot folder, waypoints = *final state only*, tick "
+                "*arm*, then *Play solve on robot*._")
+        self.g_cal_status.content = "  \n".join(lines)
+
     # -- GUI construction --
+
+    def _build_calibration_folder(self, gui):
+        """The Calibration folder: put a known hand landmark on a known point of
+        the table's grid.
+
+        Sits directly under *Table* because everything in it is expressed against
+        that landmark -- the x/y sliders ARE grid coordinates on the square drawn
+        there, and moving the table (which the object seating does) moves them.
+        """
+        self._cal_disc_labels = {f"{d} — {label}": d
+                                 for d, label in CAL_DISCS.items()}
+        default_disc_label = next(k for k, v in self._cal_disc_labels.items()
+                                  if v == CAL_DEFAULT_DISC)
+        with gui.add_folder("Calibration", expand_by_default=False):
+            gui.add_markdown(
+                f"Align a hand landmark with a point on the table's "
+                f"**{TABLE_SPAN:g} x {TABLE_SPAN:g} m** grid, to test the "
+                f"ruler-measured table transform in the URDF against the "
+                f"CAD-measured hand. x/y are grid coordinates from the corner "
+                f"frame; the lines are every {CAL_GRID_SPACING * 100:.0f} cm.")
+            self.g_cal_finger = gui.add_dropdown(
+                "finger", FINGER_LABELS, initial_value=FINGER_LABELS[0])
+            self.g_cal_disc = gui.add_dropdown(
+                "landmark disc", list(self._cal_disc_labels),
+                initial_value=default_disc_label,
+                hint="Which routing disc's frame is put on the target. Only the "
+                     "two metacarpal discs are offered: they are bolted to the "
+                     "palm, which is what makes this an exact placement instead "
+                     "of an IK solve. Disc 1 is the far end of the metacarpal, "
+                     "where the MCP joint starts -- the one you can find on the "
+                     "hardware. Turn on *disc frames* in Display to see it.")
+            # The square runs 0..TABLE_SPAN from the corner frame, so these ARE
+            # the grid coordinates. Step 5 mm: fine enough to sit between lines
+            # deliberately, coarse enough that the 10 cm intersections land
+            # exactly on a step.
+            self.g_cal_x = gui.add_slider("x (m)", 0.0, TABLE_SPAN, 0.005,
+                                          TABLE_SPAN / 2)
+            self.g_cal_y = gui.add_slider("y (m)", 0.0, TABLE_SPAN, 0.005,
+                                          TABLE_SPAN / 2)
+            self.g_cal_z = gui.add_slider("z (m)", -0.05, 0.30, 0.005, 0.10)
+            self.g_cal_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, 0.0)
+            self.g_cal_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, 0.0)
+            self.g_cal_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, 0.0)
+            self.g_cal_show = gui.add_checkbox("show calibration frame", True)
+            self.g_cal_capture = gui.add_button(
+                "Capture current", icon=self.viser.Icon.CROSSHAIR,
+                hint="Fill the six sliders from where the selected landmark is "
+                     "right now. Grab the hand's current orientation this way, "
+                     "then drive across the grid on x/y alone and every move is "
+                     "a pure translation.")
+            self.g_cal_align = gui.add_button(
+                "Align hand to frame", icon=self.viser.Icon.TARGET,
+                hint="Move the wrist so the selected landmark lands exactly on "
+                     "the calibration frame, and re-pose with FK. Closed-form, "
+                     "not a solve -- the landmark is rigid to the wrist -- so it "
+                     "ignores the constraint set entirely and reports the "
+                     "residual it actually achieved.")
+            self.g_cal_status = gui.add_markdown("")
+
+        self.g_cal_capture.on_click(self._capture_calibration)
+        self.g_cal_align.on_click(self._align_to_calibration)
+        for handle in (self.g_cal_finger, self.g_cal_disc, self.g_cal_show,
+                       self.g_cal_x, self.g_cal_y, self.g_cal_z,
+                       self.g_cal_roll, self.g_cal_pitch, self.g_cal_yaw):
+            handle.on_update(self._refresh_calibration_frame)
 
     def _build_robot_folder(self, gui):
         """The Robot folder: play a solve on the hardware, read the hardware back.
@@ -2792,12 +3305,17 @@ class HandVizApp:
                    self.g_coll_radius, self.g_coll_sigma, self.g_cull,
                    self.g_set_beta,
                    self.g_table, self.g_plane_offset, self.g_plane_avoid,
+                   self.g_cal_finger, self.g_cal_disc,
+                   self.g_cal_x, self.g_cal_y, self.g_cal_z,
+                   self.g_cal_roll, self.g_cal_pitch, self.g_cal_yaw,
+                   self.g_cal_show,
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
                    self.g_show_true_mesh,
                    self.g_show_contact, self.g_show_collision,
                    self.g_show_discs, self.g_show_disc_frames,
                    self.g_show_world, self.g_show_obj_frame,
-                   self.g_show_table_frame, self.g_show_gaps, self.g_show_mount,
+                   self.g_show_table_frame, self.g_show_grid,
+                   self.g_show_gaps, self.g_show_mount,
                    self.g_show_finger_planes, self.g_show_planar_gap])
 
     def _build_gui(self):
@@ -2986,10 +3504,33 @@ class HandVizApp:
                      "way it does in CAD.")
 
         with gui.add_folder("Tensions (N)"):
-            self.g_passive = gui.add_slider("passive", 0.0, 3.0, 0.05, 0.5)
+            # Opens on the CALIBRATED OPEN HAND -- HandConfig's
+            # zero_bend_passive_tension / zero_bend_flexor_tensions, read through
+            # robot_plan.open_pose_tensions so the numbers live in exactly one
+            # place and the GUI cannot drift from the calibration. That pose is
+            # the zero robot_plan.open_tendon_lengths measures every commanded
+            # displacement from, so the app starts at zero displacement and the
+            # length readout below opens on +0.00 mm rather than on an offset
+            # nobody asked for. (Same trick as the wrist sliders, one level out:
+            # the headless repro of what is on screen is open_pose_tensions(),
+            # not a HandSolveParams default -- ITS flexor default is still
+            # GRASP_FLEXOR_TENSION, which is scene geometry, the tension the big
+            # grasp sphere was sized at, and not a statement about this hand's
+            # open pose.) The step is 0.01 N because the calibrated pull is
+            # per-finger and does not land on a 0.05 grid.
+            open_passive, open_flexors = robot_plan.open_pose_tensions()
+            self.g_passive = gui.add_slider("passive", 0.0, 3.0, 0.05,
+                                            open_passive)
             self.g_flexors = [
-                gui.add_slider(lbl, 0.0, 3.0, 0.05, GRASP_FLEXOR_TENSION)
+                gui.add_slider(lbl, 0.0, 3.0, 0.01,
+                               open_flexors.get(lbl, GRASP_FLEXOR_TENSION))
                 for lbl in FINGER_LABELS]
+            # What the solve gives BACK for the tensions above: the sliders
+            # command a pull, this says how much actuated tendon that pull
+            # actually took in. Rewritten on every render, so it follows the
+            # live re-solve and the convergence scrubber both -- see
+            # _report_tendon_lengths.
+            self.g_tendon_lengths = gui.add_markdown(self.TENDON_IDLE)
             self.g_flexor_sigma = gui.add_slider(
                 "log10 flexor tension sigma", -3.0, 5.0, 0.1,
                 math.log10(HandSolveParams().flexor_tension_sigma),
@@ -3316,6 +3857,8 @@ class HandVizApp:
             # Filled by _refresh_table_readout on every re-place of the slab.
             self.g_table_status = gui.add_markdown("")
 
+        self._build_calibration_folder(gui)
+
         with gui.add_folder("Augmented Lagrangian"):
             self.g_al_mu = gui.add_slider("mu", 0.1, 10.0, 0.1, 1.0)
             self.g_al_rate = gui.add_slider("rate", 1.1, 5.0, 0.1, 2.0)
@@ -3369,6 +3912,14 @@ class HandVizApp:
                      f"whatever object is on it, but the plane is seated UNDER "
                      f"the object, so the frame moves when you switch objects "
                      f"-- the Table folder reports where it is.")
+            self.g_show_grid = gui.add_checkbox(
+                "table grid", True,
+                hint=f"Rule the table square into "
+                     f"{CAL_GRID_SPACING * 100:.0f} cm cells, matching the grid "
+                     f"drawn on the physical bench. On by default because it is "
+                     f"what the Calibration folder's x/y sliders are coordinates "
+                     f"ON -- with it drawn you can check a commanded landmark "
+                     f"against the same intersection in the room.")
             self.g_show_mount = gui.add_checkbox(
                 "mount frames", True,
                 hint="Draw the wrist frame and, offset from it by the measured "

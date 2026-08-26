@@ -98,7 +98,7 @@ _FLEXION_PROBE_TENSION = 1.5
 # what makes the model's open hand and the hardware's the same hand.
 _OPEN_PASSIVE_TENSION = 0.5
 _OPEN_FLEXOR_TENSIONS = {
-    "index": 0.85, "middle": 0.80, "ring": 0.90, "pinky": 0.95, "thumb": 0.85,
+    "index": 0.84, "middle": 0.84, "ring": 0.84, "pinky": 1.03, "thumb": 0.84,
 }
 
 
