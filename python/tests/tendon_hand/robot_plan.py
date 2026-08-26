@@ -586,6 +586,15 @@ def interpolate(plan, hz=100.0, max_linear=0.2, max_angular=0.4, max_tendon=0.01
     return samples
 
 
+# Below this much overreach (metres) a clamp is not worth a note. The hand-open
+# waypoint a phase-4 close starts from sits at a displacement of ~1e-16 m rather
+# than a clean zero -- FK arithmetic, not a real command -- and the lower stop
+# rounds it up, which reported as "asked for 0.0 mm beyond its 6.4 mm of travel"
+# on every digit that was not even moving. Well under the 0.1 mm the note prints
+# at, so nothing a reader could have acted on is being hidden.
+_CLAMP_REPORT_M = 5e-5
+
+
 def clamp_to_travel(plan, limits=None):
     """Clamp every displacement to the hardware's flexion travel, in place-ish.
 
@@ -617,7 +626,8 @@ def clamp_to_travel(plan, limits=None):
 
     notes = [f"**{name} clamped**: the solve asked for {excess * 1e3:.1f} mm "
              f"beyond its {limits[name][1] * 1e3:.1f} mm of travel"
-             for name, excess in sorted(worst.items())]
+             for name, excess in sorted(worst.items())
+             if excess > _CLAMP_REPORT_M]
     return replace(plan, waypoints=waypoints), notes
 
 

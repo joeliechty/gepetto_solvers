@@ -12,6 +12,18 @@ or stalls. Every step is kept, so the *Solve steps*
 scrubber replays the convergence one iteration at a time (initial guess -> each
 outer iteration).
 
+*Close* is phase 4, and it is not a solve at all. Presets 0-2 shut the fingers as
+a SIDE EFFECT of the object equality, so the digits arrive one at a time in
+whatever order the optimizer moved them; phase 4 instead COMMANDS the grasping
+fingers shut together, each along the same fraction of its own remaining tendon
+travel, so they start and finish as one. It is a walk of FK poses rather than an
+AL solve -- nothing is enforced, nothing converges, and whatever the fingers meet
+on the way, they meet -- and it reports the worst gap between the digits that the
+poses actually came back with, so the claim in its name is a measured number
+rather than an assertion. Every pose is recorded the way an AL iteration is, so
+the *Solve steps* scrubber replays a close and the *Robot* folder plays one. See
+``solvers.synchronized_close``.
+
 *E-STOP* is the software emergency stop, and it outranks everything else on the
 page. It latches: it breaks a running auto-solve out of its loop and then refuses
 every solve -- FK, Step, Auto, and the live re-solve the pose/tension sliders
@@ -31,7 +43,8 @@ until it ends -- the app says so on the button and in the startup banner.
 
 *ROS mode* (``HandVizApp(server, ros_mode=True, bridge=...)``, which
 ``gepetto_control``'s ``viz_node`` does) adds a *Robot* folder that commands the
-real hardware: **Play solve on robot** exports the AL outer iterations as
+real hardware: **Play solve on robot** exports whatever the scrubber is showing
+-- AL outer iterations after a solve, the ramp itself after a phase-4 Close -- as
 waypoints, interpolates them, and servos the arm (MoveIt Servo twists) and the
 hand (``finger_servo_node`` tendon jogs) along them; **Get robot state** reads
 the wrist pose and the measured tendon lengths back and makes them the state on
@@ -122,6 +135,7 @@ from .solvers import (
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
     pregrasp_centroid_witness, finger_plane_witness, planar_gap_witness,
     default_half_space_axis, PHASE_PRESETS, FLEXOR_IDX,
+    synchronized_close, apply_phase_preset, CLOSE_FRACTION,
     disc_pose, wrist_to_disc, wrist_pose_for_disc_target, disc_frame_error,
     DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 from .config import pinch_pose, proximal_disc_flags
@@ -199,7 +213,7 @@ def _max_tendon_speed():
 MAX_TENDON_SPEED = _max_tendon_speed()
 
 # The two playback sources, as they read on the dropdown.
-PLAY_HISTORY = "AL iterates (waypoints)"
+PLAY_HISTORY = "recorded path (waypoints)"
 PLAY_FINAL = "final state only"
 
 # This app's own startup object -- see HandVizApp.__init__ for why it's set
@@ -478,10 +492,90 @@ def _smoke():
             print(f"  [{label:>8}] steps={st.steps} state={st.state} "
                   f"snapshots={n} [{status}] | violation={st.violation:.3e} "
                   f"cost={st.cost:.4g}{extra}")
+    ok = _smoke_close() and ok
     ok = _smoke_calibration() and ok
     ok = _smoke_robot_plan() and ok
     print("Smoke test:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
+
+
+# The claim the phase-4 Close button makes, as a number the smoke test can fail
+# on: at every recorded pose, no grasping finger may be more than this fraction
+# of the close ahead of or behind any other. Generous against the ~0.1% the walk
+# actually lands (see synchronized_close), because what would break this is a
+# regression in the FK warm start, not a wobble in the last digit.
+_CLOSE_SYNC_TOL = 0.02
+
+# ...and how far each finger may miss the displacement it was commanded to. Ten
+# times solvers.CLOSE_TOL_M, i.e. still under the ~1 mm the tendon hardware
+# resolves, so a pass here means the ramp is real and not just self-consistent.
+_CLOSE_TRACK_TOL_M = 2e-3
+
+
+def _smoke_close():
+    """Check phase 4: that a synchronized close actually closes IN SYNC.
+
+    The whole point of the phase is a claim about several fingers at once, and
+    the claim is cheap to check and easy to break -- it rests on the FK solver
+    warm-starting well over small upward tension steps, which is a property of
+    the binding, not of this file. So it is measured here rather than trusted:
+    re-derive each recorded pose's tendon displacements from the result itself,
+    and fail on the worst disagreement between digits.
+    """
+    print("Smoke-testing the phase-4 synchronized close...")
+    fingers = ["index", "middle", "thumb"]
+
+    params = apply_phase_preset(HandSolveParams(), "phase4")
+    _passive, open_flexors = robot_plan.open_pose_tensions()
+    # From the calibrated OPEN hand, which is where the Close button starts from
+    # on a freshly opened app and the only starting pose with a fixed meaning.
+    params.flexor_tensions = [open_flexors.get(name, GRASP_FLEXOR_TENSION)
+                              for name in FINGER_LABELS]
+    solver = HandFKSolver(params)
+    open_lengths = robot_plan.open_tendon_lengths(params, solver)
+    limits = robot_plan.hardware_travel_limits()
+    travel = None if limits is None else {name: hi
+                                          for name, (_lo, hi) in limits.items()}
+
+    result, notes = synchronized_close(solver, open_lengths, fingers, travel)
+    n = result.num_iterates()
+
+    # Progress per finger at every recorded pose, as a fraction of its own close.
+    # Read off the ITERATES rather than off what the walk reported, so a bug in
+    # the reporting cannot make this pass.
+    disp = []
+    for i in range(n):
+        lengths = dict(zip(result.finger_names, result.at_iterate(i).tendon_lengths(0)))
+        disp.append({name: open_lengths[name] - float(lengths[name][FLEXOR_IDX])
+                     for name in fingers})
+    span = {name: disp[-1][name] - disp[0][name] for name in fingers}
+    worst_sync, worst_track = 0.0, 0.0
+    for i, row in enumerate(disp):
+        progress = [(row[name] - disp[0][name]) / span[name] for name in fingers]
+        worst_sync = max(worst_sync, max(progress) - min(progress))
+        # ...and against the schedule the walk was supposed to follow: pose i of
+        # n-1 is i/(n-1) of the way through.
+        want = i / float(n - 1)
+        worst_track = max(worst_track,
+                          max(abs(p - want) * span[name]
+                              for p, name in zip(progress, fingers)))
+
+    synced = worst_sync <= _CLOSE_SYNC_TOL
+    tracked = worst_track <= _CLOSE_TRACK_TOL_M
+    closed = n > 1 and all(v > 0.0 for v in span.values())
+    ok = synced and tracked and closed
+    print(f"  [   close] poses={n} "
+          f"travel={', '.join(f'{k} {v * 1e3:+.1f}' for k, v in span.items())} mm "
+          f"[{'ok' if ok else 'BAD'}]")
+    print(f"           - in sync to {worst_sync * 100:.2f}% "
+          f"(allow {_CLOSE_SYNC_TOL * 100:.0f}%) "
+          f"[{'ok' if synced else 'BAD'}]")
+    print(f"           - tracked the ramp to {worst_track * 1e3:.2f} mm "
+          f"(allow {_CLOSE_TRACK_TOL_M * 1e3:.1f} mm) "
+          f"[{'ok' if tracked else 'BAD'}]")
+    for note in notes:
+        print(f"           - {note}")
+    return ok
 
 
 # What "landed on the target" has to mean for the Calibration folder to be
@@ -1391,6 +1485,11 @@ class HandVizApp:
         for btn in (getattr(self, "g_ik_step", None), getattr(self, "g_ik_auto", None)):
             if btn is not None:
                 btn.disabled = blocked or not self.caps["ik_stepping"]
+        # Close follows the same rule but NOT the ik_stepping capability: it is
+        # a run of FK solves, so it works on a binding that cannot step an AL
+        # solve at all.
+        if getattr(self, "g_close", None) is not None:
+            self.g_close.disabled = blocked
         # Reset would pull the params out from under a running step, and flipping
         # the warm start mid-run cannot affect the loop already built, so both
         # wait it out rather than looking like they did something.
@@ -1750,7 +1849,9 @@ class HandVizApp:
         m = self.result.meta
         lines = [f"**{self.mode}** &nbsp; iters={m.iterations} &nbsp; "
                  f"err={m.error:.3g} &nbsp; {m.total_time_ms:.0f} ms"]
-        if self.mode != "FK":
+        # FK and a phase-4 close both enforce NOTHING, so a contact/table gap
+        # line under them would be reporting a distance nobody asked to close.
+        if self.mode not in ("FK", "Close"):
             lines.extend(self._contact_lines(-1))
         lines.extend(self._half_space_note())
         lines.extend(self._wrist_gauge_note())
@@ -2076,6 +2177,125 @@ class HandVizApp:
             self._set_solving()
             raise
 
+    # -- phase 4: the synchronized close --
+
+    def _close_hand(self, _=None):
+        """Phase 4: shut every ticked contact finger together, recording the ramp.
+
+        Threaded and gated exactly like Auto solve, and for the same two reasons:
+        the gate is what stops a close and a solve overlapping (they share the FK
+        solver, its warm start and ``self.result``), and a viser callback thread
+        that blocks for the length of a close -- a few seconds of FK solves --
+        cannot service the E-STOP click.
+
+        The stop INTERRUPTS this one rather than merely refusing it, like
+        auto-solve and unlike Step: the walk polls between poses, so a trip lands
+        within one FK solve (~100 ms, not the AL loop's ~1.7 s) and keeps every
+        pose recorded so far. See :func:`~.solvers.synchronized_close`.
+        """
+        try:
+            gate = self.estop.admit("synchronized close")
+        except Refused:
+            return
+        try:
+            self._set_solving(True)
+            self._sync_params()
+            self._refresh_object()
+        except Exception as exc:
+            gate.release()
+            self._error_status(exc)
+            self._set_solving()
+            raise
+
+        def worker():
+            try:
+                self._close_admitted()
+            except Exception as exc:
+                self._error_status(exc)
+            finally:
+                # Gate first, so the refreshes below read an idle latch and can
+                # hand the controls back -- the auto-solve worker's ordering.
+                gate.release()
+                self._set_solving()
+                self._report_estop()
+
+        self._close_thread = threading.Thread(target=worker, daemon=True)
+        try:
+            self._close_thread.start()
+        except Exception as exc:
+            # A gate never released refuses every solve for the rest of the
+            # session; the same failure _ik_auto guards against.
+            gate.release()
+            self._error_status(exc)
+            self._set_solving()
+            raise
+
+    def _close_admitted(self):
+        """The close itself, for a caller that ALREADY HOLDS the gate."""
+        fingers = [label for label, box in zip(FINGER_LABELS, self.g_contacts)
+                   if box.value]
+        if not fingers:
+            self._set_status(
+                "**nothing to close** -- tick at least one digit under "
+                "*Constraints / fingers* first. Phase 4 closes the GRASPING "
+                "set, and leaves every other finger where it is.")
+            return
+        # The motors' travel, not the model's: a close planned against what the
+        # rod can bend would spend its last waypoints past the hardware stop,
+        # which the plan export clamps and the servo node saturates. None (no
+        # gepetto_core) is passed straight through -- synchronized_close falls
+        # back to the model's reach and says in its notes that it did.
+        limits = robot_plan.hardware_travel_limits()
+        travel = None if limits is None else {name: hi
+                                              for name, (_lo, hi) in limits.items()}
+        result, notes = synchronized_close(
+            self.fk_solver, self._open_lengths(), fingers, travel,
+            fraction=self.g_close_frac.value,
+            # The tension ceiling is the flexor slider's own top, so a close can
+            # never command a pull the panel could not have been dragged to.
+            tension_ceiling=float(self.g_flexors[0].max),
+            on_progress=self._set_status,
+            should_stop=self.estop.is_tripped)
+        if result is None:
+            self._set_status("  \n".join(notes))
+            return
+
+        # Not "FK": _live_fk re-solves on every tension-slider drag while the
+        # mode is FK, and the first such drag would throw the recorded ramp away
+        # -- along with the scrubber and everything the Robot folder plays. The
+        # close is a recorded path, like a stepped solve, so it is held the way
+        # one is: press FK (or Close again) to move on from it.
+        self.mode = "Close"
+        self.result = result
+        # A close re-poses the hand outside the AL loop, so any multipliers a
+        # stepper is holding describe a hand that no longer exists.
+        self._invalidate_stepper()
+        self._rebuild_iter_slider()
+        # Move the sliders onto the tensions the close ended at, for the reason
+        # _adopt_solved_tensions exists: after it they no longer describe where
+        # the hand is, and the next FK solve would haul the fingers back open.
+        # After the scrubber rebuild, so it reads the LAST pose rather than
+        # whichever index the previous solve's slider was parked on.
+        self._adopt_solved_tensions()
+        self._render_frame()
+        # Where to go from here. Both halves are non-obvious: the mode change
+        # above quietly turns the live re-solve off, and the Robot folder plays
+        # from the SCRUBBER's position, which was just parked on the last pose --
+        # so "Play solve on robot" would make one interpolated move to the shut
+        # hand rather than walking the ramp. That single move is still a
+        # synchronized close (every tendon channel lerps on one shared fraction,
+        # see robot_plan.sample_at), which is why this is a note and not a
+        # warning; rewind the scrubber to 0 to send the ramp itself.
+        self._set_status(
+            f"**Phase 4 close** &nbsp; {self._fingers_label(fingers)}  \n"
+            + "  \n".join(notes)
+            + "  \nthe tension sliders now hold the close, and the live "
+              "re-solve is off so the recorded ramp survives -- press **FK** to "
+              "go back to posing by hand. *Play solve on robot* starts from "
+              "where the **Solve steps** scrubber is parked: leave it at the end "
+              "for one interpolated move onto the shut hand, or rewind it to 0 "
+              "to send every step of the ramp.")
+
     # -- e-stop --
 
     def _estop(self, _=None):
@@ -2328,7 +2548,7 @@ class HandVizApp:
         demand rather than cached, so a future phase3 checkbox only needs
         adding here (and to ``_build_gui``/``_input_handles``)."""
         return {"phase0": self.g_phase0, "phase1": self.g_phase1,
-                "phase2": self.g_phase2}
+                "phase2": self.g_phase2, "phase4": self.g_phase4}
 
     def _on_phase_toggle(self, name, _=None):
         """Checking a phase preset applies it and unchecks every OTHER phase
@@ -2398,14 +2618,16 @@ class HandVizApp:
             # user has to guess at.
             with self.iter_folder:
                 self.g_iter_status = self.server.gui.add_markdown(
-                    "press **Step** or **Auto solve** to record IK iterations")
+                    "press **Step** or **Auto solve** to record IK iterations, "
+                    "or **Close** to record a phase-4 close")
         else:
             with self.iter_folder:
                 self.iter_slider = self.server.gui.add_slider(
                     "iterate", min=0, max=n - 1, step=1, initial_value=n - 1,
-                    hint="0 is the initial guess, the last is the most recent "
-                         "step; in between, one Augmented Lagrangian outer "
-                         "iteration each.")
+                    hint="0 is where the run started, the last is the most "
+                         "recent step; in between, one Augmented Lagrangian "
+                         "outer iteration each after Step/Auto solve, or one "
+                         "substep of the ramp after a phase-4 Close.")
                 self.g_iter_status = self.server.gui.add_markdown("")
             self.iter_slider.on_update(lambda _: self._render_frame())
 
@@ -3241,13 +3463,14 @@ class HandVizApp:
             self.g_play_source = gui.add_dropdown(
                 "waypoints", [PLAY_HISTORY, PLAY_FINAL],
                 initial_value=PLAY_HISTORY,
-                hint="What to play. *AL iterates* walks the solve the way the "
-                     "Solve steps scrubber does, one waypoint per Augmented "
-                     "Lagrangian outer iteration, starting from wherever the "
-                     "scrubber is parked -- these are OPTIMIZER iterations, so "
-                     "early ones can move oddly before the solve settles. "
-                     "*final state only* makes one interpolated move to the "
-                     "converged state and ignores the path.")
+                hint="What to play. *recorded path* walks whatever the Solve "
+                     "steps scrubber is showing, one waypoint per recorded "
+                     "state, starting from wherever the scrubber is parked. "
+                     "After Step/Auto solve those are OPTIMIZER iterations, so "
+                     "early ones can move oddly before the solve settles; after "
+                     "a phase-4 Close they are the ramp itself, which is a real "
+                     "planned path. *final state only* makes one interpolated "
+                     "move to the end state and ignores the path.")
             self.g_arm_speed = gui.add_slider(
                 "arm speed (fraction)", 0.05, 1.0, 0.05, 0.50,
                 hint=f"Ceiling on wrist speed, as a fraction of MoveIt Servo's "
@@ -3292,7 +3515,8 @@ class HandVizApp:
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
                 + [self.g_flexor_sigma, self.g_passive_sigma,
-                   self.g_phase0, self.g_phase1, self.g_phase2]
+                   self.g_phase0, self.g_phase1, self.g_phase2, self.g_phase4,
+                   self.g_close_frac]
                 + [self.g_obj_contact, self.g_obj_contact_plane,
                    self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_half_sides, self.g_half_margin,
@@ -3361,6 +3585,30 @@ class HandVizApp:
                 hint=step_hint or (
                     "Keep stepping until the solve converges, stalls or hits "
                     "the cap, redrawing after every iteration."))
+            # Phase 4's runner. Sits with Step/Auto rather than in the Presets
+            # folder because what it IS is a third way of moving the hand -- and
+            # because it must sit above the E-STOP that stops it.
+            self.g_close = gui.add_button(
+                "Close", icon=self.viser.Icon.HAND_GRAB,
+                hint="Phase 4: shut every ticked contact finger TOGETHER, and "
+                     "record the whole ramp. Not a solve -- no constraint is "
+                     "enforced and nothing converges. Each finger is commanded "
+                     "along the same fraction of its own remaining tendon "
+                     "travel, so they start together, arrive together, and none "
+                     "races ahead or stalls on its stop; the status line reports "
+                     "the worst gap between them that the poses actually came "
+                     "back with. Every pose is kept, so the Solve steps scrubber "
+                     "replays the close and the Robot folder plays it as "
+                     "waypoints.")
+            self.g_close_frac = gui.add_slider(
+                "close depth (fraction)", 0.1, 1.0, 0.05, CLOSE_FRACTION,
+                hint="How far into the tendon travel each finger HAS LEFT the "
+                     "close goes. 1.0 drives every digit onto its hardware stop, "
+                     "where finger_servo_node saturates and the last waypoints "
+                     "command a position the motors cannot reach; the default "
+                     "stops short of it. Fractions of REMAINING travel, so a "
+                     "finger already half shut moves half as far as an open one "
+                     "and both still finish at the same moment.")
             # NEVER disabled -- not while solving, not while idle, not on a
             # binding missing every other capability. A stop button that can be
             # greyed out is not a stop button; this one is always available and
@@ -3610,6 +3858,18 @@ class HandVizApp:
                      "loose-flexor/tight-passive pair. Writes straight onto "
                      "the Constraints/Wrist/Tensions controls -- check this, "
                      "then press Auto solve. Unchecking is a no-op.")
+            self.g_phase4 = gui.add_checkbox(
+                PHASE_PRESETS["phase4"].label, DEFAULT_PHASE == "phase4",
+                hint="Apply the phase-4 preset: every constraint OFF -- object "
+                     "and table contact, collision avoidance, the opposition "
+                     "half-space and all three pre-grasp terms -- because this "
+                     "phase does not SOLVE for anything. It shuts the grasping "
+                     "fingers on a commanded schedule and whatever they meet on "
+                     "the way, they meet. The runner is **Close**, up in the "
+                     "Solver folder, NOT Auto solve: check this, then press "
+                     "Close. Same 3-finger pinch as phases 0-2, and the wrist "
+                     "prior left tight (the close does not move the wrist at "
+                     "all). Unchecking is a no-op.")
 
         # Every constraint on/off toggle lives here (Chapter 2, Eq 2.8-2.19),
         # grouped by the paper's structure. Numeric tuning sliders that go with
@@ -3980,6 +4240,8 @@ class HandVizApp:
         self.g_phase0.on_update(lambda _: self._on_phase_toggle("phase0"))
         self.g_phase1.on_update(lambda _: self._on_phase_toggle("phase1"))
         self.g_phase2.on_update(lambda _: self._on_phase_toggle("phase2"))
+        self.g_phase4.on_update(lambda _: self._on_phase_toggle("phase4"))
+        self.g_close.on_click(self._close_hand)
 
         self.g_object.on_update(self._on_object_selected)
 
