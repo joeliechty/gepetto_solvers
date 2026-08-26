@@ -869,6 +869,10 @@ class HandVizApp:
         p.al_rate = self.g_al_rate.value
         p.al_iters = self.g_al_iters.value
         p.ik_settle_steps = int(self.g_ik_settle.value)
+        # rod physics
+        p.planar_bending = self.g_planar_bend.value and self.caps["planar_bending"]
+        p.sigma_planar_bend = 10.0 ** self.g_planar_bend_sigma.value
+        p.sigma_planar_twist = 10.0 ** self.g_planar_twist_sigma.value
         # collision
         p.collision = self.g_collision.value
         p.self_collision = self.g_self_collision.value
@@ -1906,6 +1910,9 @@ class HandVizApp:
             "pregrasp_centroid": self.g_pregrasp_centroid,
             "h_clear": self.g_h_clear,
             "contact_drop_normal_row": self.g_drop_normal_row,
+            # Registered so a future preset CAN name it, though none should:
+            # planarity is a property of the hand, not of a phase.
+            "planar_bending": self.g_planar_bend,
         }[field]
 
     def _apply_phase_preset(self, name):
@@ -2139,7 +2146,9 @@ class HandVizApp:
                    self.g_pregrasp_center, self.g_h_clear,
                    self.g_pregrasp_centroid, self.g_axis_align]
                 + self.g_contacts
-                + [self.g_collision, self.g_self_collision,
+                + [self.g_planar_bend, self.g_planar_bend_sigma,
+                   self.g_planar_twist_sigma,
+                   self.g_collision, self.g_self_collision,
                    self.g_coll_radius, self.g_coll_sigma, self.g_cull,
                    self.g_set_beta,
                    self.g_table, self.g_plane_offset, self.g_plane_avoid,
@@ -2421,6 +2430,43 @@ class HandVizApp:
         # a toggle (collision radius/sigma/cull margin, table height offset)
         # stay behind in Collision/Table below -- only the booleans move.
         with gui.add_folder("Constraints"):
+            with gui.add_folder("Rod (planar bending)"):
+                pb_hint = (
+                    "Keep each finger in its own flexion plane: one factor per "
+                    "rod segment penalising the out-of-plane and torsional "
+                    "components of Log(R_i^T R_j), leaving flexion free. The "
+                    "discs are keyed to the backbone, so the real hand cannot "
+                    "splay or twist -- the Cosserat rod can, and spends those "
+                    "DOFs on contact, collision and the passive tendons routed "
+                    "at +/-90 deg. On by default: it is hardware, not a tuning "
+                    "choice."
+                    if self.caps["planar_bending"]
+                    else "requires a rebuilt _crest_sparse with "
+                         "TendonFingerSolverConfig.planar_bending")
+                self.g_planar_bend = gui.add_checkbox(
+                    "planar bending", True,
+                    disabled=not self.caps["planar_bending"], hint=pb_hint)
+                # Curvatures (rad/m), so these read against sigma_twist_rot
+                # (1e-2). Defaults are asymmetric on purpose: twist is the cause,
+                # bend is the symptom -- see HandSolveParams.
+                self.g_planar_bend_sigma = gui.add_slider(
+                    "log10 sigma bend", -6, 0, 0.5, -2,
+                    disabled=not self.caps["planar_bending"],
+                    hint="Out-of-plane bending stiffness, as a curvature sigma "
+                         "in rad/m. Lower is stiffer. Left SOFT by default: "
+                         "this row fights reach without improving planarity, "
+                         "because it constrains the accumulated splay rather "
+                         "than what causes it. Kept only so a direct lateral "
+                         "load still meets resistance.")
+                self.g_planar_twist_sigma = gui.add_slider(
+                    "log10 sigma twist", -6, 0, 0.5, -4,
+                    disabled=not self.caps["planar_bending"],
+                    hint="Torsion stiffness, same units. This is the load-"
+                         "bearing one: the spiral-routed lateral tendons inject "
+                         "twist, twist rotates the material frame, and the next "
+                         "segment's flexion then lands out of plane. Tightening "
+                         "THIS collapses the splay at no cost in reach.")
+
             with gui.add_folder("Collision (Eq 2.8-2.9)"):
                 self.g_collision = gui.add_checkbox(
                     "object collision", True,
@@ -2809,6 +2855,12 @@ class HandVizApp:
             h.on_update(lambda _: (self._sync_params(),
                                    self._invalidate_stepper(),
                                    self._render_frame()))
+        # Planar bending changes the GRAPH, not the scene, so it invalidates the
+        # stepper but draws nothing of its own.
+        for h in (self.g_planar_bend, self.g_planar_bend_sigma,
+                  self.g_planar_twist_sigma):
+            h.on_update(lambda _: (self._sync_params(),
+                                   self._invalidate_stepper()))
         # drop-normal-row / pre-grasp centering / clearance: no static geometry
         # of their own (the centering line only appears once a solve has run,
         # via _render_frame), so just invalidate the stepper -- self.params is

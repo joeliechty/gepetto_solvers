@@ -92,6 +92,7 @@ def capabilities():
     unsupported controls instead of crashing on a stale build."""
     env = crest_sparse.EnvironmentConfig()
     pc = crest_sparse.TendonHandTrajectoryPlannerConfig()
+    fc = crest_sparse.TendonFingerSolverConfig()
     return {
         "ellipsoid": hasattr(env, "ellipsoid_semi_axes"),
         # Section 1.2 ellipsoid SETS (the YCB objects). Gated separately from
@@ -147,6 +148,11 @@ def capabilities():
         # is whatever the object/table collision toggles imply and cannot be
         # turned off.
         "self_collision": hasattr(env, "self_collision"),
+        # Planar-bending approximation: PlanarBendFactor per rod segment, keeping
+        # each finger in its own flexion plane. Probed on the FINGER config
+        # because that is where the switch rides -- the sigmas are per-finger rod
+        # physics, like sigma_twist_rot, not a hand-level environment setting.
+        "planar_bending": hasattr(fc, "planar_bending"),
         "drop_normal_row": hasattr(env, "contact_drop_normal_row"),
         # Pre-grasp short-axis alignment (companion to Eq 2.16-2.17). Needs a
         # rebuilt binding with EnvironmentConfig.pregrasp_align_node.
@@ -909,6 +915,31 @@ class HandSolveParams:
     wrist_pose: np.ndarray = field(default_factory=default_wrist_pose)
     sigma_wrist_pos: float = 1e-4
     sigma_wrist_rot: float = 1e-3
+
+    # --- Rod physics: planar bending ---
+    #
+    # The discs are keyed to the backbone, so a finger bends about its local +y
+    # axis and neither deflects sideways nor twists. The Cosserat rod does not
+    # know that, and spends the free out-of-plane DOFs to satisfy contact,
+    # collision and the four passive tendons routed at +/-90 deg -- which is the
+    # sideways splay visible in a phase-2 approach. PlanarBendFactor states the
+    # constraint; see its header for the residual.
+    #
+    # On by default: this is a property of the hardware, not an experiment. The
+    # sigmas are curvatures (rad/m), directly comparable to sigma_twist_rot
+    # (1e-2 in the finger configs).
+    #
+    # Asymmetric on purpose -- soft bend, tight twist. Twist is the CAUSE (the
+    # spiral-routed lateral tendons inject it, and it rotates the material frame
+    # so the next segment's flexion lands out of plane); out-of-plane bend is the
+    # symptom. Constraining torsion alone collapses the splay 8-200x across
+    # big_sphere / mid_sphere / knife / power_drill while COSTING no reach -- the
+    # finger curls further instead of splaying. Making the bend row equally tight
+    # buys nothing extra and costs ~10 mm of reach, and stalls the AL outright on
+    # the power drill. See TendonFingerSolverConfig for the measured table.
+    planar_bending: bool = True
+    sigma_planar_bend: float = 1e-2
+    sigma_planar_twist: float = 1e-4
 
     # --- Tensions (per-finger flexor + shared passive background) ---
     passive_tension: float = 0.5
@@ -1688,8 +1719,20 @@ class HandSolverBase:
         self.configs = get_default_hand_configs(self.dims)
         self.tip_radii = default_hand_tip_radii(self.dims)
         self.finger_names = [name for name, _ in self.configs]
+        self._attach_planar_bending()
         self.spec, self.object_center, self.object_rotation, self.object_pose = \
             resolve_scene(self.params)
+
+    def _attach_planar_bending(self):
+        """Rod physics, so it rides on the per-finger config rather than the
+        environment. Attached from ``__init__`` rather than
+        ``_attach_environment`` because it is not environment-dependent and
+        because ``HandFKSolver`` builds its ``TendonHandSolver`` in its own
+        ``__init__`` -- a later attach would miss FK entirely."""
+        for _, cfg in self.configs:
+            _set_if(cfg, "planar_bending", self.params.planar_bending)
+            _set_if(cfg, "sigma_planar_bend", self.params.sigma_planar_bend)
+            _set_if(cfg, "sigma_planar_twist", self.params.sigma_planar_twist)
 
     # -- contact masks --
     #

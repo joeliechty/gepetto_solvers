@@ -3,11 +3,39 @@ import numpy as np
 from crest_sparse import TendonFingerSolverConfig, TendonInput, PerDiscTendonInput, RoutingAngleFunction, RoutingFunctionParams
 
 
-def get_K_inv():
+def get_K_inv(lateral_stiffness_scale=1.0, torsion_stiffness_scale=1.0):
+    """Compliance matrix K^-1 for one rod segment.
+
+    The backbone is modelled as a circular rod, so bending is isotropic by default
+    (``K_inv[0,0] == K_inv[1,1]``). The physical finger is not: its discs are keyed
+    to the backbone and its joints are flexures, so it bends about local +y
+    (flexion, the axis ``KnuckleBendFactor`` reads) and resists both out-of-plane
+    bending about local +x and twist about local +z.
+
+    The two scales stiffen those two directions -- ``lateral_stiffness_scale=1e3``
+    makes out-of-plane bending 1000x stiffer than flexion, i.e. the constitutive
+    model of a rectangular flexure with twist-keyed discs.
+
+    This is the cheap half of the planar-bending approximation. ``CosseratTwistFactor``
+    already carries the residual ``Log(T_i^-1 T_j)/ds - (K_inv S + nominal)``, so
+    driving ``K_inv[0,0]`` toward zero turns its x row into a direct penalty on
+    out-of-plane curvature, weighted by ``1/sigma_twist_rot``. ``PlanarBendFactor``
+    (see ``CosseratRodModel::set_planar_bending``) is the same constraint at an
+    independently tunable weight; use these scales to confirm the mechanism, that
+    factor to tune it without disturbing flexion accuracy.
+
+    Parameters
+    ----------
+    lateral_stiffness_scale : float, optional
+        Multiplies the out-of-plane bending stiffness (rotation about local x).
+        1.0 (default) is the isotropic circular rod, i.e. no change.
+    torsion_stiffness_scale : float, optional
+        Multiplies the torsional stiffness (rotation about local z).
+    """
     rod_diameter = 0.000512
     youngs_modulus = 40.0e9
-    shear_modulus = 15.0e9 
-    
+    shear_modulus = 15.0e9
+
     I = (np.pi * rod_diameter**4) / 64.0
     J = 2 * I
     A = (np.pi * rod_diameter**2) / 4.0
@@ -18,9 +46,9 @@ def get_K_inv():
     k_extension = youngs_modulus * A
 
     K_inv = np.eye(6)
-    K_inv[0,0] = 1 / k_bending
-    K_inv[1,1] = 1 / k_bending
-    K_inv[2,2] = 1 / k_torsion
+    K_inv[0,0] = 1 / (k_bending * lateral_stiffness_scale)  # out-of-plane bend (about x)
+    K_inv[1,1] = 1 / k_bending                              # flexion (about y) -- never scaled
+    K_inv[2,2] = 1 / (k_torsion * torsion_stiffness_scale)
     K_inv[3,3] = 1 / k_shear
     K_inv[4,4] = 1 / k_shear
     K_inv[5,5] = 1 / k_extension
@@ -28,7 +56,8 @@ def get_K_inv():
     return K_inv
 
 
-def build_K_inv_per_segment(num_discs, num_between_nodes, segment_types, K_inv_joint=None, bone_stiffness_scale=1e-6):
+def build_K_inv_per_segment(num_discs, num_between_nodes, segment_types, K_inv_joint=None, bone_stiffness_scale=1e-6,
+                            lateral_stiffness_scale=1.0, torsion_stiffness_scale=1.0):
     """Build a per-segment compliance list for a finger with alternating bones and joints.
 
     Parameters
@@ -48,6 +77,11 @@ def build_K_inv_per_segment(num_discs, num_between_nodes, segment_types, K_inv_j
     bone_stiffness_scale : float, optional
         ``K_inv_bone = bone_stiffness_scale * K_inv_joint``.
         Default 1e-6 makes bones ~1e6× stiffer than joints.
+    lateral_stiffness_scale, torsion_stiffness_scale : float, optional
+        Forwarded to :func:`get_K_inv` -- the planar-bending anisotropy. Only
+        meaningful when ``K_inv_joint`` is left at its default; passing both an
+        explicit matrix and a non-unit scale is a contradiction and raises, rather
+        than silently dropping the scale.
 
     Returns
     -------
@@ -60,8 +94,16 @@ def build_K_inv_per_segment(num_discs, num_between_nodes, segment_types, K_inv_j
             f"segment_types must have num_discs - 1 = {num_discs - 1} entries, "
             f"got {len(segment_types)}")
 
+    anisotropic = (lateral_stiffness_scale != 1.0) or (torsion_stiffness_scale != 1.0)
+    if K_inv_joint is not None and anisotropic:
+        raise ValueError(
+            "build_K_inv_per_segment: lateral_stiffness_scale / torsion_stiffness_scale "
+            "only apply to the default joint compliance. Bake the anisotropy into the "
+            "K_inv_joint you pass instead.")
+
     if K_inv_joint is None:
-        K_inv_joint = get_K_inv()
+        K_inv_joint = get_K_inv(lateral_stiffness_scale=lateral_stiffness_scale,
+                                torsion_stiffness_scale=torsion_stiffness_scale)
 
     K_inv_bone = bone_stiffness_scale * K_inv_joint
 
@@ -375,7 +417,8 @@ def _build_default_tendon_routing_radii(bone_joint_spec, base_radius=0.005, min_
     return [list(single_tendon) for _ in range(num_tendons)]
 
 
-def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
+def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None,
+                       lateral_stiffness_scale=1.0, torsion_stiffness_scale=1.0):
     """Get a full solver config for a 6-tendon underactuated finger.
 
     Parameters
@@ -387,6 +430,10 @@ def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
     tendon_routing_radii : list of list of tuples, optional
         Per-tendon per-segment radius specification.
         Defaults to a linear taper from 5mm to 3mm if not provided.
+    lateral_stiffness_scale, torsion_stiffness_scale : float, optional
+        Planar-bending anisotropy, forwarded to :func:`get_K_inv`. 1.0 (default)
+        leaves the rod isotropic. See :func:`get_K_inv` for what these buy you and
+        how they relate to ``config.planar_bending``.
     """
     config = TendonFingerSolverConfig()
 
@@ -413,12 +460,15 @@ def get_6tendon_config(bone_joint_spec=None, tendon_routing_radii=None):
     config.num_discs = num_discs
     config.disc_positions_normalized = disc_positions
 
-    config.K_inv = get_K_inv()
+    config.K_inv = get_K_inv(lateral_stiffness_scale=lateral_stiffness_scale,
+                             torsion_stiffness_scale=torsion_stiffness_scale)
     config.K_inv_per_segment = build_K_inv_per_segment(
         num_discs=num_discs,
         num_between_nodes=config.num_between_nodes,
         segment_types=segment_types,
-        bone_stiffness_scale=1e-10
+        bone_stiffness_scale=1e-10,
+        lateral_stiffness_scale=lateral_stiffness_scale,
+        torsion_stiffness_scale=torsion_stiffness_scale,
     )
 
     if tendon_routing_radii is None:

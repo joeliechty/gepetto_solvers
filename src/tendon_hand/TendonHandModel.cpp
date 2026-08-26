@@ -166,6 +166,10 @@ TendonHandModel::TendonHandModel(
         std::visit([&](auto& fp) {
             fp->set_hand_base(offset, shared_wrist_key);
             fp->set_emit_base_prior(false);
+            // Per-finger, like the rod sigmas above: the planar-bending switch
+            // rides on the FINGER config, so a hand can mix keyed and free rods.
+            if (c.planar_bending)
+                fp->set_planar_bending(c.sigma_planar_bend, c.sigma_planar_twist);
         }, fingers_.back());
     }
 }

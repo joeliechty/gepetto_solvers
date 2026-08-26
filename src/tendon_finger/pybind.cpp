@@ -31,6 +31,10 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("sigma_stress_moment", &TendonFingerSolverConfig::sigma_stress_moment)
         .def_readwrite("sigma_base_pos", &TendonFingerSolverConfig::sigma_base_pos)
         .def_readwrite("sigma_base_rot", &TendonFingerSolverConfig::sigma_base_rot)
+        // --- Planar-bending approximation (keyed discs: bend about local +y only) ---
+        .def_readwrite("planar_bending", &TendonFingerSolverConfig::planar_bending)
+        .def_readwrite("sigma_planar_bend", &TendonFingerSolverConfig::sigma_planar_bend)
+        .def_readwrite("sigma_planar_twist", &TendonFingerSolverConfig::sigma_planar_twist)
         .def_readwrite("tendon_input", &TendonFingerSolverConfig::tendon_input)
         .def_readwrite("per_disc_tendon_input", &TendonFingerSolverConfig::per_disc_tendon_input)
         .def_readwrite("base_pose", &TendonFingerSolverConfig::base_pose)
