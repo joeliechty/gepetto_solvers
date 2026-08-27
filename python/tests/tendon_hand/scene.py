@@ -120,6 +120,17 @@ def ycb_primitive_specs():
 
     ``recenter`` is kept on the spec so a renderer can put the *mesh* in the same
     frame as the shells; without it the two would be drawn a few cm apart.
+
+    ``hull_vertices`` is the scanned mesh's convex hull, re-centered the same way,
+    and it is what makes a YCB object sit ON a table rather than above or through
+    it. The shells only BOUND the object -- a fit reaches past the real surface by
+    16 mm on the potted meat can and 93 mm on the chips can -- so seating the
+    plane on the lowest shell floats the object that far up. Seating it on the
+    hull instead is exactly what the megaminx does with its dodecahedron
+    (:func:`object_extent_along`): the object rests on its own underside and the
+    proxy shells sink through the slab, which is the honest picture of a surface
+    that was never the object in the first place. Absent for a fit exported
+    before the hull was carried, which falls back to the old shell reading.
     """
     directory = os.path.normpath(YCB_FITS_DIR)
     if not os.path.isdir(directory):
@@ -153,6 +164,8 @@ def ycb_primitive_specs():
                  "rotation": np.asarray(m["rotation"], dtype=float)}
                 for m in raw
             ]
+            hull = np.asarray(blob.get("hull", []), dtype=float).reshape(-1, 3)
+
             specs[f"ycb:{name}"] = {
                 "type": "ellipsoid_set",
                 "ycb": name,
@@ -161,6 +174,7 @@ def ycb_primitive_specs():
                 "members": members,
                 "extents": hi - lo,
                 "recenter": recenter,
+                **({"hull_vertices": hull - recenter} if len(hull) else {}),
                 "metrics": blob.get("metrics", {}),
                 "plot": (lambda c, _m=members: {
                     "type": "ellipsoid_set", "center": c, "members": _m}),
@@ -742,7 +756,8 @@ def object_extent_along(spec, normal, rotation=None):
     hull = spec.get("hull_vertices")
     if hull is not None:
         # The spec carries the REAL solid the analytic surface only proxies (the
-        # megaminx: a dodecahedron the factors see as its circumsphere). Seat the
+        # megaminx: a dodecahedron the factors see as its circumsphere; a YCB
+        # object: the scanned mesh its ellipsoid set bounds). Seat the
         # table on the solid, since that is what the object rests on: how far the
         # lowest vertex reaches against n, which for a face-down solid is its
         # inradius. Using the proxy's half-width instead would hold a 70 mm
@@ -824,16 +839,26 @@ def object_inplane_widths(spec, rotation, plane_normal, *, n_angles=180):
     elongation understated as 1.84; swept, it reads 6.12 at the true 27 degrees.
     The flat screwdriver reads 1.03 (isotropic!) against 6.23.
 
-    The ``ellipsoid_set`` branch is vectorised over members and directions
-    because this runs per GUI frame: the same support function as
-    :func:`object_extent_along` (verified against it), but ~9 ms per YCB object
-    becomes well under 1 ms.
+    The branches below are vectorised over directions because this runs per GUI
+    frame: the same support functions as :func:`object_extent_along` (verified
+    against it), but ~9 ms per YCB object becomes well under 1 ms. A spec
+    carrying ``hull_vertices`` is measured on the SOLID, for the same reason
+    :func:`object_extent_along` seats the table on it -- the silhouette that
+    decides where §1.8 splits the support surface should be the object's, not
+    that of shells overhanging it by a centimetre.
     """
     u, v = inplane_basis(plane_normal)
     theta = np.linspace(0.0, np.pi, int(n_angles), endpoint=False)
     dirs = np.cos(theta)[:, None] * u + np.sin(theta)[:, None] * v
 
-    if spec["type"] == "ellipsoid_set" and spec.get("hull_vertices") is None:
+    hull = spec.get("hull_vertices")
+    if hull is not None:
+        H = np.asarray(hull, float)                                      # (V,3)
+        U = dirs if rotation is None else dirs @ np.asarray(rotation, float)
+        proj = H @ U.T                                                   # (V,K)
+        return dirs, proj.max(axis=0) - proj.min(axis=0)
+
+    if spec["type"] == "ellipsoid_set":
         members = spec["members"]
         C = np.array([m["center"] for m in members], dtype=float)        # (M,3)
         A = np.array([m["semi_axes"] for m in members], dtype=float)     # (M,3)
@@ -852,9 +877,9 @@ def object_inplane_widths(spec, rotation, plane_normal, *, n_angles=180):
 
 # Elongation (widest / narrowest in-plane width) below which an object has no
 # meaningful long axis and object_principal_inplane_axis returns its fallback.
-# Set above the ellipsoid-fit noise of the round YCB objects -- tennis ball 1.05,
-# soccer ball 1.10, apple 1.04 -- and below the shapes that genuinely have a long
-# side to split along (rubik's cube 1.19, lemon 1.28, mug 1.37).
+# Set above the scan noise of the round YCB objects -- tennis ball 1.02, soccer
+# ball 1.03, apple 1.04 -- and below the shapes that genuinely have a long side
+# to split along (mug 1.27, lemon 1.31, rubik's cube 1.37).
 INPLANE_DEGENERACY_RATIO = 1.15
 
 
@@ -878,10 +903,10 @@ def object_principal_inplane_axis(spec, rotation, plane_normal, *,
     the fallback below then aliased them all onto one world direction::
 
         object                    proxy semi-axes        silhouette sweep
-        ycb:044_flat_screwdriver   0 deg, 1.03 (!)       136 deg, 6.23
-        ycb:043_phillips_screwdr.  0 deg, 1.84            27 deg, 6.12
-        ycb:042_adjustable_wrench 90 deg, 1.45           119 deg, 3.10
-        ycb:011_banana            90 deg, 1.66            65 deg, 2.77
+        ycb:044_flat_screwdriver   0 deg, 1.03 (!)       136 deg, 6.25
+        ycb:043_phillips_screwdr.  0 deg, 1.84            27 deg, 6.29
+        ycb:042_adjustable_wrench 90 deg, 1.45           119 deg, 3.48
+        ycb:011_banana            90 deg, 1.66            64 deg, 2.85
         pen                        0 deg, 17.50           0 deg, 17.50
         credit_card                0 deg, 1.59            0 deg, 1.59
         sphere, coin, capsule,

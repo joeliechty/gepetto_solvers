@@ -500,18 +500,23 @@ environments.
 (`coin`, `credit_card`, `pen` from Table 1.1, plus `big/mid/small_sphere_ellipsoid`
 and `megaminx`, the circumsphere of a 70 mm face-to-face dodecahedron).
 A spec may also carry `hull_vertices`, the real solid the analytic surface only
-bounds (`dodecahedron_vertices` builds the megaminx's 20, face down). Two things
-read it: the viewer draws its convex hull inside the shell, and
-`object_extent_along` seats the support plane on it — so the megaminx
-stands at its 35 mm inradius with the proxy sphere sunk 9 mm into the table,
-rather than being levitated to 44 mm to keep the sphere tangent, which is the
-solid balanced on a corner.
+bounds (`dodecahedron_vertices` builds the megaminx's 20, face down; a `ycb:`
+fit carries the scanned mesh's decimated hull, `ellipsoids.support_hull`). Three
+things read it: the viewer draws its convex hull inside the shell (falling back
+to it when the scan cache is absent), `object_inplane_widths` measures the
+silhouette on it, and `object_extent_along` seats the support plane on it — so
+the megaminx stands at its 35 mm inradius with the proxy sphere sunk 9 mm into
+the table, rather than being levitated to 44 mm to keep the sphere tangent,
+which is the solid balanced on a corner. The same correction is what puts a YCB
+object ON the table instead of hovering over it: its shells overshoot the scan
+by 16 mm on the potted meat can and 93 mm on the chips can, and the table used
+to be seated on the lowest shell.
 Also `primitive_surface_gap` / `primitive_surface_witness` (analytic distance +
 closest point, used to report the achieved gap **independently of the solver**),
 `proxy_semi_axes` (the §1.7 bounding ellipsoid — `sqrt(3)·half_extents` for a box),
 `object_extent_along` (support half-width along any direction, per primitive type —
 what seats the table), `object_inplane_widths` (that support function swept over the
-support plane: the object's silhouette there, vectorised for ellipsoid sets),
+support plane: the object's silhouette there, vectorised over directions),
 `object_principal_inplane_axis` (the §1.8 longest-in-plane axis, read off that sweep,
 with a degeneracy ratio because degeneracy is the common case and a **world +Y**
 fallback when it trips), and the shared constants

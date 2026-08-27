@@ -19,6 +19,7 @@ is better, 1.0 is perfect) and the `surface_coverage` actually achieved.
 
 from __future__ import annotations
 
+import functools
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -308,6 +309,66 @@ def reference_volume(
     return float("nan"), False
 
 
+# How closely a decimated hull must reproduce the full one's support function.
+# 0.2 mm: a hundredth of the smallest object in the set (a 17 mm marble), and
+# well under the millimetre at which a viewer could see one sink into a table.
+SUPPORT_HULL_TOLERANCE = 2e-4
+
+
+@functools.lru_cache(maxsize=2)
+def _sphere_directions(subdivisions: int) -> np.ndarray:
+    """Unit directions on a subdivided icosahedron, plus the six world axes.
+
+    The axes are appended because they are the ones actually used: an object
+    stands on a table whose normal is +Z, and a scene that has not rotated it
+    asks for exactly that direction. An icosphere does not have a vertex there
+    (an icosahedron's are at the permutations of ``(0, ±1, ±phi)``), so without
+    them the one measurement everything depends on would be the interpolated one.
+    """
+    ico = np.asarray(trimesh.creation.icosphere(subdivisions=subdivisions).vertices,
+                     dtype=float)
+    return np.vstack([ico, np.eye(3), -np.eye(3)])
+
+
+def support_hull(
+    mesh: trimesh.Trimesh, tolerance: float = SUPPORT_HULL_TOLERANCE
+) -> np.ndarray:
+    """Convex-hull vertices of `mesh`, thinned to the ones that carry its shape.
+
+    The full hull of a scanned mesh is far larger than what it describes: the
+    peach's is 5836 vertices, the racquetball's 8085, because a smooth scan puts
+    a vertex on every facet of a sphere. Committed alongside 94 fits that is
+    4 MB of qhull output, so this keeps a subset chosen for the only thing the
+    hull is read for -- its SUPPORT FUNCTION, "how far does this object reach
+    along d", which is what seats it on a table and what measures its silhouette.
+
+    Greedy: start from the vertices extreme along a coarse set of directions,
+    then repeatedly add whichever vertex is missed worst, until no probe
+    direction is off by more than `tolerance`. Typically ~170 vertices, and the
+    error is one-sided -- a subset's hull is contained in the true hull, so a
+    reach can be understated by up to `tolerance` and never overstated. An object
+    seated on this hull may therefore sink 0.2 mm into its table; it can never
+    float above it, which is the failure that would look wrong.
+    """
+    hull = np.asarray(mesh.convex_hull.vertices, dtype=float).reshape(-1, 3)
+    if len(hull) == 0:
+        return hull
+
+    probe = _sphere_directions(4)          # 2562 directions + axes
+    support = hull @ probe.T               # (V, K)
+    exact = support.max(axis=0)
+
+    keep = set(np.unique(np.argmax(hull @ _sphere_directions(2).T, axis=0)).tolist())
+    for _ in range(len(hull)):
+        index = np.fromiter(keep, dtype=int, count=len(keep))
+        error = exact - support[index].max(axis=0)
+        worst = int(np.argmax(error))
+        if error[worst] <= tolerance:
+            break
+        keep.add(int(np.argmax(support[:, worst])))
+    return hull[sorted(keep)]
+
+
 # ---------------------------------------------------------------------------
 # Clustering backends
 # ---------------------------------------------------------------------------
@@ -404,11 +465,24 @@ class FitMetrics:
 
 @dataclass
 class EllipsoidFit:
+    """A decomposition, plus enough of the MESH to place the object in a scene.
+
+    ``hull`` is the convex hull of the mesh the ellipsoids approximate, in the
+    same displayed frame as the centers. It is carried because the union of the
+    shells is a bound, not the object: a fit routinely reaches a centimetre or
+    two past the real surface (the potted meat can, 16 mm; the chips can, 93 mm),
+    so anything that asks "where does this object END" -- seating it on a table
+    above all -- gets a badly wrong answer from the shells and the right one from
+    the hull. Empty when the fit predates this field or was built without a mesh
+    in hand; consumers fall back to the shells.
+    """
+
     ellipsoids: list[Ellipsoid]
     metrics: FitMetrics
     backend: str
     coverage_target: float
     ground_offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    hull: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
 
     def to_dict(self) -> dict:
         return {
@@ -423,6 +497,9 @@ class EllipsoidFit:
                 "ground_offset": np.asarray(self.ground_offset).tolist(),
             },
             "metrics": self.metrics.to_dict(),
+            # Rounded to 10 um: this is a few hundred vertices per object and the
+            # file is committed, so the digits past that are pure diff noise.
+            "hull": np.round(np.asarray(self.hull, float).reshape(-1, 3), 5).tolist(),
             "ellipsoids": [e.to_dict() for e in self.ellipsoids],
         }
 
@@ -435,6 +512,7 @@ class EllipsoidFit:
             data["backend"],
             data["coverage_target"],
             np.asarray(data.get("frame", {}).get("ground_offset", [0, 0, 0]), float),
+            np.asarray(data.get("hull", []), float).reshape(-1, 3),
         )
 
 

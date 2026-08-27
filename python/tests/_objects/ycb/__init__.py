@@ -46,6 +46,7 @@ from .ellipsoids import (
     fit,
     load_cached,
     save_cached,
+    support_hull,
 )
 
 __all__ = [
@@ -54,4 +55,5 @@ __all__ = [
     "describe", "ground_and_center", "ground_offset", "prefetch",
     "BACKENDS", "Ellipsoid", "EllipsoidFit", "FitMetrics",
     "auto_fit", "export_json", "fit", "load_cached", "save_cached",
+    "support_hull",
 ]

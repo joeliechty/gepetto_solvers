@@ -969,35 +969,40 @@ class HandVizApp:
         ("how much object is really inside the surface the fingers stop on"), so
         they share one toggle.
 
+        A YCB object carries BOTH: the scan is what it really looks like, its
+        hull is the summary of the scan committed alongside the fit (and what the
+        table is seated on -- ``scene.ycb_primitive_specs``). The scan wins when
+        the cache has it, since a hull cannot show a mug's handle or a concave
+        face; the hull is the fallback rather than nothing at all, because the
+        fits are committed and the 1.5 GB of meshes are not, so an object can be
+        perfectly loadable on a machine that has never fetched a scan.
+
         The mesh has to be put in the SAME frame the shells were re-centered
-        into (see ``scene.ycb_primitive_specs``), or the two render a few cm
-        apart and the overlay is worse than useless. A missing mesh cache is not
-        an error -- the fits are committed but the meshes are not, so an object
-        can be perfectly loadable with nothing to draw behind it.
+        into, or the two render a few cm apart and the overlay is worse than
+        useless. (The hull was written into that frame at spec-build time.)
         """
         if not self.g_show_true_mesh.value:
             self.scene.clear_object_mesh()
             return
-        hull = spec.get("hull_vertices")
-        if hull is not None:
-            # Local point set -> hull; set_object_mesh applies the object pose,
-            # so the solid lands inside its own shell however the object is posed.
-            self.scene.set_object_mesh(self.scene.hull_mesh(hull), center, rotation)
-            return
-        if spec["type"] != "ellipsoid_set":
-            self.scene.clear_object_mesh()
-            return
-        try:
-            from .._objects.ycb import Catalog, YcbCache, ground_and_center
+        if spec["type"] == "ellipsoid_set":
+            try:
+                from .._objects.ycb import Catalog, YcbCache, ground_and_center
 
-            cache = YcbCache(Catalog())
-            mesh = ground_and_center(
-                cache.load_mesh(spec["ycb"], spec["source"], max_texture=512))
-            mesh.apply_translation(-np.asarray(spec["recenter"], float))
-            self.scene.set_object_mesh(mesh, center, rotation)
-        except Exception as exc:
+                cache = YcbCache(Catalog())
+                mesh = ground_and_center(
+                    cache.load_mesh(spec["ycb"], spec["source"], max_texture=512))
+                mesh.apply_translation(-np.asarray(spec["recenter"], float))
+                self.scene.set_object_mesh(mesh, center, rotation)
+                return
+            except Exception as exc:
+                print(f"[viz] no scan mesh for {spec.get('ycb')}: {exc}")
+        hull = spec.get("hull_vertices")
+        if hull is None:
             self.scene.clear_object_mesh()
-            print(f"[viz] no scan mesh for {spec.get('ycb')}: {exc}")
+            return
+        # Local point set -> hull; set_object_mesh applies the object pose, so the
+        # solid lands inside its own shell however the object is posed.
+        self.scene.set_object_mesh(self.scene.hull_mesh(hull), center, rotation)
 
     # -- YCB objects --------------------------------------------------------
 

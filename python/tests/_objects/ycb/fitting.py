@@ -20,6 +20,9 @@ The sequence, and why each step is what it is:
   tempting for a batch, but the sweep returns the smallest k whose excess volume
   is within tolerance of the BEST k found, so a smaller ceiling changes which fit
   is chosen, not just how long the search takes.
+* The mesh's convex hull rides along on the fit (``EllipsoidFit.hull``), because
+  the shells are a BOUND on the object and a scene still has to know where the
+  object itself ends -- see that field for what goes wrong without it.
 * ``save_cached`` then ``export_json``: the cache is scratch, the export is the
   decision downstream code reads.
 """
@@ -71,7 +74,8 @@ def fit_object(
 
     result = (ye.load_cached(cache.root, name, source, backend, k, coverage)
               if use_cache else None)
-    if result is not None:
+    fresh = result is None
+    if not fresh:
         progress(1.0, "using cached fit.")
     else:
         progress(0.05, f"fitting with `{backend}`…")
@@ -81,6 +85,12 @@ def fit_object(
         else:
             result = ye.fit(mesh, k, coverage=coverage, backend=backend)
         result.ground_offset = offset
+
+    # Unconditionally, cached fit or not: the hull is a property of the MESH
+    # loaded above, not of the decomposition, so re-reading it here also fills it
+    # in for a cache entry written before this field existed.
+    result.hull = ye.support_hull(mesh)
+    if fresh:
         ye.save_cached(cache.root, name, source, backend, k, coverage, result)
 
     path = ye.export_json(export_dir, name, source, result)
