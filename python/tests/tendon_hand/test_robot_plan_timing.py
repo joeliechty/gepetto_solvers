@@ -14,8 +14,9 @@ import sys
 
 import numpy as np
 
-from .robot_plan import (SolvePlan, Waypoint, interpolate, plan_schedule,
-                         sample_at, segment_durations)
+from .robot_plan import (SolvePlan, Waypoint, _rotation_from_vector, interpolate,
+                         plan_schedule, sample_at, se3_exp, se3_log,
+                         segment_durations)
 
 HZ = 100.0
 PERIOD = 1.0 / HZ
@@ -97,8 +98,7 @@ def test_interpolate_is_a_walk_of_sample_at():
     last = samples[-1]
     assert abs(last.t - schedule.total) < 1e-9
     assert np.allclose(last.wrist_pose, plan.waypoints[-1].wrist_pose)
-    assert np.allclose(last.linear_velocity, 0.0)
-    assert np.allclose(last.angular_velocity, 0.0)
+    assert np.allclose(last.body_twist, 0.0)
     assert last.waypoint == len(plan.waypoints) - 1
 
 
@@ -129,23 +129,96 @@ def test_sample_at_is_continuous_and_clamped():
                        plan.waypoints[0].wrist_pose)
     assert np.allclose(sample_at(plan, schedule, schedule.total + 5.0).wrist_pose,
                        plan.waypoints[-1].wrist_pose)
-    assert np.allclose(sample_at(plan, schedule, schedule.total + 5.0).linear_velocity,
+    assert np.allclose(sample_at(plan, schedule, schedule.total + 5.0).body_twist,
                        0.0)
 
 
 def test_feed_forward_matches_the_path_it_walks():
-    """The rate handed to the controller must be the rate the target moves at.
+    """The twist handed to the controller must be the rate the target moves at.
 
-    Integrating the feed-forward across a segment has to land on the next
-    waypoint; a rate computed from the unquantized duration misses by up to half
-    a period per segment, which the arm then has to make up with error."""
+    Flowing along the feed-forward for the segment's duration has to land on the
+    next waypoint exactly; a twist computed from the unquantized duration misses
+    by up to half a period per segment, which the arm then has to make up with
+    error."""
     plan = _plan()
     schedule = plan_schedule(plan, hz=HZ, **SPEEDS)
     for k, duration in enumerate(schedule.durations):
-        travelled = schedule.linear_velocity[k] * duration
-        expected = (plan.waypoints[k + 1].wrist_pose[:3, 3]
-                    - plan.waypoints[k].wrist_pose[:3, 3])
-        assert np.allclose(travelled, expected, atol=1e-12), k
+        start = np.asarray(plan.waypoints[k].wrist_pose, float)
+        landed = start @ se3_exp(schedule.body_twist[k] * duration)
+        assert np.allclose(landed, plan.waypoints[k + 1].wrist_pose, atol=1e-9), k
+
+
+def test_feed_forward_is_the_derivative_of_the_reference():
+    """The property the separated lerp-plus-slerp reference did NOT have.
+
+    A constant body twist is the exact derivative of `T_k @ se3_exp(V t)` at
+    every instant, not just at the segment edges. Differentiating the sampled
+    reference numerically must therefore reproduce the twist the same sample
+    hands back -- otherwise the feed-forward is fighting the path it is meant to
+    be riding, everywhere in between.
+    """
+    plan = _plan()
+    schedule = plan_schedule(plan, hz=HZ, **SPEEDS)
+    step = 1e-6
+    for k, duration in enumerate(schedule.durations):
+        for frac in (0.1, 0.37, 0.5, 0.9):
+            t = schedule.edges[k] + frac * duration
+            here = sample_at(plan, schedule, float(t))
+            ahead = sample_at(plan, schedule, float(t) + step)
+            # Body-frame finite difference: the twist that carries `here` to
+            # `ahead`, per second.
+            numeric = se3_log(np.linalg.inv(here.wrist_pose) @ ahead.wrist_pose) / step
+            assert np.allclose(numeric, here.body_twist, atol=1e-6), (k, frac)
+
+
+def test_se3_exp_log_round_trip():
+    """The pair the whole reference is built on.
+
+    Rotations are kept strictly inside pi: that is the domain the log is
+    single-valued on, and beyond it a wrapped answer is correct rather than
+    wrong. Segments between consecutive iterates are nowhere near it.
+    """
+    rng = np.random.default_rng(0)
+    axis = np.array([0.3, 0.5, 0.81])
+    axis = axis / np.linalg.norm(axis)
+    for _ in range(500):
+        direction = rng.normal(size=3)
+        direction /= np.linalg.norm(direction)
+        xi = np.concatenate([rng.normal(size=3) * 0.4,
+                             direction * rng.uniform(0.0, np.pi * 0.999)])
+        assert np.allclose(se3_log(se3_exp(xi)), xi, atol=1e-9)
+
+    # Tiny rotations are the regime consecutive iterates of a converged solve
+    # live in, and the one a naive arccos/closed-form implementation gets wrong:
+    # arccos loses half its digits as its argument approaches 1, and the
+    # Jacobian coefficients are 0/0 there.
+    for angle in (0.0, 1e-12, 1e-9, 1e-7, 1e-5, 1e-3):
+        xi = np.concatenate([np.array([0.1, -0.2, 0.35]), axis * angle])
+        assert np.allclose(se3_log(se3_exp(xi)), xi, atol=1e-12), angle
+
+
+def test_screw_segment_rotates_and_translates_as_one():
+    """Simultaneous rotation and translation is where a screw and a separated
+    lerp-plus-slerp genuinely differ, so it is worth pinning that the reference
+    is the screw: the midpoint of a segment must be the half-twist, not the
+    average of the endpoints."""
+    a = np.eye(4)
+    b = np.eye(4)
+    b[:3, :3] = _rotation_from_vector(np.array([0.0, 0.0, np.pi / 2.0]))
+    b[:3, 3] = np.array([1.0, 0.0, 0.0])
+    plan = SolvePlan(waypoints=[Waypoint(a, {n: 0.0 for n in FINGERS}),
+                                Waypoint(b, {n: 0.0 for n in FINGERS})],
+                     corner_viz=np.zeros(3), finger_names=list(FINGERS),
+                     open_lengths={name: 0.1 for name in FINGERS})
+    schedule = plan_schedule(plan, hz=HZ, **SPEEDS)
+    mid = sample_at(plan, schedule, schedule.total / 2.0)
+
+    # The screw midpoint bows off the straight line between the endpoints.
+    straight = 0.5 * (a[:3, 3] + b[:3, 3])
+    assert not np.allclose(mid.wrist_pose[:3, 3], straight, atol=1e-3)
+    # Two half-twists compose to the whole segment.
+    half = se3_exp(schedule.body_twist[0] * (schedule.total / 2.0))
+    assert np.allclose(a @ half @ half, b, atol=1e-9)
 
 
 def test_single_waypoint_plan():
@@ -158,7 +231,7 @@ def test_single_waypoint_plan():
 
     samples = interpolate(plan, hz=HZ, **SPEEDS)
     assert len(samples) == 1
-    assert np.allclose(samples[0].linear_velocity, 0.0)
+    assert np.allclose(samples[0].body_twist, 0.0)
     # Any t at all resolves to "go here".
     assert np.allclose(sample_at(plan, schedule, 12.0).wrist_pose,
                        plan.waypoints[0].wrist_pose)

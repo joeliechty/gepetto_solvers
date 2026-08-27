@@ -118,14 +118,16 @@ class Waypoint:
 
 @dataclass
 class Sample:
-    """One control tick's worth of command, with the feed-forward rates that
-    produced it. A resolved-rate controller wants both: the pose to servo toward
-    and the velocity the path itself is moving at."""
+    """One control tick's worth of command, with the feed-forward that produced
+    it. A resolved-rate controller wants both: the pose to servo toward and the
+    velocity the reference itself is moving at."""
     t: float                                # seconds from the start of playback
     wrist_pose: np.ndarray                  # 4x4, viser world frame
     tendon_disp: Dict[str, float]           # metres, + = flexing
-    linear_velocity: np.ndarray             # m/s, viser world frame
-    angular_velocity: np.ndarray            # rad/s, viser world frame
+    #: Feed-forward as a BODY twist [v(3) m/s, w(3) rad/s], in the wrist's own
+    #: frame -- so it needs no rotation when the reference pose is mapped into the
+    #: robot base frame. Zero once the path has ended. See :class:`PathSchedule`.
+    body_twist: np.ndarray
     waypoint: int = 0                       # which waypoint this tick is heading to
 
 
@@ -405,16 +407,46 @@ def _rotation_error(R_to, R_from):
 
     Hand-rolled rather than pulled from scipy so this module has no dependency
     beyond numpy: the whole point of it being pure is that the ROS node and the
-    headless smoke test can both import it. The clip guards the arccos against
-    a trace a hair outside [-1, 1] from floating-point error, which is otherwise
-    a NaN on the identity rotation -- exactly the case a converged solve hits.
+    headless smoke test can both import it.
+
+    The angle comes from `atan2(|skew part|, cos)` rather than `arccos` alone.
+    Both are correct on paper; only the first is usable near zero. `arccos` takes
+    its argument to 1.0 as the rotation vanishes, which is exactly where its
+    derivative is infinite, so a trace correct to machine epsilon yields an angle
+    correct to about `sqrt(eps)` -- 1e-8 absolute, which swamps the microradian
+    rotations between consecutive iterates of a converged solve. `atan2` is
+    well-conditioned across the whole range and needs no clip to stay finite.
     """
     R = np.asarray(R_to, float) @ np.asarray(R_from, float).T
-    angle = np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0))
-    if angle < 1e-9:
-        return np.zeros(3)
     axis = np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
-    return axis * (angle / (2.0 * np.sin(angle)))
+    sin_term = 0.5 * float(np.linalg.norm(axis))         # |sin(angle)|
+    cos_term = 0.5 * (float(np.trace(R)) - 1.0)          # cos(angle)
+    angle = float(np.arctan2(sin_term, cos_term))
+    if angle < 1e-12:
+        return np.zeros(3)
+    if sin_term > 1e-7:
+        return axis * (angle / (2.0 * sin_term))
+    if angle < 1.0:
+        # Small angle: axis/2 IS the rotation vector to first order, and the
+        # scaling above is an ill-conditioned 0/0 here.
+        return 0.5 * axis
+    # Near pi: sin(angle) has vanished but the rotation has not, so the skew part
+    # carries no usable direction. At exactly pi, R = 2kk' - I, so R + I = 2kk' --
+    # every column is a multiple of the axis, and the one with the largest
+    # diagonal is the best conditioned. Taking the column (rather than the
+    # sqrt of the diagonal) keeps the RELATIVE signs between components, which
+    # a per-component sqrt throws away.
+    M = R + np.eye(3)
+    k = M[:, int(np.argmax(np.diag(M)))]
+    norm = float(np.linalg.norm(k))
+    if norm < 1e-12:
+        return np.zeros(3)
+    k = k / norm
+    # k and -k describe the same rotation at exactly pi, but just short of it the
+    # skew part still resolves the sign; below that it is genuinely ambiguous.
+    if float(np.dot(k, axis)) < 0.0:
+        k = -k
+    return k * angle
 
 
 def _rotation_from_vector(rotvec):
@@ -427,11 +459,98 @@ def _rotation_from_vector(rotvec):
     return np.eye(3) + np.sin(theta) * K + (1.0 - np.cos(theta)) * (K @ K)
 
 
-def _slerp(R_a, R_b, s):
-    """Geodesic interpolation between two rotations, ``s`` in [0, 1]. Exact
-    (not a normalized lerp): it walks the constant-rate path scipy's Slerp walks,
-    via the same log/exp pair used for the pose error above."""
-    return _rotation_from_vector(s * _rotation_error(R_b, R_a)) @ np.asarray(R_a, float)
+# ---------------------------------------------------------------------------
+# se(3). The reference a segment is walked along is T_k @ se3_exp(V * t) for a
+# CONSTANT body twist V, which is what makes the feed-forward handed to the
+# controller the exact derivative of the reference at every instant rather than
+# only at the segment edges. Hand-rolled on numpy for the same reason the SO(3)
+# pair above is -- see _rotation_error.
+#
+# TWIST ORDERING IS [v(3), w(3)], linear first, everywhere in this module and in
+# `servo_drivers`. It is stated in every docstring below because the opposite
+# convention is equally common and mixing the two is silent: the result is still
+# a 6-vector, still finite, and simply moves the arm wrongly.
+# ---------------------------------------------------------------------------
+
+#: Below this rotation angle (rad) the se(3) Jacobian coefficients are evaluated
+#: by series rather than closed form. Set where the two agree to ~1e-11: high
+#: enough that the closed form is never used in its cancelling regime, low enough
+#: that the two-term series is still exact to well past double precision's needs.
+_SMALL_ANGLE = 1e-4
+
+
+def _skew(v):
+    """The 3x3 skew-symmetric matrix with ``_skew(a) @ b == np.cross(a, b)``."""
+    x, y, z = np.asarray(v, float)
+    return np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
+
+
+def se3_log(T):
+    """``T`` (4x4) to its body twist ``xi = [v(3), w(3)]``, with ``se3_exp(xi) == T``.
+
+    The translational half is NOT the raw position column: it carries the inverse
+    of the left Jacobian, so that travelling along a CONSTANT twist for unit time
+    lands exactly on ``T``. Using ``T[:3, 3]`` in its place is the classic error --
+    it agrees only when the rotation is zero, and elsewhere it bends the path into
+    the wrong helix.
+    """
+    T = np.asarray(T, float)
+    R, p = T[:3, :3], T[:3, 3]
+    w = _rotation_error(R, np.eye(3))               # log(R), the SO(3) half
+    theta = float(np.linalg.norm(w))
+    W = _skew(w)
+    # Coefficient on W@W in the inverse of the left Jacobian V built by se3_exp.
+    # The closed form is a 0/0 as theta vanishes -- numerator and denominator both
+    # go to zero as theta**2 -- so it is evaluated by series below _SMALL_ANGLE,
+    # where the series is good to ~1e-11 relative and the closed form has already
+    # lost half its digits to cancellation.
+    if theta < _SMALL_ANGLE:
+        coefficient = (1.0 / 12.0) + (theta**2) / 720.0
+    else:
+        coefficient = (1.0 - (theta * np.sin(theta))
+                       / (2.0 * (1.0 - np.cos(theta)))) / theta**2
+    V_inv = np.eye(3) - 0.5 * W + coefficient * (W @ W)
+    return np.concatenate([V_inv @ p, w])
+
+
+def se3_exp(xi):
+    """Body twist ``xi = [v(3), w(3)]`` to the 4x4 it generates. Inverse of se3_log."""
+    xi = np.asarray(xi, float).reshape(6)
+    v, w = xi[:3], xi[3:]
+    theta = float(np.linalg.norm(w))
+    W = _skew(w)
+    # The left Jacobian V, so that the pair round-trips with se3_log above. Both
+    # coefficients are 0/0 at theta = 0 and cancel badly just above it, so they
+    # get the same series treatment as se3_log's.
+    if theta < _SMALL_ANGLE:
+        a = 0.5 - (theta**2) / 24.0
+        b = (1.0 / 6.0) - (theta**2) / 120.0
+    else:
+        a = (1.0 - np.cos(theta)) / theta**2
+        b = (theta - np.sin(theta)) / theta**3
+    V = np.eye(3) + a * W + b * (W @ W)
+    T = np.eye(4)
+    T[:3, :3] = _rotation_from_vector(w)
+    T[:3, 3] = V @ v
+    return T
+
+
+def se3_adjoint(T):
+    """The 6x6 Adjoint of ``T``, in the ``[v, w]`` ordering: ``[[R, skew(p)R], [0, R]]``.
+
+    Maps a twist expressed in ``T``'s frame into the frame ``T`` is expressed in.
+    Used to pull the segment's feed-forward twist -- which is defined relative to
+    the REFERENCE pose -- back onto the frame the arm is ACTUALLY at, so the
+    feed-forward stays exact while there is tracking error rather than only when
+    the two coincide.
+    """
+    T = np.asarray(T, float)
+    R, p = T[:3, :3], T[:3, 3]
+    Ad = np.zeros((6, 6))
+    Ad[:3, :3] = R
+    Ad[:3, 3:] = _skew(p) @ R
+    Ad[3:, 3:] = R
+    return Ad
 
 
 def segment_durations(plan, max_linear, max_angular, max_tendon, min_duration=0.05):
@@ -463,25 +582,31 @@ def segment_durations(plan, max_linear, max_angular, max_tendon, min_duration=0.
 class PathSchedule:
     """A plan's timing, precomputed once so the path can be sampled at any ``t``.
 
-    :func:`interpolate` walks a plan on a fixed grid, which is all an open-loop
-    player needs. A player that PACES ITSELF against the robot -- slowing the path
-    down when the arm falls behind, which is what keeps every waypoint fully
-    interpolated at any speed -- cannot use a fixed grid, because its clock
-    advances by a different amount every tick. It needs to ask "where should the
-    wrist be at time t" for arbitrary t, and that is what this plus
-    :func:`sample_at` answer.
+    The executor advances its own clock and asks "where should the wrist be at
+    time t" each tick, so the schedule has to be samplable at arbitrary ``t``
+    rather than only on a fixed grid; that is what this plus :func:`sample_at`
+    answer. :func:`interpolate` is then just a walk of the same pair over a grid.
 
     Durations are QUANTIZED to whole control periods. Two reasons: it makes
     :func:`interpolate` exactly a walk of :func:`sample_at` over the grid, so the
-    two can never drift apart, and it makes the per-segment feed-forward rate the
+    two can never drift apart, and it makes the per-segment feed-forward twist the
     rate the target actually moves at rather than the rate it was asked to move
     at -- which is the number a resolved-rate controller is fed.
+
+    The feed-forward is ONE BODY TWIST per segment, not a separated linear and
+    angular pair in the plan's frame. That is what makes it the exact derivative
+    of the reference :func:`sample_at` walks -- a constant body twist integrates
+    to ``T_k @ se3_exp(V * t)``, which is the reference -- rather than merely
+    agreeing with it at the segment edges. It also needs no frame rotation
+    downstream: a body twist is expressed in the wrist's own frame, which is the
+    same frame whether the plan is written in viser or robot-base coordinates.
     """
     durations: List[float]              # per segment, seconds, whole periods
     edges: np.ndarray                   # segment start times, len = n_seg + 1
     total: float                        # seconds
-    linear_velocity: List[np.ndarray]   # per segment, m/s, viser world frame
-    angular_velocity: List[np.ndarray]  # per segment, rad/s, viser world frame
+    #: Per segment, the constant body twist [v(3) m/s, w(3) rad/s] whose flow for
+    #: `durations[k]` carries waypoint k exactly onto waypoint k+1.
+    body_twist: List[np.ndarray]
 
 
 def plan_schedule(plan, hz=100.0, max_linear=0.2, max_angular=0.4,
@@ -496,20 +621,23 @@ def plan_schedule(plan, hz=100.0, max_linear=0.2, max_angular=0.4,
     raw = segment_durations(plan, max_linear, max_angular, max_tendon,
                             min_duration)
 
-    durations, linear, angular = [], [], []
+    durations, twists = [], []
     for k, duration in enumerate(raw):
         a, b = plan.waypoints[k], plan.waypoints[k + 1]
         duration = max(1, int(round(duration / period))) * period
         durations.append(duration)
-        linear.append((b.wrist_pose[:3, 3] - a.wrist_pose[:3, 3]) / duration)
-        angular.append(_rotation_error(b.wrist_pose[:3, :3],
-                                       a.wrist_pose[:3, :3]) / duration)
+        # The body twist carrying a onto b in exactly `duration`. Relative pose
+        # first, then the log: this is a screw, so the wrist rotates and
+        # translates as one motion rather than as two independently interpolated
+        # channels that only agree at the ends.
+        relative = np.linalg.inv(np.asarray(a.wrist_pose, float)) @ \
+            np.asarray(b.wrist_pose, float)
+        twists.append(se3_log(relative) / duration)
 
     edges = np.concatenate([[0.0], np.cumsum(durations)]) if durations \
         else np.zeros(1)
     return PathSchedule(durations=durations, edges=edges,
-                        total=float(edges[-1]),
-                        linear_velocity=linear, angular_velocity=angular)
+                        total=float(edges[-1]), body_twist=twists)
 
 
 def sample_at(plan, schedule, t):
@@ -517,7 +645,16 @@ def sample_at(plan, schedule, t):
 
     ``t`` is clamped to ``[0, schedule.total]``: before the start is the first
     waypoint, at or past the end is the last one held with ZERO feed-forward,
-    which is exactly what a settle phase wants to command.
+    which is what the terminal hold wants to command.
+
+    The wrist reference is ``T_k @ se3_exp(V * elapsed)`` -- the flow of the
+    segment's constant body twist. At ``elapsed == duration`` that is exactly
+    waypoint ``k+1`` by construction of ``V``, so no waypoint is ever missed, and
+    at every instant between, the twist handed back IS the derivative of the pose
+    handed back. Interpolating position and rotation separately would break that
+    second property: the true body twist of a lerp-plus-slerp path varies along
+    the segment, so a constant feed-forward would be subtly wrong everywhere
+    except the ends.
     """
     if not plan.waypoints:
         raise ValueError("empty plan has no samples")
@@ -525,20 +662,20 @@ def sample_at(plan, schedule, t):
     if not schedule.durations:
         w = plan.waypoints[0]
         return Sample(0.0, np.asarray(w.wrist_pose, float), dict(w.tendon_disp),
-                      np.zeros(3), np.zeros(3), 0)
+                      np.zeros(6), 0)
 
     t = float(np.clip(t, 0.0, schedule.total))
     # -1 because searchsorted returns the insertion point; clipped to the last
-    # segment so t == total lands on s == 1.0 of it rather than off the end.
+    # segment so t == total lands on the end of it rather than off the end.
     k = int(np.clip(np.searchsorted(schedule.edges, t, side="right") - 1,
                     0, len(schedule.durations) - 1))
-    s = float(np.clip((t - schedule.edges[k]) / schedule.durations[k], 0.0, 1.0))
+    duration = schedule.durations[k]
+    elapsed = float(np.clip(t - schedule.edges[k], 0.0, duration))
+    s = elapsed / duration
 
     a, b = plan.waypoints[k], plan.waypoints[k + 1]
-    p_a, p_b = a.wrist_pose[:3, 3], b.wrist_pose[:3, 3]
-    T = np.eye(4)
-    T[:3, :3] = _slerp(a.wrist_pose[:3, :3], b.wrist_pose[:3, :3], s)
-    T[:3, 3] = p_a + s * (p_b - p_a)
+    twist = schedule.body_twist[k]
+    T = np.asarray(a.wrist_pose, float) @ se3_exp(twist * elapsed)
 
     # Held at the end, not still travelling: a feed-forward past the last
     # waypoint would walk the arm straight through it.
@@ -546,11 +683,13 @@ def sample_at(plan, schedule, t):
     return Sample(
         t=t,
         wrist_pose=T,
+        # Tendons stay a plain linear ramp in their own coordinate -- they are a
+        # displacement in R^n, not a pose, so there is no manifold to respect and
+        # theta(t) = theta_k + theta_dot * t is already exact.
         tendon_disp={name: (a.tendon_disp.get(name, 0.0)
                             + s * (value - a.tendon_disp.get(name, 0.0)))
                      for name, value in b.tendon_disp.items()},
-        linear_velocity=(np.zeros(3) if at_end else schedule.linear_velocity[k]),
-        angular_velocity=(np.zeros(3) if at_end else schedule.angular_velocity[k]),
+        body_twist=(np.zeros(6) if at_end else np.asarray(twist, float)),
         waypoint=k + 1)
 
 
