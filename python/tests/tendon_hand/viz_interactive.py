@@ -12,6 +12,29 @@ or stalls. Every step is kept, so the *Solve steps*
 scrubber replays the convergence one iteration at a time (initial guess -> each
 outer iteration).
 
+The window docked to the LEFT of the 3D view plots that convergence as a
+CONTROL TRAJECTORY: one subplot each for the six things this robot is commanded
+with -- the five actuated tendon LENGTHS (what the hand took in, in mm, and what
+the hardware is commanded on -- not the tension that was asked for), and the
+wrist pose split into x/y/z/roll/pitch/yaw, since a pose is not plottable as a
+scalar. Sample 0 is
+where the run started (the FK pose on screen, so with *Warm start* on it is the
+current kinematics) and every later sample is one AL outer iteration, joined by
+straight segments with the knots dotted, so the window fills in live as *Auto
+solve* runs and holds the whole path once it stops. A phase-4 *Close* or
+phase-5 *Lift* plots its ramp substeps the same way. The white dot marks the
+sample the 3D view is showing, so it follows the *Solve steps* scrubber, and the
+readout above the plots plus a *trajectory plots* checkbox in *Display* are its
+only other controls. Values are re-read from the SOLVE, not from the sliders
+that commanded it -- the wrist and the flexor tensions are both variables with
+soft priors, so watching them walk away from what was asked for is the point.
+Units are whatever already prints the same quantity -- mm for the tendons, as in
+the *Tensions* folder's length table, and the wrist sliders' own m and rad -- so
+a number can be read off a plot and checked against the readout beside it. One
+caveat: the straight line drawn between two rpy samples is
+not the path the arm flies between them, which ``robot_plan`` interpolates as a
+screw motion (``se3_log``/``se3_exp``).
+
 *Close* is phase 4, and it is not a solve at all. Presets 0-2 shut the fingers as
 a SIDE EFFECT of the object equality, so the digits arrive one at a time in
 whatever order the optimizer moved them; phase 4 instead COMMANDS the grasping
@@ -49,15 +72,16 @@ until it ends -- the app says so on the button and in the startup banner.
 
 *ROS mode* (``HandVizApp(server, ros_mode=True, bridge=...)``, which
 ``gepetto_control``'s ``viz_node`` does) adds a *Robot* folder that commands the
-real hardware: **Play solve on robot** exports whatever the scrubber is showing
--- AL outer iterations after a solve, the ramp itself after a phase-4 Close -- as
-waypoints, interpolates them, and servos the arm (MoveIt Servo twists) and the
+real hardware: **Play solve on robot** exports the WHOLE recorded path -- AL outer
+iterations after a solve, the ramp itself after a phase-4 Close -- as waypoints,
+interpolates them, and servos the arm (MoveIt Servo twists) and the
 hand (``finger_servo_node`` tendon jogs) along them; **Get robot state** reads
 the wrist pose and the measured tendon lengths back and makes them the state on
 screen. The scene registers against the robot through the table: the drawn square
-IS ``lbr_workspace_table_link``, so no transform has to be measured. Both channels
-open disabled, and the E-STOP above extends to them -- it halts the publishers,
-not just the solver. Nothing in this module imports rclpy; the bridge is
+IS ``lbr_workspace_table_link``, so no transform has to be measured. The folder
+opens DISARMED -- one checkbox arms one press of *Play* and clears itself when the
+run ends -- and the E-STOP above extends to it: it halts the publishers, not just
+the solver, and disarms. Nothing in this module imports rclpy; the bridge is
 duck-typed and the conversion lives in ``robot_plan.py``, which is pure numpy and
 is covered by ``--smoke``.
 
@@ -110,7 +134,8 @@ collision radius/sigma/cull margin, table height offset -- stay in the
 
 The solvers are the reusable ``HandFKSolver`` / ``HandIKStepper`` classes in
 ``tendon_hand/solvers.py``; the 3D scene is drawn by
-``_plotting/viser_hand.ViserHandScene``. The trajectory planner is not part of
+``_plotting/viser_hand.ViserHandScene`` and the left-hand plots by
+``_plotting/traj_panel.TrajectoryPanel``. The trajectory planner is not part of
 this app -- see the ``traj_*`` scripts.
 
 then open the printed http://localhost:8080 URL. The startup line names the
@@ -768,6 +793,20 @@ def _smoke_robot_plan():
         np.asarray(stepper.params.plane_normal, float))
 
     plan = robot_plan.build_plan(result, stepper.configs, corner, open_lengths)
+
+    # THE WHOLE PATH, one waypoint per recorded iterate. Checked rather than
+    # assumed because the failure is silent and was live for a while: build_plan
+    # used to take the convergence scrubber's index, the scrubber opens on the
+    # LAST iterate, and the "recorded path" therefore collapsed to a single
+    # waypoint -- one hop to the final pose with the trajectory dropped. Nothing
+    # downstream can tell a one-waypoint plan from a legitimate one.
+    n_iterates = result.num_iterates()
+    whole = len(plan.waypoints) == n_iterates
+    if not whole:
+        print(f"  [    plan] BAD -- history gave {len(plan.waypoints)} waypoint(s) "
+              f"for {n_iterates} recorded iterates; the path is being truncated")
+    ok = ok and whole
+
     plan, clamp_notes = robot_plan.clamp_to_travel(plan)
     # The approach segment the bridge prepends at play time: pretend the robot is
     # at the hand-open pose, which is the worst case for the first segment.
@@ -780,9 +819,10 @@ def _smoke_robot_plan():
     final = plan.waypoints[-1]
     landed = np.allclose(samples[-1].wrist_pose, final.wrist_pose, atol=1e-9)
     finite = all(np.all(np.isfinite(s.wrist_pose)) for s in samples)
-    status = "ok" if landed and finite and len(samples) > 1 else "BAD"
+    status = "ok" if landed and finite and whole and len(samples) > 1 else "BAD"
     ok = ok and status == "ok"
-    print(f"  [    plan] waypoints={len(plan.waypoints)} samples={len(samples)} "
+    print(f"  [    plan] waypoints={len(plan.waypoints)} "
+          f"({n_iterates} iterates + 1 approach) samples={len(samples)} "
           f"duration={samples[-1].t:.2f}s [{status}] | {robot_plan.summarize(plan)}")
     for note in clamp_notes:
         print(f"           - {note}")
@@ -859,6 +899,15 @@ class HandVizApp:
 
         from .._plotting.viser_hand import ViserHandScene
         self.scene = ViserHandScene(server, FINGER_LABELS)
+
+        # The control-trajectory plots, in their own window docked to the LEFT of
+        # the 3D view (the main control panel is on the right, so the two do not
+        # compete for the same edge). Built before _build_gui because the Display
+        # folder's visibility checkbox needs something to toggle; it is a
+        # top-level entity, so it is not placed in any folder that happens to be
+        # open. See _plotting/traj_panel.py.
+        from .._plotting.traj_panel import TrajectoryPanel
+        self.traj = TrajectoryPanel(server, FINGER_LABELS)
 
         # Park every (current and future) client's camera on the -X/palmar side so
         # the finger curl reads as a grasp instead of bending backwards. Without
@@ -1467,6 +1516,7 @@ class HandVizApp:
             # Nothing solved yet, so the commanded wrist pose is all there is.
             self._render_mount()
             self._report_tendon_lengths(None)
+            self._update_traj()
             return
         # Render whichever solve snapshot the convergence scrubber selects; with
         # no scrubber up this is the result itself, so the gap readouts below
@@ -1525,6 +1575,9 @@ class HandVizApp:
                           centroid_gap=centroid_gap,
                           finger_planes=planes,
                           planar_gaps=planar)
+        # Last: the plots describe the state just drawn, and they are the one
+        # readout here that spans the WHOLE solve rather than this single frame.
+        self._update_traj(live)
 
     def _set_status(self, text):
         self.g_status.content = text
@@ -2421,22 +2474,18 @@ class HandVizApp:
         self._adopt_solved_tensions()
         self._render_frame()
         # Where to go from here. Both halves are non-obvious: the mode change
-        # above quietly turns the live re-solve off, and the Robot folder plays
-        # from the SCRUBBER's position, which was just parked on the last pose --
-        # so "Play solve on robot" would make one interpolated move to the shut
-        # hand rather than walking the ramp. That single move is still a
-        # synchronized close (every tendon channel lerps on one shared fraction,
-        # see robot_plan.sample_at), which is why this is a note and not a
-        # warning; rewind the scrubber to 0 to send the ramp itself.
+        # above quietly turns the live re-solve off, which is what keeps the
+        # recorded ramp alive for the Robot folder to play. The scrubber parking
+        # on the last pose no longer matters to playback -- it decides what is
+        # drawn, not what is sent (see robot_plan.build_plan).
         self._set_status(
             f"**Phase 4 close** &nbsp; {self._fingers_label(fingers)}  \n"
             + "  \n".join(([carried] if carried else []) + notes)
             + "  \nthe tension sliders now hold the close, and the live "
               "re-solve is off so the recorded ramp survives -- press **FK** to "
-              "go back to posing by hand. *Play solve on robot* starts from "
-              "where the **Solve steps** scrubber is parked: leave it at the end "
-              "for one interpolated move onto the shut hand, or rewind it to 0 "
-              "to send every step of the ramp.")
+              "go back to posing by hand. *Play solve on robot* sends the whole "
+              "ramp, every step of it, wherever the **Solve steps** scrubber "
+              "happens to be parked.")
 
     # -- phase 5: the lift --
 
@@ -2534,9 +2583,8 @@ class HandVizApp:
         lines.append(
             "the wrist sliders now hold the raised pose and the live re-solve "
             "is off so the recorded ramp survives -- press **FK** to go back to "
-            "posing by hand. *Play solve on robot* starts from where the **Solve "
-            "steps** scrubber is parked: leave it at the end for one "
-            "interpolated move up, or rewind it to 0 to send every step.")
+            "posing by hand. *Play solve on robot* sends the whole lift, every "
+            "step of it, wherever the **Solve steps** scrubber is parked.")
         self._set_status("  \n".join(lines))
 
     # -- e-stop --
@@ -2938,6 +2986,114 @@ class HandVizApp:
         body = notes[i] if notes is not None else ""
         self.g_iter_status.content = f"iterate {i} / {n - 1}  \n{body}"
 
+    # -- control-trajectory panel (left-docked plot window) --
+    #
+    # The six things this robot is commanded with -- five actuated tendons and
+    # one wrist pose -- plotted against the iteration the solve is on, in the
+    # window traj_panel.TrajectoryPanel owns. Everything below is
+    # EXTRACTION: the panel is handed plain numbers and knows nothing about
+    # results or iterates, which is what keeps the solver vocabulary on this side
+    # of the line and the plotting on that one.
+
+    def _traj_row(self, res):
+        """The eleven control numbers of ONE solved state, in panel order:
+        five actuated tendon lengths in mm, then the wrist as xyz (m) + rpy (rad).
+
+        The LENGTH, not the tension that produced it. The tension is what the
+        solve was asked for; the length is what the hand took in, it is the L
+        half of the state a Section 1.8 control tick anchors on, and it is what
+        the hardware is actually commanded on -- `robot_plan.build_plan` turns
+        each waypoint into ``open_lengths[name] - length``. Same array
+        `_report_tendon_lengths` prints under the tension sliders, and in the
+        same mm, so the plot and that readout cannot disagree.
+
+        Everything is re-read from the RESULT rather than from the sliders that
+        commanded it, for the reason `_report_tendon_lengths` gives: past the
+        first iterate neither the wrist nor the tendon is the slider's any more.
+        The wrist is a variable with a soft prior, so a contact solve ends a long
+        way from the commanded pose -- which is precisely the drift this panel
+        exists to make visible. Reading the sliders would draw flat lines.
+
+        The wrist also has to be RECOVERED rather than read: nothing in a result
+        reports it directly, so `solved_wrist_pose` inverts finger 0's base
+        offset out of its node-0 pose. Split into xyzrpy here because a 4x4 is
+        not plottable, using the same ZYX convention (and the same radians) the
+        Wrist start pose sliders use, so a number read off a plot goes straight
+        back into the slider it came from.
+        """
+        T = np.asarray(solved_wrist_pose(self.fk_solver.configs, res.frames[0]),
+                       float)
+        roll, pitch, yaw = R_to_euler(T[:3, :3])
+        lengths = [float(np.asarray(length, float)[FLEXOR_IDX]) * 1e3
+                   for length in res.tendon_lengths(0)]
+        return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
+
+    def _traj_samples(self):
+        """The whole trajectory on screen as an ``(N, 11)`` array.
+
+        The recorded AL iterates when there are any -- sample 0 is where the run
+        started, which under the warm-start latch IS the FK pose that was on
+        screen when Step was first pressed, i.e. the current kinematics -- and
+        the single solved state when there are none, which is what an FK pose
+        is. So the panel shows a lone dot after FK and grows a line from it as
+        the solve steps, with no special-casing at the boundary.
+
+        Recomputed in full on every render rather than appended to. Measured at
+        1.1 ms over a 26-iterate solve -- 1.6 ms including the eleven uplot
+        pushes, against a `_render_frame` that costs 52 ms -- so it is 3% of a
+        redraw, and nowhere near worth a cache that would have to know about cold
+        restarts, Close/Lift overwriting the history, and the scrubber: three
+        separate ways to serve a stale plot.
+
+        Close and Lift record their ramp substeps as iterates too, so those get
+        plotted by exactly the same path: a phase-4 close draws as five tendon
+        lengths ramping together, which is the claim in its name made visible."""
+        res = self.result
+        if res is None or getattr(self, "fk_solver", None) is None:
+            return np.zeros((0, self.traj.N_CHANNELS))
+        n = res.num_iterates()
+        views = [res.at_iterate(i) for i in range(n)] if n else [res]
+        return np.array([self._traj_row(v) for v in views], float)
+
+    def _traj_cursor(self, n, live):
+        """Which sample the 3D view is showing, for the marker dot.
+
+        Follows `_iter_view` exactly, because agreeing with it is the point: the
+        dot claims "this plotted sample is the hand you are looking at", and the
+        one case where that is easy to get wrong is mid-run, where the scrubber
+        still describes the PREVIOUS solve and the render is drawing the newest
+        state regardless."""
+        if n == 0:
+            return None
+        if live or getattr(self, "iter_slider", None) is None:
+            return n - 1
+        return min(self._current_iterate(), n - 1)
+
+    def _update_traj(self, live=False):
+        """Redraw the trajectory panel for whatever is on screen.
+
+        Called from `_render_frame`, so it follows the live re-solve, every AL
+        step (from the auto-solve worker thread, which is safe -- assigning to a
+        uPlot handle only queues a message) and the convergence scrubber alike.
+
+        Exceptions are caught and shown IN the panel rather than raised: this is
+        a readout on the render path, and that path runs inside the auto-solve
+        loop, so a raise here would end a solve over a plotting bug."""
+        panel = getattr(self, "traj", None)
+        if panel is None:
+            return          # rendered before __init__ built it
+        try:
+            values = self._traj_samples()
+            n = len(values)
+            panel.update(
+                values, cursor=self._traj_cursor(n, live),
+                # Worth saying only in the case that looks like a broken panel:
+                # one dot and no line is a correct picture of an FK pose.
+                note=("current kinematics (FK pose)"
+                      if n == 1 and self.result.num_iterates() == 0 else ""))
+        except Exception as exc:
+            panel.error(exc)
+
     TENDON_IDLE = "_press **FK** to read the actuated tendon lengths_"
 
     def _report_tendon_lengths(self, res):
@@ -3040,23 +3196,31 @@ class HandVizApp:
                             np.asarray(self.params.plane_normal, float))
 
     def _robot_speeds(self):
-        """The two speed sliders resolved into real units.
+        """The playback-speed slider resolved into real units, per channel.
 
-        The sliders are FRACTIONS of each channel's own limit, so they keep
-        meaning something if MoveIt Servo's scales or HandConfig's tendon speed
-        are ever retuned -- and so the numbers on screen are directly comparable
-        to the configured maxima rather than to nothing."""
-        arm = float(self.g_arm_speed.value)
-        hand = float(self.g_hand_speed.value)
-        return dict(max_linear=arm * SERVO_SCALE_LINEAR,
-                    max_angular=arm * SERVO_SCALE_ROTATIONAL,
-                    max_tendon=hand * MAX_TENDON_SPEED)
+        ONE fraction scaling all three ceilings together, which is exactly the
+        time-scaling factor: a segment lasts
+        ``(1 / fraction) * max(t_linear, t_angular, t_tendon)``, so the slider is
+        a pure duration multiplier and the geometric path is untouched by it.
+        Scaling the channels independently could only change WHICH one is the
+        slowest -- it can never make them arrive at different times, because they
+        share a duration by construction -- so two sliders were two numbers for
+        one question.
+
+        Fractions rather than absolute speeds so they keep meaning something if
+        MoveIt Servo's scales or HandConfig's tendon speed are ever retuned.
+        """
+        fraction = float(self.g_speed.value)
+        return dict(max_linear=fraction * SERVO_SCALE_LINEAR,
+                    max_angular=fraction * SERVO_SCALE_ROTATIONAL,
+                    max_tendon=fraction * MAX_TENDON_SPEED)
 
     def _speed_note(self):
         speeds = self._robot_speeds()
-        return (f"arm {speeds['max_linear']:.2f} m/s / "
-                f"{speeds['max_angular']:.2f} rad/s &nbsp; "
-                f"hand {speeds['max_tendon'] * 1e3:.1f} mm/s")
+        return (f"speed {float(self.g_speed.value):.2f} &nbsp; "
+                f"(wrist {speeds['max_linear']:.2f} m/s / "
+                f"{speeds['max_angular']:.2f} rad/s, "
+                f"tendon {speeds['max_tendon'] * 1e3:.1f} mm/s)")
 
     def _set_robot_status(self, text):
         self.g_robot_status.content = text
@@ -3083,12 +3247,11 @@ class HandVizApp:
                 standing_lines.append(self.bridge.status())
             except Exception as exc:
                 standing_lines.append(f"**bridge unavailable:** `{exc}`")
-            channels = [name for name, handle in (("arm", self.g_enable_arm),
-                                                  ("hand", self.g_enable_hand))
-                        if handle.value]
             standing_lines.append(
-                f"channels enabled: **{', '.join(channels) or 'none'}** "
-                f"&nbsp; {self._speed_note()}")
+                (f"**ARMED** -- the next *Play* moves the arm and the hand"
+                 if self.g_armed.value else
+                 "not armed -- tick *move the real robot* to allow one playback")
+                + f" &nbsp; {self._speed_note()}")
             standing_lines.extend(self._open_notes)
             self._standing_status = standing_lines
         lines.extend(self._standing_status)
@@ -3123,6 +3286,15 @@ class HandVizApp:
         move while this app looked live again.
         """
         self.bridge.set_estop(tripped, reason)
+        # A trip disarms. Releasing the latch deliberately does NOT re-arm: coming
+        # back from an E-STOP should take the same explicit gesture as arming did
+        # the first time, not hand back a live panel because someone cleared a
+        # fault. `getattr` because the latch exists outside ROS mode, where the
+        # Robot folder -- and this checkbox -- was never built.
+        if tripped:
+            armed = getattr(self, "g_armed", None)
+            if armed is not None:
+                armed.value = False
         self._set_robot_busy()
 
     def _play_on_robot(self, _=None):
@@ -3137,9 +3309,10 @@ class HandVizApp:
         """
         if not self.ros_mode:
             return
-        if not (self.g_enable_arm.value or self.g_enable_hand.value):
+        if not self.g_armed.value:
             self._refresh_robot_status(
-                "**nothing enabled** -- tick *arm* and/or *hand* first.")
+                "**not armed** -- tick *move the real robot* first. It arms one "
+                "press and clears itself afterwards.")
             return
         try:
             gate = self.estop.admit("robot playback")
@@ -3153,8 +3326,11 @@ class HandVizApp:
                 plan = self._build_robot_plan()
                 self.bridge.play(
                     plan,
-                    enable_arm=self.g_enable_arm.value,
-                    enable_hand=self.g_enable_hand.value,
+                    # Both channels, always: the wrist and the fingers are one
+                    # time-scaled trajectory and playing half of it would move the
+                    # arm to the grasp with the hand wherever it happened to be.
+                    enable_arm=True,
+                    enable_hand=True,
                     speeds=self._robot_speeds(),
                     on_progress=lambda text: self._refresh_robot_status(
                         text, standing=False),
@@ -3163,7 +3339,13 @@ class HandVizApp:
                 traceback.print_exc()
                 self._refresh_robot_status(f"**playback failed:** `{exc}`")
             finally:
-                # Gate first, so the refreshes below see an idle latch and can
+                # DISARM FIRST, before anything that can fail or block. This runs
+                # on every exit -- finished, aborted, stopped, threw -- because
+                # the box arms one press and a press has now been spent. Ahead of
+                # the gate release so there is no window in which the panel is
+                # live again while still armed.
+                self.g_armed.value = False
+                # Gate next, so the refreshes below see an idle latch and can
                 # hand the controls back -- the auto-solve worker's ordering.
                 gate.release()
                 self._set_solving()
@@ -3174,7 +3356,9 @@ class HandVizApp:
             self._play_thread.start()
         except Exception:
             # A gate never released refuses every solve for the rest of the
-            # session; the same failure _ik_auto guards against.
+            # session; the same failure _ik_auto guards against. Disarm here too:
+            # the worker's `finally` is what normally does it and it never ran.
+            self.g_armed.value = False
             gate.release()
             self._set_solving()
             raise
@@ -3184,12 +3368,13 @@ class HandVizApp:
         source = "final" if self.g_play_source.value == PLAY_FINAL else "history"
         if self.result is None:
             raise RuntimeError("nothing solved yet -- press FK, Step or Auto solve")
+        # The WHOLE recorded path, whatever the scrubber is showing. See
+        # build_plan on why there is no "play from here": the scrubber opens on
+        # the last iterate, so honouring it turned every playback into a single
+        # hop to the final pose.
         plan = robot_plan.build_plan(
             self.result, self.fk_solver.configs, self._corner_viz(),
-            self._open_lengths(), source=source,
-            # Play from where the scrubber is parked, so rewinding and replaying
-            # a section works the same way warm-starting from an iterate does.
-            start=self._current_iterate())
+            self._open_lengths(), source=source)
         plan, notes = robot_plan.clamp_to_travel(plan)
         if notes:
             self._refresh_robot_status("  \n".join(notes))
@@ -3704,55 +3889,54 @@ class HandVizApp:
     def _build_robot_folder(self, gui):
         """The Robot folder: play a solve on the hardware, read the hardware back.
 
-        Built only in ROS mode. Both channels open DISABLED -- an operator has to
-        say, per channel, that the arm or the hand may move, because everything
-        else on this page is a picture and these two are not.
+        Built only in ROS mode. It opens DISARMED -- everything else on this page
+        is a picture, and this is not, so moving the robot takes a deliberate
+        gesture that does not survive the run that used it.
         """
         with gui.add_folder("Robot"):
             gui.add_markdown(
                 "Commands the **real robot**. The scene's table square is "
                 "registered against `lbr_workspace_table_link`, so the hand on "
                 "screen and the hand on the arm are the same hand.")
-            self.g_enable_arm = gui.add_checkbox(
-                "arm", False,
-                hint="Allow this folder to publish arm twists to MoveIt Servo "
-                     "(`/lbr/servo_node/delta_twist_cmds`). Off by default: the "
-                     "wrist waypoints are simply not sent while it is unticked, "
-                     "so hand-only playback is the default first run.")
-            self.g_enable_hand = gui.add_checkbox(
-                "hand", False,
-                hint="Allow this folder to publish tendon jogs to "
-                     "`finger_servo_node` (`~/delta_tendon_cmds`). Off by "
-                     "default. Run finger_servo_node with `dry_run:=true` to "
-                     "exercise the whole path with no motors attached.")
+            self.g_armed = gui.add_checkbox(
+                "move the real robot", False,
+                hint="Safety interlock, and nothing else: *Play solve on robot* "
+                     "refuses while this is clear. It ARMS ONE PRESS -- it clears "
+                     "itself when the run ends, however it ends, and an E-STOP "
+                     "clears it too. So it can never be left on and forgotten, "
+                     "and Reset cannot set it. Playback always drives the arm and "
+                     "the hand together; they are one coordinated trajectory and "
+                     "running half of it is not a thing this panel offers. For "
+                     "channel-at-a-time bring-up use `play_client.py --hand-only` "
+                     "(with `finger_servo_node dry_run:=true`).")
             self.g_play_source = gui.add_dropdown(
                 "waypoints", [PLAY_HISTORY, PLAY_FINAL],
                 initial_value=PLAY_HISTORY,
-                hint="What to play. *recorded path* walks whatever the Solve "
-                     "steps scrubber is showing, one waypoint per recorded "
-                     "state, starting from wherever the scrubber is parked. "
-                     "After Step/Auto solve those are OPTIMIZER iterations, so "
-                     "early ones can move oddly before the solve settles; after "
-                     "a phase-4 Close they are the ramp itself, which is a real "
-                     "planned path. *final state only* makes one interpolated "
-                     "move to the end state and ignores the path.")
-            self.g_arm_speed = gui.add_slider(
-                "arm speed (fraction)", 0.05, 1.0, 0.05, 0.50,
-                hint=f"Ceiling on wrist speed, as a fraction of MoveIt Servo's "
-                     f"configured scale ({SERVO_SCALE_LINEAR} m/s linear, "
-                     f"{SERVO_SCALE_ROTATIONAL} rad/s rotational). A ceiling, "
-                     f"not a setpoint: each segment takes as long as its slowest "
-                     f"channel needs.")
-            self.g_hand_speed = gui.add_slider(
-                "hand speed (fraction)", 0.05, 1.0, 0.05, 0.25,
-                hint=f"Ceiling on tendon speed, as a fraction of "
-                     f"HandConfig.max_tendon_speed ({MAX_TENDON_SPEED} m/s). "
-                     f"finger_servo_node rate-limits to the same cap on its own "
-                     f"side, so this can only ever be the slower of the two.")
+                hint="What to play. *recorded path* walks the WHOLE recorded "
+                     "path, one waypoint per recorded state, from the first -- "
+                     "the Solve steps scrubber decides what is drawn, not what is "
+                     "played. After Step/Auto solve those states are OPTIMIZER "
+                     "iterations, so early ones can move oddly before the solve "
+                     "settles; after a phase-4 Close they are the ramp itself, "
+                     "which is a real planned path. *final state only* makes one "
+                     "interpolated move to the end state and ignores the path.")
+            self.g_speed = gui.add_slider(
+                "playback speed (fraction)", 0.05, 1.0, 0.05, 0.50,
+                hint=f"How fast to play the trajectory, as a fraction of every "
+                     f"channel's own maximum ({SERVO_SCALE_LINEAR} m/s linear, "
+                     f"{SERVO_SCALE_ROTATIONAL} rad/s rotational, "
+                     f"{MAX_TENDON_SPEED} m/s tendon). ONE number because the "
+                     f"wrist and the fingers are one trajectory: each segment "
+                     f"takes as long as its slowest channel needs, so scaling "
+                     f"them apart only changes which one waits. A ceiling rather "
+                     f"than a setpoint -- halving it doubles the duration and "
+                     f"leaves the path itself identical. The executor caps the "
+                     f"wrist below the servo's full scale so its tracking "
+                     f"correction always has room to work.")
             self.g_play = gui.add_button(
                 "Play solve on robot", icon=self.viser.Icon.ROBOT,
                 hint="Export the solve on screen as waypoints, interpolate them "
-                     "at the speeds above, and servo the robot along them. Goes "
+                     "at the speed above, and servo the robot along them. Goes "
                      "through the same admission gate as a solve, so it cannot "
                      "run alongside one and the E-STOP refuses it outright.")
             self.g_get_state = gui.add_button(
@@ -3765,8 +3949,7 @@ class HandVizApp:
 
         self.g_play.on_click(self._play_on_robot)
         self.g_get_state.on_click(self._get_robot_state)
-        for handle in (self.g_enable_arm, self.g_enable_hand,
-                       self.g_arm_speed, self.g_hand_speed):
+        for handle in (self.g_armed, self.g_speed):
             handle.on_update(lambda _: self._refresh_robot_status())
 
     def _input_handles(self):
@@ -3805,7 +3988,8 @@ class HandVizApp:
                    self.g_show_world, self.g_show_obj_frame,
                    self.g_show_table_frame, self.g_show_grid,
                    self.g_show_gaps, self.g_show_mount,
-                   self.g_show_finger_planes, self.g_show_planar_gap])
+                   self.g_show_finger_planes, self.g_show_planar_gap,
+                   self.g_show_traj])
 
     def _build_gui(self):
         gui = self.server.gui
@@ -4545,6 +4729,29 @@ class HandVizApp:
                      "sets only -- cube/cylinder/capsule have no ellipsoid "
                      "cross-section. On by default wherever the binding "
                      "supports it. Measurement only: no solve uses this yet.")
+            self.g_show_traj = gui.add_checkbox(
+                "trajectory plots", True,
+                hint="The window docked to the LEFT of the 3D view: the six "
+                     "controls this robot is commanded with -- the five "
+                     "actuated tendon lengths in mm (what the hand took in, "
+                     "the same numbers the length table above prints, NOT the "
+                     "tension that was commanded) and the wrist pose, split "
+                     "into x/y/z/roll/pitch/yaw -- one subplot each, against the "
+                     "iteration the solve is on. Sample 0 is where the run "
+                     "started (the FK pose on screen, so with Warm start on it "
+                     "is the current kinematics) and each later sample is one "
+                     "AL outer iteration, joined by straight segments, so the "
+                     "window fills in live as Auto solve runs and holds the "
+                     "whole path afterwards. A Close or a Lift plots its ramp "
+                     "substeps the same way. The white dot marks the sample the "
+                     "3D view is showing, so it follows the Solve steps "
+                     "scrubber. Angles are the wrist sliders' own radians and "
+                     "positions their metres, so a pose value read off a plot "
+                     "can be typed back into the slider that commands it -- but "
+                     "note "
+                     "the straight line between two rpy samples is NOT the path "
+                     "the arm flies between them, which robot_plan interpolates "
+                     "as a screw motion (se3_log/se3_exp).")
 
         # Every value-carrying control, captured as built: this IS the definition
         # of "defaults" that Reset restores, so the two cannot drift.
@@ -4612,6 +4819,12 @@ class HandVizApp:
         # in-plane form is still buildable -- its plane is keyed off the pinch
         # centroid of exactly these digits, so unchecking the thumb can take it
         # away.
+        # Purely a visibility switch -- the panel keeps its plotted data while
+        # hidden, so unlike the toggles above this needs no re-render to come
+        # back with the trajectory still on it.
+        self.g_show_traj.on_update(
+            lambda _: self.traj.set_visible(self.g_show_traj.value))
+
         for h in (self.g_obj_contact, self.g_obj_contact_plane):
             h.on_update(lambda _, src=h: self._enforce_object_contact(src))
         for h in self.g_contacts:
