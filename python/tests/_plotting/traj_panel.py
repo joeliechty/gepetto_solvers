@@ -61,6 +61,11 @@ def _css(rgb):
 # repeat red/green/blue -- they are told apart by the dashed stroke, not the hue.
 _AXIS_RGB = ((214, 62, 62), (60, 176, 92), (62, 118, 214))
 
+# The MEASURED robot trace, overlaid on every subplot. Black and dashed against
+# the solve's own coloured solid line, so "what was asked for" and "what the
+# machine did" are never confused for one another at a glance.
+_ACTUAL_STROKE = "rgb(24, 24, 24)"
+
 # One entry per subplot, in plot order: (title, dashed?). The five tension rows
 # are built per finger at construction, since their labels come from the caller.
 _POSE_CHANNELS = (("wrist x (m)", 0, False), ("wrist y (m)", 1, False),
@@ -90,6 +95,7 @@ class TrajectoryPanel:
         self.server = server
         self.finger_labels = list(finger_labels)
         self._n = 0
+        self._actual = None
         self.panel = server.gui.add_panel(visible=visible)
         # The icon as its literal string rather than via ``viser.Icon``: this
         # module, like ``viser_hand``, is handed a server and never imports
@@ -152,9 +158,26 @@ class TrajectoryPanel:
              "auto": False,
              "points": {"show": True, "size": 9.0,
                         "stroke": "rgb(255, 255, 255)", "fill": stroke}},
+            # What the ROBOT actually did, sampled during playback -- see
+            # `update`. `auto: False` for the same reason the marker above has
+            # it, and it is not optional: this series is all-NaN until a
+            # playback has happened, and an all-NaN series left in the y-range
+            # calculation makes uPlot's range come out null and silently kills
+            # the whole subplot, taking the solve's own trace with it.
+            #
+            # THE COST of that flag is real and worth knowing: the measured
+            # trace does not widen the y range, so a robot far outside the
+            # solve's own span is drawn off-chart and reads as absent. That is
+            # why `_header` prints the measured numbers next to the commanded
+            # ones -- the readout stays right even when the line is out of view.
+            {"label": "measured", "stroke": _ACTUAL_STROKE, "width": 1.4,
+             "dash": (5.0, 4.0), "auto": False, "spanGaps": False,
+             "points": {"show": True, "size": 4.0,
+                        "stroke": _ACTUAL_STROKE, "fill": _ACTUAL_STROKE}},
         )
         return self.server.gui.add_uplot(
-            data=(np.zeros(1), np.full(1, np.nan), np.full(1, np.nan)),
+            data=(np.zeros(1), np.full(1, np.nan), np.full(1, np.nan),
+                  np.full(1, np.nan)),
             series=series, title=title, height=_PLOT_HEIGHT,
             # Integers only on the x axis: the samples ARE iteration indices, and
             # a "3.5th iterate" does not exist.
@@ -167,12 +190,25 @@ class TrajectoryPanel:
             cursor={"drag": {"x": True, "y": False}},
             padding=(0, 10, 0, 0))
 
-    def update(self, values, cursor=None, note=""):
+    def update(self, values, cursor=None, note="", actual=None):
         """Redraw every subplot from ``values``, an ``(N, N_CHANNELS)`` array.
 
         ``cursor`` is the sample index the 3D view is currently showing (the
         convergence scrubber's position), marked on each plot with a dot; None
         leaves it unmarked. ``note`` is appended to the header line.
+
+        ``actual`` is the same shape and the same channels, but MEASURED off the
+        robot during a playback rather than solved -- drawn dashed black over the
+        commanded line so the two can be read against each other. It is aligned
+        SAMPLE FOR SAMPLE with ``values``: entry ``k`` is where the machine was
+        when the reference reached waypoint ``k``, so a gap between the two lines
+        at ``k`` is the tracking error at that waypoint, read off directly. NaN
+        wherever nothing was recorded, which is most of it if a run was stopped
+        part way; None when no playback has happened at all.
+
+        A mismatched length is IGNORED rather than raised on: the overlay is a
+        readout, and a solve that grew by one iterate after a playback should
+        drop a stale trace quietly, not take the panel down with it.
         """
         values = np.asarray(values, float)
         if values.ndim != 2 or values.shape[1] != self.N_CHANNELS:
@@ -180,20 +216,28 @@ class TrajectoryPanel:
                 f"expected an (N, {self.N_CHANNELS}) array, got {values.shape}")
         n = len(values)
         self._n = n
+        if actual is not None:
+            actual = np.asarray(actual, float)
+            if actual.shape != values.shape:
+                actual = None
+        self._actual = actual
         # uPlot needs a length to draw against; one NaN sample is an empty chart
         # that still has axes, where a zero-length array is a frontend error.
         if n == 0:
             x, values = np.zeros(1), np.full((1, self.N_CHANNELS), np.nan)
             n = 1
             cursor = None
+            actual = None
         else:
             x = np.arange(n, dtype=float)
+        blank = np.full(n, np.nan)
         mark = np.full(n, np.nan)
         if cursor is not None and 0 <= int(cursor) < n:
             mark[int(cursor)] = 1.0
         for i, plot in enumerate(self.plots):
             col = values[:, i]
-            plot.data = (x, col, col * mark)
+            plot.data = (x, col, col * mark,
+                         blank if actual is None else actual[:, i])
         self.header.content = self._header(values, cursor, note)
 
     def _header(self, values, cursor, note):
@@ -207,15 +251,36 @@ class TrajectoryPanel:
             return self._IDLE
         i = int(cursor) if cursor is not None and 0 <= int(cursor) < n else n - 1
         row = values[i]
-        lines = [f"**sample {i} / {n - 1}**" + (f" &nbsp; {note}" if note else "")]
+        actual = getattr(self, "_actual", None)
+        # The measured column is printed beside the commanded one, not instead of
+        # it, and it is printed even when the dashed line is off-chart -- see the
+        # `auto: False` note in `_add_plot`. A blank column means nothing was
+        # recorded at this sample, which is not the same as a zero.
+        meas = (actual[i] if actual is not None and i < len(actual)
+                else [np.nan] * self.N_CHANNELS)
+        head = f"**sample {i} / {n - 1}**" + (f" &nbsp; {note}" if note else "")
+        if actual is not None:
+            head += "  \n_solid = commanded, dashed black = measured on the robot_"
+        lines = [head]
+
+        def pair(label, want, got, fmt, unit):
+            """One row: what was asked for, what the robot did, and the gap."""
+            cell = f"`{label:<6} {want:{fmt}} {unit}`"
+            if np.isfinite(got):
+                # The delta is always signed; `fmt` may already carry a '+' for
+                # the channels that show one, and '++7.4f' is not a format spec.
+                signed = "+" + fmt.lstrip("+")
+                cell += f" `{got:{fmt}}` `{got - want:{signed}}`"
+            return cell
+
         # Code spans so the columns survive markdown's whitespace collapsing --
         # the same trick _report_tendon_lengths uses for its length table.
-        for label, q in zip(self.finger_labels, row[:5]):
-            lines.append(f"`{label:<6} {q:7.2f} mm`")
-        for label, q in zip(("x", "y", "z"), row[5:8]):
-            lines.append(f"`{label:<6} {q:+7.4f} m`")
-        for label, q in zip(("roll", "pitch", "yaw"), row[8:11]):
-            lines.append(f"`{label:<6} {q:+7.4f} rad`")
+        for label, q, m in zip(self.finger_labels, row[:5], meas[:5]):
+            lines.append(pair(label, q, m, "7.2f", "mm"))
+        for label, q, m in zip(("x", "y", "z"), row[5:8], meas[5:8]):
+            lines.append(pair(label, q, m, "+7.4f", "m"))
+        for label, q, m in zip(("roll", "pitch", "yaw"), row[8:11], meas[8:11]):
+            lines.append(pair(label, q, m, "+7.4f", "rad"))
         return "  \n".join(lines)
 
     def clear(self):

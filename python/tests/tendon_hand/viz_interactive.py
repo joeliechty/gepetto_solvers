@@ -908,6 +908,11 @@ class HandVizApp:
         # open. See _plotting/traj_panel.py.
         from .._plotting.traj_panel import TrajectoryPanel
         self.traj = TrajectoryPanel(server, FINGER_LABELS)
+        #: Measured robot states from the last playback, keyed by the waypoint
+        #: (== iterate) index they were sampled at. None when nothing has been
+        #: played, or when what was played cannot be lined up against the plotted
+        #: iterates. See `_sample_robot_trace`.
+        self._robot_trace = None
 
         # Park every (current and future) client's camera on the -X/palmar side so
         # the finger curl reads as a grasp instead of bending backwards. Without
@@ -2917,9 +2922,16 @@ class HandVizApp:
     def _rebuild_iter_slider(self):
         """Rebuild the convergence scrubber for the steps taken so far.
 
+        Also drops any measured robot trace, and this is the right hook for it:
+        the trace is indexed by iterate, every path that records new iterates
+        comes through here, and a trace left over from the PREVIOUS solve would
+        draw against waypoints it was never measured at. Silently wrong is the
+        one thing an overlay claiming to be "what the robot did" must not be.
+
         Torn down and re-created rather than resized because the iteration count
         is whatever the AL outer loop has run to date -- and an FK pose (or a
         freshly restarted loop) must leave no slider at all."""
+        self._robot_trace = None
         for name in ("iter_slider", "g_iter_status"):
             handle = getattr(self, name, None)
             if handle is not None:
@@ -3028,6 +3040,96 @@ class HandVizApp:
                    for length in res.tendon_lengths(0)]
         return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
 
+    def _robot_traj_row(self, state):
+        """One MEASURED robot state as the panel's eleven channels.
+
+        The exact inverse of what `_traj_row` reads off a solve, in the same
+        units and the same order, because the whole point is to draw the two on
+        one axis: five actuated tendon LENGTHS in mm, then the wrist as xyz (m)
+        and rpy (rad) in the viser world frame.
+
+        The hardware reports DISPLACEMENT from the hand-open pose and
+        `robot_plan.build_plan` commands it as ``open_lengths[name] - length``,
+        so recovering a length is ``open_lengths[name] - displacement`` -- the
+        same identity read backwards. Doing it here rather than plotting the
+        displacement directly is what makes the measured line comparable to the
+        commanded one instead of being a differently-zeroed cousin of it.
+
+        A finger the hardware could not report is left NaN rather than zeroed: a
+        motor whose position read failed is a hole in the measurement, and
+        `spanGaps: False` on the series draws it as one. Zero would draw as a
+        fully open finger, which is a claim about the hand rather than an
+        admission that nothing was heard.
+        """
+        T = np.asarray(state.wrist_pose, float)
+        roll, pitch, yaw = R_to_euler(T[:3, :3])
+        open_lengths = self._open_lengths()
+        # The ORDER has to be the result's own, because that is the order
+        # `_traj_row` reads `tendon_lengths(0)` in and therefore the order the
+        # panel's first five channels are in. Falling back to FINGER_LABELS only
+        # covers the case where nothing is solved, where there is no plot to
+        # align with anyway.
+        names = (list(self.result.finger_names)
+                 if self.result is not None else list(FINGER_LABELS))
+        lengths = []
+        for name in names:
+            disp = state.tendon_disp.get(name)
+            lengths.append(np.nan if disp is None or name not in open_lengths
+                           else (open_lengths[name] - float(disp)) * 1e3)
+        # Fixed to five, so a result carrying a different number of digits can
+        # never slide the wrist channels along and draw them on a tendon plot.
+        lengths = (lengths + [np.nan] * 5)[:5]
+        return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
+
+    def _sample_robot_trace(self, feedback):
+        """Record where the robot IS, against the waypoint the plan is heading to.
+
+        Called about ten times a second off the playback feedback, on the action
+        client's callback thread. Cheap on purpose -- two TF lookups and a cached
+        tendon reading -- because it runs while the robot is moving and must not
+        become a reason the feedback path falls behind.
+
+        Keyed by WAYPOINT rather than by time, and the last sample for a waypoint
+        wins. That makes entry ``k`` "where the machine was as the reference
+        finished waypoint k", which is exactly the quantity the plot is being
+        asked for: the gap between the two lines at ``k`` is the tracking error
+        at that waypoint. Time would have to be resampled onto the iterate grid
+        to be plotted at all, and would answer a question nobody asked.
+
+        The feedback's waypoint index is already the CLIENT's -- the executor
+        takes its own prepended approach waypoint back off -- so it indexes the
+        iterates directly, with no offset to get wrong here.
+        """
+        trace = self._robot_trace
+        if trace is None:
+            return          # not collecting: not a history playback
+        try:
+            state = self.bridge.read_state(self._corner_viz())
+            trace[int(feedback.waypoint)] = self._robot_traj_row(state)
+        except Exception:
+            # Diagnostics on the feedback path of a moving robot. A failed TF
+            # lookup mid-run is a missing sample, not a reason to raise into the
+            # action client's callback.
+            pass
+
+    def _robot_trace_array(self, n):
+        """The recorded trace as an ``(n, 11)`` array, NaN where nothing landed.
+
+        Returns None when there is nothing to draw, which the panel takes as "no
+        measured line" -- distinct from an all-NaN array, which would mean a
+        playback happened and recorded nothing.
+        """
+        trace = getattr(self, "_robot_trace", None)
+        if not trace:
+            return None
+        out = np.full((n, self.traj.N_CHANNELS), np.nan)
+        hit = False
+        for index, row in trace.items():
+            if 0 <= index < n:
+                out[index] = row
+                hit = True
+        return out if hit else None
+
     def _traj_samples(self):
         """The whole trajectory on screen as an ``(N, 11)`` array.
 
@@ -3087,6 +3189,7 @@ class HandVizApp:
             n = len(values)
             panel.update(
                 values, cursor=self._traj_cursor(n, live),
+                actual=self._robot_trace_array(n),
                 # Worth saying only in the case that looks like a broken panel:
                 # one dot and no line is a correct picture of an FK pose.
                 note=("current kinematics (FK pose)"
@@ -3320,6 +3423,13 @@ class HandVizApp:
             self._refresh_robot_status(f"**refused:** {exc}")
             return
 
+        # Collect the measured trace only for a recorded-path playback: it is
+        # keyed by waypoint index, and only for `history` does a waypoint index
+        # mean an iterate index -- which is what the plot's x axis is. A `final
+        # state only` run has one waypoint and nothing to line up against.
+        self._robot_trace = ({} if self.g_play_source.value == PLAY_HISTORY
+                             else None)
+
         def worker():
             try:
                 self._set_solving(True)
@@ -3334,6 +3444,7 @@ class HandVizApp:
                     speeds=self._robot_speeds(),
                     on_progress=lambda text: self._refresh_robot_status(
                         text, standing=False),
+                    on_sample=self._sample_robot_trace,
                     should_stop=self.estop.is_tripped)
             except Exception as exc:
                 traceback.print_exc()
@@ -3350,6 +3461,11 @@ class HandVizApp:
                 gate.release()
                 self._set_solving()
                 self._report_estop()
+                # The measured trace is complete now, including whatever the
+                # terminal hold added. Redraw so the dashed line reflects where
+                # the robot actually finished rather than the last feedback
+                # tick before it stopped moving.
+                self._update_traj()
 
         self._play_thread = threading.Thread(target=worker, daemon=True)
         try:
