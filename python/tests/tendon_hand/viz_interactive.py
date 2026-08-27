@@ -20,7 +20,13 @@ travel, so they start and finish as one. It is a walk of FK poses rather than an
 AL solve -- nothing is enforced, nothing converges, and whatever the fingers meet
 on the way, they meet -- and it reports the worst gap between the digits that the
 poses actually came back with, so the claim in its name is a measured number
-rather than an assertion. Every pose is recorded the way an AL iteration is, so
+rather than an assertion. It starts from the solve on screen (whichever step the
+scrubber is parked on) while *Warm start* is on: the solved wrist pose and flexor
+tensions are adopted onto the sliders and the posture is handed to the FK solver,
+so a close continues the phase-2 approach instead of jumping back to whatever the
+panel was last commanded to. What cannot cross that boundary is the contact
+itself -- an FK ramp enforces nothing, so the fingers relax to their tension
+equilibrium before the first step. Same carry on the phase-5 *Lift*. Every pose is recorded the way an AL iteration is, so
 the *Solve steps* scrubber replays a close and the *Robot* folder plays one. See
 ``solvers.synchronized_close``.
 
@@ -136,6 +142,7 @@ from .solvers import (
     pregrasp_centroid_witness, finger_plane_witness, planar_gap_witness,
     default_half_space_axis, PHASE_PRESETS, FLEXOR_IDX,
     synchronized_close, apply_phase_preset, CLOSE_FRACTION,
+    lift_wrist, LIFT_HEIGHT_M, LIFT_STEPS,
     disc_pose, wrist_to_disc, wrist_pose_for_disc_target, disc_frame_error,
     DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY)
 from .config import pinch_pose, proximal_disc_flags
@@ -493,6 +500,7 @@ def _smoke():
                   f"snapshots={n} [{status}] | violation={st.violation:.3e} "
                   f"cost={st.cost:.4g}{extra}")
     ok = _smoke_close() and ok
+    ok = _smoke_lift() and ok
     ok = _smoke_calibration() and ok
     ok = _smoke_robot_plan() and ok
     print("Smoke test:", "PASS" if ok else "FAIL")
@@ -573,6 +581,80 @@ def _smoke_close():
     print(f"           - tracked the ramp to {worst_track * 1e3:.2f} mm "
           f"(allow {_CLOSE_TRACK_TOL_M * 1e3:.1f} mm) "
           f"[{'ok' if tracked else 'BAD'}]")
+    for note in notes:
+        print(f"           - {note}")
+    return ok
+
+
+# What the phase-5 Lift button claims, as two numbers the smoke test can fail on.
+#
+# The wrist has to arrive: how far the SOLVED wrist may sit from the height it
+# was sent to, over the whole ramp. HandFKSolver already refuses a solve that
+# misses its prior by more than 1 mm, so this only has to be loose enough not to
+# fail on the microns a healthy solve lands within.
+_LIFT_ARRIVE_TOL_M = 1e-3
+
+# ...and the hand has to come with it RIGIDLY. Only the wrist prior moves during
+# a lift -- no tension changes, no contact -- so every fingertip must translate
+# by the same vector the wrist did, with the posture untouched. This is the check
+# worth having: it is what breaks if a step ever outgrows the FK warm-start bound
+# and the optimizer starts dragging the hand up instead of moving it.
+_LIFT_RIGID_TOL_M = 5e-4
+
+
+def _smoke_lift():
+    """Check phase 5: that a lift raises the whole hand, rigidly, to where it
+    was sent.
+
+    Same reasoning as :func:`_smoke_close`: the phase rests on a property of the
+    binding (the FK warm start carrying the hand across each step), not of this
+    file, so it is measured rather than trusted.
+    """
+    print("Smoke-testing the phase-5 wrist lift...")
+
+    params = apply_phase_preset(HandSolveParams(), "phase5")
+    # Off a CLOSED hand, since that is what the button lifts in practice, and a
+    # curled rod is the harder thing to translate rigidly than a straight one.
+    params.flexor_tensions = [GRASP_FLEXOR_TENSION] * len(FINGER_LABELS)
+    solver = HandFKSolver(params)
+
+    z0 = float(params.wrist_pose[2, 3])
+    result, notes = lift_wrist(solver)
+    n = result.num_iterates()
+
+    def tips(view):
+        """Fingertip positions at a recorded pose -- the node the renderer draws
+        the contact sphere on."""
+        return {name: np.asarray(
+            view.frames[0][name].marginals.rod.states[-1].pose.mean, float)[:3, 3]
+            for name in view.finger_names}
+
+    start_tips = tips(result.at_iterate(0))
+    worst_arrive, worst_rigid = 0.0, 0.0
+    for i in range(n):
+        view = result.at_iterate(i)
+        want = z0 + i * (LIFT_HEIGHT_M / LIFT_STEPS)
+        got = solved_wrist_pose(solver.configs, view.frames[0])
+        worst_arrive = max(worst_arrive, abs(float(got[2, 3]) - want))
+        # Every tip should sit exactly where it started, plus the rise so far.
+        rise = np.array([0.0, 0.0, float(got[2, 3]) - z0])
+        worst_rigid = max(worst_rigid,
+                          max(float(np.linalg.norm(p - (start_tips[name] + rise)))
+                              for name, p in tips(view).items()))
+
+    stepped = n == LIFT_STEPS + 1
+    arrived = worst_arrive <= _LIFT_ARRIVE_TOL_M
+    rigid = worst_rigid <= _LIFT_RIGID_TOL_M
+    ok = stepped and arrived and rigid
+    print(f"  [    lift] poses={n} (expect {LIFT_STEPS + 1}) "
+          f"rise={(float(solver.params.wrist_pose[2, 3]) - z0) * 1e3:+.1f} mm "
+          f"[{'ok' if ok else 'BAD'}]")
+    print(f"           - arrived within {worst_arrive * 1e3:.3f} mm of every "
+          f"commanded height (allow {_LIFT_ARRIVE_TOL_M * 1e3:.1f} mm) "
+          f"[{'ok' if arrived else 'BAD'}]")
+    print(f"           - fingertips translated rigidly to {worst_rigid * 1e3:.3f} "
+          f"mm (allow {_LIFT_RIGID_TOL_M * 1e3:.1f} mm) "
+          f"[{'ok' if rigid else 'BAD'}]")
     for note in notes:
         print(f"           - {note}")
     return ok
@@ -1490,6 +1572,10 @@ class HandVizApp:
         # solve at all.
         if getattr(self, "g_close", None) is not None:
             self.g_close.disabled = blocked
+        # Lift is the same kind of thing as Close -- a run of FK solves -- so it
+        # follows the same rule, ik_stepping capability included (not needed).
+        if getattr(self, "g_lift", None) is not None:
+            self.g_lift.disabled = blocked
         # Reset would pull the params out from under a running step, and flipping
         # the warm start mid-run cannot affect the loop already built, so both
         # wait it out rather than looking like they did something.
@@ -1849,9 +1935,10 @@ class HandVizApp:
         m = self.result.meta
         lines = [f"**{self.mode}** &nbsp; iters={m.iterations} &nbsp; "
                  f"err={m.error:.3g} &nbsp; {m.total_time_ms:.0f} ms"]
-        # FK and a phase-4 close both enforce NOTHING, so a contact/table gap
-        # line under them would be reporting a distance nobody asked to close.
-        if self.mode not in ("FK", "Close"):
+        # FK, a phase-4 close and a phase-5 lift all enforce NOTHING, so a
+        # contact/table gap line under them would be reporting a distance nobody
+        # asked to close.
+        if self.mode not in ("FK", "Close", "Lift"):
             lines.extend(self._contact_lines(-1))
         lines.extend(self._half_space_note())
         lines.extend(self._wrist_gauge_note())
@@ -2046,6 +2133,49 @@ class HandVizApp:
                 f"**warm start:** a solved flexor tension fell outside the "
                 f"slider range [{lo}, {hi}] N and was clamped -- the hand will "
                 f"move toward the clamped value.")
+
+    def _carry_solve_into_fk(self):
+        """Hand the solve on screen over to the FK solver, for the two phases
+        that are commanded ramps rather than solves (4's close, 5's lift).
+        Returns a markdown line saying which way it went, or None when there was
+        nothing to carry.
+
+        The IK phases carry themselves: ``_ensure_stepper`` adopts the solved
+        wrist and tensions and seeds the posture every time a changed constraint
+        set forces a rebuild, which is what makes phase 0 -> 1 -> 2 one
+        continuous move. Nothing did that across the boundary INTO FK. The
+        sliders still hold the pose and the tensions the last phase was
+        *commanded* with -- deliberately, since a contact solve ends far from
+        both -- and the FK solver holds whatever its own last solve left, which
+        can be a phase and an object ago. So pressing Close after a phase-2
+        approach re-posed the hand at the wrist phase 1 was aimed at and let the
+        fingers spring back to the slider tensions, all before the ramp took its
+        first step.
+
+        What crosses is what an FK ramp can be told: the wrist pose, the flexor
+        tensions, and the posture to start looking from. The CONTACT does not,
+        and cannot -- phase 4 enforces nothing, so the fingers settle where
+        those tensions put them. That gap is the phase, not a shortfall of the
+        carry.
+
+        Gated on the warm-start latch, this app's one switch for "continue from
+        the state on screen", so a close can still be run from what the panel
+        commands by turning it off."""
+        if self.result is None:
+            return None
+        if not self.warm_start:
+            return ("*warm start is off, so this ramp starts from the wrist and "
+                    "tensions the sliders command rather than from the solve on "
+                    "screen.*")
+        # Both adopt from the SCRUBBED iterate, like every other warm start
+        # here, so a ramp branches from whichever step of the solve is showing.
+        self._adopt_solved_wrist()
+        self._adopt_solved_tensions()
+        self.fk_solver.seed_posture(self._seed_state())
+        return ("*carried the solve on screen into the ramp: its wrist pose and "
+                "flexor tensions are now on the sliders and the FK solver starts "
+                "from its posture. Contact does not cross -- nothing is enforced "
+                "from here.*")
 
     def _show_step(self, result, status):
         """Render one stepped state and update both status readouts. Called from
@@ -2248,8 +2378,15 @@ class HandVizApp:
         limits = robot_plan.hardware_travel_limits()
         travel = None if limits is None else {name: hi
                                               for name, (_lo, hi) in limits.items()}
+        # Resolved BEFORE the carry below, deliberately: the open lengths are
+        # measured by FK solves at the CALIBRATED OPEN tensions, which leave the
+        # solver's retained values on an open hand and would eat the posture the
+        # carry commits. Cached, so this ordering costs nothing after the first
+        # close.
+        open_lengths = self._open_lengths()
+        carried = self._carry_solve_into_fk()
         result, notes = synchronized_close(
-            self.fk_solver, self._open_lengths(), fingers, travel,
+            self.fk_solver, open_lengths, fingers, travel,
             fraction=self.g_close_frac.value,
             # The tension ceiling is the flexor slider's own top, so a close can
             # never command a pull the panel could not have been dragged to.
@@ -2288,13 +2425,114 @@ class HandVizApp:
         # warning; rewind the scrubber to 0 to send the ramp itself.
         self._set_status(
             f"**Phase 4 close** &nbsp; {self._fingers_label(fingers)}  \n"
-            + "  \n".join(notes)
+            + "  \n".join(([carried] if carried else []) + notes)
             + "  \nthe tension sliders now hold the close, and the live "
               "re-solve is off so the recorded ramp survives -- press **FK** to "
               "go back to posing by hand. *Play solve on robot* starts from "
               "where the **Solve steps** scrubber is parked: leave it at the end "
               "for one interpolated move onto the shut hand, or rewind it to 0 "
               "to send every step of the ramp.")
+
+    # -- phase 5: the lift --
+
+    def _lift_hand(self, _=None):
+        """Phase 5: raise the wrist straight up, and record the whole ramp.
+
+        Threaded and gated exactly like the close, for the close's reasons: the
+        gate is what stops a lift and a solve overlapping (they share the FK
+        solver, its warm start and ``self.result``), and a viser callback thread
+        blocked for the length of a lift cannot service the E-STOP click. The
+        stop INTERRUPTS this one rather than merely refusing it -- the walk polls
+        between poses -- and keeps every pose recorded so far.
+        See :func:`~.solvers.lift_wrist`.
+        """
+        try:
+            gate = self.estop.admit("wrist lift")
+        except Refused:
+            return
+        try:
+            self._set_solving(True)
+            self._sync_params()
+            self._refresh_object()
+        except Exception as exc:
+            gate.release()
+            self._error_status(exc)
+            self._set_solving()
+            raise
+
+        def worker():
+            try:
+                self._lift_admitted()
+            except Exception as exc:
+                self._error_status(exc)
+            finally:
+                # Gate first, so the refreshes below read an idle latch and can
+                # hand the controls back -- the close worker's ordering.
+                gate.release()
+                self._set_solving()
+                self._report_estop()
+
+        self._lift_thread = threading.Thread(target=worker, daemon=True)
+        try:
+            self._lift_thread.start()
+        except Exception as exc:
+            # A gate never released refuses every solve for the rest of the
+            # session; the same failure _ik_auto and _close_hand guard against.
+            gate.release()
+            self._error_status(exc)
+            self._set_solving()
+            raise
+
+    def _lift_admitted(self):
+        """The lift itself, for a caller that ALREADY HOLDS the gate."""
+        # Same hand-over as the close, for the same reason: a lift pressed
+        # straight off an IK phase (skipping the close, which is allowed --
+        # nothing sequences these buttons) would otherwise start by dropping the
+        # hand back onto the wrist and tensions the sliders still command.
+        carried = self._carry_solve_into_fk()
+        result, notes = lift_wrist(
+            self.fk_solver, height=self.g_lift_height.value,
+            on_progress=self._set_status,
+            should_stop=self.estop.is_tripped)
+
+        # "Lift", not "FK", for the close's reason: _live_fk re-solves on every
+        # slider drag while the mode is FK, and the first such drag would throw
+        # the recorded ramp away along with the scrubber.
+        self.mode = "Lift"
+        self.result = result
+        # A lift re-poses the hand outside the AL loop, so any multipliers a
+        # stepper is holding describe a hand that no longer exists.
+        self._invalidate_stepper()
+        self._rebuild_iter_slider()
+        # The wrist half of what _adopt_solved_tensions does after a close, and
+        # just as necessary: lift_wrist moved params.wrist_pose, but the six
+        # Wrist-start-pose sliders still read the pose from BEFORE the lift, and
+        # _sync_params rebuilds params.wrist_pose straight off them -- so the
+        # next FK solve (or any slider drag) would drop the hand back down.
+        # _write_wrist_sliders also grows the +-0.1 m demo range, which a lift
+        # always needs: the default hover is 0.075 m and 150 mm of it lands well
+        # outside.
+        widened = self._write_wrist_sliders(self.fk_solver.params.wrist_pose)
+        self._render_frame()
+        lines = ["**Phase 5 lift**  \n"
+                 + "  \n".join(([carried] if carried else []) + notes)]
+        if widened:
+            lines.append(
+                f"_wrist slider range widened ({', '.join(widened)}) to hold "
+                f"the raised pose._")
+        # Said every time, because the picture invites the opposite reading: the
+        # hand rises and the object does not follow it up.
+        lines.append(
+            "the object stayed where it is -- an FK lift enforces nothing, so "
+            "no contact carries it, and whether this grasp would actually hold "
+            "it is not a question this phase asks.")
+        lines.append(
+            "the wrist sliders now hold the raised pose and the live re-solve "
+            "is off so the recorded ramp survives -- press **FK** to go back to "
+            "posing by hand. *Play solve on robot* starts from where the **Solve "
+            "steps** scrubber is parked: leave it at the end for one "
+            "interpolated move up, or rewind it to 0 to send every step.")
+        self._set_status("  \n".join(lines))
 
     # -- e-stop --
 
@@ -2388,13 +2626,15 @@ class HandVizApp:
                 "build is used, and rebuild with `pip install .`)*")
         elif on:
             self.g_warm_status.content = (
-                "the next **Step** starts from the state on screen"
+                "the next **Step**, **Close** or **Lift** starts from the state "
+                "on screen"
                 + (", carrying the AL multipliers"
                    if self.caps["dual_transfer"] and self.g_carry_duals.value
                    else ""))
         else:
             self.g_warm_status.content = (
-                "the next **Step** cold-starts (straight hand, Q = 0)")
+                "the next **Step** cold-starts (straight hand, Q = 0); "
+                "**Close**/**Lift** start from what the sliders command")
 
     def _reset_defaults(self, _=None):
         """Put every control back to the value it was built with and cold-start.
@@ -2438,10 +2678,11 @@ class HandVizApp:
 
     def _preset_widget(self, field):
         """The GUI handle a ``PHASE_PRESETS`` override field writes onto, for
-        the plain 1:1 cases (everything except ``contact_fingers``, the two
-        object-contact form boxes, ``sigma_wrist_pos``/``sigma_wrist_rot``,
+        the plain 1:1 cases (everything except the two object-contact form
+        boxes, ``sigma_wrist_pos``/``sigma_wrist_rot``,
         ``flexor_tension_sigma`` and ``passive_tension_sigma``, which
-        :meth:`_apply_phase_preset` special-cases itself)."""
+        :meth:`_apply_phase_preset` special-cases itself, and
+        ``contact_fingers``, which it deliberately ignores)."""
         return {
             "table_contact": self.g_tbl_contact,
             "collision": self.g_collision,
@@ -2465,15 +2706,32 @@ class HandVizApp:
         corresponding GUI widgets, so checking the preset box is a single
         visible action: every affected checkbox/slider jumps to the preset's
         value on screen. One solve-ready sync/invalidate happens at the end --
-        Auto solve is a separate, manual next step, not triggered here."""
+        Auto solve is a separate, manual next step, not triggered here.
+
+        The one field no preset writes here is ``contact_fingers``: the finger
+        mask carries across phases untouched, see the branch below."""
         overrides = PHASE_PRESETS[name].overrides
         self._restoring = True   # batch write; no live-FK/other side effects
         try:
             for field, value in overrides.items():
                 if field == "contact_fingers":
-                    for handle, v in zip(self.g_contacts, value):
-                        handle.value = bool(v)
-                elif field == "object_contact":
+                    # NOT written. Which digits are grasping is the user's
+                    # standing choice, not part of what a phase IS: the panel
+                    # is stepped phase0 -> phase1 -> phase2 on one scene, and a
+                    # preset that re-imposed its own mask would silently
+                    # un-pick the hand between stages -- tick all five for the
+                    # pre-grasp, check phase 1, and three of them quietly go
+                    # away. Every preset that names the field names the SAME
+                    # three-finger pinch anyway (phase 5 deliberately names
+                    # none), so honouring it here only ever overwrote a
+                    # deliberate selection with the value it started at. The
+                    # boxes are seeded at build time and put back by Reset,
+                    # neither of which goes through a preset, so the opening
+                    # pinch set is unaffected. Headless callers still get the
+                    # mask -- solvers.apply_phase_preset writes the field, and
+                    # a script has no standing selection to protect.
+                    continue
+                if field == "object_contact":
                     # A preset that names object_contact ALONE says only WHETHER
                     # the object is contacted, with no opinion on which metric,
                     # so the form the user picked survives it. Off clears both
@@ -2513,9 +2771,10 @@ class HandVizApp:
                     self._preset_widget(field).value = value
         finally:
             self._restoring = False
-        # The batch ran with every per-handle callback suppressed, and a preset's
-        # contact_fingers may have just taken the thumb away -- which is what the
-        # in-plane form's plane is keyed off.
+        # The batch ran with every per-handle callback suppressed, so the
+        # in-plane form's gate -- which is keyed off the object AND the finger
+        # mask (it needs a measured thumb pinch pose) -- has to be re-run by
+        # hand against whichever object and digits are currently selected.
         self._refresh_planar_contact_gate()
         # ...and that gate may have just cleared an in-plane box the preset asked
         # for (SDF object, or a digit set with no measured pinch pose). Falling
@@ -2548,7 +2807,8 @@ class HandVizApp:
         demand rather than cached, so a future phase3 checkbox only needs
         adding here (and to ``_build_gui``/``_input_handles``)."""
         return {"phase0": self.g_phase0, "phase1": self.g_phase1,
-                "phase2": self.g_phase2, "phase4": self.g_phase4}
+                "phase2": self.g_phase2, "phase4": self.g_phase4,
+                "phase5": self.g_phase5}
 
     def _on_phase_toggle(self, name, _=None):
         """Checking a phase preset applies it and unchecks every OTHER phase
@@ -3516,7 +3776,7 @@ class HandVizApp:
                 + self.g_flexors
                 + [self.g_flexor_sigma, self.g_passive_sigma,
                    self.g_phase0, self.g_phase1, self.g_phase2, self.g_phase4,
-                   self.g_close_frac]
+                   self.g_phase5, self.g_close_frac, self.g_lift_height]
                 + [self.g_obj_contact, self.g_obj_contact_plane,
                    self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_half_sides, self.g_half_margin,
@@ -3591,8 +3851,15 @@ class HandVizApp:
             self.g_close = gui.add_button(
                 "Close", icon=self.viser.Icon.HAND_GRAB,
                 hint="Phase 4: shut every ticked contact finger TOGETHER, and "
-                     "record the whole ramp. Not a solve -- no constraint is "
-                     "enforced and nothing converges. Each finger is commanded "
+                     "record the whole ramp. Starts from the solve on screen "
+                     "while Warm start is on -- its wrist pose and flexor "
+                     "tensions are adopted onto the sliders and its posture "
+                     "seeds the FK solver -- so a close follows a phase-2 "
+                     "approach instead of jumping back to whatever the sliders "
+                     "were last commanded to. Not a solve -- no constraint is "
+                     "enforced and nothing converges, so the CONTACT does not "
+                     "carry over: the fingers settle wherever their tensions "
+                     "put them before the ramp starts. Each finger is commanded "
                      "along the same fraction of its own remaining tendon "
                      "travel, so they start together, arrive together, and none "
                      "races ahead or stalls on its stop; the status line reports "
@@ -3609,6 +3876,30 @@ class HandVizApp:
                      "stops short of it. Fractions of REMAINING travel, so a "
                      "finger already half shut moves half as far as an open one "
                      "and both still finish at the same moment.")
+            # Phase 5's runner, next to phase 4's for the same two reasons, and
+            # in the order the two phases run.
+            self.g_lift = gui.add_button(
+                "Lift", icon=self.viser.Icon.ARROW_UP,
+                hint="Phase 5: raise the wrist straight up in the WORLD frame "
+                     "from wherever it is, and record the whole ramp. The mirror "
+                     "of Close -- that one moves the tendons and leaves the "
+                     "wrist alone, this one moves the wrist and leaves the "
+                     "tendons alone, so the hand goes up holding exactly the "
+                     "grasp it closed on. Carries the state on screen the way "
+                     "Close does, so it can also be pressed straight off a "
+                     "solve. Not a solve: no constraint is "
+                     "enforced, and NOTHING IN THE MODEL HOLDS THE OBJECT, so "
+                     "the hand rises and the object stays on the table. Every "
+                     "pose is kept, so the Solve steps scrubber replays the lift "
+                     "and the Robot folder plays it as waypoints.")
+            self.g_lift_height = gui.add_slider(
+                "lift height (m)", 0.0, 0.3, 0.01, LIFT_HEIGHT_M,
+                hint=f"How far up the wrist goes, along world +Z. Split into "
+                     f"{LIFT_STEPS} equal steps whatever the height, so the "
+                     f"taller the lift the bigger each step -- past ~50 mm a "
+                     f"step the FK warm start stops carrying the hand and every "
+                     f"pose rebuilds from cold (slower, still correct; the "
+                     f"status line says when it happens).")
             # NEVER disabled -- not while solving, not while idle, not on a
             # binding missing every other capability. A stop button that can be
             # greyed out is not a stop button; this one is always available and
@@ -3680,7 +3971,11 @@ class HandVizApp:
                       "this is what lets you change a setting and carry on from "
                       "the posture you had. It also starts an IK solve from an "
                       "FK pose you dialled in, and it follows the iterate "
-                      "scrubber, so you can rewind and branch. Only the POSTURE "
+                      "scrubber, so you can rewind and branch. It governs the "
+                      "phase-4 Close and phase-5 Lift the same way: on, they "
+                      "adopt the solved wrist and tensions and start from the "
+                      "posture on screen; off, they start from what the sliders "
+                      "command. Only the POSTURE "
                       "carries -- the penalty schedule restarts either way."
                       if self.caps["solver_seed"]
                       else "requires a rebuilt _crest_sparse with "
@@ -3707,7 +4002,7 @@ class HandVizApp:
                      "off -- drop the stepped solve, and re-pose with FK.")
             self.g_warm_status = gui.add_markdown("")
 
-        with gui.add_folder("Object pose"):
+        with gui.add_folder("Object pose", expand_by_default=False):
             # OFFSETS from whatever the primitive resolves to on its own, not
             # absolute coordinates. Two reasons: every object keeps its own
             # sensible default placement (the grasp locus for the graspable ones,
@@ -3726,7 +4021,7 @@ class HandVizApp:
                 "the primitive's base orientation. Moving the object changes the "
                 "constraint set, so it restarts the IK loop._")
 
-        with gui.add_folder("Wrist start pose"):
+        with gui.add_folder("Wrist start pose", expand_by_default=False):
             # Seeded from the shared default (solvers.DEFAULT_WRIST_*) so the
             # pose the GUI opens on IS HandSolveParams' default -- a headless
             # repro of what is on screen needs no numbers copied across.
@@ -3801,9 +4096,10 @@ class HandVizApp:
 
         # One-click constraint-set presets, backed by solvers.PHASE_PRESETS so
         # the same data is usable headlessly. Checking a box writes its whole
-        # preset onto the Constraints controls below in one go; press Auto
-        # solve afterward to run it. Mutually exclusive -- checking one
-        # unchecks the other, see _on_phase_toggle.
+        # preset onto the Constraints controls below in one go -- except the
+        # per-finger mask, which is the user's and carries across phases (see
+        # _apply_phase_preset); press Auto solve afterward to run it. Mutually
+        # exclusive -- checking one unchecks the other, see _on_phase_toggle.
         #
         # DEFAULT_PHASE's box opens TICKED. The tick alone would be a claim the
         # panel does not back (the callback only fires on a change), so
@@ -3817,11 +4113,11 @@ class HandVizApp:
                      "short-axis alignment on (the opposition half-space and "
                      "fingertip-midpoint centering stay OFF -- the pinch "
                      "centroid already positions the hand and the other two "
-                     "fight it), a loose wrist prior (this is a big "
-                     "repositioning move), and a 3-finger pinch "
-                     "(index/middle/thumb). Writes straight onto the "
+                     "fight it), and a loose wrist prior (this is a big "
+                     "repositioning move). Writes straight onto the "
                      "Constraints/Wrist controls -- check this, then press "
-                     "Auto solve. Unchecking is a no-op.")
+                     "Auto solve. Your finger selection is left alone, as it "
+                     "is by every preset. Unchecking is a no-op.")
             self.g_phase1 = gui.add_checkbox(
                 PHASE_PRESETS["phase1"].label, DEFAULT_PHASE == "phase1",
                 hint="Apply the phase-1 preset: table contact ON (object "
@@ -3834,9 +4130,10 @@ class HandVizApp:
                      "centering, short-axis alignment) turned back OFF now "
                      "that they've done their job, and a tighter wrist prior "
                      "than phase 0 (held closer to where it ended up, not "
-                     "free to roam). Same 3-finger pinch. Writes straight "
-                     "onto the Constraints/Wrist controls -- check this, then "
-                     "press Auto solve. Unchecking is a no-op.")
+                     "free to roam). Writes straight onto the "
+                     "Constraints/Wrist controls -- check this, then press "
+                     "Auto solve; whichever fingers phase 0 was solved with "
+                     "carry over untouched. Unchecking is a no-op.")
             self.g_phase2 = gui.add_checkbox(
                 PHASE_PRESETS["phase2"].label, DEFAULT_PHASE == "phase2",
                 hint="Apply the phase-2 preset: object contact turned back ON "
@@ -3853,11 +4150,12 @@ class HandVizApp:
                      "constraints still off, and the wrist prior kept TIGHT "
                      "at phase 1's level -- with nothing else holding the "
                      "hand, a loose wrist rides the whole hand onto the "
-                     "object instead of closing the fingers around it. Same "
-                     "3-finger pinch; tendon sigmas set to the standard "
+                     "object instead of closing the fingers around it. Tendon "
+                     "sigmas set to the standard "
                      "loose-flexor/tight-passive pair. Writes straight onto "
                      "the Constraints/Wrist/Tensions controls -- check this, "
-                     "then press Auto solve. Unchecking is a no-op.")
+                     "then press Auto solve; the finger selection carries "
+                     "over from phase 1. Unchecking is a no-op.")
             self.g_phase4 = gui.add_checkbox(
                 PHASE_PRESETS["phase4"].label, DEFAULT_PHASE == "phase4",
                 hint="Apply the phase-4 preset: every constraint OFF -- object "
@@ -3867,16 +4165,30 @@ class HandVizApp:
                      "fingers on a commanded schedule and whatever they meet on "
                      "the way, they meet. The runner is **Close**, up in the "
                      "Solver folder, NOT Auto solve: check this, then press "
-                     "Close. Same 3-finger pinch as phases 0-2, and the wrist "
-                     "prior left tight (the close does not move the wrist at "
-                     "all). Unchecking is a no-op.")
+                     "Close. The fingers it shuts are the ones checked below "
+                     "-- the same set phases 0-2 positioned, since no preset "
+                     "touches that mask -- and the wrist prior is left tight "
+                     "(the close does not move the wrist at all). Unchecking "
+                     "is a no-op.")
+            self.g_phase5 = gui.add_checkbox(
+                PHASE_PRESETS["phase5"].label, DEFAULT_PHASE == "phase5",
+                hint="Apply the phase-5 preset: every constraint OFF, for "
+                     "phase 4's reason -- this phase does not solve for "
+                     "anything either. It raises the wrist on a commanded ramp "
+                     "and the hand goes up holding whatever the close left it "
+                     "holding; nothing in the model holds the OBJECT, so the "
+                     "object stays where it is. The runner is **Lift**, up in "
+                     "the Solver folder, NOT Auto solve: check this, then press "
+                     "Lift. The finger checkboxes are left alone, as by every "
+                     "preset -- a lift follows a close, and the grasping set is "
+                     "whatever that close shut. Unchecking is a no-op.")
 
         # Every constraint on/off toggle lives here (Chapter 2, Eq 2.8-2.19),
         # grouped by the paper's structure. Numeric tuning sliders that go with
         # a toggle (collision radius/sigma/cull margin, table height offset)
         # stay behind in Collision/Table below -- only the booleans move.
         with gui.add_folder("Constraints"):
-            with gui.add_folder("Rod (planar bending)"):
+            with gui.add_folder("Rod (planar bending)", expand_by_default=False):
                 pb_hint = (
                     "Keep each finger in its own flexion plane: one factor per "
                     "rod segment penalising the out-of-plane and torsional "
@@ -3913,7 +4225,7 @@ class HandVizApp:
                          "segment's flexion then lands out of plane. Tightening "
                          "THIS collapses the splay at no cost in reach.")
 
-            with gui.add_folder("Collision (Eq 2.8-2.9)"):
+            with gui.add_folder("Collision (Eq 2.8-2.9)", expand_by_default=False):
                 self.g_collision = gui.add_checkbox(
                     "object collision", True,
                     hint="Keep every non-contact sphere out of the OBJECT. "
@@ -3941,7 +4253,7 @@ class HandVizApp:
                          "families. Needs the table enabled below -- with no "
                          "plane there is no half-space to stay out of.")
 
-            with gui.add_folder("Contact (Eq 2.11-2.15)"):
+            with gui.add_folder("Contact (Eq 2.11-2.15)", expand_by_default=False):
                 self.g_table = gui.add_checkbox(
                     "table enabled", True, disabled=not self.caps["table"],
                     hint="Put the support plane in the factor graph. Affects the "
@@ -3988,7 +4300,7 @@ class HandVizApp:
                          "instead of the default 5-row form. Only affects "
                          "non-ellipsoid (SDF) object contact.")
 
-            with gui.add_folder("Pre-grasp (Eq 2.16-2.19)"):
+            with gui.add_folder("Pre-grasp (Eq 2.16-2.19)", expand_by_default=False):
                 self.g_half_space = gui.add_checkbox(
                     "opposition half-space", False,
                     disabled=not self.caps["opposition"],
@@ -4076,20 +4388,25 @@ class HandVizApp:
             with gui.add_folder("fingers"):
                 # Default to a 3-finger pinch (thumb, index, middle) rather
                 # than the whole-hand grasp; ring/pinky keep collision
-                # avoidance but are not driven onto a surface.
+                # avoidance but are not driven onto a surface. Whatever is
+                # ticked here survives every phase preset (see
+                # _apply_phase_preset) -- only Reset puts this back.
                 _pinch_default = {"index", "middle", "thumb"}
                 self.g_contacts = [
                     gui.add_checkbox(
                         lbl, lbl in _pinch_default,
                         hint="Which fingers every constraint above applies "
-                             "to (IK only; FK never uses contact). "
+                             "to (IK only; FK never uses contact), and the set "
+                             "a phase-4 Close shuts. Carries across the phase "
+                             "presets -- pick the digits once and they hold "
+                             "from pre-grasp through the lift. "
                              "Unchecked fingers keep collision avoidance, so "
                              "they stay out of the object and off the table "
                              "without being driven onto either, opposed "
                              "against, or centered on.")
                     for lbl in FINGER_LABELS]
 
-        with gui.add_folder("Collision"):
+        with gui.add_folder("Collision", expand_by_default=False):
             self.g_coll_radius = gui.add_slider("sphere radius (m)", 0.001, 0.01, 0.0005, 0.003)
             self.g_coll_sigma = gui.add_slider("log10 sigma", -6, 0, 0.5, -4)
             self.g_cull = gui.add_slider("cull margin (m, 0 off)", 0.0, 0.1, 0.005, 0.0)
@@ -4106,7 +4423,7 @@ class HandVizApp:
 
         self._build_ycb_folder(gui)
 
-        with gui.add_folder("Table"):
+        with gui.add_folder("Table", expand_by_default=False):
             # Offset from the scene's own seating, which this app sets to rest
             # the object ON the plane (table_burial = 0, see __init__). Zero
             # default, so every object -- whatever its size, shape or rotation --
@@ -4119,7 +4436,7 @@ class HandVizApp:
 
         self._build_calibration_folder(gui)
 
-        with gui.add_folder("Augmented Lagrangian"):
+        with gui.add_folder("Augmented Lagrangian", expand_by_default=False):
             self.g_al_mu = gui.add_slider("mu", 0.1, 10.0, 0.1, 1.0)
             self.g_al_rate = gui.add_slider("rate", 1.1, 5.0, 0.1, 2.0)
             self.g_al_iters = gui.add_slider("max iters", 5, 100, 5, 40)
@@ -4241,7 +4558,9 @@ class HandVizApp:
         self.g_phase1.on_update(lambda _: self._on_phase_toggle("phase1"))
         self.g_phase2.on_update(lambda _: self._on_phase_toggle("phase2"))
         self.g_phase4.on_update(lambda _: self._on_phase_toggle("phase4"))
+        self.g_phase5.on_update(lambda _: self._on_phase_toggle("phase5"))
         self.g_close.on_click(self._close_hand)
+        self.g_lift.on_click(self._lift_hand)
 
         self.g_object.on_update(self._on_object_selected)
 

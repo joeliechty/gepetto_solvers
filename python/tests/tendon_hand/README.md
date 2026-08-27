@@ -642,6 +642,33 @@ The rule behind all three: **anything the solve is free to move away from its
 commanded value, a warm start has to re-command — otherwise the prior that
 commanded it drags the hand back.**
 
+**Crossing out of IK, into an FK ramp.** Phases 4 and 5 are not solves, so none
+of the machinery above ran for them: `_ensure_stepper` carries the state only
+when it builds a *stepper*, and the close and the lift go through `HandFKSolver`.
+Pressing **Close** after a phase-2 approach therefore re-posed the hand at the
+wrist the sliders still commanded (phase 1's) and let the fingers spring back to
+the slider tensions, all before the ramp took its first step: measured at a
+**64 mm wrist jump and 57–70 mm of fingertip motion**.
+`_carry_solve_into_fk()` (gated on the same *Warm start* latch, called by both
+`_close_admitted` and `_lift_admitted`) does the same three things the IK path
+does — `_adopt_solved_wrist()`, `_adopt_solved_tensions()`, and
+`HandFKSolver.seed_posture(result.state(0))` — which takes the wrist jump to
+0.0 mm. It is ordered *after* `_open_lengths()`, whose own FK solves at the
+calibrated open tensions would otherwise eat the seed.
+
+Two things about that seed are worth knowing. It is **one-shot and forces a
+rebuild**: `seed_posture` clears `_warm_wrist`, because a wrist that barely moved
+would warm-start off the FK solver's own retained values and never read it. And a
+seeded FK solve is **not at its fixed point when the optimizer stops** — starting
+next to another solver's posture, the convergence test can call it done up to
+6 mm short of the tension equilibrium the same wrist and tensions reach from
+cold, which matters because `synchronized_close` *measures* that pose (it reads
+the starting tendon lengths off it, then probes for a slope). `HandFKSolver._settle()`
+re-solves a seeded pose until the fingertips stop moving (≤ 0.1 mm, at most 3
+solves; in practice one). What still does **not** cross is the contact: an FK
+ramp enforces nothing, so the fingers relax off the object — 1–23 mm — before the
+close begins. That is the phase, not a gap in the carry.
+
 #### …and the multipliers (`initial_duals`)
 
 The state is only half of a warm start; the other half is the **optimizer**.
@@ -850,7 +877,13 @@ short-axis alignment) — each independent, over the shared *Contact fingers*
 mask. That is what makes a stalled grasp bisectable: solve for one surface, the
 other, or both, with or without any given avoidance, and see which family
 refuses to close. The *Presets* folder's phase0/1/2 checkboxes apply
-`apply_phase_preset` to the whole panel at once. The panel **opens in
+`apply_phase_preset` to the whole panel at once — with one field held back:
+`contact_fingers`. The mask is the user's standing choice and **carries across
+every phase**, so ticking all five digits for the pre-grasp and then stepping to
+phase 1 keeps all five; only *Reset defaults* puts it back to the opening
+three-finger pinch. (Headless `apply_phase_preset` still writes the field — a
+script has no selection to protect — so the presets themselves keep naming it.)
+The panel **opens in
 `DEFAULT_PHASE`** (`phase0`): that box is ticked at build time *and* its preset
 is written for real by `_apply_default_phase()`, since a build-time tick fires no
 callback and would otherwise be a claim the constraint controls below it do not
@@ -860,7 +893,9 @@ Changing any of those restarts the AL loop (the duals are positional). The
 **Warm start** latch is what lets you change one and carry on: while it is on,
 every rebuild starts from the state on screen and carries the wrist pose, the
 flexor tensions and — with *carry AL duals* ticked — the multipliers, reporting
-`duals carried: 547/550 constraints` in the status. It is a latch, not a capture,
+`duals carried: 547/550 constraints` in the status. It governs the **Close** and
+**Lift** ramps too (see *Crossing out of IK, into an FK ramp* above), which is
+what makes phase 2 → phase 4 continuous. It is a latch, not a capture,
 so press order does not matter, and it defaults **on** (the staged pipeline is a
 chain of continuations; off only where the binding has no `initial_state`).
 *carry AL duals* defaults **off**: carried multipliers stiffen a constraint the

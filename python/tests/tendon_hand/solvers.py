@@ -1454,6 +1454,15 @@ def _make_frame(finger_names, hand_marginals, meta):
             for name, fm in zip(finger_names, hand_marginals.fingers)}
 
 
+def _tip_points(frame):
+    """Every fingertip of one render frame, as an ``(n, 3)`` array in frame
+    order -- the last rod node of each finger, which is the same point the
+    contact and gap witnesses measure from."""
+    return np.array([
+        np.asarray(fs.marginals.rod.states[-1].pose.mean, float)[:3, 3]
+        for fs in frame.values()])
+
+
 @dataclass
 class HandResult:
     """Uniform result for all three solvers. ``frames`` has length 1 for FK/IK and
@@ -1793,6 +1802,44 @@ PHASE_PRESETS: Dict[str, PhasePreset] = {
             sigma_wrist_rot=0.01,
         ),
     ),
+    "phase5": PhasePreset(
+        label="Phase 5: lift",
+        overrides=dict(
+            # Phase 5 enforces exactly as much as phase 4 does: nothing. The
+            # lift is a commanded wrist ramp run through the FK solver
+            # (:func:`lift_wrist`), so every constraint goes off for phase 4's
+            # reasons -- FK never attaches the environment, and a ticked box
+            # here would claim a guarantee the lift cannot make. Worth saying
+            # out loud for this phase in particular: NOTHING in the model holds
+            # the object. The hand rises carrying whatever tension the close
+            # left it pulling with, and whether that is enough to take the
+            # object with it is a question this phase does not ask.
+            object_contact=False,
+            table_contact=False,
+            half_space=False,
+            pregrasp_center=False,
+            pregrasp_axis_align=False,
+            pregrasp_centroid=False,
+            contact_drop_normal_row=False,
+            collision=False,
+            self_collision=False,
+            # The plane stays for phase 4's reason -- it is the registration the
+            # robot plan is built against, not a constraint.
+            table=True,
+            plane_avoidance=False,
+            # contact_fingers is DELIBERATELY absent. A lift follows a close,
+            # and the grasping set is what the close just shut; re-writing it
+            # here would let ticking this box quietly change which digits the
+            # panel says are holding on. `_apply_phase_preset` only writes the
+            # keys a preset names, so omitting it leaves the set alone.
+            #
+            # The wrist prior, unlike phase 4's, is doing real work: it is the
+            # only thing pulling the hand up the ramp, and the lift checks that
+            # the solve tracked it (HandFKSolver._WRIST_TRACKING_TOL_M).
+            sigma_wrist_pos=0.01,
+            sigma_wrist_rot=0.01,
+        ),
+    ),
 }
 
 
@@ -1888,6 +1935,21 @@ CLOSE_TOL_M = 2e-4
 #: normally does it; the cap is what stops a finger that has run out of curve
 #: (already at the tension ceiling) from spinning.
 CLOSE_REFINE = 3
+
+#: How far a phase-5 lift raises the wrist, in metres of world +Z.
+LIFT_HEIGHT_M = 0.15
+
+#: How many FK poses a lift is recorded at, not counting the starting pose.
+#: What matters here is the SIZE OF ONE STEP, not the total: 0.15 m over 12
+#: steps is 12.5 mm a step, well under `HandFKSolver._WARM_START_MAX_POS_M`
+#: (50 mm), so every pose warm-starts off the one before instead of rebuilding
+#: the graph -- and, more to the point, the hand is MOVED rather than dragged.
+#: A step past that bound is not merely slower: a warm start re-aims the wrist
+#: prior while leaving every rod node where it was, so the optimizer has to haul
+#: the whole hand across the gap and can land short of the commanded pose
+#: without saying so. Raising the height without raising the steps is the way
+#: to walk into that.
+LIFT_STEPS = 12
 
 
 def synchronized_close(fk_solver, open_lengths, fingers, travel,
@@ -2106,6 +2168,121 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
     # pose as an iterate. `replace` off a real FK result rather than building one
     # from scratch, so the spec, object pose, tip radii and contact masks are
     # exactly the ones the scene produced and cannot drift from them.
+    result = replace(results[-1],
+                     iterates=[res.frames for res in results],
+                     iterate_states=[res.states for res in results],
+                     iterate_notes=iterate_notes)
+    return result, notes
+
+
+def lift_wrist(fk_solver, height=LIFT_HEIGHT_M, steps=LIFT_STEPS,
+               on_progress=None, should_stop=None):
+    """Raise the wrist ``height`` metres along world +Z, recording every pose.
+
+    Phase 5, and the mirror image of :func:`synchronized_close`: that one walks
+    the tendons and never touches the wrist, this one walks the wrist and never
+    touches a tendon. The flexor tensions are left exactly as they are found, so
+    a lift carries whatever grasp the close ended on -- and every finger outside
+    it -- up unchanged.
+
+    Returns ``(result, notes)`` in the close's shape. ``result`` is a
+    :class:`HandResult` whose ``frames`` are the raised hand and whose
+    ``iterates`` are the whole ramp starting from the pose the hand is in NOW,
+    so the iterate scrubber and ``robot_plan.build_plan``'s ``source="history"``
+    read it without knowing a lift from a solve -- ``build_plan`` takes the
+    wrist off each iterate with :func:`solved_wrist_pose`, so the arm follows
+    the ramp with no plumbing of its own. ``notes`` are markdown lines for the
+    caller, including the MEASURED rise, which is the number that says whether
+    this function did what its name claims.
+
+    Straight up in the WORLD frame, not along any axis of the hand: only
+    ``T[2, 3]`` moves, and the orientation the hand is holding is carried
+    through untouched. Nothing here is a solve -- no constraint is enforced, and
+    in particular nothing in the model holds the object being lifted.
+
+    The rise is split into ``steps`` so each one stays inside the FK solver's
+    warm-start bound (see :data:`LIFT_STEPS`). ``should_stop`` is polled between
+    poses (the e-stop); a stop KEEPS everything solved so far and returns it as
+    a shorter lift, like the close. On a stop or a failed solve, the params are
+    left holding the last pose that actually came back, so they never describe a
+    hand that was never drawn.
+    """
+    params = fk_solver.params
+    T0 = np.array(params.wrist_pose, float)
+    height = float(height)
+    steps = max(1, int(steps))
+    rise = height / steps
+    notes = []
+
+    def _pose(z):
+        """One FK pose with the wrist commanded to height ``z``."""
+        T = T0.copy()
+        T[2, 3] = z
+        params.wrist_pose = T
+        return fk_solver.solve()
+
+    def _wrist_z(res):
+        """Where the wrist ACTUALLY landed -- the solved pose, not the command."""
+        return float(solved_wrist_pose(fk_solver.configs, res.frames[0])[2, 3])
+
+    if on_progress is not None:
+        on_progress("lift: reading the starting pose")
+    start_res = _pose(T0[2, 3])
+    start_z = _wrist_z(start_res)
+
+    if rise <= 0.0:
+        notes.append("**nothing to lift** -- the height is zero")
+        return replace(start_res, iterates=[start_res.frames],
+                       iterate_states=[start_res.states],
+                       iterate_notes=["lift 0% -- starting pose"]), notes
+
+    # Said once, here, rather than left to be discovered as a hand that does not
+    # quite reach: a caller is free to pass a height and a step count that put
+    # the per-step move past what a warm start can carry.
+    if rise > HandFKSolver._WARM_START_MAX_POS_M:
+        notes.append(
+            f"*{rise * 1e3:.0f} mm per step is past the {HandFKSolver._WARM_START_MAX_POS_M * 1e3:.0f} "
+            f"mm a warm start carries* -- each pose rebuilds from cold, so the "
+            f"lift is slower but no less correct; raise the step count to avoid it")
+
+    results = [start_res]
+    iterate_notes = ["lift 0% -- starting pose"]
+    reached = T0[2, 3]
+    for k in range(1, steps + 1):
+        if should_stop is not None and should_stop():
+            notes.append(
+                f"**stopped** {k - 1}/{steps} of the way up -- the poses already "
+                f"recorded are kept, so the scrubber and the Robot folder can "
+                f"still play the part that ran")
+            break
+        z = T0[2, 3] + k * rise
+        if on_progress is not None:
+            on_progress(f"lift: {k / steps * 100:.0f}% ({k}/{steps}) "
+                        f"-- {k * rise * 1e3:.0f} mm up")
+        try:
+            res = _pose(z)
+        except Exception:
+            # Back to the last pose that came back, so params, the drawn hand
+            # and the panel's sliders cannot disagree about where the wrist is.
+            T_last = T0.copy()
+            T_last[2, 3] = reached
+            params.wrist_pose = T_last
+            raise
+        results.append(res)
+        reached = z
+        iterate_notes.append(f"lift {k / steps * 100:.0f}%  \n"
+                             f"{(z - T0[2, 3]) * 1e3:.0f} mm up")
+
+    # The commanded rise is the easy number and the useless one -- an FK solve
+    # that stalls short of its prior is exactly the failure this phase can have.
+    # HandFKSolver.solve already refuses a solve that misses by more than a
+    # millimetre, so this is a readout rather than a check, but it is the readout
+    # that says the hand went where it was sent.
+    measured = _wrist_z(results[-1]) - start_z
+    notes.append(
+        f"**lifted** in {len(results) - 1} steps: {measured * 1e3:+.1f} mm "
+        f"measured at the wrist ({(reached - T0[2, 3]) * 1e3:+.1f} mm commanded)")
+
     result = replace(results[-1],
                      iterates=[res.frames for res in results],
                      iterate_states=[res.states for res in results],
@@ -2446,17 +2623,27 @@ class HandFKSolver(HandSolverBase):
 
     def __init__(self, params: Optional[HandSolveParams] = None):
         super().__init__(params)
+        # A posture the next rebuild starts from, committed by seed_posture()
+        # and consumed by the next solve. None -- the case every caller had
+        # before phase 4 needed one -- is the straight-rod cold guess.
+        self._seed = None
         self._build()
 
-    def _build(self):
+    def _build(self, seed=None):
         """Build (or rebuild) the underlying solver, cold-started at the params'
-        current wrist pose."""
+        current wrist pose -- or, with ``seed``, at that posture.
+
+        ``seed`` is a :meth:`HandResult.state` from any solver over this same
+        hand; the C++ side merges it over the cold guess, so a state that does
+        not carry every variable still works."""
         cfg = crest_sparse.TendonHandSolverConfig()
         cfg.wrist_pose = self.params.wrist_pose
         cfg.sigma_wrist_pos = self.params.sigma_wrist_pos
         cfg.sigma_wrist_rot = self.params.sigma_wrist_rot
         cfg.base.linear_solver_type = "MULTIFRONTAL_QR"
         cfg.base.max_iterations = 500
+        if seed is not None:
+            _set_if(cfg, "initial_state", seed)
         self._solver = crest_sparse.TendonHandSolver(self.configs, cfg)
         # Where the values this solver is holding actually sit. None = nothing
         # worth warm-starting from (a solve that failed left them wherever it
@@ -2476,6 +2663,68 @@ class HandFKSolver(HandSolverBase):
         cos = 0.5 * (np.trace(self._warm_wrist[:3, :3].T @ T[:3, :3]) - 1.0)
         return float(np.arccos(np.clip(cos, -1.0, 1.0))) <= self._WARM_START_MAX_ROT_RAD
 
+    def seed_posture(self, state):
+        """Start the next solve from ``state`` instead of the cold guess.
+
+        For the caller crossing INTO an FK ramp from a solve this solver never
+        ran -- the phase-4 close, the phase-5 lift, both handed a hand that an
+        IK solve posed. Its own retained values are whatever its last FK solve
+        left, which may be a phase and a scene ago, so without this the ramp's
+        first pose drags the whole hand across that gap.
+
+        Forces the rebuild that applies it (``_warm_wrist = None``): a wrist
+        that has barely moved would otherwise warm-start off those retained
+        values and the seed would never be read.
+
+        Note what an FK solve can and cannot do with it. Nothing is enforced
+        here, so the seed cannot make the hand HOLD the posture it came from:
+        the tensions decide where this solve settles, and the seed only says
+        where it starts looking. It buys continuity and the iterations that go
+        with it -- not the contact the IK solve was maintaining.
+
+        ``state`` of None is a no-op, so a caller with nothing solved yet (or a
+        result from before ``HandResult.states`` existed) can call it blind.
+        """
+        if state is None:
+            return
+        self._seed = state
+        self._warm_wrist = None
+
+    # How far a re-solve may move a fingertip before a seeded pose counts as
+    # settled, and how many re-solves it gets. Both measured (see _settle): a
+    # phase-2 grasp carried into an FK solve lands up to 6 mm short, one more
+    # solve reaches the fixed point, and a third does not move at all.
+    _SETTLE_TOL_M = 1e-4
+    _SETTLE_MAX_SOLVES = 3
+
+    def _settle(self, frame):
+        """Re-solve a SEEDED pose until it stops moving. Returns the settled
+        ``(frame, sol)``.
+
+        An unseeded FK solve is at its fixed point when it returns -- solve it
+        again at the same wrist and tensions and nothing moves. A seeded one is
+        not: it starts near a posture some other solver produced, and the
+        optimizer's convergence test can call it done several millimetres short
+        of the tension equilibrium the same wrist and tensions reach from cold
+        (up to 6 mm on a phase-2 grasp carried into a close).
+
+        That difference matters to the caller doing the carrying, because it
+        MEASURES this pose. :func:`synchronized_close` reads the starting tendon
+        lengths off it and then probes for a slope; a pose still settling hands
+        the probe a few millimetres of travel the tension nudge did not buy, and
+        the whole ramp is spaced off that slope. Better to arrive settled.
+
+        Costs one extra FK solve (~100 ms) on the single seeded solve at the
+        head of a ramp; nothing else in the app ever seeds one."""
+        for _ in range(self._SETTLE_MAX_SOLVES):
+            before = _tip_points(frame)
+            frame, sol = self._solve_once()
+            moved = float(np.max(np.linalg.norm(
+                _tip_points(frame) - before, axis=1)))
+            if moved <= self._SETTLE_TOL_M:
+                break
+        return frame, sol
+
     def _solve_once(self):
         # Uniform prior on every tendon: a tight-passive/loose-flexor prior is
         # underdetermined without contact (IndeterminantLinearSystem on the
@@ -2490,7 +2739,13 @@ class HandFKSolver(HandSolverBase):
         if self._warm_start_holds(T):
             self._solver.set_wrist_pose(T)   # re-aim the prior; keep the posture
         else:
-            self._build()                    # too far to drag the hand: start there
+            # Too far to drag the hand: start there -- from a committed posture
+            # if one is pending, else cold.
+            self._build(self._seed)
+        # One-shot, whether or not it was used: it describes the hand at the
+        # moment the caller committed it, and the retry below is supposed to be
+        # a genuine cold start rather than the same seed a second time.
+        seeded, self._seed = self._seed is not None, None
 
         # The thresholds above are where the trouble STARTS, not a proof, and a
         # bad warm start can be a bad one for reasons that have nothing to do with
@@ -2504,6 +2759,8 @@ class HandFKSolver(HandSolverBase):
                 offset = float(np.linalg.norm(
                     solved_wrist_pose(self.configs, frame)[:3, 3] - T[:3, 3]))
                 if offset <= self._WRIST_TRACKING_TOL_M:
+                    if seeded:
+                        frame, sol = self._settle(frame)
                     self._warm_wrist = T.copy()
                     # FK constrains no finger, but the mask still rides along: it
                     # is read live off params (not baked in at construction), and
