@@ -4,8 +4,6 @@
 
 #include "TendonFingerModel.h"
 #include "TendonFingerSolver.h"
-#include "TendonFingerTrajectoryPlanner.h"
-#include "TendonFingerIterativeSolver.h"
 #include "utils/EnvironmentFactors.h"
 
 #include <openvdb/openvdb.h>
@@ -40,6 +38,17 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("routing_radius", &PerDiscTendonInput::routing_radius)
         .def_readwrite("hole_angles", &PerDiscTendonInput::hole_angles)
         .def_readwrite("hole_radii", &PerDiscTendonInput::hole_radii);
+
+    // Resolved routing, read back off a finger's marginals. solvers.py uses
+    // disc_pose_idx to map a disc index to its rod node.
+    py::class_<TendonConfig>(m, "TendonConfig")
+        .def(py::init<>())
+        .def_readwrite("num_discs", &TendonConfig::num_discs)
+        .def_readwrite("num_tendons", &TendonConfig::num_tendons)
+        .def_readwrite("routing_radius", &TendonConfig::routing_radius)
+        .def_readwrite("disc_pose_idx", &TendonConfig::disc_pose_idx)
+        .def_readwrite("no_disc_pose_idx", &TendonConfig::no_disc_pose_idx)
+        .def_readwrite("hole_locations", &TendonConfig::hole_locations);
 
     py::class_<TendonFingerSolverConfig>(m, "TendonFingerSolverConfig")
         .def(py::init<>())
@@ -79,6 +88,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("sphere_pose_cov",    &SpherePrimitiveContactConfig::sphere_pose_cov)
         .def_readwrite("witness",            &SpherePrimitiveContactConfig::witness);
 
+    // Per-finger results. TendonFingerSolver is gone, but TendonHandMarginals
+    // holds a vector of these -- this is what every hand script reads.
     py::class_<TendonFingerMarginals>(m, "TendonFingerMarginals")
         .def(py::init<>())
         .def_readwrite("rod", &TendonFingerMarginals::rod)
@@ -87,34 +98,6 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("tensions", &TendonFingerMarginals::tensions)
         .def_readwrite("J_pose_tensions", &TendonFingerMarginals::J_pose_tensions)
         .def_readwrite("tendon_lengths", &TendonFingerMarginals::tendon_lengths);
-
-    py::class_<Solution<TendonFingerMarginals>>(m, "TendonFingerSolution")
-        .def(py::init<>())
-        .def_readwrite("meta", &Solution<TendonFingerMarginals>::meta)
-        .def_readwrite("marginals", &Solution<TendonFingerMarginals>::marginals);
-
-    py::class_<TendonFingerSolverDispatch>(m, "TendonFingerSolver")
-        .def(py::init<const TendonFingerSolverConfig&>())
-        // GIL released for the duration, matching every other solver here (see
-        // the note on TendonHandSolver::solve). A single finger solve is far
-        // shorter than a hand's, but it is the same freeze in kind.
-        .def("solve", &TendonFingerSolverDispatch::solve,
-             py::arg("tensions"),
-             py::arg("tip_force"),
-             py::arg("tip_meas"),
-             py::call_guard<py::gil_scoped_release>())
-        .def("get_factor_error_summary",
-             &TendonFingerSolverDispatch::get_factor_error_summary)
-        .def("get_factor_errors_by_type",
-             &TendonFingerSolverDispatch::get_factor_errors_by_type)
-        .def("get_initial_factor_error_summary",
-             &TendonFingerSolverDispatch::get_initial_factor_error_summary)
-        .def("get_hessian_and_gradient",
-             &TendonFingerSolverDispatch::get_hessian_and_gradient)
-        .def("get_intermediate_solutions",
-             &TendonFingerSolverDispatch::get_intermediate_solutions)
-        .def("get_initial_solution",
-             &TendonFingerSolverDispatch::get_initial_solution);
 
     // --- Environment (collision/contact) ---
 
@@ -267,77 +250,4 @@ void bind_tendon_finger(py::module& m) {
         "set, with the per-member breakdown. Falls back to the 3D distance where "
         "the plane misses a member or is degenerate.");
 
-    // --- Trajectory Planner ---
-
-    py::class_<TrajectoryPlannerConfig>(m, "TrajectoryPlannerConfig")
-        .def(py::init<>())
-        .def_readwrite("model_config", &TrajectoryPlannerConfig::model_config)
-        .def_readwrite("K", &TrajectoryPlannerConfig::K)
-        .def_readwrite("dt", &TrajectoryPlannerConfig::dt)
-        // Start boundary conditions (set to None to omit; start_tensions replaces bg prior at k=0)
-        .def_readwrite("start_pose", &TrajectoryPlannerConfig::start_pose)
-        .def_readwrite("start_pose_cov", &TrajectoryPlannerConfig::start_pose_cov)
-        .def_readwrite("start_position", &TrajectoryPlannerConfig::start_position)
-        .def_readwrite("start_position_cov", &TrajectoryPlannerConfig::start_position_cov)
-        .def_readwrite("start_tensions", &TrajectoryPlannerConfig::start_tensions)
-        .def_readwrite("start_tensions_cov", &TrajectoryPlannerConfig::start_tensions_cov)
-        // Goal boundary conditions (set to None to omit; goal_tensions replaces bg prior at k=K)
-        .def_readwrite("goal_pose", &TrajectoryPlannerConfig::goal_pose)
-        .def_readwrite("goal_pose_cov", &TrajectoryPlannerConfig::goal_pose_cov)
-        .def_readwrite("goal_position", &TrajectoryPlannerConfig::goal_position)
-        .def_readwrite("goal_position_cov", &TrajectoryPlannerConfig::goal_position_cov)
-        .def_readwrite("goal_tensions", &TrajectoryPlannerConfig::goal_tensions)
-        .def_readwrite("goal_tensions_cov", &TrajectoryPlannerConfig::goal_tensions_cov)
-        // Background tension prior
-        .def_readwrite("background_tensions_mean", &TrajectoryPlannerConfig::background_tensions_mean)
-        .def_readwrite("background_tensions_sigmas", &TrajectoryPlannerConfig::background_tensions_sigmas)
-        .def_readwrite("gp_tense_Qc", &TrajectoryPlannerConfig::gp_tense_Qc)
-        .def_readwrite("gp_len_Qc", &TrajectoryPlannerConfig::gp_len_Qc)
-        .def_readwrite("tension_limit_alpha", &TrajectoryPlannerConfig::tension_limit_alpha)
-        .def_readwrite("tension_limit_q_min", &TrajectoryPlannerConfig::tension_limit_q_min)
-        .def_readwrite("active_tendon_indices", &TrajectoryPlannerConfig::active_tendon_indices)
-        .def_readwrite("sigma_ext_wrench_force", &TrajectoryPlannerConfig::sigma_ext_wrench_force)
-        .def_readwrite("sigma_ext_wrench_moment", &TrajectoryPlannerConfig::sigma_ext_wrench_moment)
-        // Optional environment for collision/contact (Section 3). None => free-space planner.
-        .def_readwrite("environment", &TrajectoryPlannerConfig::environment)
-        // Optional analytic sphere-primitive terminal contact (mirrors model_config.sphere_contact).
-        .def_readwrite("sphere_contact", &TrajectoryPlannerConfig::sphere_contact);
-
-    py::class_<TrajectoryPlannerResult>(m, "TrajectoryPlannerResult")
-        .def(py::init<>())
-        .def_readwrite("trajectory", &TrajectoryPlannerResult::trajectory)
-        .def_readwrite("meta", &TrajectoryPlannerResult::meta);
-
-    py::class_<TendonFingerTrajectoryPlannerDispatch>(m, "TendonFingerTrajectoryPlanner")
-        .def(py::init<const TrajectoryPlannerConfig&>())
-        .def("plan", &TendonFingerTrajectoryPlannerDispatch::plan)
-        .def("get_factor_error_summary",
-             &TendonFingerTrajectoryPlannerDispatch::get_factor_error_summary);
-
-    // --- Iterative (ISAM2) State Estimator ---
-
-    py::class_<TendonFingerEstimatorConfig>(m, "TendonFingerEstimatorConfig")
-        .def(py::init<>())
-        .def_readwrite("base_config", &TendonFingerEstimatorConfig::base_config)
-        .def_readwrite("background_tensions_mean", &TendonFingerEstimatorConfig::background_tensions_mean)
-        .def_readwrite("background_tensions_cov",  &TendonFingerEstimatorConfig::background_tensions_cov)
-        .def_readwrite("gp_tense_Qc", &TendonFingerEstimatorConfig::gp_tense_Qc)
-        .def_readwrite("gp_len_Qc",   &TendonFingerEstimatorConfig::gp_len_Qc)
-        .def_readwrite("gp_pose_Qc",  &TendonFingerEstimatorConfig::gp_pose_Qc)
-        .def_readwrite("lag_sec",     &TendonFingerEstimatorConfig::lag_sec)
-        .def_readwrite("homotopy_steps", &TendonFingerEstimatorConfig::homotopy_steps);
-
-    py::class_<TendonFingerIterativeSolverDispatch>(m, "TendonFingerIterativeSolver")
-        .def(py::init<const TendonFingerEstimatorConfig&, double>(),
-             py::arg("config"), py::arg("bend_sigma"))
-        .def("step", &TendonFingerIterativeSolverDispatch::step,
-             py::arg("timestamp_sec"),
-             py::arg("tensions_meas")     = std::nullopt,
-             py::arg("lengths_meas")      = std::nullopt,
-             py::arg("measured_bend")     = std::nullopt,
-             py::arg("tip_wrench_meas")   = std::nullopt,
-             py::arg("tip_position_meas") = std::nullopt)
-        .def("get_current_marginals",
-             &TendonFingerIterativeSolverDispatch::get_current_marginals)
-        .def("num_tendons", &TendonFingerIterativeSolverDispatch::num_tendons);
 }

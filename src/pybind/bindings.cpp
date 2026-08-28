@@ -139,10 +139,6 @@ void bind_utils(py::module& m) {
 PYBIND11_MODULE(_crest_sparse, m) {
     bind_cosserat_rod(m);
     bind_cosserat_dynamics(m);
-    bind_cosserat_shell(m);
-    bind_parallel_robot(m);
-    bind_tendon_robot(m);
-    bind_multi_robot(m);
     bind_tendon_finger(m);
     bind_tendon_hand(m);
     bind_utils(m);
