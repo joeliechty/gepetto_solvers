@@ -765,13 +765,10 @@ Two things in here are load-bearing beyond convenience:
 |---|---|---|---|
 | `fk_5f_sweep.py` | HandSolver (no contact) | §1.1 | Live animation, warm-started wrist sweep + flexor sweep |
 | `fk_pinch_centroids.py` | HandFKSolver | — | Generates `config.HAND_PINCH_POSES`: brute-forces where every thumb-opposition combination meets |
-| `ik_1f_contact.py` | FingerSolver | §1.3 | One finger, one SDF contact — the smallest contact test |
-| `ik_2f_contact.py` | HandSolver | §1.4 | Two opposed fingers, one wrist, one graph |
 | `ik_5f_contact.py` | HandSolver | §1.4 | Full 5-finger grasp, one shot |
 | `ik_5f_collision.py` | HandSolver | §1.5 | Collision **only** (no contact) — isolates the inequality path |
 | `ik_5f_contact_collision.py` | HandSolver | §1.4+§1.5 | Grasp + collision together |
 | `ik_5f_point_collision.py` | HandSolver | §1.5 | Point goals + collision — **known to fail, see below** |
-| `traj_1f_contact.py` | FingerPlanner | §1.3 | Single-finger point-to-contact trajectory |
 | `traj_5f_contact.py` | HandPlanner | §1.4 | K+1-step grasp trajectory with GP priors |
 | `traj_5f_contact_collision.py` | HandPlanner | §1.5 | …plus collision at every plannable step |
 | `traj_5f_point.py` | HandPlanner | §1.4 | Terminal tip-position goals instead of contact (non-AL path) |
@@ -1086,28 +1083,39 @@ hand cannot oppose at all.
 
 ---
 
-## 8. The dependency graph — what the hand needs, and what it doesn't
+## 8. What is in the tree, and what used to be
 
-`crest-sparse` is a repo of six unrelated robot models that share a Cosserat rod
-and an optimizer. The tendon hand uses two of the six. This section is the
-transitive closure, so demos outside it can be pruned deliberately rather than
-guessed at.
+`crest-sparse` used to carry six unrelated robot models sharing a Cosserat rod and
+an optimizer. The hand used two of them. **The other four are gone** — pruned in
+2026-08 after tracing the include closure from `src/tendon_hand/pybind.cpp` and the
+Python import closure from this directory. What follows is the tree that is left and
+why each piece has to be here; the deleted code is in git history if it is ever
+wanted back.
 
-### 8.1 C++ — required
-
-Traced from `src/tendon_hand/pybind.cpp` through every `#include`.
+### 8.1 C++ — all of it, and why
 
 ```
 tendon_hand/  TendonHandModel · TendonHandSolver · TendonHandTrajectoryPlanner · pybind
       │
-      ├── tendon_finger/  TendonFingerModel · TendonFingerSolver
-      │                   TendonDiscWrenchFactor · TendonLengthFactor
-      │                   pybind.cpp   ← MANDATORY, see 8.3
+      ├── tendon_finger/  TendonFingerModel · TendonDiscWrenchFactor ·
+      │                   TendonLengthFactor
+      │                   TendonFingerSolver.h  ← HEADER ONLY, for the
+      │                     TendonFingerSolverConfig / SpherePrimitiveContactConfig
+      │                     structs. There is no TendonFingerSolver any more.
+      │                   pybind.cpp  ← binds EnvironmentConfig, EllipsoidPrimitive,
+      │                     ellipsoid_set_planar_gap, the routing types, and
+      │                     TendonFingerMarginals. Mandatory (see 8.3).
       │
       ├── cosserat_rod/   CosseratRodModel
       │                   + its 6 factors: Cosserat{Twist,Stress}Factor,
       │                     BoundaryStressFactor, Root{CosseratTwist,
       │                     CosseratStress,Boundary}StressFactor
+      │                   PlanarBendFactor
+      │                   pybind.cpp  ← CosseratRodState/Marginals/Solution only;
+      │                     the standalone CosseratRodSolver is gone (see 8.3)
+      │
+      ├── cosserat_dynamics/  kept for the dynamics roadmap, not in the hand
+      │                       chain — see 8.5
       │
       ├── measurement/    PositionPriorFactor
       │
@@ -1118,160 +1126,103 @@ tendon_hand/  TendonHandModel · TendonHandSolver · TendonHandTrajectoryPlanner
       └── pybind/         bindings.{h,cpp}   ← the PYBIND11_MODULE entry point
 ```
 
-Read the `tendon_finger` edge precisely: the hand includes
-`TendonFingerSolver.h` **for the `TendonFingerSolverConfig` struct**, not for the
-`TendonFingerSolver` class. So if `ik_1f_contact.py` goes, `TendonFingerSolver.cpp`
-and its binding go with it while the header stays. Likewise
-`TendonFingerTrajectoryPlanner.{h,cpp}` (+ `TensionLimitFactor.h`, which nothing
-else includes) exists solely for `traj_1f_contact.py`.
+### 8.2 What was removed
 
-### 8.2 C++ — not in the chain
-
-| Path | Lines | Notes |
+| Path | Lines | Was |
 |---|---|---|
-| `src/cosserat_dynamics/` | 389 | whole module — **but see 8.7 if dynamics is on the roadmap** |
 | `src/cosserat_shell/` | 501 | whole module |
 | `src/multi_robot/` | 447 | whole module |
 | `src/parallel_robot/` | 665 | whole module; sole user of `measurement/ActuationForceMeasFactor` |
-| `src/tendon_robot/` | 1353 | whole module — **but read 8.3 before deleting** |
-| `src/cosserat_rod/CosseratRodSolver.{h,cpp}`, `pybind.cpp` | 205 | the rod as a standalone solver; the hand uses `CosseratRodModel` directly |
-| `src/tendon_finger/TendonFingerEstimatorModel.*`, `TendonFingerIterativeSolver.*`, `KnuckleBendFactor.*` | 902 | the state-estimation path (`state_estimation_test.py`) |
-| `src/tendon_finger/TendonFingerTrajectoryPlanner.*`, `TensionLimitFactor.h` | 817 | only `traj_1f_contact.py` |
-| `src/measurement/ActuationForceMeasFactor.*` | 47 | only `parallel_robot` |
-| `src/measurement/FbgArrayMeasFactor.h` | 70 | **included by nothing at all** |
-| `src/utils/DistLoadSmoothingFactor.h` | 50 | **included by nothing at all** |
+| `src/tendon_robot/` | 1353 | whole module — its four routing bindings moved to `tendon_finger/pybind.cpp` first |
+| `src/cosserat_rod/CosseratRodSolver.{h,cpp}` | 205 | the rod as a standalone solver; the hand uses `CosseratRodModel` directly |
+| `src/tendon_finger/TendonFingerEstimatorModel.*`, `TendonFingerIterativeSolver.*`, `KnuckleBendFactor.*` | 902 | the state-estimation path |
+| `src/tendon_finger/TendonFingerTrajectoryPlanner.*`, `TensionLimitFactor.h` | 817 | only `traj_1f_contact.py`, also removed |
+| `src/tendon_finger/TendonFingerSolver.cpp` | 472 | only `ik_1f_contact.py`, also removed |
+| `src/measurement/ActuationForceMeasFactor.*`, `FbgArrayMeasFactor.h` | 117 | |
+| `src/utils/DistLoadSmoothingFactor.h` | 50 | included by nothing at all |
 
-That is ~5,400 of ~13,900 C++ lines.
+~5,500 of ~15,100 C++ lines. On the Python side: `tests/{multi_robot,parallel_robot,
+tendon_robot,tendon_finger}/`, most of `tests/cosserat/`, six `_plotting/` modules,
+the dead `crest_sparse/{configs,utils}/` copies, and the `ik_1f_contact` /
+`traj_1f_contact` / `ik_2f_contact` scripts — ~5,900 lines.
 
-### 8.3 Three traps in the C++ prune
+### 8.3 Two traps this prune walked into — read before pruning further
+
+**A module's `pybind.cpp` can be load-bearing after its solver is gone.** Both of
+these were listed as prunable by the old audit, and both broke the hand:
+
+* `cosserat_rod/pybind.cpp` is the only binding site for `CosseratRodState` and
+  `CosseratRodMarginals`. Every hand script reads `fm.rod.states[n].pose.mean`.
+  `CosseratRodSolution` is likewise needed by `cosserat_dynamics`.
+* `TendonFingerMarginals` and `TendonConfig` reach Python through
+  `TendonHandMarginals::fingers` and `solvers.py`'s `fm.tendon_config.disc_pose_idx`,
+  long after `TendonFingerSolver` stopped existing.
+
+The lesson generalizes: **a type is needed if any kept type has a field of that type**,
+whether or not its own solver survives. A `def_readwrite` to an unregistered type
+raises at *attribute access*, not at import — so the failure surfaces after a
+ten-second solve, not at startup. Always run a solve to completion, not just an import.
 
 **`CMakeLists.txt` globs.** It is `file(GLOB_RECURSE SOURCES "src/*.cpp")`, so a
-deleted directory needs no build-file edit — but a *stale* CMake cache will
-still list it. Reconfigure, don't rebuild.
+deleted directory needs no build-file edit — but a stale CMake cache still lists it.
+Delete `build/` and reconfigure; do not just rebuild.
 
-**`pybind/bindings.cpp` calls every module unconditionally.** Deleting a module
-means deleting its `bind_*(m)` call in `PYBIND11_MODULE` and its declaration in
-`bindings.h`, or the link fails.
+**`pybind/bindings.cpp` calls every module unconditionally**, so deleting a module
+means deleting its `bind_*(m)` call and its declaration in `bindings.h`, or the link
+fails.
 
-**`src/tendon_robot/pybind.cpp` registers types the hand needs.**
-`RoutingAngleFunction`, `RoutingFunctionParams`, `TendonInput` and
-`PerDiscTendonInput` are bound **there and nowhere else**, and
-`tests/tendon_finger/config.py` — which `config.py` imports, which every hand
-script imports — constructs them by those names. Delete `tendon_robot/` as-is
-and every hand script dies at import with `AttributeError: module 'crest_sparse'
-has no attribute 'TendonInput'`.
-
-The reason it works today is worth knowing, because it is also a latent bug:
-those four types are declared **twice, byte-identically, in the global
-namespace** — once in `tendon_robot/TendonRobotModel.h:16-47` and once in
-`tendon_finger/TendonFingerModel.h:17-48`. The two headers are never included in
-the same translation unit, so it links; pybind keys its registry on `typeid`, so
-the single registration from `tendon_robot/pybind.cpp` serves
-`TendonFingerSolverConfig` too. It is a one-definition-rule violation that
-currently happens to be benign.
-
-So the correct order is: **move those four `py::class_`/`py::enum_` blocks from
-`tendon_robot/pybind.cpp` into `tendon_finger/pybind.cpp` first, rebuild, run a
-hand script, and only then delete `src/tendon_robot/`.** Deleting the duplicate
-declaration from one of the two headers is a good follow-up while it is fresh —
-after the prune, `tendon_finger/TendonFingerModel.h` should be the only home.
-
-### 8.4 Python — required
+### 8.4 Python — all of it
 
 ```
 python/crest_sparse/__init__.py          re-exports the extension
 
-python/tests/tendon_hand/                all of it — config, scene, solvers,
-                                         utils + the scripts you keep
-
-python/tests/tendon_finger/config.py     get_6tendon_config, get_base_config
-python/tests/tendon_finger/utils.py      PlannerLogger, log_planner_parameters,
-                                         log_conditioning_report
+python/tests/tendon_hand/                all of it — config, finger_config, scene,
+                                         solvers, utils + the scripts
 
 python/tests/_plotting/  __init__ · utils · cosserat_rod_plotter ·
                          tendon_hand_plotter · trajectory_plotter ·
-                         al_convergence_plotter · viser_hand
-                         (+ tendon_finger_plotter, for the two 1f scripts)
+                         al_convergence_plotter · traj_panel · viser_hand
 
-python/tests/_objects/   make_*.py and the .vdb grids they bake
+python/tests/_objects/   make_*.py, the .vdb grids they bake, and ycb/
+                         (catalog + committed ellipsoid fits + the browser GUI
+                         that authored them)
+
+python/tests/cosserat/dynamics_sim.py    the one demo of the retained
+                                         cosserat_dynamics module
 ```
 
-Note `tendon_hand/utils.py` and `tendon_finger/utils.py` both export
-`PlannerLogger` / `log_planner_parameters`, and the scripts import them from
-*both* — `traj_5f_contact.py` takes them from `tendon_finger.utils`,
-`debug_al_trace.py` from `tendon_hand.utils`. Consolidate before pruning, or the
-"unused" copy turns out to be the one half the scripts use.
+`tendon_finger/config.py` is now `tendon_hand/finger_config.py`, and the logging
+half of `tendon_finger/utils.py` was folded into `tendon_hand/utils.py` — there used
+to be two near-identical `PlannerLogger`s and the scripts imported from both. Both
+files' unused simulation tails (`generate_trajectory`, `BumpFunction`, the waypoint
+helpers — copies of `tendon_robot/utils.py`) went with them.
 
-### 8.5 Python — not in the chain
+### 8.5 If dynamics is on the roadmap
 
-| Path | Lines | Notes |
-|---|---|---|
-| `python/tests/cosserat/` | 710 | |
-| `python/tests/multi_robot/` | 202 | |
-| `python/tests/parallel_robot/` | 507 | |
-| `python/tests/tendon_robot/` | 1066 | |
-| `python/tests/tendon_finger/` **except** `config.py`, `utils.py` | 2,057 | benchmark, kinematics/contact tests, state estimation, `.old/` |
-| `python/tests/_plotting/` — `cosserat_shell_plotter`, `multi_robot_plotter`, `parallel_robot_plotter`, `tendon_robot_plotter`, `state_estimation_plotter`, `solver_diagnostics_plotter` | 1,113 | |
-| `python/crest_sparse/configs/tendon_finger.py`, `python/crest_sparse/utils/tendon_finger.py` | — | **dead copies** of `tests/tendon_finger/{config,utils}.py`; nothing imports either |
+`cosserat_dynamics` was kept because it costs **nothing beyond the module itself**.
+Its entire include closure is `cosserat_rod/CosseratRodModel.h`, `utils/SolverBase.h`
+and `utils/WrenchTransforms.h` — all three already mandatory for the hand.
 
-### 8.6 Hand scripts, ranked by how much you'd miss them
-
-Everything in this directory is a demo of the same three solver classes, so the
-prunable set is larger than it looks. In rough order of what to keep:
-
-* **Keep** — `config.py`, `scene.py`, `solvers.py`, `utils.py` (the shared
-  layer); `viz_interactive.py` and both `debug_*` (the only debugging tools);
-  `traj_5f_slide_grasp.py` (the most complete pipeline — `--no-table` reproduces
-  `traj_5f_contact_collision` exactly).
-* **Keep one of each family** — `ik_5f_contact.py` and `traj_5f_contact.py` are
-  the reference inline builds; the `_collision` / `_point` variants differ by a
-  handful of flags.
-* **Prunable, with a caveat** — `ik_1f_contact.py` and `traj_1f_contact.py` are
-  the *only* users of the single-finger C++ path, so deleting them is what makes
-  `TendonFingerTrajectoryPlanner` prunable too. `ik_2f_contact.py` is the only
-  user of `get_two_finger_opposition_configs`.
-* **Documents a known failure, keep as a record** — `ik_5f_point_collision.py`
-  and `ik_5f_collision.py` (§6).
-* **Regenerable** — `fk_pinch_centroids.py` produced `HAND_PINCH_POSES`; delete
-  it and that table can never be re-derived from anything in the tree.
-* **Ad-hoc** — `_sweep_pinch_centroid.py`, `_sweep_pregrasp_pen.py`.
-
-### 8.7 If dynamics is on the roadmap
-
-Keeping `cosserat_dynamics` costs **nothing beyond the module itself**. Its
-entire include closure is `cosserat_rod/CosseratRodModel.h`, `utils/SolverBase.h`
-and `utils/WrenchTransforms.h` — all three already mandatory for the hand. It
-pulls in no other robot model, so nothing else in 8.2 becomes un-prunable:
-
-* C++ keep-set grows by `src/cosserat_dynamics/` (389 lines). Prunable drops
-  from ~5,400 to ~5,000 of ~13,900.
-* Python keep-set grows by exactly one file, `tests/cosserat/dynamics_sim.py`
-  (178 lines). It is self-contained — its only local imports are `crest_sparse`
-  and `_plotting/cosserat_rod_plotter.py`, which the hand already needs for
-  `tendon_hand_plotter` (`CosseratRodMeshManager` and `CosseratRodPlotter` are
-  both in that file), and it carries its own `get_K_inv` rather than importing
-  `tests/cosserat/config.py`. **The rest of `tests/cosserat/` stays prunable.**
-
-Know which half you are keeping, because they are not equally useful:
+Know which half you would be using, because they are not equally useful:
 
 **`CosseratDynamicsFactor` is the reusable piece.** It is a plain node-level
 `NoiseModelFactorN<Pose3, Pose3, Pose3, Vector6>` over the same node at three
-consecutive *time* steps plus its external wrench, parameterized by `dt`, linear
-/ rotational damping and inertia. It includes nothing but GTSAM headers. That is
-what hand dynamics would emit into the existing K+1-step planner graph, where
-the temporal structure and the wrench variables `D`/`F` already exist.
+consecutive *time* steps plus its external wrench, parameterized by `dt`, linear /
+rotational damping and inertia. It includes nothing but GTSAM headers. That is what
+hand dynamics would emit into the existing K+1-step planner graph, where the temporal
+structure and the wrench variables `D`/`F` already exist.
 
-**`CosseratDynamicsSolver` is a bare-rod demo, not a component.** It owns its
-own `CosseratDynamicsConfig` (`rod_length`, `num_nodes`, `num_time_steps`,
-`K_inv`) and builds `num_time_steps` independent rods — it has no notion of a
-tendon, a finger, a shared wrist, or contact. A hand-dynamics build extends
-`TendonHandTrajectoryPlanner`, it does not call this. Keep it as the reference
-for how the factor is wired and tuned; do not expect to reuse it.
+**`CosseratDynamicsSolver` is a bare-rod demo, not a component.** It owns its own
+`CosseratDynamicsConfig` (`rod_length`, `num_nodes`, `num_time_steps`, `K_inv`) and
+builds `num_time_steps` independent rods — it has no notion of a tendon, a finger, a
+shared wrist, or contact. A hand-dynamics build extends
+`TendonHandTrajectoryPlanner`; it does not call this. Keep it as the reference for
+how the factor is wired and tuned; do not expect to reuse it.
 
-One practical wrinkle when you get there: `CosseratRodModel` numbers its key
-namespace from a **globally auto-incrementing `next_id_`**, so each step's
-`TendonHandModel` builds fingers with fresh rod ids and there is no formula
-mapping "node n of finger f" from step k to step k−1. The planner owns all K+1
-models, so it can pair them by calling `get_pose_key(n)` on each — but the
-pairing has to be built explicitly, unlike the wrist and tension GP priors that
-key off `Symbol('W', k)` and can just index by step.
+One practical wrinkle when you get there: `CosseratRodModel` numbers its key namespace
+from a **globally auto-incrementing `next_id_`**, so each step's `TendonHandModel`
+builds fingers with fresh rod ids and there is no formula mapping "node n of finger f"
+from step k to step k−1. The planner owns all K+1 models, so it can pair them by
+calling `get_pose_key(n)` on each — but the pairing has to be built explicitly, unlike
+the wrist and tension GP priors that key off `Symbol('W', k)` and can just index by
+step.

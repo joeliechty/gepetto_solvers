@@ -9,6 +9,17 @@ This repository demonstrates how to construct factor graph representations of th
 We leverage the sparse nonlinear optimization capabilities of GTSAM to efficiently estimate continuum robot states.
 For each model, we provide Python bindings for the underlying solver along with a real-time PyVista plotter for visualizing simulations.
 
+This tree has been pruned to the **tendon hand** and what it needs. A Cosserat rod
+(`src/cosserat_rod/`) builds a tendon-driven finger (`src/tendon_finger/`), and a set
+of fingers sharing one floating wrist variable makes the hand (`src/tendon_hand/`) —
+three solvers over that graph: static FK, single-shot IK, and a K+1-step trajectory
+planner. `src/cosserat_dynamics/` is kept for the dynamics roadmap. The other robot
+models this repo used to carry (shell, multi-robot, parallel robot, standalone tendon
+robot) were removed; they are in the git history if you need them.
+
+**`python/tests/tendon_hand/README.md` is the real documentation** — what each solver
+builds, which section of the paper it implements, and how every script wires it up.
+
 ## Build/Install GTSAM
 
 The Python bindings dynamically load classes from GTSAM, so GTSAM must first be built and installed from source.
@@ -66,18 +77,20 @@ The final output should include `Successfully installed crest_sparse`, meaning t
 ## Run Test Scripts
 
 The module for plotting and testing lives in `python/tests/`, where there are several examples you can run to verify the solvers are working.
-Here are a few options:
+
+Run these from the **repo root**, so `import crest_sparse` resolves to the installed
+extension rather than a stale in-tree `.so`:
 
 ```bash
-cd python
-
-python -m tests.cosserat.test_priors_sim
-python -m tests.cosserat.spring_sim
-python -m tests.cosserat.shell_sim
-python -m tests.cosserat.dynamics_sim
-python -m tests.tendon_robot.test_simple
-python -m tests.multi_robot.test_jacobian_control
+python -m python.tests.tendon_hand.ik_5f_contact big_sphere --no-viz  # single-shot IK
+python -m python.tests.tendon_hand.traj_5f_slide_grasp --no-viz       # trajectory planner
+python -m python.tests.tendon_hand.fk_5f_sweep                        # FK (opens a window)
+python -m python.tests.cosserat.dynamics_sim                          # rod dynamics
 ```
+
+`--no-viz` skips the PyVista render window; scripts without that flag always open one.
+For the interactive web visualizer, `pip install -e ".[viz]"` and then
+`python -m python.tests.tendon_hand.viz_interactive`.
 
 You may get an initial error that says something like: `ImportError: libgtsam.so.4: cannot open shared object file: No such file or directory`.
 This indicates that the GTSAM library installation directory is not visible to the dynamic linker.

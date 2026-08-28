@@ -45,7 +45,7 @@ from .config import (
 from .scene import GRASP_FLEXOR_TENSION, TENDON_NAMES
 from .utils import FingerTraj
 from .._plotting.trajectory_plotter import plot_trajectory, plot_hand_wrist_trajectory
-from ..tendon_finger.utils import PlannerLogger, log_planner_parameters
+from .utils import PlannerLogger, log_planner_parameters
 
 # Per-finger world-frame tip-position goals (order = config order: index, middle,
 # ring, pinky, thumb). These are the fully-converged terminal fingertip positions

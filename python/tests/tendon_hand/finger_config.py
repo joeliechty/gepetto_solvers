@@ -1,6 +1,6 @@
 import numpy as np
 
-from crest_sparse import TendonFingerSolverConfig, TendonInput, PerDiscTendonInput, RoutingAngleFunction, RoutingFunctionParams
+from crest_sparse import TendonFingerSolverConfig, PerDiscTendonInput
 
 
 def get_K_inv(lateral_stiffness_scale=1.0, torsion_stiffness_scale=1.0):
@@ -173,59 +173,6 @@ def build_disc_positions_and_segments(bone_joint_lengths):
     num_discs = len(disc_positions_normalized)
     
     return disc_positions_normalized, segment_types, num_discs, total_length
-
-
-def get_tendon_input():
-    tendon_input = TendonInput()
-
-    tendon_input.routing_radius = 0.01
-
-    # All tendons have constant (non-spiraling) routing
-    tendon_input.functions = [
-        RoutingAngleFunction.CONSTANT,  # Tendon 0: 0° (primary actuator)
-        RoutingAngleFunction.CONSTANT,  # Tendon 1: 90°
-        RoutingAngleFunction.CONSTANT,  # Tendon 2: 180°
-        RoutingAngleFunction.CONSTANT   # Tendon 3: 270°
-    ]
-
-    # Position tendons at 90° intervals around the finger
-    tendon_input.params = [
-        RoutingFunctionParams(angle_offset=0.0,           total_angle=0.0),  # 0°
-        RoutingFunctionParams(angle_offset=np.pi / 2,     total_angle=0.0),  # 90°
-        RoutingFunctionParams(angle_offset=np.pi,         total_angle=0.0),  # 180°
-        RoutingFunctionParams(angle_offset=3 * np.pi / 2, total_angle=0.0)   # 270°
-    ]
-
-    return tendon_input
-
-
-def get_base_config():
-    config = TendonFingerSolverConfig()
-
-    config.base.use_dense = False
-    config.base.linear_solver_type = "MULTIFRONTAL_QR"
-    config.rod_length = 0.25
-    config.num_discs = 9
-    config.num_between_nodes = 3
-    config.K_inv = get_K_inv()
-    config.sigma_twist_rot = 1.0e-2
-    config.sigma_twist_pos = 1.0e-4
-    config.sigma_stress_force = 1.0e-4
-    config.sigma_stress_moment = 1.0e-5
-    config.sigma_base_pos = 1.0e-4
-    config.sigma_base_rot = 1.0e-3
-    config.tendon_input = get_tendon_input()
-
-    # config.tip_position_meas_std = 1e-3
-
-    # config.dist_load_prior_std = 2e-2
-    # config.dist_load_smoothness_std = 1e-2
-    # config.fbg_strain_meas_std = 3e-6
-    # config.tension_drift_std = 1e-2
-    # config.tip_force_drift_std = 1e-1
-    # config.dist_load_drift_std = 5e-3
-
-    return config
 
 
 def _get_tendon_angle_at_disc(tendon_segments, disc_idx, num_segments):

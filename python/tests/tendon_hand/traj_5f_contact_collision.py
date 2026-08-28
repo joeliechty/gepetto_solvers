@@ -43,7 +43,7 @@ from .scene import (
 from .utils import FingerTraj
 from .._plotting.trajectory_plotter import (
     plot_trajectory, plot_hand_wrist_trajectory)
-from ..tendon_finger.utils import (
+from .utils import (
     PlannerLogger, log_planner_parameters, log_prior_table,
     log_conditioning_report, report_al_iterations)
 

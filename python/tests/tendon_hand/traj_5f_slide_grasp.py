@@ -53,7 +53,7 @@ from .scene import (
 from .utils import FingerTraj
 from .._plotting.trajectory_plotter import (
     plot_trajectory, plot_hand_wrist_trajectory)
-from ..tendon_finger.utils import PlannerLogger, log_conditioning_report
+from .utils import PlannerLogger, log_conditioning_report
 
 # Reuse the collision-grasp planner + reports verbatim (they are table-agnostic).
 from . import traj_5f_contact_collision as base

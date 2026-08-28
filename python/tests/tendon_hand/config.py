@@ -2,7 +2,7 @@
 floating wrist base.
 
 Each finger is a standard 6-tendon finger (reusing
-``tendon_finger.config.get_6tendon_config``); the only hand-specific piece is the
+``finger_config.get_6tendon_config``); the only hand-specific piece is the
 per-finger ``hand_base_offset`` that places that finger relative to the shared
 wrist. The C++ ``TendonHandSolver`` gives every finger the *same* wrist variable
 ``T_base`` with ``T_0 = T_base o hand_base_offset``, so changing an offset just
@@ -15,7 +15,7 @@ from typing import Dict, Optional, Tuple
 
 import numpy as np
 
-from ..tendon_finger.config import get_6tendon_config
+from .finger_config import get_6tendon_config
 
 
 def _Rz(theta):
@@ -55,21 +55,6 @@ def default_finger_base_pose():
     return T
 
 
-def point_reflection_about_z(center):
-    """4x4 SE(3) for a 180 deg rotation about the world Z axis through ``center``.
-
-    In the z=0 plane this is a point reflection through ``center``: it maps a
-    finger (and its whole in-plane curl) to a mirrored finger that approaches the
-    same point from the opposite side — i.e. opposition.
-    """
-    Rz = np.eye(4)
-    Rz[:3, :3] = _Rz(np.pi)
-    Tc = np.eye(4); Tc[:3, 3] = np.asarray(center, dtype=float)
-    Tc_inv = np.eye(4); Tc_inv[:3, 3] = -np.asarray(center, dtype=float)
-    return Tc @ Rz @ Tc_inv
-
-
-
 def hand_growth_axis(configs):
     """Mean rod-growth direction in the hand BASE frame, as a unit vector.
 
@@ -89,30 +74,6 @@ def tip_node_index(config):
     """Index of the last rod node (the tip) for a finger config."""
     num_nodes = config.num_discs + (config.num_discs - 1) * config.num_between_nodes
     return num_nodes - 1
-
-
-def get_two_finger_opposition_configs(object_center, bone_joint_spec=None):
-    """Two identical 6-tendon fingers placed in opposition about ``object_center``.
-
-    Finger A uses the legacy single-finger mounting (identity wrist, default base
-    rotation) so it reaches the object exactly like the standalone test. Finger B
-    is A reflected 180 deg about the vertical axis through ``object_center``, so it
-    curls into the object from the opposite side. Both share the wrist variable.
-
-    Returns a list ``[("finger_a", cfg_a), ("finger_b", cfg_b)]``. The caller is
-    responsible for attaching each finger's ``sdf_contact`` / ``sphere_contact``.
-    """
-    cfg_a = get_6tendon_config(bone_joint_spec=bone_joint_spec)
-    cfg_b = get_6tendon_config(bone_joint_spec=bone_joint_spec)
-
-    base_a = default_finger_base_pose()
-    offset_a = base_a                                    # wrist is identity here
-    offset_b = point_reflection_about_z(object_center) @ base_a
-
-    cfg_a.hand_base_offset = offset_a
-    cfg_b.hand_base_offset = offset_b
-
-    return [("finger_a", cfg_a), ("finger_b", cfg_b)]
 
 
 # ---------------------------------------------------------------------------

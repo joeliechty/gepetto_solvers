@@ -3,6 +3,7 @@
 #include <pybind11/eigen.h>
 
 #include "CosseratRodModel.h"
+#include "utils/SolverBase.h"
 
 namespace py = pybind11;
 
@@ -22,4 +23,10 @@ void bind_cosserat_rod(py::module& m) {
     py::class_<CosseratRodMarginals>(m, "CosseratRodMarginals")
         .def(py::init<>())
         .def_readwrite("states", &CosseratRodMarginals::states);
+
+    // CosseratDynamicsSolver's marginals are a list of these, one per time step.
+    py::class_<Solution<CosseratRodMarginals>>(m, "CosseratRodSolution")
+        .def(py::init<>())
+        .def_readwrite("meta", &Solution<CosseratRodMarginals>::meta)
+        .def_readwrite("marginals", &Solution<CosseratRodMarginals>::marginals);
 }

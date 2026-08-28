@@ -48,7 +48,7 @@ from .scene import (
 from .utils import collision_report, FingerTraj
 from .._plotting.trajectory_plotter import (
     plot_trajectory, plot_hand_wrist_trajectory)
-from ..tendon_finger.utils import PlannerLogger, log_planner_parameters
+from .utils import PlannerLogger, log_planner_parameters
 
 # Target flexor tension at k>=1 (loose prior; the goal priors do the closing).
 BACKGROUND_FLEXOR = 2.0

@@ -42,7 +42,7 @@ from .scene import (
 from .utils import FingerTraj
 from .._plotting.trajectory_plotter import plot_trajectory, plot_hand_wrist_trajectory
 from .._plotting.al_convergence_plotter import plot_al_convergence
-from ..tendon_finger.utils import PlannerLogger, log_planner_parameters
+from .utils import PlannerLogger, log_planner_parameters
 
 
 def experiment_label(args):
