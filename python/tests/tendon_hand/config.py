@@ -635,7 +635,7 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
                    tip_radii=None, radius=None, contact_fingers=None,
                    object_pose_cov=None, proxy_and_exact=False,
                    drop_normal_row=False, ellipsoid_set_beta=None,
-                   in_plane=False, pinch_centroid=None):
+                   in_plane=False, pinch_centroid=None, contact_subset=None):
     """Attach the shared object surface + a terminal tip contact to every finger
     of a hand config list, in place. Returns ``configs`` for chaining.
 
@@ -667,6 +667,18 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     ``ellipsoid_set`` object (None = the spec's own value). Only the smooth-min
     STANDOFF changes with it, not the geometry: the constraint surface sits up to
     ln(K)/beta outside the true union. Inert for every other surface kind.
+
+    ``contact_subset`` (``scene.grasp_subset_indices``) restricts which members
+    of an ``ellipsoid_set`` the fingertips may be driven onto -- the authored
+    "these shells are handles, those only bound the shape" choice that travels
+    with a YCB fit. None = every member, the pre-existing behavior, and inert for
+    a surface with no members to choose between.
+
+    It narrows CONTACT ONLY. :func:`attach_collision` shares this very env, and
+    the whole set stays on it, so the excluded shells keep pushing the fingers
+    out while nothing is sent to touch them. That is the point: they are the
+    drill's housing, not a handle, and a hand allowed to pass through them would
+    be planning against an object that is not there.
 
     ``drop_normal_row`` (Eq 2.12-2.15) selects the 4-row witness contact form
     [c_R, c_O, c_T1, c_T2] (c_N dropped) instead of the default 5-row form.
@@ -727,7 +739,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
 
     for i, (_, cfg) in enumerate(configs):
         env = crest_sparse.EnvironmentConfig()
-        setup_surface(env, spec, objects_dir, primitive)
+        setup_surface(env, spec, objects_dir, primitive,
+                      contact_subset=contact_subset)
         if ellipsoid_set_beta is not None and hasattr(env, "ellipsoid_set_beta"):
             env.ellipsoid_set_beta = float(ellipsoid_set_beta)
         env.object_pose_mean = object_pose

@@ -45,6 +45,7 @@ from .config import (
 from .scene import (
     OBJECT_CENTER, GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL,
     get_primitive_specs, primitive_surface_witness, object_principal_inplane_axis,
+    grasp_subset_indices, subset_spec,
     # Re-exported: pure spec geometry, and it lives in scene.py so the in-plane
     # width sweep there can reach it. Callers still say solvers.object_extent_along.
     object_extent_along)
@@ -99,6 +100,11 @@ def capabilities():
         # "ellipsoid" because the set factor landed much later than the single
         # one, so a binding can easily have one and not the other.
         "ellipsoid_set": hasattr(env, "ellipsoid_set"),
+        # Narrowing an ellipsoid set's CONTACT targets to the authored grasp
+        # subset. Gated apart from "ellipsoid_set" again: a binding that can load
+        # a YCB object cannot necessarily narrow it, and offering the choice on
+        # one that cannot would contact every shell while claiming otherwise.
+        "grasp_subset": hasattr(env, "contact_ellipsoid_subset"),
         "table": hasattr(env, "plane_normal"),
         "collision_cull": hasattr(env, "collision_cull_margin"),
         "k_touch": hasattr(pc, "k_touch"),
@@ -879,7 +885,10 @@ def planar_gap_witness(params, result, k=0):
 
     if not hasattr(crest_sparse, "ellipsoid_set_planar_gap"):
         return None
-    members = ellipsoid_members(result.spec)
+    # The CONTACT members, narrowed the same way the factor's were -- an overlay
+    # drawing cross-sections of shells the constraint never saw is exactly the
+    # drift this function exists to avoid.
+    members = ellipsoid_members(subset_spec(result.spec, result.contact_subset))
     if members is None:
         return None
     pose = pinch_pose(result.contact_names())
@@ -982,6 +991,20 @@ class HandSolveParams:
     # constraint surface sits up to ln(K)/beta outside the true union. Inert for
     # every other primitive type.
     ellipsoid_set_beta: Optional[float] = None
+    # Send the fingertips only to the shells a `ycb:` fit names as grasp targets
+    # (its `grasp_subset`), rather than to the nearest point of the whole union.
+    # A decomposition is not all handles: on the power drill 5 of 6 shells are
+    # the housing, and a contact equality against the union is as happy landing
+    # on those as on the grip.
+    #
+    # Default True because a subset that was authored is a statement about the
+    # object, and ignoring it by default would make the curated objects behave
+    # like the uncurated ones. Inert for every object without an authored subset,
+    # which is every non-`ycb:` primitive and most of the YCB set.
+    #
+    # CONTACT ONLY -- collision keeps the whole union either way, so the excluded
+    # shells still keep the fingers out. See `config.attach_contact`.
+    use_grasp_subset: bool = True
 
     # --- Wrist start pose + prior ---
     # A palm-down HOVER above the object (see DEFAULT_WRIST_XYZ /
@@ -1550,6 +1573,15 @@ class HandResult:
     # how many of its constraints inherited a multiplier. None when nothing was
     # carried in.
     dual_transfer: Optional[object] = None
+    # Which of an ``ellipsoid_set`` object's members contact was allowed to
+    # target (``scene.grasp_subset_indices``); None = all of them, which is every
+    # object that is not a curated ``ycb:`` set.
+    #
+    # Carried on the RESULT, not just used at build time, because the gap
+    # readouts have to measure against the same shells the graph did. Reporting a
+    # fingertip's distance to the drill housing, when the constraint drove it to
+    # the grip, describes a solve that never ran.
+    contact_subset: Optional[List[int]] = None
 
     def state(self, k=0):
         """The solved hand state at frame ``k``, for seeding another solver.
@@ -1601,16 +1633,23 @@ class HandResult:
         Uses the analytic ``primitive_surface_witness``, so for the baked-SDF
         primitives this measures against the analytic look-alike rather than the
         .vdb grid -- the same approximation :meth:`surface_gaps` has always made,
-        differing only within the ``edge_radius`` fillets."""
+        differing only within the ``edge_radius`` fillets.
+
+        Measured against the CONTACT surface -- narrowed to ``contact_subset``
+        when the solve was -- because this is the number the contact equality was
+        driven to zero, and it is what ``worst_gap`` scores a grasp on. The
+        excluded shells are still there as collision geometry; they are simply
+        not what the fingertip was aiming at."""
         frame = self.frames[k]
         out = {}
         R = self.object_rotation
+        spec = subset_spec(self.spec, self.contact_subset)
         for name, radius in zip(self.finger_names, self.tip_radii):
             fm = frame[name].marginals
             # Same node the renderer draws the contact sphere on (tip_node_index).
             tip = np.asarray(fm.rod.states[-1].pose.mean)[:3, 3]
             dist, foot_local, n_local = primitive_surface_witness(
-                R.T @ (tip - self.object_center), self.spec)
+                R.T @ (tip - self.object_center), spec)
             surface_pt = self.object_center + R @ foot_local
             sphere_pt = tip - radius * (R @ n_local)
             out[name] = (sphere_pt, surface_pt, dist - radius)
@@ -2345,6 +2384,11 @@ class HandSolverBase:
         self._attach_planar_bending()
         self.spec, self.object_center, self.object_rotation, self.object_pose = \
             resolve_scene(self.params)
+        # Which object shells contact may target (None = all). Resolved for real
+        # in _attach_contact, but seeded here so a solver that never attaches
+        # contact -- FK -- still answers the question its result is asked.
+        self.contact_subset = grasp_subset_indices(
+            self.spec, self.params.use_grasp_subset)
 
     def _attach_planar_bending(self):
         """Rod physics, so it rides on the per-finger config rather than the
@@ -2387,10 +2431,17 @@ class HandSolverBase:
         distance in place of the 3D one), so it needs the pinch centroid of the
         digits actually being CONTACTED -- keyed off the same mask the contact
         nodes come from, not the raw finger selection, so unchecking a finger
-        moves the plane's third point exactly as it moves the constraint set."""
+        moves the plane's third point exactly as it moves the constraint set.
+
+        ``contact_subset`` narrows which SHELLS of the object may be touched, as
+        the mask narrows which FINGERS do the touching -- two independent halves
+        of "what is this grasp". It is resolved here and stashed so the result
+        can report gaps against the shells the graph actually targeted."""
         mask = self._object_contact_mask()
         in_plane = self.params.object_contact and self.params.object_contact_in_plane
         pinch = pinch_pose_for_mask(self.configs, mask) if in_plane else None
+        self.contact_subset = grasp_subset_indices(
+            self.spec, self.params.use_grasp_subset)
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
@@ -2398,7 +2449,8 @@ class HandSolverBase:
                        drop_normal_row=self.params.contact_drop_normal_row,
                        ellipsoid_set_beta=self.params.ellipsoid_set_beta,
                        in_plane=in_plane,
-                       pinch_centroid=(pinch.centroid if pinch is not None else None))
+                       pinch_centroid=(pinch.centroid if pinch is not None else None),
+                       contact_subset=self.contact_subset)
 
     def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)
@@ -2619,7 +2671,7 @@ class HandSolverBase:
                           self.object_rotation, self.finger_names, self.tip_radii,
                           contact_fingers, states, iterates, iterate_states,
                           iterate_notes, table_contact_fingers, duals,
-                          dual_transfer)
+                          dual_transfer, contact_subset=self.contact_subset)
 
     def solve(self) -> HandResult:  # pragma: no cover - abstract
         raise NotImplementedError

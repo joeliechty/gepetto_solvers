@@ -40,6 +40,12 @@ _OBJECT_RGB = (218, 165, 32)
 # judged, and in one colour the shells would be indistinguishable from the mesh
 # they are approximating.
 _OBJECT_MESH_RGB = (120, 150, 190)
+# A shell of an ellipsoid set that contact is NOT allowed to target (it is
+# outside the object's grasp subset). Grey and fainter than _OBJECT_RGB, so it
+# reads as present-but-not-a-target: it is still collision geometry, and drawing
+# it as absent would suggest the hand may pass through it.
+_OBJECT_EXCLUDED_RGB = (140, 140, 145)
+_OBJECT_EXCLUDED_OPACITY = 0.18
 _CONTACT_RGB = (80, 200, 120)
 _COLLISION_RGB = (230, 120, 60)
 _DISC_RGB = (100, 149, 237)
@@ -181,10 +187,16 @@ class ViserHandScene:
 
     # -- static scene: object + table --------------------------------------
 
-    def set_object(self, spec, center, rotation=None):
+    def set_object(self, spec, center, rotation=None, contact_subset=None):
         """(Re)build the grasp object mesh. Sphere/cube/ellipsoid/ellipsoid_set use
         native viser primitives (translucent); cylinder/capsule fall back to a
         trimesh.
+
+        ``contact_subset`` (``scene.grasp_subset_indices``; None = all) marks
+        which members of an ``ellipsoid_set`` the fingertips may be driven onto.
+        The rest are still drawn -- greyed, not hidden -- because they are still
+        collision geometry: a shell removed from the picture would say the hand
+        can pass through it, when what it actually cannot do is grab it.
 
         ``rotation`` is the object's world orientation (3x3). It matters for any
         primitive that is not rotationally symmetric -- an ellipsoid drawn without
@@ -224,13 +236,16 @@ class ViserHandScene:
             # the OBJECT frame, so the world placement is the object pose composed
             # with it -- exactly what EllipsoidSetCollisionGapFactor evaluates, so
             # what is drawn is the geometry the graph sees.
+            targets = None if contact_subset is None else set(contact_subset)
             for index, member in enumerate(spec["members"]):
                 a, b, c = (float(v) for v in member["semi_axes"])
                 R_member = R @ np.asarray(member["rotation"], float)
                 pos = center + R @ np.asarray(member["center"], float)
+                excluded = targets is not None and index not in targets
                 self.scene.add_icosphere(
                     f"{name}/e{index}", radius=1.0, scale=(a, b, c),
-                    color=_OBJECT_RGB, opacity=0.35,
+                    color=_OBJECT_EXCLUDED_RGB if excluded else _OBJECT_RGB,
+                    opacity=_OBJECT_EXCLUDED_OPACITY if excluded else 0.35,
                     position=tuple(pos), wxyz=tuple(_wxyz_from_R(R_member)))
         elif t == "cube":
             hx, hy, hz = spec["half_extents"]

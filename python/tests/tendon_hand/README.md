@@ -511,6 +511,28 @@ which is the solid balanced on a corner. The same correction is what puts a YCB
 object ON the table instead of hovering over it: its shells overshoot the scan
 by 16 mm on the potted meat can and 93 mm on the chips can, and the table used
 to be seated on the lowest shell.
+
+A `ycb:` spec may also carry **`grasp_subset`**, the members that are grasp
+*targets*. A decomposition is not all handles: 5 of the power drill's 6 shells
+are its housing, 8 of the pitcher's 10 are its body, and a contact equality
+against the smooth min of the union is as happy landing a fingertip on those as
+on the grip. Which ones to grab is a judgement about the object that only a
+person looking at it can make, so it is authored per object and committed in the
+fit file; 14 of the 94 name a proper subset, and the rest are entirely targets.
+`grasp_subset_indices(spec, use_subset)` is the one definition of "which shells
+may be touched" (None = all) and `subset_spec` the narrowed spec the Python-side
+gap readings measure against, so the number, the overlay and the greyed shells in
+the viewer cannot describe three different grasps.
+**It narrows contact only.** `attach_ellipsoid_set` writes the whole set to
+`ellipsoid_set` and the indices to `contact_ellipsoid_subset`, and the C++ reads
+the second at the two contact sites while Eq 12 keeps the first for every free
+sphere — so the drill's housing goes on pushing the fingers out while nothing is
+sent to touch it. Narrowing the contact target is a planning choice; narrowing
+the collision set would be a lie about where the object is.
+`HandSolveParams.use_grasp_subset` (default True — an authored subset is a
+statement about the object) selects it, the viewer's **contact shells** dropdown
+drives that, and `solvers.capabilities()["grasp_subset"]` gates both on a
+binding old enough to lack the field.
 Also `primitive_surface_gap` / `primitive_surface_witness` (analytic distance +
 closest point, used to report the achieved gap **independently of the solver**),
 `proxy_semi_axes` (the §1.7 bounding ellipsoid — `sqrt(3)·half_extents` for a box),
@@ -881,7 +903,13 @@ side dropdown and margin, hand-centering with `h_clear`, pinch-centroid,
 short-axis alignment) — each independent, over the shared *Contact fingers*
 mask. That is what makes a stalled grasp bisectable: solve for one surface, the
 other, or both, with or without any given avoidance, and see which family
-refuses to close. The *Presets* folder's phase0/1/2 checkboxes apply
+refuses to close. Beside the object picker, **contact shells** chooses whether the
+fingertips may be sent to every shell of a `ycb:` set or only to its authored
+`grasp_subset` — greyed out for an object whose fit names no subset, since then
+there is nothing to choose. The excluded shells stay in the view, drawn grey, to
+say what they still are: collision geometry. They keep the fingers out either
+way; the choice is only what the hand is reaching *for*.
+The *Presets* folder's phase0/1/2 checkboxes apply
 `apply_phase_preset` to the whole panel at once — with one field held back:
 `contact_fingers`. The mask is the user's standing choice and **carries across
 every phase**, so ticking all five digits for the pre-grasp and then stepping to

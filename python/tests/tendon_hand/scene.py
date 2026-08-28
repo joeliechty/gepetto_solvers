@@ -131,6 +131,10 @@ def ycb_primitive_specs():
     proxy shells sink through the slab, which is the honest picture of a surface
     that was never the object in the first place. Absent for a fit exported
     before the hull was carried, which falls back to the old shell reading.
+
+    ``grasp_subset`` is the authored list of member indices that are grasp
+    TARGETS -- see :func:`grasp_subset_indices`. Present only when the fit names
+    a proper subset, so its absence means "every shell, nothing to choose".
     """
     directory = os.path.normpath(YCB_FITS_DIR)
     if not os.path.isdir(directory):
@@ -166,6 +170,17 @@ def ycb_primitive_specs():
             ]
             hull = np.asarray(blob.get("hull", []), dtype=float).reshape(-1, 3)
 
+            # The authored grasp subset, if this fit has one worth offering.
+            # Out-of-range indices are dropped (a subset written against an
+            # older decomposition), and a subset covering every member is
+            # omitted entirely: there is nothing to choose between, and its
+            # absence is what tells the caller not to offer the choice.
+            subset = blob.get("grasp_subset")
+            if subset is not None:
+                subset = sorted({int(i) for i in subset if 0 <= int(i) < len(raw)})
+                if len(subset) in (0, len(raw)):
+                    subset = None
+
             specs[f"ycb:{name}"] = {
                 "type": "ellipsoid_set",
                 "ycb": name,
@@ -174,6 +189,7 @@ def ycb_primitive_specs():
                 "members": members,
                 "extents": hi - lo,
                 "recenter": recenter,
+                **({"grasp_subset": subset} if subset else {}),
                 **({"hull_vertices": hull - recenter} if len(hull) else {}),
                 "metrics": blob.get("metrics", {}),
                 "plot": (lambda c, _m=members: {
@@ -547,6 +563,52 @@ def primitive_surface_witness(p_local, spec, *, h=1e-6):
     return float(d), x - d * n, n
 
 
+def grasp_subset_indices(spec, use_subset=True):
+    """Which members of ``spec`` a fingertip may be sent to -- ``[i, ...]``, or
+    None meaning "all of them, no narrowing".
+
+    THE one definition of that question. The env writes these into
+    ``contact_ellipsoid_subset``, the gap reporting measures against the same
+    members, and the renderer greys out the rest -- three readings that have to
+    agree, or the picture and the number describe a grasp the solver never
+    planned.
+
+    None (rather than ``range(len(members))``) whenever there is no narrowing to
+    do: the caller was not asking for the subset, the object has no authored one,
+    or it is not an ellipsoid set at all. That distinction is load-bearing
+    downstream -- an empty ``contact_ellipsoid_subset`` is what makes an env build
+    the pre-existing graph, and it is what lets the visualizer tell "this object
+    offers no choice" from "the choice is all shells".
+    """
+    if not use_subset or spec.get("type") != "ellipsoid_set":
+        return None
+    subset = spec.get("grasp_subset")
+    if not subset:
+        return None
+    return [int(i) for i in subset]
+
+
+def subset_spec(spec, indices):
+    """``spec`` narrowed to ``indices``, for the PYTHON-side surface readings.
+
+    ``primitive_surface_gap`` and the planar overlay walk ``members`` rather than
+    taking a list of indices, so they need the narrowed spec; the C++ env takes
+    the indices themselves. Same narrowing, two shapes -- which is why both come
+    off :func:`grasp_subset_indices` instead of being derived independently.
+
+    A shallow copy: only ``members`` is rebuilt, so ``extents``, ``recenter`` and
+    ``hull_vertices`` keep describing the WHOLE object. They should -- narrowing
+    the contact target does not move the object, shrink its bounding box, or lift
+    it off the table.
+    """
+    if indices is None:
+        return spec
+    members = spec["members"]
+    narrowed = dict(spec)
+    narrowed["members"] = [members[i] for i in indices]
+    return narrowed
+
+
 def ellipsoid_members(spec):
     """The object as a list of analytic ellipsoids -- ``[(semi_axes, R, center), ...]``
     in the OBJECT frame -- or None for a primitive that has no such form.
@@ -637,16 +699,22 @@ def plane_ellipse_section(semi_axes, rotation, center, plane_point, plane_normal
     return c + q0 + uv[:, :1] * e1 + uv[:, 1:] * e2
 
 
-def configure_object_surface(env, spec, objects_dir, primitive_name):
+def configure_object_surface(env, spec, objects_dir, primitive_name,
+                             contact_subset=None):
     """Attach the object surface to a ``crest_sparse.EnvironmentConfig`` from a
     primitive spec: an analytic hyper-ellipsoid (Section 1.6.3, no VDB) or a
     baked SDF grid. Shared by the contact/collision demo scripts so both surface
-    kinds are set up identically; leaves all other env fields untouched."""
+    kinds are set up identically; leaves all other env fields untouched.
+
+    ``contact_subset`` (:func:`grasp_subset_indices`) narrows which members of an
+    ``ellipsoid_set`` the CONTACT equality may target. None = no narrowing, and
+    it is inert for every other surface kind: a single ellipsoid or a baked SDF
+    has no members to choose between."""
     if spec["type"] == "ellipsoid":
         env.ellipsoid_semi_axes = np.asarray(spec["semi_axes"], dtype=float)
         return
     if spec["type"] == "ellipsoid_set":
-        attach_ellipsoid_set(env, spec)
+        attach_ellipsoid_set(env, spec, contact_subset=contact_subset)
         return
     vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
     if not os.path.exists(vdb_path):
@@ -656,12 +724,19 @@ def configure_object_surface(env, spec, objects_dir, primitive_name):
     env.load_sdf(vdb_path)
 
 
-def attach_ellipsoid_set(env, spec):
+def attach_ellipsoid_set(env, spec, contact_subset=None):
     """Write an ``ellipsoid_set`` spec onto a ``crest_sparse.EnvironmentConfig``.
 
     Each member becomes an ``EllipsoidPrimitive`` whose ``local_pose`` is its
     constant pose in the OBJECT frame; the C++ side composes that with the one
     optimized object pose, so the set adds no variables of its own.
+
+    ``contact_subset`` narrows the members the CONTACT equality may target, and
+    ONLY those: the whole set is written either way, so the Eq 12 collision
+    inequality still sees every shell. That asymmetry is the point of the
+    feature -- the excluded members are the ones bounding the object rather than
+    offering a handle, and they have to keep pushing the fingers out even while
+    nothing is being sent to touch them.
 
     Raises on a binding that predates ``ellipsoid_set`` rather than degrading
     quietly. The usual ``_set_if`` treatment is wrong here: skipping this field
@@ -669,6 +744,11 @@ def attach_ellipsoid_set(env, spec):
     and the solve then runs with the contact constraint silently missing. Callers
     that need to stay up on an old binding should gate on
     ``solvers.capabilities()["ellipsoid_set"]`` and not offer the object.
+
+    A requested subset on a binding without ``contact_ellipsoid_subset`` raises
+    for the same reason: the solve would run against every shell while the caller
+    believed it had narrowed the target. Passing None asks for no narrowing, so
+    it stays silent on an old binding -- that is the pre-existing behavior.
     """
     import crest_sparse
 
@@ -677,6 +757,13 @@ def attach_ellipsoid_set(env, spec):
             "this crest_sparse build has no EnvironmentConfig.ellipsoid_set, so "
             f"the ellipsoid-set object {spec.get('ycb', '?')!r} cannot be built -- "
             "rebuild it (pip install . from the crest-sparse root)")
+    if contact_subset and not hasattr(env, "contact_ellipsoid_subset"):
+        raise AttributeError(
+            "this crest_sparse build has no EnvironmentConfig."
+            "contact_ellipsoid_subset, so the grasp subset for "
+            f"{spec.get('ycb', '?')!r} cannot be applied -- rebuild it "
+            "(pip install . from the crest-sparse root), or gate on "
+            'solvers.capabilities()["grasp_subset"] and contact every shell')
 
     members = []
     for m in spec["members"]:
@@ -689,6 +776,8 @@ def attach_ellipsoid_set(env, spec):
         members.append(primitive)
     env.ellipsoid_set = members
     env.ellipsoid_set_beta = float(spec.get("beta", ELLIPSOID_SET_BETA))
+    if contact_subset:
+        env.contact_ellipsoid_subset = [int(i) for i in contact_subset]
 
 
 def proxy_semi_axes(spec):
@@ -956,7 +1045,8 @@ def object_principal_inplane_axis(spec, rotation, plane_normal, *,
     return e / np.linalg.norm(e), ratio
 
 
-def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name):
+def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name,
+                                     contact_subset=None):
     """Section 1.8 controller variant of :func:`configure_object_surface`: attach
     BOTH the bounding-ellipsoid proxy (phase 2's sliding target) and, when the
     primitive has one, the baked SDF of the exact geometry (phase 3's servoing
@@ -968,6 +1058,13 @@ def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name):
     exact geometry to switch to, so it keeps the ellipsoid in phase 3 and only
     the witness form changes — which is correct, since for those the ellipsoid
     *is* the object.
+
+    ``contact_subset`` is accepted and forwarded so this stays a drop-in for
+    :func:`configure_object_surface` (``config.attach_contact`` picks between the
+    two and calls whichever it chose with one signature). It narrows only the
+    set; the PROXY is a bound on the whole object and is never narrowed -- an
+    approach that slid along a proxy shrunk to the grip would clip the parts of
+    the object it is meant to steer around.
     """
     env.ellipsoid_semi_axes = proxy_semi_axes(spec)
     if spec["type"] == "ellipsoid":
@@ -977,7 +1074,7 @@ def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name):
         # in phase 3 -- so attach it alongside the proxy. Note the C++ precedence
         # (set beats ellipsoid_semi_axes) means the set wins wherever both are
         # set, so the proxy above only takes effect in a phase that clears it.
-        attach_ellipsoid_set(env, spec)
+        attach_ellipsoid_set(env, spec, contact_subset=contact_subset)
         return
     vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
     if not os.path.exists(vdb_path):

@@ -166,7 +166,7 @@ from .scene import (get_primitive_specs, ycb_primitive_specs, proxy_semi_axes,
                     GRASP_FLEXOR_TENSION, TABLE_NORMAL, ELLIPSOID_SET_BETA,
                     TABLE_SPAN, TABLE_THICKNESS, table_corner,
                     object_principal_inplane_axis, INPLANE_DEGENERACY_RATIO,
-                    ellipsoid_members)
+                    ellipsoid_members, grasp_subset_indices)
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
     resolve_scene, resolve_table_origin, resolve_constraint_plane_origin,
@@ -291,6 +291,26 @@ OPPOSITION_SIDES = {
     "as derived": False,
     "flipped": True,
 }
+
+# Which shells of an ellipsoid-set object the fingertips may be sent to.
+# Label -> HandSolveParams.use_grasp_subset.
+#
+# A YCB decomposition is not all handles: 5 of the power drill's 6 shells are its
+# housing, and the contact equality against the smooth-min of the union is as
+# happy landing a fingertip on those as on the grip. Which ones are grasp targets
+# is authored per object and travels in the fit as `grasp_subset`.
+#
+# EITHER WAY, EVERY SHELL STILL COLLIDES -- this narrows the contact target, not
+# the object (see EnvironmentConfig::contact_ellipsoid_subset). So "grasp subset"
+# is not a way to reach into an object; it is a way to say which part of it the
+# hand is reaching for.
+CONTACT_SHELL_MODES = {
+    "grasp subset": True,
+    "all shells": False,
+}
+# The authored choice is a statement about the object, so honour it by default;
+# an object with no authored subset is unaffected either way.
+DEFAULT_CONTACT_SHELL_MODE = "grasp subset"
 
 
 # The wrist sliders and the solvers must agree on what "pitch" means, so the
@@ -934,6 +954,9 @@ class HandVizApp:
         # contact form, so the box is never offered live for a scene the solve
         # would refuse.
         self._refresh_planar_contact_gate()
+        # Same for the contact-shells choice, whose hint counts the opening
+        # object's shells and so cannot be written at build time.
+        self._refresh_grasp_subset_gate()
         # The panel opens IN a stage, not merely showing its box ticked: the
         # build-time tick fires no callback, so the preset is written here. After
         # _gui_defaults was captured, deliberately -- Reset restores the ticked
@@ -1242,6 +1265,10 @@ class HandVizApp:
         # object (it needs an ellipsoid cross-section), so re-decide it here
         # rather than leaving a live checkbox the next solve would refuse.
         self._refresh_planar_contact_gate()
+        # Whether there is a grasp subset to choose is likewise a property of the
+        # object, so re-gate it here too -- and before _refresh_object, which
+        # greys the excluded shells off the answer.
+        self._refresh_grasp_subset_gate()
         self._rebuild_fk()      # FK solver carries the object for its result/spec
         self._refresh_object()
         self._aim_all_cameras()  # re-center on the new object's location
@@ -1380,6 +1407,7 @@ class HandVizApp:
         p.flexor_tension_sigma = 10.0 ** self.g_flexor_sigma.value
         p.passive_tension_sigma = 10.0 ** self.g_passive_sigma.value
         p.ellipsoid_set_beta = float(self.g_set_beta.value)
+        p.use_grasp_subset = CONTACT_SHELL_MODES[self.g_contact_shells.value]
         p.contact_fingers = [c.value for c in self.g_contacts]
         p.object_contact = self.g_obj_contact.value or self.g_obj_contact_plane.value
         # Which FORM, once object contact is on at all. The two boxes are kept
@@ -1497,7 +1525,14 @@ class HandVizApp:
 
     def _refresh_object(self):
         spec, center, rotation, _pose = resolve_scene(self.params)
-        self.scene.set_object(spec, center, rotation)
+        # The shells contact may target, so the rest draw muted. Resolved the same
+        # way the solve resolves it, off the same params -- the picture is meant
+        # to say which surface the fingertips are being sent to, and a second
+        # reading of "which shells" is how it would come to say something else.
+        self.scene.set_object(
+            spec, center, rotation,
+            contact_subset=grasp_subset_indices(spec,
+                                                self.params.use_grasp_subset))
         self._refresh_object_mesh(spec, center, rotation)
         # Reference frames. The world triad is fixed, but the object's rides on
         # the pose resolved just above, so it is drawn here -- with the object
@@ -1874,6 +1909,51 @@ class HandVizApp:
                 self.g_obj_contact_plane.value = False
             finally:
                 self._contact_guard = False
+
+    def _grasp_subset_note(self):
+        """The loaded object's shell counts as ``(n_subset, n_members)``, or None
+        when there is no choice to describe.
+
+        None for three different reasons, all of which mean "leave the control
+        greyed": the binding cannot narrow a set, the object is not a set, or the
+        object's fit names no proper subset. Only the first is a shortcoming."""
+        if not self.caps.get("grasp_subset", False):
+            return None
+        spec = get_primitive_specs().get(self.params.primitive, {})
+        subset = spec.get("grasp_subset")
+        if not subset:
+            return None
+        return len(subset), len(spec["members"])
+
+    def _refresh_grasp_subset_gate(self):
+        """Grey the contact-shells dropdown, and say what it would do, for the
+        object now loaded.
+
+        Unlike :meth:`_refresh_planar_contact_gate` this does NOT reset the value
+        when it greys out. There is nothing to reset: an object with no authored
+        subset is contacted on every shell whichever mode is selected, so the
+        setting is inert rather than a lie, and preserving it means it still
+        applies when the user returns to an object that does have one."""
+        counts = self._grasp_subset_note()
+        self.g_contact_shells.disabled = counts is None
+        if counts is None:
+            reason = ("needs a rebuilt _crest_sparse with EnvironmentConfig."
+                      "contact_ellipsoid_subset"
+                      if not self.caps.get("grasp_subset", False)
+                      else "this object's fit names no grasp subset, so every "
+                           "shell is a target")
+            self.g_contact_shells.hint = (
+                f"Which shells of the object the fingertips may be driven onto "
+                f"-- inert here: {reason}.")
+            return
+        n_subset, n_members = counts
+        self.g_contact_shells.hint = (
+            f"Which shells of the object the fingertips may be driven onto. "
+            f"{n_subset} of this object's {n_members} shells are authored grasp "
+            f"targets; the other {n_members - n_subset} bound its shape rather "
+            f"than offering a handle. Either way ALL {n_members} still collide, "
+            f"so 'grasp subset' narrows what the hand reaches FOR, never what it "
+            f"can reach THROUGH.")
 
     def _planar_contact_note(self):
         """Say why the in-plane contact box is greyed, when it is."""
@@ -4117,7 +4197,8 @@ class HandVizApp:
     def _input_handles(self):
         """Every value-carrying control, in build order. Buttons and markdown are
         deliberately absent -- Reset restores values, not widgets."""
-        return ([self.g_object, self.g_ik_max, self.g_ik_settle, self.g_carry_duals,
+        return ([self.g_object, self.g_contact_shells,
+                 self.g_ik_max, self.g_ik_settle, self.g_carry_duals,
                  self.g_obj_dx, self.g_obj_dy, self.g_obj_dz,
                  self.g_obj_roll, self.g_obj_pitch, self.g_obj_yaw,
                  self.g_tx, self.g_ty, self.g_tz,
@@ -4176,6 +4257,13 @@ class HandVizApp:
                 default_label = labels[0]
             self.g_object = gui.add_dropdown(
                 "object", labels, initial_value=default_label)
+            # Which SHELLS of the object the fingertips may be sent to, next to
+            # the object it qualifies. Its enabled state and hint depend on the
+            # loaded object, so both are (re)set by _refresh_grasp_subset_gate --
+            # here and on every object change.
+            self.g_contact_shells = gui.add_dropdown(
+                "contact shells", list(CONTACT_SHELL_MODES),
+                initial_value=DEFAULT_CONTACT_SHELL_MODE)
             self.g_fk = gui.add_button(
                 "FK", icon=self.viser.Icon.PLAYER_PLAY,
                 hint="Re-pose the hand from the current wrist / tension sliders "
@@ -5012,6 +5100,13 @@ class HandVizApp:
             h.on_update(lambda _: (self._sync_params(),
                                    self._invalidate_stepper(),
                                    self._render_frame()))
+        # Which SHELLS may be touched is the same kind of change as which FINGERS
+        # touch -- the contact equality is written against a different surface, so
+        # a carried dual is meaningless -- but it also restyles the object, since
+        # the excluded shells are drawn greyed. Hence _refresh_object as well.
+        self.g_contact_shells.on_update(
+            lambda _: (self._sync_params(), self._refresh_object(),
+                       self._invalidate_stepper(), self._render_frame()))
         # Table toggle / constraint-plane height updates the static slabs
         # immediately; opposition half-space rides along since it draws its own
         # static split-plane slab (set_half_space_plane) the same way -- as does

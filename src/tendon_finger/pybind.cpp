@@ -124,6 +124,8 @@ void bind_tendon_finger(py::module& m) {
         .def_readwrite("ellipsoid_semi_axes", &crest_sparse::EnvironmentConfig::ellipsoid_semi_axes)
         .def_readwrite("ellipsoid_set",       &crest_sparse::EnvironmentConfig::ellipsoid_set)
         .def_readwrite("ellipsoid_set_beta",  &crest_sparse::EnvironmentConfig::ellipsoid_set_beta)
+        .def_readwrite("contact_ellipsoid_subset",
+                       &crest_sparse::EnvironmentConfig::contact_ellipsoid_subset)
         // --- Tendon-aligned in-plane object contact (Eq 11 / Eq 13) ---
         .def_readwrite("object_contact_in_plane",
                        &crest_sparse::EnvironmentConfig::object_contact_in_plane)

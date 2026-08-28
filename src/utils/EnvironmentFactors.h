@@ -180,6 +180,27 @@ struct EnvironmentConfig {
     // SMOOTH-MIN BIAS note for the full trade-off.
     double ellipsoid_set_beta = 1000.0;
 
+    // Which members of ellipsoid_set the CONTACT equality (Eq 1.13 / Eq 13) may
+    // target. Empty (the default) => all of them, so every existing env builds
+    // exactly the pre-existing graph.
+    //
+    // A decomposition is not all handles. The shells covering a drill's housing
+    // or a pitcher's body are there to BOUND the geometry, and a fingertip sent
+    // to the nearest point of the union lands on one of them as readily as on
+    // the grip -- so which members are grasp targets is a property of the object
+    // that only a human looking at it can supply. That choice is authored per
+    // object and travels in the fit file as `grasp_subset`.
+    //
+    // COLLISION IS NEVER SUBSET. Eq 12 keeps the whole union for every free
+    // sphere, and this field is read at the contact sites only: dropping the
+    // excluded members from collision would let the rod pass straight through
+    // the part the subset exists to say "do not grab this", which is the
+    // opposite of what it asks for. Same asymmetry as object_contact_in_plane's
+    // COLLISION IS NEVER PROJECTED note below, and for the same reason -- a
+    // narrowed CONTACT target is a planning choice, a narrowed COLLISION set is
+    // a lie about where the object is.
+    std::vector<int> contact_ellipsoid_subset;
+
     // --- Tendon-aligned in-plane object contact (Eq 11 / Eq 13) ----------
     // Swap the object CONTACT equality from the full 3D distance to the distance
     // measured inside the finger's pulling plane -- EllipsoidSetPlanarGapFactor
@@ -414,6 +435,37 @@ inline bool has_object_surface(const EnvironmentConfig& env) {
     return !env.ellipsoid_set.empty() ||
            env.ellipsoid_semi_axes.norm() > 0.0 ||
            static_cast<bool>(env.sdf_grid);
+}
+
+
+// The members a CONTACT factor may target: contact_ellipsoid_subset applied to
+// ellipsoid_set, or the whole set when no subset was asked for.
+//
+// Shared for the same reason has_object_surface() is: the two contact sites in
+// TendonHandModel::build_graph (the 3D equality and its in-plane Eq 13 variant)
+// must narrow identically, or switching contact FORM would silently also change
+// which shells are being touched.
+//
+// An index that addresses no member THROWS rather than being skipped. Silently
+// dropping it would leave the caller believing a shell is a contact target when
+// it is not, and the resulting grasp would read as a solver failure rather than
+// as the mis-request it is -- the same reasoning attach_ellipsoid_set documents
+// on the Python side.
+inline std::vector<EllipsoidPrimitive>
+contact_ellipsoid_members(const EnvironmentConfig& env) {
+    if (env.contact_ellipsoid_subset.empty()) return env.ellipsoid_set;
+
+    std::vector<EllipsoidPrimitive> members;
+    members.reserve(env.contact_ellipsoid_subset.size());
+    for (int index : env.contact_ellipsoid_subset) {
+        if (index < 0 || index >= static_cast<int>(env.ellipsoid_set.size()))
+            throw std::invalid_argument(
+                "EnvironmentConfig::contact_ellipsoid_subset holds index " +
+                std::to_string(index) + ", but ellipsoid_set has " +
+                std::to_string(env.ellipsoid_set.size()) + " member(s)");
+        members.push_back(env.ellipsoid_set[static_cast<std::size_t>(index)]);
+    }
+    return members;
 }
 
 

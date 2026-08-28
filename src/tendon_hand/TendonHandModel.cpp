@@ -353,7 +353,9 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         // base the finger is not actually on.
                         std::vector<crest_sparse::EllipsoidPrimitive> members;
                         if (!env.ellipsoid_set.empty()) {
-                            members = env.ellipsoid_set;
+                            // Narrowed by contact_ellipsoid_subset when one is
+                            // set; the free spheres below keep the whole union.
+                            members = crest_sparse::contact_ellipsoid_members(env);
                         } else {
                             crest_sparse::EllipsoidPrimitive one;
                             one.semi_axes = env.ellipsoid_semi_axes;
@@ -380,10 +382,19 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         // equality against the smooth-min distance to the union.
                         // Its own tag, so get_factor_error_summary() tells the two
                         // surface kinds apart.
+                        //
+                        // The union here is the CONTACT one -- narrowed by
+                        // contact_ellipsoid_subset to the shells that are grasp
+                        // targets, where the collision inequality below keeps
+                        // every member. The tag does not encode the subset, so a
+                        // warm start would carry duals across a change of it;
+                        // callers that change the subset should reset them, the
+                        // same as for a change of object.
                         center_contact =
                             std::make_shared<crest_sparse::EllipsoidSetCollisionGapFactor>(
                                 tip_key, object_key(), env.contact_node_radius,
-                                env.ellipsoid_set, env.ellipsoid_set_beta,
+                                crest_sparse::contact_ellipsoid_members(env),
+                                env.ellipsoid_set_beta,
                                 noiseModel::Isotropic::Sigma(1, 1.0));
                         tag = "obj.set|f" + std::to_string(i);
                     } else {

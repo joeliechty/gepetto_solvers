@@ -475,6 +475,14 @@ class EllipsoidFit:
     above all -- gets a badly wrong answer from the shells and the right one from
     the hull. Empty when the fit predates this field or was built without a mesh
     in hand; consumers fall back to the shells.
+
+    ``grasp_subset`` is the subset of ellipsoid indices a grasp planner should
+    consider TOUCHING. Not every shell is a handle: the ones covering the body of
+    a drill or the base of a bottle are there to bound the geometry, not to be
+    grabbed. ``None`` means "no choice has been made yet", which reads as all of
+    them. The subsets are authored in the standalone YCB browser and consumed by
+    ``tendon_hand/scene.py``'s ``ycb_primitive_specs()``; they scope CONTACT only,
+    never collision -- see ``EnvironmentConfig::contact_ellipsoid_subset``.
     """
 
     ellipsoids: list[Ellipsoid]
@@ -483,6 +491,18 @@ class EllipsoidFit:
     coverage_target: float
     ground_offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
     hull: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
+    grasp_subset: list[int] | None = None
+
+    def grasp_indices(self) -> list[int]:
+        """Indices in the grasp subset, sorted, with stale ones dropped.
+
+        Indices are the only handle a subset has on an ellipsoid, so one that no
+        longer addresses a member (the decomposition was re-fitted under it) is
+        dropped rather than carried forward onto whatever now sits at that slot.
+        """
+        if self.grasp_subset is None:
+            return list(range(len(self.ellipsoids)))
+        return sorted({i for i in self.grasp_subset if 0 <= i < len(self.ellipsoids)})
 
     def to_dict(self) -> dict:
         return {
@@ -501,6 +521,11 @@ class EllipsoidFit:
             # file is committed, so the digits past that are pure diff noise.
             "hull": np.round(np.asarray(self.hull, float).reshape(-1, 3), 5).tolist(),
             "ellipsoids": [e.to_dict() for e in self.ellipsoids],
+            # Beside the list it indexes, so the two are read together. A fresh
+            # fit writes every index: a decomposition nobody has curated yet is
+            # entirely grasp targets, which is also how a reader that ignores the
+            # key sees it.
+            "grasp_subset": self.grasp_indices(),
         }
 
     @classmethod
@@ -513,6 +538,7 @@ class EllipsoidFit:
             data["coverage_target"],
             np.asarray(data.get("frame", {}).get("ground_offset", [0, 0, 0]), float),
             np.asarray(data.get("hull", []), float).reshape(-1, 3),
+            data.get("grasp_subset"),
         )
 
 
