@@ -8,30 +8,10 @@
 namespace py = pybind11;
 
 void bind_tendon_robot(py::module& m) {
-    py::enum_<RoutingAngleFunction>(m, "RoutingAngleFunction")
-        .value("CONSTANT", RoutingAngleFunction::CONSTANT)
-        .value("LINEAR", RoutingAngleFunction::LINEAR)
-        .export_values();
-
-    py::class_<RoutingFunctionParams>(m, "RoutingFunctionParams")
-        .def(py::init<>())
-        .def(py::init<double, double>(), py::arg("angle_offset"), py::arg("total_angle"))
-        .def_readwrite("angle_offset", &RoutingFunctionParams::angle_offset)
-        .def_readwrite("total_angle", &RoutingFunctionParams::total_angle);
-
-    py::class_<TendonInput>(m, "TendonInput")
-        .def(py::init<>())
-        .def_readwrite("functions", &TendonInput::functions)
-        .def_readwrite("params", &TendonInput::params)
-        .def_readwrite("routing_radius", &TendonInput::routing_radius);
-
-    py::class_<PerDiscTendonInput>(m, "PerDiscTendonInput")
-        .def(py::init<>())
-        .def_readwrite("num_tendons", &PerDiscTendonInput::num_tendons)
-        .def_readwrite("routing_radius", &PerDiscTendonInput::routing_radius)
-        .def_readwrite("hole_angles", &PerDiscTendonInput::hole_angles)
-        .def_readwrite("hole_radii", &PerDiscTendonInput::hole_radii);
-
+    // RoutingAngleFunction, RoutingFunctionParams, TendonInput and
+    // PerDiscTendonInput are registered from tendon_finger/pybind.cpp. The types
+    // are declared byte-identically in TendonRobotModel.h and TendonFingerModel.h,
+    // so pybind's typeid-keyed registry serves both from that one site.
     py::class_<TendonConfig>(m, "TendonConfig")
         .def(py::init<>())
         .def_readwrite("num_discs", &TendonConfig::num_discs)
