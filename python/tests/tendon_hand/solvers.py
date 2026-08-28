@@ -379,11 +379,39 @@ def auto_table_origin(params, spec, object_center):
 
 
 def resolve_table_origin(params, spec, object_center):
-    """Resolve the support-plane origin: explicit ``params.plane_origin`` if set,
-    else the scene's own seating rule (see :func:`auto_table_origin`)."""
+    """Resolve the TABLE origin: explicit ``params.plane_origin`` if set, else the
+    scene's own seating rule (see :func:`auto_table_origin`).
+
+    This is the physical support SURFACE -- the workspace table the robot, its
+    URDF and the bench registration are all expressed against. It is what a
+    renderer draws and what ``robot_plan`` corners against
+    ``lbr_workspace_table_link``, and it is deliberately NOT the plane the factor
+    graph constrains against: see :func:`resolve_constraint_plane_origin`.
+    """
     if params.plane_origin is not None:
         return np.asarray(params.plane_origin, float)
     return auto_table_origin(params, spec, object_center)
+
+
+def resolve_constraint_plane_origin(params, spec, object_center):
+    """The origin of the plane the SOLVER constrains against: the table plane
+    (:func:`resolve_table_origin`) raised by ``params.constraint_plane_height``
+    along ``plane_normal``.
+
+    The two are separate because they answer different questions. The table is a
+    fixed physical landmark -- move it and the robot registration, the calibration
+    grid and the URDF's workspace table all move with it -- whereas the constraint
+    plane is a planning choice: where the support equality seats fingertips and
+    where the avoidance half-space starts. Height 0 (the default) puts the
+    constraint plane exactly on the table, which is the geometry every headless
+    script has always solved, so nothing changes unless a caller asks for it.
+    """
+    n = np.asarray(params.plane_normal, float)
+    n = n / (np.linalg.norm(n) or 1.0)
+    # getattr: params-like objects predating the split keep the coincident planes.
+    height = float(getattr(params, "constraint_plane_height", 0.0))
+    return np.asarray(resolve_table_origin(params, spec, object_center),
+                      float) + height * n
 
 
 
@@ -419,8 +447,8 @@ def plane_witness(params, result, k=0, names=None):
     targets the two surfaces separately passes ``result.table_contact_names()``.
     """
     frame = result.frames[k]
-    origin = np.asarray(resolve_table_origin(params, result.spec,
-                                             result.object_center), float)
+    origin = np.asarray(resolve_constraint_plane_origin(
+        params, result.spec, result.object_center), float)
     n_hat = np.asarray(params.plane_normal, float)
     n_hat = n_hat / (np.linalg.norm(n_hat) or 1.0)
     wanted = set(result.contact_names() if names is None else names)
@@ -448,8 +476,8 @@ def free_sphere_plane_witness(params, result, k=0, names=None):
     reported twice or not at all.
     """
     frame = result.frames[k]
-    origin = np.asarray(resolve_table_origin(params, result.spec,
-                                             result.object_center), float)
+    origin = np.asarray(resolve_constraint_plane_origin(
+        params, result.spec, result.object_center), float)
     n_hat = np.asarray(params.plane_normal, float)
     n_hat = n_hat / (np.linalg.norm(n_hat) or 1.0)
     contact = set(result.contact_names() if names is None else names)
@@ -1158,6 +1186,15 @@ class HandSolveParams:
     plane_origin: Optional[np.ndarray] = None       # None => seat from the scene
     plane_normal: np.ndarray = field(
         default_factory=lambda: np.array(TABLE_NORMAL, float))
+    # Signed height of the CONSTRAINT plane above the table surface, along
+    # plane_normal. The table is the physical bench -- the robot, the workspace
+    # table URDF and the viser/`lbr_workspace_table_link` registration are all
+    # expressed against it, so it must not move to satisfy a planning tweak. This
+    # is the knob that moves instead: it raises or lowers the plane the support
+    # equality seats fingertips on and the avoidance half-space starts at,
+    # leaving every table-frame transform alone. 0.0 keeps the two coincident,
+    # which is the geometry every script solved before the split.
+    constraint_plane_height: float = 0.0
     # TABLE collision: keep every non-contact sphere out of the half-space. Needs
     # only `table`, not `collision` -- the solvers attach the collision sphere set
     # whenever any of the three avoidance consumers wants it.
@@ -2383,8 +2420,13 @@ class HandSolverBase:
                          self_collision=self.params.self_collision)
 
     def _attach_table(self):
-        """Attach the Section 1.6 support plane to every finger's env."""
-        origin = resolve_table_origin(self.params, self.spec, self.object_center)
+        """Attach the Section 1.6 support plane to every finger's env.
+
+        The CONSTRAINT plane, not the table surface -- they coincide until a
+        caller raises ``constraint_plane_height`` (see
+        :func:`resolve_constraint_plane_origin`)."""
+        origin = resolve_constraint_plane_origin(self.params, self.spec,
+                                                 self.object_center)
         attach_table(self.configs, origin, self.params.plane_normal,
                      avoidance=self.params.plane_avoidance,
                      tip_radii=self.tip_radii,

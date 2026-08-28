@@ -318,6 +318,36 @@ class ViserHandScene:
         except Exception:
             pass
 
+    def set_constraint_plane(self, origin, normal, *, span, thickness=0.001):
+        """Draw the plane the SOLVER constrains against, when it has been raised
+        off the table surface :meth:`set_table` draws.
+
+        A separate node from ``/table`` because the two are separate things: the
+        slab is the physical bench the robot is registered to and never moves for
+        a planning reason, while this is where the support equality seats
+        fingertips and where the avoidance half-space begins. Drawn thinner, more
+        transparent and in the contact colour so it reads as a constraint rather
+        than as a second table -- and so a viewer can tell at a glance which
+        surface the fingers are actually stopping on.
+
+        The caller decides when to draw it: coincident with the table it is
+        nothing but z-fighting, so the app clears it at zero height.
+        """
+        origin = np.asarray(origin, float).reshape(3)
+        n = np.asarray(normal, float).reshape(3)
+        axis = int(np.argmax(np.abs(n)))
+        extents = [span, span, span]
+        extents[axis] = thickness
+        self.scene.add_box("/constraint_plane", color=_CONTACT_RGB,
+                           dimensions=tuple(extents), opacity=0.2,
+                           position=tuple(origin))
+
+    def clear_constraint_plane(self):
+        try:
+            self.server.scene.remove_by_name("/constraint_plane")
+        except Exception:
+            pass
+
     def set_table_grid(self, origin, normal, *, span, spacing):
         """Rule the table's top face into a grid, matching the one drawn on the
         physical bench.

@@ -68,8 +68,8 @@ from .scene import (GRASP_FLEXOR_TENSION, TABLE_NORMAL, get_primitive_specs,
                     primitive_surface_gap)
 from .solvers import (DEFAULT_WRIST_RPY, DEFAULT_WRIST_XYZ, NUM_FINGERS,
                       HandIKStepper, HandSolveParams, capabilities,
-                      free_sphere_plane_witness, plane_witness, resolve_scene,
-                      resolve_table_origin, wrist_pose_from_xyzrpy)
+                      free_sphere_plane_witness, plane_witness,
+                      resolve_constraint_plane_origin, wrist_pose_from_xyzrpy)
 from .utils import PlannerLogger, log_planner_parameters
 
 
@@ -145,7 +145,11 @@ def print_scene(stepper, params):
         print(f"  spheres          : radius={params.collision_radius:.4f} m  "
               f"sigma={params.collision_sigma:.3g}  cull={params.cull_margin}")
     if params.table:
-        origin = resolve_table_origin(params, stepper.spec, stepper.object_center)
+        # The CONSTRAINT plane -- what the graph is written against, and what
+        # every gap in this trace is measured from. Equals the table surface
+        # unless --table-offset lifted it.
+        origin = resolve_constraint_plane_origin(params, stepper.spec,
+                                                 stepper.object_center)
         print(f"  table            : on   origin="
               f"{np.array2string(np.asarray(origin), precision=4)}  "
               f"normal={np.array2string(np.asarray(params.plane_normal), precision=3)}")
@@ -509,17 +513,11 @@ def build_params(args):
     # k_touch is the PLANNER's approach/slide schedule; a single-state IK solve
     # has no steps to schedule, so the table equality is simply always active.
     p.k_touch = None
-    if args.table and args.table_offset:
-        # Absolute origin, resolved from the scene's own seating then shifted --
-        # the headless equivalent of the GUI's "height offset" slider. Must be
-        # resolved BEFORE it is assigned, since resolve_table_origin returns the
-        # auto seating only while plane_origin is still None.
-        spec = get_primitive_specs()[args.primitive]
-        n = np.asarray(p.plane_normal, float)
-        n = n / (np.linalg.norm(n) or 1.0)
-        center = np.asarray(resolve_scene(p)[1], float)
-        p.plane_origin = np.asarray(
-            resolve_table_origin(p, spec, center), float) + args.table_offset * n
+    # Height of the CONSTRAINT plane above the table surface -- the headless
+    # equivalent of the GUI's "constraint plane height" slider. The table itself
+    # stays on the scene's own seating; only the plane the graph is written
+    # against moves.
+    p.constraint_plane_height = args.table_offset
     return p
 
 
@@ -563,8 +561,10 @@ def build_parser():
                     help="drop the support plane and its collision avoidance "
                          "(on by default here, matching the visualizer)")
     ap.add_argument("--table-offset", dest="table_offset", type=float, default=0.0,
-                    help="shift the plane along its normal from the scene's own "
-                         "seating, in m -- the GUI's 'height offset' slider")
+                    help="raise the CONSTRAINT plane along the normal, in m, "
+                         "above the table surface the scene seats -- the GUI's "
+                         "'constraint plane height' slider. Leaves the table "
+                         "itself (and everything registered to it) alone")
     ap.add_argument("--no-table-collision", dest="table_collision",
                     action="store_false", default=True,
                     help="drop the plane avoidance inequalities, leaving only "

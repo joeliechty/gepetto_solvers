@@ -129,8 +129,17 @@ the graph, with no second toggle it silently waits on. That is what makes a
 stalled grasp bisectable: solve for the object alone, the table alone, or both,
 with or without any of the three avoidances, and see which constraint family is
 the one refusing to close. (Their tuning sliders --
-collision radius/sigma/cull margin, table height offset -- stay in the
+collision radius/sigma/cull margin, constraint plane height -- stay in the
 *Collision*/*Table* folders alongside the object/primitive picker.)
+
+The support surface is TWO planes, deliberately. The drawn square is the physical
+bench: it carries the corner frame, the grid, the calibration target and the
+registration against ``lbr_workspace_table_link``, so nothing planning-related is
+allowed to move it. The plane the SOLVER constrains against -- the support
+equality and the avoidance half-space -- is the *Table* folder's *constraint
+plane height* above that surface, drawn as a thin green sheet once it is lifted
+off. Raise it to hold the fingers clear of the bench, or sink it below to let
+them press in, without touching a single table-frame transform.
 
 The solvers are the reusable ``HandFKSolver`` / ``HandIKStepper`` classes in
 ``tendon_hand/solvers.py``; the 3D scene is drawn by
@@ -160,7 +169,8 @@ from .scene import (get_primitive_specs, ycb_primitive_specs, proxy_semi_axes,
                     ellipsoid_members)
 from .solvers import (
     HandSolveParams, HandFKSolver, HandIKStepper,
-    resolve_scene, resolve_table_origin, capabilities,
+    resolve_scene, resolve_table_origin, resolve_constraint_plane_origin,
+    capabilities,
     euler_to_R, R_to_euler, solved_wrist_pose, plane_witness,
     default_object_center,
     half_space_witness, pregrasp_center_witness, pregrasp_axis_witness,
@@ -1414,17 +1424,15 @@ class HandVizApp:
         p.table = self.g_table.value and self.caps["table"]
         p.plane_normal = np.array(TABLE_NORMAL, float)
         p.plane_avoidance = self.g_plane_avoid.value
-        # Resolve the auto (under-object) seating once, then bake the "height
-        # offset" slider into an EXPLICIT plane_origin -- shared by the factor
-        # graph (via this params object) and the rendered slab (_table_origin
-        # just reads it back). Previously this stayed None and the offset was
-        # applied only in _table_origin() for the visual scene, so dragging the
-        # slider moved the drawn table without moving the solver's plane.
+        # The TABLE stays where the scene seats it: left as None, so
+        # resolve_table_origin keeps answering with the seating rule and the slab,
+        # its corner frame, its grid, the calibration target and the robot
+        # registration (_corner_viz) all stay put. The slider moves the CONSTRAINT
+        # plane instead -- a height above that surface, resolved by the solver on
+        # demand rather than baked into an explicit origin here, so the two planes
+        # cannot drift apart and the offset cannot compound across syncs.
         p.plane_origin = None
-        spec, center, _rot, _pose = resolve_scene(p)
-        p.plane_origin = np.asarray(
-            resolve_table_origin(p, spec, center), float) + (
-                self.g_plane_offset.value * np.array(TABLE_NORMAL, float))
+        p.constraint_plane_height = self.g_constraint_height.value
         # display toggles
         self.scene.show_discs = self.g_show_discs.value
         self.scene.show_disc_frames = self.g_show_disc_frames.value
@@ -1435,11 +1443,25 @@ class HandVizApp:
         self.scene.show_planar_gap = self.g_show_planar_gap.value
 
     def _table_origin(self):
-        """The rendered slab's origin -- reads straight off ``params.plane_origin``,
-        which ``_sync_params`` bakes the height-offset slider into, so the drawn
-        table and the factor graph's plane always agree."""
+        """The rendered slab's origin: the TABLE surface, seated from the scene.
+
+        Everything registered against the bench hangs off this -- the slab, its
+        corner frame and grid, the calibration target, and ``_corner_viz``, which
+        is this app's half of the registration against
+        ``lbr_workspace_table_link``. It is therefore deliberately independent of
+        the constraint-plane height slider; that moves
+        :meth:`_constraint_plane_origin` alone.
+        """
         spec, center, _rot, _pose = resolve_scene(self.params)
         return resolve_table_origin(self.params, spec, center)
+
+    def _constraint_plane_origin(self):
+        """The origin of the plane the SOLVER sees -- the table raised by the
+        Table folder's height slider. Resolved through the solvers module, so the
+        picture drawn here is the same plane ``_attach_table`` builds the support
+        equality and the avoidance half-space from."""
+        spec, center, _rot, _pose = resolve_scene(self.params)
+        return resolve_constraint_plane_origin(self.params, spec, center)
 
     def _refresh_table_readout(self, origin, corner):
         """Publish the landmark's numbers: the square's size and where its corner
@@ -1447,18 +1469,27 @@ class HandVizApp:
 
         These have to be readable, not inferred. The whole point of the frame is
         to be measured against a real bench, and a triad you can see but whose
-        coordinates you cannot read is not a landmark. The plane height is quoted
+        coordinates you cannot read is not a landmark. The table height is quoted
         alongside because the table is seated from the object (see
         ``auto_table_origin``), so it moves when the object changes -- this is
         where you see that it did.
+
+        The CONSTRAINT plane's height is quoted on its own line, because the two
+        surfaces are now independent and the whole risk of separating them is
+        mistaking one for the other: this says, in world coordinates, exactly
+        where the solver's plane sits relative to the bench.
         """
         origin = np.asarray(origin, float).reshape(3)
         corner = np.asarray(corner, float).reshape(3)
         axis = int(np.argmax(np.abs(np.asarray(self.params.plane_normal, float))))
+        constraint = np.asarray(self._constraint_plane_origin(), float).reshape(3)
+        height = self.params.constraint_plane_height
         self.g_table_status.content = (
             f"square **{TABLE_SPAN:.3f} x {TABLE_SPAN:.3f} m**, "
             f"{TABLE_THICKNESS * 1e3:.0f} mm thick  \n"
-            f"plane (top face) {'xyz'[axis]} = {origin[axis]:+.4f} m  \n"
+            f"table (top face) {'xyz'[axis]} = {origin[axis]:+.4f} m  \n"
+            f"constraint plane {'xyz'[axis]} = {constraint[axis]:+.4f} m "
+            f"({height * 1e3:+.0f} mm)  \n"
             f"corner frame ({corner[0]:+.4f}, {corner[1]:+.4f}, "
             f"{corner[2]:+.4f}) m")
 
@@ -1495,6 +1526,21 @@ class HandVizApp:
                                       span=TABLE_SPAN, spacing=CAL_GRID_SPACING)
         else:
             self.scene.clear_table_grid()
+        # The solver's plane, when the slider has lifted it off the bench. Gated
+        # on params.table -- unlike the slab above, which is drawn unconditionally
+        # because it is a physical landmark, this one is a picture of a constraint
+        # and drawing it with that constraint switched off would claim a plane the
+        # graph does not have. Also drawn only when it is actually somewhere else:
+        # coincident with the slab it is nothing but z-fighting, and a second
+        # surface exactly where the table already is would invite the very
+        # confusion the split exists to remove.
+        constraint = self._constraint_plane_origin()
+        if (self.g_show_constraint_plane.value and self.params.table
+                and abs(self.params.constraint_plane_height) > 1e-6):
+            self.scene.set_constraint_plane(constraint, self.params.plane_normal,
+                                            span=TABLE_SPAN)
+        else:
+            self.scene.clear_constraint_plane()
         corner = table_corner(origin, self.params.plane_normal)
         if self.g_show_table_frame.value:
             self.scene.set_table_frame(
@@ -4092,7 +4138,8 @@ class HandVizApp:
                    self.g_collision, self.g_self_collision,
                    self.g_coll_radius, self.g_coll_sigma, self.g_cull,
                    self.g_set_beta,
-                   self.g_table, self.g_plane_offset, self.g_plane_avoid,
+                   self.g_table, self.g_constraint_height,
+                   self.g_show_constraint_plane, self.g_plane_avoid,
                    self.g_cal_finger, self.g_cal_disc,
                    self.g_cal_x, self.g_cal_y, self.g_cal_z,
                    self.g_cal_roll, self.g_cal_pitch, self.g_cal_yaw,
@@ -4380,7 +4427,7 @@ class HandVizApp:
             # _report_tendon_lengths.
             self.g_tendon_lengths = gui.add_markdown(self.TENDON_IDLE)
             self.g_flexor_sigma = gui.add_slider(
-                "log10 flexor tension sigma", -3.0, 5.0, 0.1,
+                "log10 flexor tension sigma", -6.0, 6.0, 0.1,
                 math.log10(HandSolveParams().flexor_tension_sigma),
                 hint="How loose the ACTUATED (flexor) tendon's tension prior "
                      "is once contact is expected to move it away from its "
@@ -4729,13 +4776,27 @@ class HandVizApp:
         self._build_ycb_folder(gui)
 
         with gui.add_folder("Table", expand_by_default=False):
-            # Offset from the scene's own seating, which this app sets to rest
-            # the object ON the plane (table_burial = 0, see __init__). Zero
-            # default, so every object -- whatever its size, shape or rotation --
-            # opens sitting on the table rather than sunk through it. Drag
-            # negative to bury it (0.5 * extent reaches the half-buried §1.8
-            # geometry HandSolveParams still defaults to headlessly).
-            self.g_plane_offset = gui.add_slider("height offset (m)", -0.1, 0.1, 0.002, 0.0)
+            # Height of the SOLVER's plane above the table surface. The table
+            # itself does not move: it is seated from the scene (table_burial = 0,
+            # see _fresh_params) and carries the bench registration, the corner
+            # frame, the grid and the calibration target with it. Zero default, so
+            # the two planes open coincident -- the geometry every headless script
+            # solves.
+            self.g_constraint_height = gui.add_slider(
+                "constraint plane height (m)", -0.1, 0.1, 0.002, -0.005,
+                hint="Raise or lower the plane the SOLVER constrains against -- "
+                     "where the support equality seats fingertips and where the "
+                     "avoidance half-space starts -- relative to the table's top "
+                     "face. Moves nothing else: the drawn square, its corner "
+                     "frame, the grid, the calibration target and the robot "
+                     "registration all stay on the physical bench. Positive "
+                     "lifts the constraint off the table; negative sinks it "
+                     "under.")
+            self.g_show_constraint_plane = gui.add_checkbox(
+                "draw constraint plane", True,
+                hint="Show the solver's plane as a thin green sheet. Only "
+                     "appears at a nonzero height -- sitting on the table it "
+                     "would just z-fight the slab.")
             # Filled by _refresh_table_readout on every re-place of the slab.
             self.g_table_status = gui.add_markdown("")
 
@@ -4951,11 +5012,15 @@ class HandVizApp:
             h.on_update(lambda _: (self._sync_params(),
                                    self._invalidate_stepper(),
                                    self._render_frame()))
-        # Table toggle / height updates the static slab immediately; opposition
-        # half-space rides along since it draws its own static split-plane slab
-        # (set_half_space_plane) the same way -- as does its standoff slider,
-        # which draws the two boundary planes either side of that split.
-        for h in (self.g_table, self.g_plane_offset, self.g_half_space,
+        # Table toggle / constraint-plane height updates the static slabs
+        # immediately; opposition half-space rides along since it draws its own
+        # static split-plane slab (set_half_space_plane) the same way -- as does
+        # its standoff slider, which draws the two boundary planes either side of
+        # that split. The height slider invalidates the stepper too: it moves a
+        # plane the factor graph is written against, even though the drawn table
+        # stays put.
+        for h in (self.g_table, self.g_constraint_height,
+                  self.g_show_constraint_plane, self.g_half_space,
                   self.g_half_margin, self.g_half_sides):
             h.on_update(lambda _: (self._sync_params(), self._refresh_object(),
                                    self._invalidate_stepper()))

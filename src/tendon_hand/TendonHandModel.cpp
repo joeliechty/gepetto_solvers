@@ -163,13 +163,17 @@ TendonHandModel::TendonHandModel(
         }
 
         // Share the one wrist variable and let this model own the wrist prior.
+        // `cfg` rather than the structured binding `c` directly: capturing a
+        // structured binding in a lambda is C++20, and this builds as C++17
+        // (clang takes it as an extension, with a warning).
+        const auto& cfg = c;
         std::visit([&](auto& fp) {
             fp->set_hand_base(offset, shared_wrist_key);
             fp->set_emit_base_prior(false);
             // Per-finger, like the rod sigmas above: the planar-bending switch
             // rides on the FINGER config, so a hand can mix keyed and free rods.
-            if (c.planar_bending)
-                fp->set_planar_bending(c.sigma_planar_bend, c.sigma_planar_twist);
+            if (cfg.planar_bending)
+                fp->set_planar_bending(cfg.sigma_planar_bend, cfg.sigma_planar_twist);
         }, fingers_.back());
     }
 }
