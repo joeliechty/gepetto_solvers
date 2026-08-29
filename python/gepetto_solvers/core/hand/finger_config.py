@@ -1,6 +1,6 @@
 import numpy as np
 
-from gepetto_solvers import TendonFingerSolverConfig, PerDiscTendonInput
+from gepetto_solvers import PerDiscTendonInput, TendonFingerSolverConfig
 
 
 def get_K_inv(lateral_stiffness_scale=1.0, torsion_stiffness_scale=1.0):
