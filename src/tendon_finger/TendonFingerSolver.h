@@ -133,7 +133,7 @@ struct TendonFingerSolverConfig{
     // hard AL equality constraint. Reuses EnvironmentConfig as the carrier:
     // sdf_grid, object_pose_mean/cov, target_contact_node, contact_node_radius.
     // Mutually exclusive with sphere_contact (only one contact mode at a time).
-    std::optional<crest_sparse::EnvironmentConfig> sdf_contact;
+    std::optional<gepetto_solvers::EnvironmentConfig> sdf_contact;
 };
 
 
@@ -193,7 +193,7 @@ private:
     std::optional<Vector3Gaussian> tip_position_meas_;
 
     std::optional<SpherePrimitiveContactConfig> sphere_contact_;
-    std::optional<crest_sparse::EnvironmentConfig> sdf_contact_;
+    std::optional<gepetto_solvers::EnvironmentConfig> sdf_contact_;
     static gtsam::Key sphere_object_key() { return gtsam::Symbol('O', 0); }
     static gtsam::Key dummy_point_key()   { return gtsam::Symbol('Y', 0); }
 

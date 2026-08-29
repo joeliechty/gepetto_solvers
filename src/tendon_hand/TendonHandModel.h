@@ -2,7 +2,7 @@
 
 #include "tendon_finger/TendonFingerModel.h"
 #include "tendon_finger/TendonFingerSolver.h"   // TendonFingerSolverConfig, SpherePrimitiveContactConfig
-#include "utils/EnvironmentFactors.h"            // crest_sparse::EnvironmentConfig
+#include "utils/EnvironmentFactors.h"            // gepetto_solvers::EnvironmentConfig
 #include "utils/Gaussians.h"
 
 #include <gtsam/geometry/Pose3.h>
@@ -174,7 +174,7 @@ public:
     // with it and get_initial_values() decides whether to seed a witness point
     // with it, and a disagreement between those two leaves either an orphan
     // variable (indeterminate system) or an unseeded key.
-    static bool uses_center_direct_contact(const crest_sparse::EnvironmentConfig& env);
+    static bool uses_center_direct_contact(const gepetto_solvers::EnvironmentConfig& env);
 
     // NOTE there is deliberately no table witness key: the support-plane contact
     // equality constrains the contact node's sphere CENTER directly (one residual,
@@ -280,7 +280,7 @@ private:
     std::vector<gtsam::Pose3> hand_base_offsets_;
 
     // Per-finger contact configuration (either may be empty).
-    std::vector<std::optional<crest_sparse::EnvironmentConfig>>   sdf_contacts_;
+    std::vector<std::optional<gepetto_solvers::EnvironmentConfig>>   sdf_contacts_;
     std::vector<std::optional<SpherePrimitiveContactConfig>>      sphere_contacts_;
 
     gtsam::Pose3          wrist_pose_;

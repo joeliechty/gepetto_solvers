@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(crest_sparse LANGUAGES CXX)
+project(gepetto_solvers LANGUAGES CXX)
 
 # Set release build flags for performance
 if(NOT CMAKE_BUILD_TYPE)
@@ -31,7 +31,7 @@ endif()
 
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 
-pybind11_add_module(_crest_sparse ${SOURCES})
+pybind11_add_module(_gepetto_solvers ${SOURCES})
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -39,17 +39,17 @@ include_directories(
     ${EIGEN_INCLUDE_DIR}
 )
 
-target_link_libraries(_crest_sparse PRIVATE gtsam OpenVDB::openvdb)
+target_link_libraries(_gepetto_solvers PRIVATE gtsam OpenVDB::openvdb)
 
 if(OpenMP_CXX_FOUND)
-    target_link_libraries(_crest_sparse PRIVATE OpenMP::OpenMP_CXX)
-    target_compile_definitions(_crest_sparse PRIVATE CREST_USE_OPENMP)
+    target_link_libraries(_gepetto_solvers PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(_gepetto_solvers PRIVATE GEPETTO_USE_OPENMP)
 endif()
 
-install(TARGETS _crest_sparse LIBRARY DESTINATION crest_sparse)
+install(TARGETS _gepetto_solvers LIBRARY DESTINATION gepetto_solvers)
 
-# target_compile_features(crest_sparse PRIVATE cxx_std_17)
-# target_compile_options(crest_sparse PRIVATE -O3 -fPIC)
+# target_compile_features(gepetto_solvers PRIVATE cxx_std_17)
+# target_compile_options(gepetto_solvers PRIVATE -O3 -fPIC)
 
-# set_target_properties(crest_sparse PROPERTIES
-#     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python/crest_sparse")
+# set_target_properties(gepetto_solvers PROPERTIES
+#     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python/gepetto_solvers")

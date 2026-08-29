@@ -114,13 +114,13 @@ public:
     // shows up as the hand drifting off constraints it had already satisfied
     // before being pulled back over the next few iterations. Constraints the two
     // problems share keep their multipliers; new ones start at zero.
-    void set_initial_duals(const crest_sparse::WarmALState& d) {
+    void set_initial_duals(const gepetto_solvers::WarmALState& d) {
         SolverBase::set_initial_duals(d);
     }
-    const crest_sparse::WarmALState& get_al_duals() const {
+    const gepetto_solvers::WarmALState& get_al_duals() const {
         return SolverBase::get_al_duals();
     }
-    const crest_sparse::ALTransferReport& al_transfer_report() const {
+    const gepetto_solvers::ALTransferReport& al_transfer_report() const {
         return SolverBase::al_transfer_report();
     }
 

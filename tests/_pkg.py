@@ -14,18 +14,9 @@ and then ``scene.primitive_surface_gap(...)`` -- never a direct
 
 from __future__ import annotations
 
-try:  # post-refactor layout
-    from gepetto_solvers.core import robot_plan, solvers
-    from gepetto_solvers.core.geometry import scene  # type: ignore[import-not-found]
-    from gepetto_solvers.core.hand import config, finger_config
-except ImportError:  # current layout
-    from python.tests.tendon_hand import (
-        config,
-        finger_config,
-        robot_plan,
-        scene,
-        solvers,
-    )
+from gepetto_solvers.core import robot_plan, solvers
+from gepetto_solvers.core.geometry import scene
+from gepetto_solvers.core.hand import config, finger_config
 
 __all__ = ["config", "finger_config", "robot_plan", "scene", "solvers"]
 
@@ -37,10 +28,6 @@ def viz_interactive():
     is only needed by the smoke tests. ``viser`` itself is imported lazily *inside*
     the module, so this works headless.
     """
-    try:  # post-refactor layout
-        from gepetto_solvers.projects.viz import (  # type: ignore[import-not-found]
-            viz_interactive as mod,
-        )
-    except ImportError:  # current layout
-        from python.tests.tendon_hand import viz_interactive as mod
+    from gepetto_solvers.projects.viz import viz_interactive as mod
+
     return mod

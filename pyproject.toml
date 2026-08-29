@@ -7,10 +7,10 @@ CMAKE_EXPORT_COMPILE_COMMANDS = "ON"
 
 [tool.scikit-build]
 build-dir = "build"
-wheel.packages = ["python/crest_sparse"]
+wheel.packages = ["python/gepetto_solvers"]
 
 [project]
-name = "crest_sparse"
+name = "gepetto_solvers"
 version = "0.0.1"
 
 # Optional extras for the interactive visualizer (tests/tendon_hand/viz_interactive.py
@@ -68,10 +68,10 @@ ignore = ["N802", "N803", "N806", "N816"]
 
 [tool.ruff.lint.isort]
 # `_pkg` is the test suite's own import-indirection module (tests/_pkg.py), and
-# `crest_sparse` is this project's extension -- both are first-party, not vendor code.
-known-first-party = ["_pkg", "crest_sparse", "gepetto_solvers"]
+# `gepetto_solvers` is this project's own package -- both first-party, not vendor code.
+known-first-party = ["_pkg", "gepetto_solvers"]
 
 [tool.ruff.lint.per-file-ignores]
 # The extension re-export is a deliberate star-import: it is how the C++ symbols
-# reach `import crest_sparse`.
-"python/crest_sparse/__init__.py" = ["F403", "F405"]
+# reach `import gepetto_solvers`.
+"python/gepetto_solvers/__init__.py" = ["F403", "F405"]

@@ -93,7 +93,7 @@ TendonHandModel::TendonHandModel(
         // finger-object penetration gap.
         if (c.sdf_contact.has_value() &&
             c.sdf_contact->collision_avoidance &&
-            crest_sparse::has_object_surface(*c.sdf_contact) &&
+            gepetto_solvers::has_object_surface(*c.sdf_contact) &&
             !c.sdf_contact->collision_node_indices.empty())
             has_collision_ = true;
         // Finger-finger, on the same spheres and gated on its own field. Each
@@ -180,7 +180,7 @@ TendonHandModel::TendonHandModel(
 
 
 bool TendonHandModel::uses_center_direct_contact(
-    const crest_sparse::EnvironmentConfig& env)
+    const gepetto_solvers::EnvironmentConfig& env)
 {
     // Collision-only env: no object contact of any kind to choose a form for.
     if (!env.target_contact_node.has_value()) return false;
@@ -252,7 +252,7 @@ void TendonHandModel::add_eq(NonlinearFactorGraph& graph,
 void TendonHandModel::add_ineq(NonlinearFactorGraph& graph,
                                const gtsam::NoiseModelFactor::shared_ptr& gap,
                                std::string tag) {
-    graph.add(crest_sparse::CollisionInequalityConstraint(gap));
+    graph.add(gepetto_solvers::CollisionInequalityConstraint(gap));
     tags_.ineq.push_back(std::move(tag));
 }
 
@@ -351,18 +351,18 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         // it IS this finger's mounting offset, so reading it here
                         // makes it impossible for the plane to be built about a
                         // base the finger is not actually on.
-                        std::vector<crest_sparse::EllipsoidPrimitive> members;
+                        std::vector<gepetto_solvers::EllipsoidPrimitive> members;
                         if (!env.ellipsoid_set.empty()) {
                             // Narrowed by contact_ellipsoid_subset when one is
                             // set; the free spheres below keep the whole union.
-                            members = crest_sparse::contact_ellipsoid_members(env);
+                            members = gepetto_solvers::contact_ellipsoid_members(env);
                         } else {
-                            crest_sparse::EllipsoidPrimitive one;
+                            gepetto_solvers::EllipsoidPrimitive one;
                             one.semi_axes = env.ellipsoid_semi_axes;
                             members.push_back(one);
                         }
                         center_contact =
-                            std::make_shared<crest_sparse::EllipsoidSetPlanarGapFactor>(
+                            std::make_shared<gepetto_solvers::EllipsoidSetPlanarGapFactor>(
                                 tip_key, object_key(), wrist_key(step_),
                                 env.contact_node_radius, members,
                                 env.ellipsoid_set_beta,
@@ -391,15 +391,15 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                         // callers that change the subset should reset them, the
                         // same as for a change of object.
                         center_contact =
-                            std::make_shared<crest_sparse::EllipsoidSetCollisionGapFactor>(
+                            std::make_shared<gepetto_solvers::EllipsoidSetCollisionGapFactor>(
                                 tip_key, object_key(), env.contact_node_radius,
-                                crest_sparse::contact_ellipsoid_members(env),
+                                gepetto_solvers::contact_ellipsoid_members(env),
                                 env.ellipsoid_set_beta,
                                 noiseModel::Isotropic::Sigma(1, 1.0));
                         tag = "obj.set|f" + std::to_string(i);
                     } else {
                         center_contact =
-                            std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
+                            std::make_shared<gepetto_solvers::EllipsoidCollisionGapFactor>(
                                 tip_key, object_key(), env.contact_node_radius,
                                 env.ellipsoid_semi_axes,
                                 noiseModel::Isotropic::Sigma(1, 1.0));
@@ -417,12 +417,12 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                 gtsam::NoiseModelFactor::shared_ptr contact;
                 if (env.ellipsoid_semi_axes.norm() > 0.0) {
                     // Analytic hyper-ellipsoid surface (Section 1.6.3).
-                    contact = std::make_shared<crest_sparse::EllipsoidWitnessContactFactor>(
+                    contact = std::make_shared<gepetto_solvers::EllipsoidWitnessContactFactor>(
                         tip_key, object_key(), witness_key(static_cast<int>(i)),
                         env.contact_node_radius, env.ellipsoid_semi_axes,
                         noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n);
                 } else {
-                    contact = std::make_shared<crest_sparse::SdfWitnessContactFactor>(
+                    contact = std::make_shared<gepetto_solvers::SdfWitnessContactFactor>(
                         tip_key, object_key(), witness_key(static_cast<int>(i)),
                         env.contact_node_radius, env.sdf_grid,
                         noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n);
@@ -449,13 +449,13 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                     object_anchored = true;
                 }
                 if (sc.witness) {
-                    auto contact = std::make_shared<crest_sparse::SphereWitnessContactFactor>(
+                    auto contact = std::make_shared<gepetto_solvers::SphereWitnessContactFactor>(
                         finger_key, object_key(), witness_key(static_cast<int>(i)),
                         sc.finger_node_radius, sc.sphere_radius,
                         noiseModel::Isotropic::Sigma(5, 1.0));
                     add_eq(graph, contact, "obj.sphwit|f" + std::to_string(i));
                 } else {
-                    auto contact = std::make_shared<crest_sparse::SphereSphereContactFactor>(
+                    auto contact = std::make_shared<gepetto_solvers::SphereSphereContactFactor>(
                         finger_key, object_key(),
                         sc.finger_node_radius, sc.sphere_radius,
                         noiseModel::Isotropic::Sigma(1, 1.0));
@@ -496,7 +496,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         if (!sdf_contacts_[i]) continue;
         const auto& env = *sdf_contacts_[i];
         bool wants_object_collision =
-            env.collision_avoidance && crest_sparse::has_object_surface(env);
+            env.collision_avoidance && gepetto_solvers::has_object_surface(env);
         bool wants_plane_collision  = env.plane_avoidance &&
                                       env.plane_normal.norm() > 0.0;
         bool wants_self_collision   = env.self_collision;
@@ -534,7 +534,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
         // decides whether the shared object variable is seeded at all -- anchoring
         // an object that was never seeded is an indeterminate system. Both now
         // call has_object_surface() so they cannot drift apart.
-        if (!env.collision_avoidance || !crest_sparse::has_object_surface(env))
+        if (!env.collision_avoidance || !gepetto_solvers::has_object_surface(env))
             continue;
         if (!object_anchored) {
             graph.add(PriorFactor<Pose3>(
@@ -553,14 +553,14 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             if (is_set) {
                 // Eq 1.12: the same residual as the contact equality above, read
                 // as an inequality c_pen = r - d_E <= 0.
-                gap = std::make_shared<crest_sparse::EllipsoidSetCollisionGapFactor>(
+                gap = std::make_shared<gepetto_solvers::EllipsoidSetCollisionGapFactor>(
                     s.key, object_key(), s.radius, env.ellipsoid_set,
                     env.ellipsoid_set_beta, col_noise);
             } else if (is_ellipsoid) {
-                gap = std::make_shared<crest_sparse::EllipsoidCollisionGapFactor>(
+                gap = std::make_shared<gepetto_solvers::EllipsoidCollisionGapFactor>(
                     s.key, object_key(), s.radius, env.ellipsoid_semi_axes, col_noise);
             } else {
-                gap = std::make_shared<crest_sparse::SdfCollisionGapFactor>(
+                gap = std::make_shared<gepetto_solvers::SdfCollisionGapFactor>(
                     s.key, object_key(), s.radius, env.sdf_grid, col_noise);
             }
             add_ineq(graph, gap, "col.obj|f" + std::to_string(i) +
@@ -604,7 +604,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                                 .norm() - sa.radius - sb.radius;
                         if (gap0 > cull_margin) continue;
                     }
-                    auto gap = std::make_shared<crest_sparse::SphereSphereCollisionGapFactor>(
+                    auto gap = std::make_shared<gepetto_solvers::SphereSphereCollisionGapFactor>(
                         sa.key, sb.key, sa.radius, sb.radius, col_noise);
                     // a < b by construction, so the pair name is canonical.
                     add_ineq(graph, gap,
@@ -643,7 +643,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             // support_contact_node, whose factor this now matches exactly.
             if (env.table_contact_node.has_value()) {
                 Key tip_key = fp->rod_->get_pose_key(*env.table_contact_node);
-                auto contact = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
+                auto contact = std::make_shared<gepetto_solvers::PlaneCollisionGapFactor>(
                     tip_key, env.table_contact_radius,
                     env.plane_origin, env.plane_normal,
                     noiseModel::Isotropic::Sigma(1, 1.0));
@@ -662,7 +662,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             // equality above.
             if (env.support_contact_node.has_value()) {
                 Key sup_key = fp->rod_->get_pose_key(*env.support_contact_node);
-                auto support = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
+                auto support = std::make_shared<gepetto_solvers::PlaneCollisionGapFactor>(
                     sup_key, env.support_contact_radius,
                     env.plane_origin, env.plane_normal,
                     noiseModel::Isotropic::Sigma(1, 1.0));
@@ -692,7 +692,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                             fp->rod_->get_pose_key(*env.support_contact_node))
                         continue;
                     double r = env.collision_node_radii[j];
-                    auto gap = std::make_shared<crest_sparse::PlaneCollisionGapFactor>(
+                    auto gap = std::make_shared<gepetto_solvers::PlaneCollisionGapFactor>(
                         fp->rod_->get_pose_key(idx), r,
                         env.plane_origin, env.plane_normal, col_noise);
                     add_ineq(graph, gap, "col.plane|f" + std::to_string(i) +
@@ -723,7 +723,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
                                       : env.table_contact_node;
         if (!node.has_value()) continue;
         std::visit([&](auto& fp) {
-            auto half = std::make_shared<crest_sparse::HalfSpaceGapFactor>(
+            auto half = std::make_shared<gepetto_solvers::HalfSpaceGapFactor>(
                 fp->rod_->get_pose_key(*node),
                 env.half_space_split_point, env.half_space_normal,
                 noiseModel::Isotropic::Sigma(1, env.collision_sigma),
@@ -767,7 +767,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             }
         }
         if (thumb_key.has_value() && !finger_keys.empty() && n_hat.norm() > 0.0) {
-            auto center = std::make_shared<crest_sparse::PreGraspHandCenteringFactor>(
+            auto center = std::make_shared<gepetto_solvers::PreGraspHandCenteringFactor>(
                 *thumb_key, finger_keys, object_key(), h_clear, n_hat,
                 noiseModel::Isotropic::Sigma(3, 1.0));
             add_eq(graph, center, "pregrasp.center");
@@ -795,7 +795,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             axis = env.pregrasp_align_axis;
         }
         if (thumb_key.has_value() && !finger_keys.empty() && axis.norm() > 0.0) {
-            auto align = std::make_shared<crest_sparse::PreGraspAxisAlignmentFactor>(
+            auto align = std::make_shared<gepetto_solvers::PreGraspAxisAlignmentFactor>(
                 *thumb_key, finger_keys, axis,
                 noiseModel::Isotropic::Sigma(1, 1.0));
             add_eq(graph, align, "pregrasp.align");
@@ -831,7 +831,7 @@ NonlinearFactorGraph TendonHandModel::build_graph(
             break;
         }
         if (centroid.has_value() && n_hat.norm() > 0.0) {
-            auto pinch = std::make_shared<crest_sparse::PreGraspCentroidFactor>(
+            auto pinch = std::make_shared<gepetto_solvers::PreGraspCentroidFactor>(
                 wrist_key(step_), object_key(), gtsam::Point3(*centroid),
                 h_clear, n_hat, noiseModel::Isotropic::Sigma(3, 1.0));
             add_eq(graph, pinch, "pregrasp.centroid");
@@ -875,7 +875,7 @@ Values TendonHandModel::get_initial_values(const Values* warm) const {
                 // collision. An inert sdf env seeds nothing (avoids an orphan
                 // object variable with no factors).
                 bool has_col = env.collision_avoidance &&
-                               crest_sparse::has_object_surface(env) &&
+                               gepetto_solvers::has_object_surface(env) &&
                                !env.collision_node_indices.empty();
                 if (!env.target_contact_node.has_value() && !has_col) return;
 

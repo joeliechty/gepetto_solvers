@@ -205,16 +205,16 @@ public:
     // (constraint_tags_eq/ineq), or the transfer is refused -- pairing
     // multipliers by position across a rebuilt graph is not a degraded warm
     // start, it is wrong. Consumed by the first solve after the call.
-    void set_initial_duals(const crest_sparse::WarmALState& duals) {
+    void set_initial_duals(const gepetto_solvers::WarmALState& duals) {
         al_transfer_in_ = duals;
     }
 
     // The AL state of the last solve, tagged so another solver can take it.
-    const crest_sparse::WarmALState& get_al_duals() const { return al_warm_; }
+    const gepetto_solvers::WarmALState& get_al_duals() const { return al_warm_; }
 
     // How much of the last transfer matched (matched/total, per class). All
     // zeros when nothing was carried in.
-    const crest_sparse::ALTransferReport& al_transfer_report() const {
+    const gepetto_solvers::ALTransferReport& al_transfer_report() const {
         return al_transfer_report_;
     }
 
@@ -258,13 +258,13 @@ protected:
     // config_.al_warm_start_duals is set; see reset_al_duals(). Default
     // constructed (empty multipliers) means "cold start", which is the state
     // after construction and after a reset.
-    crest_sparse::WarmALState al_warm_;
+    gepetto_solvers::WarmALState al_warm_;
 
     // Duals handed in by set_initial_duals(), pending remap onto this solver's
     // own constraints. Cleared once consumed, so a transfer seeds the first
     // solve and every later one continues from al_warm_ as usual.
-    crest_sparse::WarmALState al_transfer_in_;
-    crest_sparse::ALTransferReport al_transfer_report_;
+    gepetto_solvers::WarmALState al_transfer_in_;
+    gepetto_solvers::ALTransferReport al_transfer_report_;
 
     // This solver's constraint identities, in graph-insertion order (= the order
     // ConstrainedOptProblem enumerates them). Empty by default: a solver that

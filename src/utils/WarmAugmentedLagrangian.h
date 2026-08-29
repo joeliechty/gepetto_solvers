@@ -9,7 +9,7 @@
 #include <vector>
 
 
-namespace crest_sparse {
+namespace gepetto_solvers {
 
 // The Augmented Lagrangian outer-loop state that survives between solves.
 //
@@ -251,4 +251,4 @@ public:
     }
 };
 
-}  // namespace crest_sparse
+}  // namespace gepetto_solvers

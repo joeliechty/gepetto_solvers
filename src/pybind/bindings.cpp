@@ -10,45 +10,45 @@ void bind_utils(py::module& m) {
     // Augmented Lagrangian outer-loop state, carried between solves. Opaque on
     // purpose: a caller moves it from one solver to another and never builds one
     // -- the multipliers only mean anything paired with the tags beside them.
-    py::class_<crest_sparse::WarmALState>(m, "ALDuals")
+    py::class_<gepetto_solvers::WarmALState>(m, "ALDuals")
         .def(py::init<>())
         .def_property_readonly(
             "num_equality",
-            [](const crest_sparse::WarmALState& s) { return s.lambda_eq.size(); })
+            [](const gepetto_solvers::WarmALState& s) { return s.lambda_eq.size(); })
         .def_property_readonly(
             "num_inequality",
-            [](const crest_sparse::WarmALState& s) { return s.lambda_ineq.size(); })
-        .def_property_readonly("mu", [](const crest_sparse::WarmALState& s) {
+            [](const gepetto_solvers::WarmALState& s) { return s.lambda_ineq.size(); })
+        .def_property_readonly("mu", [](const gepetto_solvers::WarmALState& s) {
             return s.mu_eq_at;
         })
-        .def_property_readonly("tagged", &crest_sparse::WarmALState::tagged,
+        .def_property_readonly("tagged", &gepetto_solvers::WarmALState::tagged,
                                "True when every multiplier carries the identity "
                                "of its constraint, which is what a transfer "
                                "across a rebuilt graph requires.")
-        .def_readonly("tags_equality", &crest_sparse::WarmALState::tag_eq)
-        .def_readonly("tags_inequality", &crest_sparse::WarmALState::tag_ineq)
-        .def("__bool__", [](const crest_sparse::WarmALState& s) {
+        .def_readonly("tags_equality", &gepetto_solvers::WarmALState::tag_eq)
+        .def_readonly("tags_inequality", &gepetto_solvers::WarmALState::tag_ineq)
+        .def("__bool__", [](const gepetto_solvers::WarmALState& s) {
             return !s.empty();
         })
-        .def("__repr__", [](const crest_sparse::WarmALState& s) {
+        .def("__repr__", [](const gepetto_solvers::WarmALState& s) {
             return "<ALDuals eq=" + std::to_string(s.lambda_eq.size()) +
                    " ineq=" + std::to_string(s.lambda_ineq.size()) +
                    " mu=" + std::to_string(s.mu_eq_at) +
                    (s.tagged() ? " tagged>" : " untagged>");
         });
 
-    py::class_<crest_sparse::ALTransferReport>(m, "ALTransferReport")
+    py::class_<gepetto_solvers::ALTransferReport>(m, "ALTransferReport")
         .def(py::init<>())
         .def_readonly("matched_equality",
-                      &crest_sparse::ALTransferReport::matched_eq)
-        .def_readonly("total_equality", &crest_sparse::ALTransferReport::total_eq)
+                      &gepetto_solvers::ALTransferReport::matched_eq)
+        .def_readonly("total_equality", &gepetto_solvers::ALTransferReport::total_eq)
         .def_readonly("matched_inequality",
-                      &crest_sparse::ALTransferReport::matched_ineq)
+                      &gepetto_solvers::ALTransferReport::matched_ineq)
         .def_readonly("total_inequality",
-                      &crest_sparse::ALTransferReport::total_ineq)
-        .def_property_readonly("matched", &crest_sparse::ALTransferReport::matched)
-        .def_property_readonly("total", &crest_sparse::ALTransferReport::total)
-        .def("__repr__", [](const crest_sparse::ALTransferReport& r) {
+                      &gepetto_solvers::ALTransferReport::total_ineq)
+        .def_property_readonly("matched", &gepetto_solvers::ALTransferReport::matched)
+        .def_property_readonly("total", &gepetto_solvers::ALTransferReport::total)
+        .def("__repr__", [](const gepetto_solvers::ALTransferReport& r) {
             return "<ALTransferReport " + std::to_string(r.matched()) + "/" +
                    std::to_string(r.total()) + " constraints matched>";
         });
@@ -136,7 +136,7 @@ void bind_utils(py::module& m) {
 }
 
 
-PYBIND11_MODULE(_crest_sparse, m) {
+PYBIND11_MODULE(_gepetto_solvers, m) {
     bind_cosserat_rod(m);
     bind_cosserat_dynamics(m);
     bind_tendon_finger(m);

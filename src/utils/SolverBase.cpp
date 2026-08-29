@@ -176,7 +176,7 @@ SolutionMetadata SolverBase::optimize() {
         // constrained problem keep tightening it, instead of each restarting at
         // al_initial_mu with zero duals. See SolverBaseConfig::al_warm_start_duals
         // for why a short-budget loop cannot enforce anything without this.
-        crest_sparse::WarmAugmentedLagrangianOptimizer optimizer(graph_, values_, p);
+        gepetto_solvers::WarmAugmentedLagrangianOptimizer optimizer(graph_, values_, p);
         if (config_.al_warm_start_duals) {
             // Multipliers handed over from another solver (set_initial_duals):
             // re-seat them onto THIS problem's constraints by identity before
@@ -188,7 +188,7 @@ SolutionMetadata SolverBase::optimize() {
             // many steps it has taken since. It describes the last TRANSFER,
             // not the last solve.
             if (al_warm_.empty() && al_transfer_in_.tagged()) {
-                al_transfer_report_ = crest_sparse::ALTransferReport{};
+                al_transfer_report_ = gepetto_solvers::ALTransferReport{};
                 const auto eq_tags = constraint_tags_eq();
                 const auto ineq_tags = constraint_tags_ineq();
                 const auto counts = optimizer.constraint_counts();
@@ -197,7 +197,7 @@ SolutionMetadata SolverBase::optimize() {
                 // safe response.
                 if (eq_tags.size() == counts.first &&
                     ineq_tags.size() == counts.second) {
-                    al_warm_ = crest_sparse::remap_al_state(
+                    al_warm_ = gepetto_solvers::remap_al_state(
                         al_transfer_in_, eq_tags, optimizer.eq_dims(), ineq_tags,
                         config_.al_transfer_mu_max, &al_transfer_report_);
                 }
@@ -382,7 +382,7 @@ void SolverBase::reset_al_duals() {
     // it too: "start the homotopy over" cannot mean "start it over, but from
     // somebody else's multipliers".
     al_transfer_in_.clear();
-    al_transfer_report_ = crest_sparse::ALTransferReport{};
+    al_transfer_report_ = gepetto_solvers::ALTransferReport{};
 }
 
 

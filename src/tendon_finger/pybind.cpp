@@ -105,89 +105,89 @@ void bind_tendon_finger(py::module& m) {
     // 4x4 matrix rather than a Pose3: gtsam::Pose3 is not bound anywhere in this
     // module, and every other pose that crosses this boundary
     // (object_pose_mean, Pose3Gaussian.mean, base_pose) is a Matrix4 already.
-    py::class_<crest_sparse::EllipsoidPrimitive>(m, "EllipsoidPrimitive")
+    py::class_<gepetto_solvers::EllipsoidPrimitive>(m, "EllipsoidPrimitive")
         .def(py::init<>())
-        .def_readwrite("semi_axes", &crest_sparse::EllipsoidPrimitive::semi_axes)
+        .def_readwrite("semi_axes", &gepetto_solvers::EllipsoidPrimitive::semi_axes)
         .def_property("local_pose",
-            [](const crest_sparse::EllipsoidPrimitive& p) {
+            [](const gepetto_solvers::EllipsoidPrimitive& p) {
                 return p.local_pose.matrix();
             },
-            [](crest_sparse::EllipsoidPrimitive& p, const gtsam::Matrix4& m) {
+            [](gepetto_solvers::EllipsoidPrimitive& p, const gtsam::Matrix4& m) {
                 p.local_pose = gtsam::Pose3(m);
             });
 
-    py::class_<crest_sparse::EnvironmentConfig>(m, "EnvironmentConfig")
+    py::class_<gepetto_solvers::EnvironmentConfig>(m, "EnvironmentConfig")
         .def(py::init<>())
-        .def_readwrite("object_pose_mean",     &crest_sparse::EnvironmentConfig::object_pose_mean)
-        .def_readwrite("object_pose_cov",      &crest_sparse::EnvironmentConfig::object_pose_cov)
-        .def_readwrite("object_pose_per_step", &crest_sparse::EnvironmentConfig::object_pose_per_step)
-        .def_readwrite("collision_avoidance",    &crest_sparse::EnvironmentConfig::collision_avoidance)
-        .def_readwrite("self_collision",         &crest_sparse::EnvironmentConfig::self_collision)
-        .def_readwrite("collision_sigma",        &crest_sparse::EnvironmentConfig::collision_sigma)
-        .def_readwrite("collision_node_indices", &crest_sparse::EnvironmentConfig::collision_node_indices)
-        .def_readwrite("collision_node_radii",   &crest_sparse::EnvironmentConfig::collision_node_radii)
-        .def_readwrite("collision_node_is_proximal", &crest_sparse::EnvironmentConfig::collision_node_is_proximal)
-        .def_readwrite("collision_cull_margin",  &crest_sparse::EnvironmentConfig::collision_cull_margin)
-        .def_readwrite("target_contact_node", &crest_sparse::EnvironmentConfig::target_contact_node)
-        .def_readwrite("contact_node_radius", &crest_sparse::EnvironmentConfig::contact_node_radius)
-        .def_readwrite("witness_point_seed",  &crest_sparse::EnvironmentConfig::witness_point_seed)
-        .def_readwrite("ellipsoid_semi_axes", &crest_sparse::EnvironmentConfig::ellipsoid_semi_axes)
-        .def_readwrite("ellipsoid_set",       &crest_sparse::EnvironmentConfig::ellipsoid_set)
-        .def_readwrite("ellipsoid_set_beta",  &crest_sparse::EnvironmentConfig::ellipsoid_set_beta)
+        .def_readwrite("object_pose_mean",     &gepetto_solvers::EnvironmentConfig::object_pose_mean)
+        .def_readwrite("object_pose_cov",      &gepetto_solvers::EnvironmentConfig::object_pose_cov)
+        .def_readwrite("object_pose_per_step", &gepetto_solvers::EnvironmentConfig::object_pose_per_step)
+        .def_readwrite("collision_avoidance",    &gepetto_solvers::EnvironmentConfig::collision_avoidance)
+        .def_readwrite("self_collision",         &gepetto_solvers::EnvironmentConfig::self_collision)
+        .def_readwrite("collision_sigma",        &gepetto_solvers::EnvironmentConfig::collision_sigma)
+        .def_readwrite("collision_node_indices", &gepetto_solvers::EnvironmentConfig::collision_node_indices)
+        .def_readwrite("collision_node_radii",   &gepetto_solvers::EnvironmentConfig::collision_node_radii)
+        .def_readwrite("collision_node_is_proximal", &gepetto_solvers::EnvironmentConfig::collision_node_is_proximal)
+        .def_readwrite("collision_cull_margin",  &gepetto_solvers::EnvironmentConfig::collision_cull_margin)
+        .def_readwrite("target_contact_node", &gepetto_solvers::EnvironmentConfig::target_contact_node)
+        .def_readwrite("contact_node_radius", &gepetto_solvers::EnvironmentConfig::contact_node_radius)
+        .def_readwrite("witness_point_seed",  &gepetto_solvers::EnvironmentConfig::witness_point_seed)
+        .def_readwrite("ellipsoid_semi_axes", &gepetto_solvers::EnvironmentConfig::ellipsoid_semi_axes)
+        .def_readwrite("ellipsoid_set",       &gepetto_solvers::EnvironmentConfig::ellipsoid_set)
+        .def_readwrite("ellipsoid_set_beta",  &gepetto_solvers::EnvironmentConfig::ellipsoid_set_beta)
         .def_readwrite("contact_ellipsoid_subset",
-                       &crest_sparse::EnvironmentConfig::contact_ellipsoid_subset)
+                       &gepetto_solvers::EnvironmentConfig::contact_ellipsoid_subset)
         // --- Tendon-aligned in-plane object contact (Eq 11 / Eq 13) ---
         .def_readwrite("object_contact_in_plane",
-                       &crest_sparse::EnvironmentConfig::object_contact_in_plane)
+                       &gepetto_solvers::EnvironmentConfig::object_contact_in_plane)
         .def_readwrite("contact_plane_centroid",
-                       &crest_sparse::EnvironmentConfig::contact_plane_centroid)
+                       &gepetto_solvers::EnvironmentConfig::contact_plane_centroid)
         .def_readwrite("contact_plane_rho_lo",
-                       &crest_sparse::EnvironmentConfig::contact_plane_rho_lo)
+                       &gepetto_solvers::EnvironmentConfig::contact_plane_rho_lo)
         .def_readwrite("contact_plane_rho_hi",
-                       &crest_sparse::EnvironmentConfig::contact_plane_rho_hi)
+                       &gepetto_solvers::EnvironmentConfig::contact_plane_rho_hi)
         .def_readwrite("contact_plane_gap_lo",
-                       &crest_sparse::EnvironmentConfig::contact_plane_gap_lo)
+                       &gepetto_solvers::EnvironmentConfig::contact_plane_gap_lo)
         .def_readwrite("contact_plane_gap_hi",
-                       &crest_sparse::EnvironmentConfig::contact_plane_gap_hi)
-        .def_readwrite("plane_origin",        &crest_sparse::EnvironmentConfig::plane_origin)
-        .def_readwrite("plane_normal",        &crest_sparse::EnvironmentConfig::plane_normal)
-        .def_readwrite("plane_avoidance",     &crest_sparse::EnvironmentConfig::plane_avoidance)
-        .def_readwrite("table_contact_node",  &crest_sparse::EnvironmentConfig::table_contact_node)
-        .def_readwrite("table_contact_radius",&crest_sparse::EnvironmentConfig::table_contact_radius)
+                       &gepetto_solvers::EnvironmentConfig::contact_plane_gap_hi)
+        .def_readwrite("plane_origin",        &gepetto_solvers::EnvironmentConfig::plane_origin)
+        .def_readwrite("plane_normal",        &gepetto_solvers::EnvironmentConfig::plane_normal)
+        .def_readwrite("plane_avoidance",     &gepetto_solvers::EnvironmentConfig::plane_avoidance)
+        .def_readwrite("table_contact_node",  &gepetto_solvers::EnvironmentConfig::table_contact_node)
+        .def_readwrite("table_contact_radius",&gepetto_solvers::EnvironmentConfig::table_contact_radius)
         // --- Section 1.8 phased controller ---
-        .def_readwrite("support_contact_node",   &crest_sparse::EnvironmentConfig::support_contact_node)
-        .def_readwrite("support_contact_radius", &crest_sparse::EnvironmentConfig::support_contact_radius)
-        .def_readwrite("half_space_enabled",     &crest_sparse::EnvironmentConfig::half_space_enabled)
-        .def_readwrite("half_space_node",        &crest_sparse::EnvironmentConfig::half_space_node)
-        .def_readwrite("half_space_split_point", &crest_sparse::EnvironmentConfig::half_space_split_point)
-        .def_readwrite("half_space_normal",      &crest_sparse::EnvironmentConfig::half_space_normal)
-        .def_readwrite("half_space_margin",      &crest_sparse::EnvironmentConfig::half_space_margin)
+        .def_readwrite("support_contact_node",   &gepetto_solvers::EnvironmentConfig::support_contact_node)
+        .def_readwrite("support_contact_radius", &gepetto_solvers::EnvironmentConfig::support_contact_radius)
+        .def_readwrite("half_space_enabled",     &gepetto_solvers::EnvironmentConfig::half_space_enabled)
+        .def_readwrite("half_space_node",        &gepetto_solvers::EnvironmentConfig::half_space_node)
+        .def_readwrite("half_space_split_point", &gepetto_solvers::EnvironmentConfig::half_space_split_point)
+        .def_readwrite("half_space_normal",      &gepetto_solvers::EnvironmentConfig::half_space_normal)
+        .def_readwrite("half_space_margin",      &gepetto_solvers::EnvironmentConfig::half_space_margin)
         .def_readwrite("object_contact_center_direct",
-                       &crest_sparse::EnvironmentConfig::object_contact_center_direct)
+                       &gepetto_solvers::EnvironmentConfig::object_contact_center_direct)
         .def_readwrite("contact_drop_normal_row",
-                       &crest_sparse::EnvironmentConfig::contact_drop_normal_row)
-        .def_readwrite("witness_target",     &crest_sparse::EnvironmentConfig::witness_target)
-        .def_readwrite("witness_target_cov", &crest_sparse::EnvironmentConfig::witness_target_cov)
+                       &gepetto_solvers::EnvironmentConfig::contact_drop_normal_row)
+        .def_readwrite("witness_target",     &gepetto_solvers::EnvironmentConfig::witness_target)
+        .def_readwrite("witness_target_cov", &gepetto_solvers::EnvironmentConfig::witness_target_cov)
         // --- Pre-grasp hand-centering (Section 2.2.1, Eq 2.18-2.19) ---
         .def_readwrite("pregrasp_center_node",
-                       &crest_sparse::EnvironmentConfig::pregrasp_center_node)
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_center_node)
         .def_readwrite("pregrasp_clearance_height",
-                       &crest_sparse::EnvironmentConfig::pregrasp_clearance_height)
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_clearance_height)
         .def_readwrite("pregrasp_clearance_normal",
-                       &crest_sparse::EnvironmentConfig::pregrasp_clearance_normal)
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_clearance_normal)
         // --- Pre-grasp short-axis alignment ---
         .def_readwrite("pregrasp_align_node",
-                       &crest_sparse::EnvironmentConfig::pregrasp_align_node)
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_align_node)
         .def_readwrite("pregrasp_align_axis",
-                       &crest_sparse::EnvironmentConfig::pregrasp_align_axis)
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_align_axis)
         // --- Pre-grasp pinch-centroid centering (hardcoded hand-frame point) ---
         .def_readwrite("pregrasp_centroid_point",
-                       &crest_sparse::EnvironmentConfig::pregrasp_centroid_point)
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_centroid_point)
         .def_readwrite("pregrasp_centroid_clearance",
-                       &crest_sparse::EnvironmentConfig::pregrasp_centroid_clearance)
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_centroid_clearance)
         .def_readwrite("pregrasp_centroid_normal",
-                       &crest_sparse::EnvironmentConfig::pregrasp_centroid_normal)
-        .def("load_sdf", [](crest_sparse::EnvironmentConfig& self, const std::string& path) {
+                       &gepetto_solvers::EnvironmentConfig::pregrasp_centroid_normal)
+        .def("load_sdf", [](gepetto_solvers::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);
             f.open();
@@ -217,11 +217,11 @@ void bind_tendon_finger(py::module& m) {
     m.def("ellipsoid_set_planar_gap",
         [](const gtsam::Matrix4& tip_pose, const gtsam::Matrix4& object_pose,
            const gtsam::Matrix4& wrist_pose, double radius,
-           const std::vector<crest_sparse::EllipsoidPrimitive>& ellipsoids,
+           const std::vector<gepetto_solvers::EllipsoidPrimitive>& ellipsoids,
            double beta, const gtsam::Vector3& base_local,
            const gtsam::Vector3& centroid_local,
            double rho_lo, double rho_hi, double gap_lo, double gap_hi) {
-            crest_sparse::EllipsoidSetPlanarGapFactor factor(
+            gepetto_solvers::EllipsoidSetPlanarGapFactor factor(
                 0, 1, 2, radius, ellipsoids, beta, base_local, centroid_local,
                 gtsam::noiseModel::Isotropic::Sigma(1, 1.0),
                 rho_lo, rho_hi, gap_lo, gap_hi);

@@ -30,28 +30,12 @@ from typing import Any
 
 import numpy as np
 
-# Running `python scripts/capture_baseline.py` puts scripts/ on sys.path, not the repo
-# root, so the pre-refactor `python.tests.*` namespace package is not importable
-# without this. Harmless afterwards, when the import resolves to the installed package.
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
-
-# Import path indirection: this script must keep working across the package rename
-# and the three-tier move. Everything it needs comes through these two names.
-try:  # post-refactor layout
-    from gepetto_solvers.core.solvers import (  # type: ignore[import-not-found]
-        HandFKSolver,
-        HandIKSolver,
-        HandPlannerSolver,
-        HandSolveParams,
-    )
-except ImportError:  # current layout
-    from python.tests.tendon_hand.solvers import (
-        HandFKSolver,
-        HandIKSolver,
-        HandPlannerSolver,
-        HandSolveParams,
-    )
-
+from gepetto_solvers.core.solvers import (
+    HandFKSolver,
+    HandIKSolver,
+    HandPlannerSolver,
+    HandSolveParams,
+)
 
 # Numbers below this move in the last bits of a double under any reordering of
 # floating-point work, which a refactor can cause without changing behavior.

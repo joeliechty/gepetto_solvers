@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace crest_sparse {
+namespace gepetto_solvers {
 
 // Frisvad/Hughes-Moller Householder basis: maps +Z onto the unit normal n and
 // returns the two orthonormal tangent vectors spanning n's tangent plane. This
@@ -2215,4 +2215,4 @@ public:
     }
 };
 
-} // namespace crest_sparse
+} // namespace gepetto_solvers
