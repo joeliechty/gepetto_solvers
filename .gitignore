@@ -21,6 +21,12 @@ venv/
 *.whl
 *.cache/
 
+# Tooling caches. pytest and ruff each drop a self-ignoring .gitignore inside
+# their cache dir, but that is tool-version-dependent; name them here too.
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 # Video generation stuff
 *.mp4
 *.png

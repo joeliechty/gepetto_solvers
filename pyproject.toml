@@ -17,5 +17,61 @@ version = "0.0.1"
 # and tests/_plotting/viser_hand.py). Install with: pip install -e ".[viz]".
 # Kept optional so core solver installs stay lean; the demo scripts' PyVista viewers
 # are installed the same ad hoc way into the crest_py11 env.
+#
+# NOTE: runtime dependencies still live in requirements.txt; consolidating them here
+# is a later step, because conda_setup_py11_mac.sh deliberately replaces pip's
+# numpy/scipy wheels with conda's openblas build *after* installing requirements.
 [project.optional-dependencies]
 viz = ["viser", "trimesh"]
+dev = ["pytest", "ruff", "mypy"]
+
+
+# ---------------------------------------------------------------------------
+# Test suite
+# ---------------------------------------------------------------------------
+# Two tiers, split by the `slow` marker:
+#   pytest -m "not slow"   pure-function unit tests, no solver -- seconds
+#   pytest -m slow         golden solves + the viz smoke modes -- minutes
+# The default run includes both; CI and the edit/check loop use the fast tier.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: invokes the C++ solver or a full viz smoke run (seconds to minutes)",
+]
+# Committed tests must not need the baked .vdb SDF grids: they are 54 MB, gitignored,
+# and regenerating them needs conda-only pyopenvdb. Solve tests use the analytic
+# ellipsoid primitives instead. See tests/README.md.
+filterwarnings = ["ignore::DeprecationWarning"]
+
+
+# ---------------------------------------------------------------------------
+# Lint / format
+# ---------------------------------------------------------------------------
+# line-length 88 matches how this codebase is already written: p95 is 81 columns
+# and only ~100 of ~17k lines exceed 88.
+[tool.ruff]
+line-length = 88
+extend-exclude = ["build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "N"]
+# pep8-naming is selected for the checks that catch real mistakes (N818 on exception
+# names, N805 on a mistyped `self`) but the case rules are switched off deliberately:
+# this codebase names variables after the paper's notation, and those names are
+# single capitals on purpose. `T` is an SE(3) pose, `R` a rotation, `K` the stiffness,
+# `H` the Hessian; `T`/`S`/`F`/`D`/`Q`/`L`/`W`/`O`/`Y`/`U` are also the literal GTSAM
+# key symbols the graph is built from (see the state-vector table in the tendon-hand
+# architecture doc). Renaming `euler_to_R` to `euler_to_r`, or `Rz` to `rz`, would
+# break the correspondence between the code and the equations it implements, which is
+# the single thing making this system readable. 188 findings, all of this kind.
+ignore = ["N802", "N803", "N806", "N816"]
+
+[tool.ruff.lint.isort]
+# `_pkg` is the test suite's own import-indirection module (tests/_pkg.py), and
+# `crest_sparse` is this project's extension -- both are first-party, not vendor code.
+known-first-party = ["_pkg", "crest_sparse", "gepetto_solvers"]
+
+[tool.ruff.lint.per-file-ignores]
+# The extension re-export is a deliberate star-import: it is how the C++ symbols
+# reach `import crest_sparse`.
+"python/crest_sparse/__init__.py" = ["F403", "F405"]
