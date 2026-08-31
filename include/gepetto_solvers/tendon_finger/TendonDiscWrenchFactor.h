@@ -3,7 +3,7 @@
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
 
-#include "tendon_finger/TendonFingerModel.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerModel.h"
 
 #include <array>
 #include <optional>

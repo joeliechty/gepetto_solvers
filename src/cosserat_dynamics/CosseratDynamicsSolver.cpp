@@ -1,4 +1,4 @@
-#include "CosseratDynamicsSolver.h"
+#include "gepetto_solvers/cosserat_dynamics/CosseratDynamicsSolver.h"
 
 #include <gtsam/base/Vector.h>
 #include <gtsam/nonlinear/DoglegOptimizer.h>
@@ -7,9 +7,9 @@
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/linear/NoiseModel.h>
 
-#include "cosserat_dynamics/CosseratDynamicsFactor.h"
-#include "cosserat_rod/CosseratRodModel.h"
-#include "utils/SolverBase.h"
+#include "gepetto_solvers/cosserat_dynamics/CosseratDynamicsFactor.h"
+#include "gepetto_solvers/cosserat_rod/CosseratRodModel.h"
+#include "gepetto_solvers/utils/SolverBase.h"
 
 using namespace gtsam;
 

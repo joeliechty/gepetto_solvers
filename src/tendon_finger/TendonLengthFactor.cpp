@@ -1,4 +1,4 @@
-#include "TendonLengthFactor.h"
+#include "gepetto_solvers/tendon_finger/TendonLengthFactor.h"
 
 using namespace gtsam;
 

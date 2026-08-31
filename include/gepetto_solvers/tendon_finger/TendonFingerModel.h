@@ -4,8 +4,8 @@
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/base/Matrix.h>
 
-#include "cosserat_rod/CosseratRodModel.h"
-#include "utils/Gaussians.h"
+#include "gepetto_solvers/cosserat_rod/CosseratRodModel.h"
+#include "gepetto_solvers/utils/Gaussians.h"
 
 #include <cmath>
 #include <functional>

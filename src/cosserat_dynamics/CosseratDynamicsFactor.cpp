@@ -1,11 +1,11 @@
-#include "CosseratDynamicsFactor.h"
+#include "gepetto_solvers/cosserat_dynamics/CosseratDynamicsFactor.h"
 
 #include <gtsam/base/Lie.h>
 #include <gtsam/base/Vector.h>
 #include <gtsam/base/numericalDerivative.h>
 #include <gtsam/geometry/Pose3.h>
 
-#include "utils/WrenchTransforms.h"
+#include "gepetto_solvers/utils/WrenchTransforms.h"
 
 using namespace gtsam;
 

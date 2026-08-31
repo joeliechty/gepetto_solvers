@@ -2,8 +2,8 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include "CosseratRodModel.h"
-#include "utils/SolverBase.h"
+#include "gepetto_solvers/cosserat_rod/CosseratRodModel.h"
+#include "gepetto_solvers/utils/SolverBase.h"
 
 namespace py = pybind11;
 

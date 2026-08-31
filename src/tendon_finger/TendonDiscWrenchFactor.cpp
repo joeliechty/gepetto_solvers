@@ -1,8 +1,8 @@
-#include "TendonDiscWrenchFactor.h"
+#include "gepetto_solvers/tendon_finger/TendonDiscWrenchFactor.h"
 
 #include <gtsam/base/Matrix.h>
 
-#include "utils/WrenchTransforms.h"
+#include "gepetto_solvers/utils/WrenchTransforms.h"
 
 
 using namespace gtsam;

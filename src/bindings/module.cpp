@@ -1,7 +1,7 @@
 #include "bindings.h"
 
-#include "utils/SolverBase.h"
-#include "utils/Gaussians.h"
+#include "gepetto_solvers/utils/SolverBase.h"
+#include "gepetto_solvers/utils/Gaussians.h"
 
 namespace py = pybind11;
 

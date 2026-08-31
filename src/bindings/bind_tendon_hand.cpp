@@ -2,9 +2,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include "TendonHandModel.h"
-#include "TendonHandSolver.h"
-#include "TendonHandTrajectoryPlanner.h"
+#include "gepetto_solvers/tendon_hand/TendonHandModel.h"
+#include "gepetto_solvers/tendon_hand/TendonHandSolver.h"
+#include "gepetto_solvers/tendon_hand/TendonHandTrajectoryPlanner.h"
 
 namespace py = pybind11;
 

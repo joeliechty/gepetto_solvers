@@ -1,5 +1,5 @@
-#include "TendonFingerModel.h"
-#include "cosserat_rod/CosseratRodModel.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerModel.h"
+#include "gepetto_solvers/cosserat_rod/CosseratRodModel.h"
 
 #include <gtsam/base/Vector.h>
 #include <gtsam/geometry/Pose3.h>
@@ -7,9 +7,9 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <memory>
 
-#include "TendonDiscWrenchFactor.h"
-#include "TendonLengthFactor.h"
-#include "utils/Gaussians.h"
+#include "gepetto_solvers/tendon_finger/TendonDiscWrenchFactor.h"
+#include "gepetto_solvers/tendon_finger/TendonLengthFactor.h"
+#include "gepetto_solvers/utils/Gaussians.h"
 
 using namespace gtsam;
 

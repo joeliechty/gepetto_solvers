@@ -1,9 +1,9 @@
 #pragma once
 
-#include "tendon_finger/TendonFingerModel.h"
-#include "tendon_finger/TendonFingerSolver.h"   // TendonFingerSolverConfig, SpherePrimitiveContactConfig
-#include "utils/EnvironmentFactors.h"            // gepetto_solvers::EnvironmentConfig
-#include "utils/Gaussians.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerModel.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerSolver.h"   // TendonFingerSolverConfig, SpherePrimitiveContactConfig
+#include "gepetto_solvers/utils/EnvironmentFactors.h"            // gepetto_solvers::EnvironmentConfig
+#include "gepetto_solvers/utils/Gaussians.h"
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/inference/Symbol.h>

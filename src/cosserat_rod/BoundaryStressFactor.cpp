@@ -1,6 +1,6 @@
-#include "BoundaryStressFactor.h"
+#include "gepetto_solvers/cosserat_rod/BoundaryStressFactor.h"
 
-#include "utils/WrenchTransforms.h"
+#include "gepetto_solvers/utils/WrenchTransforms.h"
 
 using namespace gtsam;
 

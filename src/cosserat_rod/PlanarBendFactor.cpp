@@ -1,4 +1,4 @@
-#include "PlanarBendFactor.h"
+#include "gepetto_solvers/cosserat_rod/PlanarBendFactor.h"
 
 #include <gtsam/base/Matrix.h>
 #include <stdexcept>

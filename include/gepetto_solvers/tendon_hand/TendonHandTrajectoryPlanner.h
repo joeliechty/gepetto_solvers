@@ -1,9 +1,9 @@
 #pragma once
 
-#include "tendon_hand/TendonHandModel.h"
-#include "tendon_finger/TendonFingerSolver.h"   // TendonFingerSolverConfig
-#include "utils/Gaussians.h"
-#include "utils/SolverBase.h"
+#include "gepetto_solvers/tendon_hand/TendonHandModel.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerSolver.h"   // TendonFingerSolverConfig
+#include "gepetto_solvers/utils/Gaussians.h"
+#include "gepetto_solvers/utils/SolverBase.h"
 
 #include <gtsam/base/Matrix.h>
 #include <gtsam/base/Vector.h>

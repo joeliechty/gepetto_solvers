@@ -9,7 +9,7 @@
 #include <functional>
 #include <optional>
 
-#include "utils/Gaussians.h"
+#include "gepetto_solvers/utils/Gaussians.h"
 
 
 struct CosseratRodState {

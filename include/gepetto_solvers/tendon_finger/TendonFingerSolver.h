@@ -1,9 +1,9 @@
 #pragma once
 
-#include "utils/Gaussians.h"
-#include "utils/SolverBase.h"
-#include "utils/EnvironmentFactors.h"
-#include "TendonFingerModel.h"
+#include "gepetto_solvers/utils/Gaussians.h"
+#include "gepetto_solvers/utils/SolverBase.h"
+#include "gepetto_solvers/utils/EnvironmentFactors.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerModel.h"
 #include <gtsam/geometry/Point3.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "utils/WarmAugmentedLagrangian.h"
+#include "gepetto_solvers/utils/WarmAugmentedLagrangian.h"
 
 #include <gtsam/nonlinear/DoglegOptimizer.h>
 #include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>

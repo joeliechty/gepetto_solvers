@@ -1,4 +1,4 @@
-#include "CosseratTwistFactor.h"
+#include "gepetto_solvers/cosserat_rod/CosseratTwistFactor.h"
 #include <gtsam/base/Matrix.h>
 
 using namespace gtsam;

@@ -1,7 +1,7 @@
-#include "TendonHandTrajectoryPlanner.h"
+#include "gepetto_solvers/tendon_hand/TendonHandTrajectoryPlanner.h"
 
-#include "measurement/PositionPriorFactor.h"
-#include "utils/MiscInline.h"
+#include "gepetto_solvers/measurement/PositionPriorFactor.h"
+#include "gepetto_solvers/utils/MiscInline.h"
 
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/linear/NoiseModel.h>

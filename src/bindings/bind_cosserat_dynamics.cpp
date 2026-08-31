@@ -2,7 +2,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include "CosseratDynamicsSolver.h"
+#include "gepetto_solvers/cosserat_dynamics/CosseratDynamicsSolver.h"
 
 namespace py = pybind11;
 

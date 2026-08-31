@@ -1,7 +1,7 @@
 #pragma once
 
-#include "utils/SolverBase.h"
-#include "cosserat_rod/CosseratRodModel.h"
+#include "gepetto_solvers/utils/SolverBase.h"
+#include "gepetto_solvers/cosserat_rod/CosseratRodModel.h"
 #include <gtsam/linear/NoiseModel.h>
 
 

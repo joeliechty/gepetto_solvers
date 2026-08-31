@@ -1,6 +1,6 @@
-#include "SolverBase.h"
+#include "gepetto_solvers/utils/SolverBase.h"
 
-#include "utils/WarmAugmentedLagrangian.h"
+#include "gepetto_solvers/utils/WarmAugmentedLagrangian.h"
 
 #include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/linear/HessianFactor.h>

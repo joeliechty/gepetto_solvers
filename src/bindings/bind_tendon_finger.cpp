@@ -2,9 +2,9 @@
 #include <pybind11/stl.h>
 #include <pybind11/eigen.h>
 
-#include "TendonFingerModel.h"
-#include "TendonFingerSolver.h"
-#include "utils/EnvironmentFactors.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerModel.h"
+#include "gepetto_solvers/tendon_finger/TendonFingerSolver.h"
+#include "gepetto_solvers/utils/EnvironmentFactors.h"
 
 #include <openvdb/openvdb.h>
 #include <openvdb/io/File.h>
