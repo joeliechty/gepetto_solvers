@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import json
 import tarfile
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
 
 import numpy as np
 import requests

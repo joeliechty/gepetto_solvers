@@ -10,7 +10,6 @@ specific when changed.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 import numpy as np
 
@@ -36,13 +35,13 @@ class HandSolveParams:
     # ~55 mm shell; half-buried the exposed dome is 35 mm, which is both
     # reachable and the low-profile-object case Section 1.8 is about.
     primitive: str = "mid_sphere_ellipsoid"
-    object_center: Optional[np.ndarray] = None      # None => derive from primitive
-    object_rotation: Optional[np.ndarray] = None     # None => primitive's rotation
+    object_center: np.ndarray | None = None      # None => derive from primitive
+    object_rotation: np.ndarray | None = None     # None => primitive's rotation
     # LogSumExp sharpness for an `ellipsoid_set` (ycb:) object; None keeps the
     # spec's own value. Only the smooth-min standoff moves with it -- the
     # constraint surface sits up to ln(K)/beta outside the true union. Inert for
     # every other primitive type.
-    ellipsoid_set_beta: Optional[float] = None
+    ellipsoid_set_beta: float | None = None
     # Send the fingertips only to the shells a `ycb:` fit names as grasp targets
     # (its `grasp_subset`), rather than to the nearest point of the whole union.
     # A decomposition is not all handles: on the power drill 5 of 6 shells are
@@ -105,7 +104,7 @@ class HandSolveParams:
 
     # --- Tensions (per-finger flexor + shared passive background) ---
     passive_tension: float = 0.5
-    flexor_tensions: List[float] = field(
+    flexor_tensions: list[float] = field(
         default_factory=lambda: [GRASP_FLEXOR_TENSION] * NUM_FINGERS)
     tip_wrench_sigma: float = 1e-3
     # How loose the ACTUATED (flexor) tendon's tension prior is once contact
@@ -129,7 +128,7 @@ class HandSolveParams:
     # avoidance is active) off the table. All-True is the legacy behavior.
     # WHICH surfaces the True fingers are driven onto is object_contact /
     # table_contact below.
-    contact_fingers: List[bool] = field(
+    contact_fingers: list[bool] = field(
         default_factory=lambda: [True] * NUM_FINGERS)
 
     # --- WHICH SURFACE those fingers are driven onto (IK / planner) ---
@@ -213,7 +212,7 @@ class HandSolveParams:
     # from where the solve got to, since a new constraint set needs a new solver
     # and a new solver otherwise cold-starts. Needs a binding with
     # ``TendonHandSolverConfig.initial_state`` (capabilities()["solver_seed"]).
-    initial_state: Optional[object] = None
+    initial_state: object | None = None
 
     # The other half of a warm start: the Augmented Lagrangian multipliers and
     # penalty weight of a previous solve (``HandResult.duals``), matched onto
@@ -223,7 +222,7 @@ class HandSolveParams:
     # the rebuilt solve restarts at mu = al_mu with every multiplier at zero and
     # visibly drifts off the constraints it had already satisfied before being
     # dragged back. Needs capabilities()["dual_transfer"].
-    initial_duals: Optional[object] = None
+    initial_duals: object | None = None
 
     # Ceiling on the penalty weight a transfer may carry in. mu is global, so a
     # rebuilt problem inherits it for constraints it has never seen: too high and
@@ -254,11 +253,11 @@ class HandSolveParams:
     collision_radius: float = 0.003
     collision_sigma: float = 1e-4
     num_proximal_discs: int = 2
-    cull_margin: Optional[float] = None
+    cull_margin: float | None = None
 
     # --- Support plane / "table" (Section 1.6, opt-in; IK / planner) ---
     table: bool = False
-    plane_origin: Optional[np.ndarray] = None       # None => seat from the scene
+    plane_origin: np.ndarray | None = None       # None => seat from the scene
     plane_normal: np.ndarray = field(
         default_factory=lambda: np.array(TABLE_NORMAL, float))
     # Signed height of the CONSTRAINT plane above the table surface, along
@@ -274,7 +273,7 @@ class HandSolveParams:
     # only `table`, not `collision` -- the solvers attach the collision sphere set
     # whenever any of the three avoidance consumers wants it.
     plane_avoidance: bool = True
-    k_touch: Optional[int] = None                    # planner slide-grasp schedule
+    k_touch: int | None = None                    # planner slide-grasp schedule
     # Fraction of the object's FULL along-normal extent sitting BELOW the plane.
     # 0.0 = tangent to the underside, i.e. the object rests on the table (the
     # Section 1.6 slide-and-grasp geometry); 0.5 = plane through the centroid,
@@ -389,8 +388,8 @@ class HandSolveParams:
     # every existing caller of HandSolveParams() that never touches this
     # field).
     half_space: bool = False
-    half_space_split: Optional[np.ndarray] = None
-    half_space_axis: Optional[np.ndarray] = None
+    half_space_split: np.ndarray | None = None
+    half_space_axis: np.ndarray | None = None
     # Which SIDE of the split the thumb is asked to stay on. The derived axis
     # only fixes the split LINE; its sign is an arbitrary object-frame
     # convention, and getting it backwards asks the thumb and fingers to trade
@@ -398,7 +397,7 @@ class HandSolveParams:
     # None (default) = orient by the hand's current posture, False = keep the
     # derived sign, True = invert it. Ignored when half_space_axis is given
     # explicitly, which is taken as already oriented.
-    half_space_flip: Optional[bool] = None
+    half_space_flip: bool | None = None
     # Minimum standoff (m) each contact finger must keep from the splitting
     # line, along its own m_hat: HalfSpaceGapFactor's d_min, so the constraint
     # is -(c - p_split) . m_hat + half_space_margin <= 0. 0.0 (the default) is
@@ -411,7 +410,7 @@ class HandSolveParams:
     half_space_margin: float = 0.0
     # Optional per-finger phase-3 witness targets (Eq 1.111); None entries mean
     # "contact anywhere on the surface" for that finger.
-    witness_targets: Optional[List[Optional[np.ndarray]]] = None
+    witness_targets: list[np.ndarray | None] | None = None
     # A control tick's AL budget: outer iterations per tick. Small on purpose,
     # because with ctrl_al_warm_duals below the outer loop genuinely IS amortized
     # across ticks -- mu and the multipliers pick up where the last tick left off,
@@ -468,7 +467,7 @@ class HandSolveParams:
     # --- Phase 0: pre-grasp positioning (Section 1.8, Eq 1.92-1.98) ---
     # Explicit 4x4 target T_base,pre. None => derive it from the hand's own
     # forward kinematics via :func:`pregrasp_wrist_pose`.
-    pregrasp_wrist_pose: Optional[np.ndarray] = None
+    pregrasp_wrist_pose: np.ndarray | None = None
     # Hover height of the CONTACT-SPHERE CENTROID above the object centroid along
     # the support normal. None => object_extent_along(spec, n_hat) +
     # pregrasp_margin, i.e. scaled to the object rather than an absolute number
@@ -480,7 +479,7 @@ class HandSolveParams:
     # clearance offset along the support normal. None there falls back to a
     # flat 0.02 m rather than the object_extent_along derivation above (that
     # helper belonged to the deleted §1.8 phase-0 code).
-    h_clear: Optional[float] = None
+    h_clear: float | None = None
     pregrasp_margin: float = 0.04
     # Eq 1.92: Q_pre = [c]*5 + [c + pregrasp_flexor_offset], the "slightly curled"
     # pre-grasp posture. pregrasp_flexor_absolute overrides the offset form.
@@ -488,7 +487,7 @@ class HandSolveParams:
     # GRASP_FLEXOR_TENSION (0.6), so phase 1 extends the fingers to reach the
     # table rather than curling further.
     pregrasp_flexor_offset: float = 0.25
-    pregrasp_flexor_absolute: Optional[float] = None
+    pregrasp_flexor_absolute: float | None = None
     # Per-tick cap on how far the phase-0 TARGET may advance toward T_base,pre
     # (m and rad). This -- not the sigma ratio -- is the real rate limiter, and
     # it is what makes phase 0 work at all.

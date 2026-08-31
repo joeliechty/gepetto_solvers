@@ -36,7 +36,10 @@ def get_K_inv(lateral_stiffness_scale=1.0, torsion_stiffness_scale=1.0):
     youngs_modulus = 40.0e9
     shear_modulus = 15.0e9
 
-    I = (np.pi * rod_diameter**4) / 64.0
+    # noqa: E741 -- `I` is the second moment of area and `J` below is the polar
+    # moment. Standard beam-theory notation; renaming them breaks the link to
+    # the formulae these lines implement.
+    I = (np.pi * rod_diameter**4) / 64.0  # noqa: E741
     J = 2 * I
     A = (np.pi * rod_diameter**2) / 4.0
 
@@ -115,7 +118,7 @@ def build_K_inv_per_segment(num_discs, num_between_nodes, segment_types, K_inv_j
     # Segments per inter-disc gap = num_between_nodes + 1
     segs_per_gap = num_between_nodes + 1
 
-    for gap_idx, seg_type in enumerate(segment_types):
+    for _gap_idx, seg_type in enumerate(segment_types):
         K = K_inv_bone if seg_type == "bone" else K_inv_joint
         for _ in range(segs_per_gap):
             K_inv_list.append(K.copy())

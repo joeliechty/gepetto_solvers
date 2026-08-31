@@ -6,7 +6,6 @@ they build and which constraints they switch on.
 """
 
 import os
-from typing import Optional
 
 import numpy as np
 
@@ -46,7 +45,7 @@ class HandSolverBase:
     ``gepetto_core`` dims and holds the resolved scene. Subclasses implement
     :meth:`solve`."""
 
-    def __init__(self, params: Optional[HandSolveParams] = None):
+    def __init__(self, params: HandSolveParams | None = None):
         self.params = params or HandSolveParams()
         self.dims = load_hand_dimensions()
         self.configs = get_default_hand_configs(self.dims)

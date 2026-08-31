@@ -34,10 +34,14 @@ import itertools
 
 import numpy as np
 
-from gepetto_solvers.core.hand.config import default_hand_tip_radii
-from gepetto_solvers.core.solvers import (HandFKSolver, HandSolveParams, solved_wrist_pose,
-                      tip_gap_matrix)
 from gepetto_solvers.core.diagnostics import PlannerLogger
+from gepetto_solvers.core.hand.config import default_hand_tip_radii
+from gepetto_solvers.core.solvers import (
+    HandFKSolver,
+    HandSolveParams,
+    solved_wrist_pose,
+    tip_gap_matrix,
+)
 
 FINGER_NAMES = ["index", "middle", "ring", "pinky", "thumb"]
 THUMB = "thumb"

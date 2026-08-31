@@ -24,26 +24,39 @@ Run (from the ``python/`` directory):
     python scripts/traj_5f_contact.py big_sphere -SF
 """
 
-import os
 import argparse
+import os
 import time
 
 import numpy as np
 
 import gepetto_solvers
-
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
-    tip_node_index)
+from gepetto_solvers.core.diagnostics import (
+    FingerTraj,
+    PlannerLogger,
+    log_planner_parameters,
+)
 from gepetto_solvers.core.geometry.scene import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
-    configure_object_surface, GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER,
-    TENDON_NAMES)
-from gepetto_solvers.core.diagnostics import FingerTraj
-from gepetto_solvers.core.plotting.trajectory_plotter import plot_trajectory, plot_hand_wrist_trajectory
+    GRASP_FLEXOR_TENSION,
+    GRASP_SPHERE_CENTER,
+    OBJECT_CENTER,
+    TENDON_NAMES,
+    configure_object_surface,
+    get_primitive_specs,
+    primitive_surface_gap,
+)
+from gepetto_solvers.core.hand.config import (
+    default_hand_tip_radii,
+    get_default_hand_configs,
+    load_hand_dimensions,
+    tip_node_index,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
 from gepetto_solvers.core.plotting.al_convergence_plotter import plot_al_convergence
-from gepetto_solvers.core.diagnostics import PlannerLogger, log_planner_parameters
+from gepetto_solvers.core.plotting.trajectory_plotter import (
+    plot_hand_wrist_trajectory,
+    plot_trajectory,
+)
 
 
 def experiment_label(args):

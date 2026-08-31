@@ -5,7 +5,6 @@ import vtk
 from . import utils
 from .cosserat_rod_plotter import CosseratRodMeshManager
 
-
 TENDON_COLORS = [
     "crimson", "forestgreen", "royalblue", "mediumorchid", "goldenrod",
     "deeppink", "darkorange", "teal", "sienna", "slategray",

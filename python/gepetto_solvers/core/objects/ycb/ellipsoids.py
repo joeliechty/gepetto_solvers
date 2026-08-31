@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import functools
 import json
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal, Sequence
+from typing import Literal
 
 import numpy as np
 import trimesh
@@ -101,7 +102,7 @@ class Ellipsoid:
         sphere.apply_transform(self.transform())
         return sphere
 
-    def translated(self, offset: np.ndarray) -> "Ellipsoid":
+    def translated(self, offset: np.ndarray) -> Ellipsoid:
         return Ellipsoid(self.center + np.asarray(offset, float), self.radii, self.rotation)
 
     def to_dict(self) -> dict:
@@ -114,7 +115,7 @@ class Ellipsoid:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Ellipsoid":
+    def from_dict(cls, data: dict) -> Ellipsoid:
         return cls(
             np.asarray(data["center"], float),
             np.asarray(data["radii"], float),
@@ -529,7 +530,7 @@ class EllipsoidFit:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "EllipsoidFit":
+    def from_dict(cls, data: dict) -> EllipsoidFit:
         metrics = FitMetrics(**data["metrics"])
         return cls(
             [Ellipsoid.from_dict(e) for e in data["ellipsoids"]],

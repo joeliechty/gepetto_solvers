@@ -61,17 +61,35 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from gepetto_solvers.core.hand.config import disc_node_indices, proximal_disc_flags, tip_node_index
-from gepetto_solvers.experimental.traces.debug_al_trace import (_arr as trace_array, classify, print_inner_tail,
-                             print_outer_trace)
-from gepetto_solvers.core.geometry.scene import (GRASP_FLEXOR_TENSION, TABLE_NORMAL, get_primitive_specs,
-                    primitive_surface_gap)
-from gepetto_solvers.core.solvers import (DEFAULT_WRIST_RPY, DEFAULT_WRIST_XYZ, NUM_FINGERS,
-                      HandIKStepper, HandSolveParams, capabilities,
-                      free_sphere_plane_witness, plane_witness,
-                      resolve_constraint_plane_origin, wrist_pose_from_xyzrpy)
 from gepetto_solvers.core.diagnostics import PlannerLogger, log_planner_parameters
-
+from gepetto_solvers.core.geometry.scene import (
+    GRASP_FLEXOR_TENSION,
+    TABLE_NORMAL,
+    get_primitive_specs,
+    primitive_surface_gap,
+)
+from gepetto_solvers.core.hand.config import (
+    disc_node_indices,
+    proximal_disc_flags,
+    tip_node_index,
+)
+from gepetto_solvers.core.solvers import (
+    DEFAULT_WRIST_RPY,
+    DEFAULT_WRIST_XYZ,
+    NUM_FINGERS,
+    HandIKStepper,
+    HandSolveParams,
+    capabilities,
+    free_sphere_plane_witness,
+    plane_witness,
+    resolve_constraint_plane_origin,
+    wrist_pose_from_xyzrpy,
+)
+from gepetto_solvers.experimental.traces.debug_al_trace import (
+    classify,
+    print_inner_tail,
+    print_outer_trace,
+)
 
 # Taken from HandSolveParams rather than named here: the mid analytic sphere is
 # both the params default and what the visualizer's object dropdown opens on, so

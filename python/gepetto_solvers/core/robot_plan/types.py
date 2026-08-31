@@ -5,7 +5,6 @@ the ROS side can import these without dragging in a solver.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 import numpy as np
 
@@ -26,7 +25,7 @@ class Waypoint:
     about.
     """
     wrist_pose: np.ndarray                  # 4x4, viser world frame
-    tendon_disp: Dict[str, float]           # solver finger name -> metres, + = flexing
+    tendon_disp: dict[str, float]           # solver finger name -> metres, + = flexing
     note: str = ""                          # the iterate's own status line, if any
 
 
@@ -37,7 +36,7 @@ class Sample:
     velocity the reference itself is moving at."""
     t: float                                # seconds from the start of playback
     wrist_pose: np.ndarray                  # 4x4, viser world frame
-    tendon_disp: Dict[str, float]           # metres, + = flexing
+    tendon_disp: dict[str, float]           # metres, + = flexing
     #: Feed-forward as a BODY twist [v(3) m/s, w(3) rad/s], in the wrist's own
     #: frame -- so it needs no rotation when the reference pose is mapped into the
     #: robot base frame. Zero once the path has ended. See :class:`PathSchedule`.
@@ -48,17 +47,17 @@ class Sample:
 @dataclass
 class SolvePlan:
     """A whole solve, ready to be registered against the robot and executed."""
-    waypoints: List[Waypoint]
+    waypoints: list[Waypoint]
     #: Position of the viser table square's minimum corner, in the viser world
     #: frame. Paired with the physical corner (``lbr_workspace_table_link``) this
     #: is the registration between the two worlds -- see the ROS-side bridge.
     corner_viz: np.ndarray
     #: Solver digit names carrying a displacement, in solver order.
-    finger_names: List[str]
+    finger_names: list[str]
     #: Per-finger hand-open reference length (m), the zero of every displacement.
-    open_lengths: Dict[str, float]
+    open_lengths: dict[str, float]
     #: Human-readable notes from the build (open-length cross-check, sign check).
-    notes: List[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     def duration_hint(self):
         """Waypoint count, for a status line. The real duration is not known
@@ -89,9 +88,9 @@ class PathSchedule:
     downstream: a body twist is expressed in the wrist's own frame, which is the
     same frame whether the plan is written in viser or robot-base coordinates.
     """
-    durations: List[float]              # per segment, seconds, whole periods
+    durations: list[float]              # per segment, seconds, whole periods
     edges: np.ndarray                   # segment start times, len = n_seg + 1
     total: float                        # seconds
     #: Per segment, the constant body twist [v(3) m/s, w(3) rad/s] whose flow for
     #: `durations[k]` carries waypoint k exactly onto waypoint k+1.
-    body_twist: List[np.ndarray]
+    body_twist: list[np.ndarray]

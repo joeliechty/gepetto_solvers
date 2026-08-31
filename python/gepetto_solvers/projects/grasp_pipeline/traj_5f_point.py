@@ -31,21 +31,27 @@ Run (from the ``python/`` directory):
     python scripts/traj_5f_point.py -SF
 """
 
-import os
 import argparse
+import os
 import time
 
 import numpy as np
 
 import gepetto_solvers
-
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
-    tip_node_index)
+from gepetto_solvers.core.diagnostics import (
+    FingerTraj,
+    PlannerLogger,
+    log_planner_parameters,
+)
 from gepetto_solvers.core.geometry.scene import GRASP_FLEXOR_TENSION, TENDON_NAMES
-from gepetto_solvers.core.diagnostics import FingerTraj
-from gepetto_solvers.core.plotting.trajectory_plotter import plot_trajectory, plot_hand_wrist_trajectory
-from gepetto_solvers.core.diagnostics import PlannerLogger, log_planner_parameters
+from gepetto_solvers.core.hand.config import (
+    get_default_hand_configs,
+    load_hand_dimensions,
+)
+from gepetto_solvers.core.plotting.trajectory_plotter import (
+    plot_hand_wrist_trajectory,
+    plot_trajectory,
+)
 
 # Per-finger world-frame tip-position goals (order = config order: index, middle,
 # ring, pinky, thumb). These are the fully-converged terminal fingertip positions
@@ -132,7 +138,6 @@ def _main(args, results_dir):
     #     No contact/SDF is attached: the terminal goal is a per-finger position. ---
     dims = load_hand_dimensions()
     configs = get_default_hand_configs(dims)
-    tip_radii = default_hand_tip_radii(dims)
     finger_names = [name for name, _ in configs]
 
     if len(configs) != len(GOAL_POSITIONS):

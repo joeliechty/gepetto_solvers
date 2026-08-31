@@ -22,7 +22,7 @@ def _taubin_gap(x, semi_axes):
     m_diag = 1.0 / (a * a)
     x = np.asarray(x, dtype=float)
     Mx = m_diag * x
-    g = np.linalg.norm(Mx)
+    g = float(np.linalg.norm(Mx))
     if g < 1e-9:
         g = 1e-9
     return float((x @ Mx - 1.0) / (2.0 * g))

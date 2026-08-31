@@ -29,8 +29,8 @@ The sequence, and why each step is what it is:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from . import ellipsoids as ye
 from .data import FITS_DIR, YcbCache, ground_and_center, ground_offset
@@ -54,10 +54,10 @@ def fit_object(
     source: str,
     *,
     backend: str = "gmm",
-    k: Optional[int] = None,
+    k: int | None = None,
     coverage: float = 0.98,
     k_max: int = DEFAULT_K_MAX,
-    max_texture: Optional[int] = DEFAULT_MAX_TEXTURE,
+    max_texture: int | None = DEFAULT_MAX_TEXTURE,
     export_dir: Path = FITS_DIR,
     use_cache: bool = True,
     progress: Callable[[float, str], None] = _noop,

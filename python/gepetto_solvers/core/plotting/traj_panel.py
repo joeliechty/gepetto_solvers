@@ -53,7 +53,8 @@ from .viser_hand import _FINGER_PLANE_RGB
 
 def _css(rgb):
     """An (r, g, b) 0-255 tuple as the CSS string uPlot wants."""
-    return "rgb(%d, %d, %d)" % tuple(int(c) for c in rgb)
+    r, g, b = (int(c) for c in rgb)
+    return f"rgb({r}, {g}, {b})"
 
 
 # The triad colours, so "x" on a plot is the same red as the x arrow in the

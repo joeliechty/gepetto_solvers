@@ -81,7 +81,7 @@ class RobotMixin:
             except Exception as exc:
                 standing_lines.append(f"**bridge unavailable:** `{exc}`")
             standing_lines.append(
-                (f"**ARMED** -- the next *Play* moves the arm and the hand"
+                ("**ARMED** -- the next *Play* moves the arm and the hand"
                  if self.g_armed.value else
                  "not armed -- tick *move the real robot* to allow one playback")
                 + f" &nbsp; {self._speed_note()}")

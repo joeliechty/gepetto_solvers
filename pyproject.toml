@@ -12,17 +12,44 @@ wheel.packages = ["python/gepetto_solvers"]
 [project]
 name = "gepetto_solvers"
 version = "0.0.1"
+requires-python = ">=3.10"
 
-# Optional extras for the interactive visualizer (tests/tendon_hand/viz_interactive.py
-# and tests/_plotting/viser_hand.py). Install with: pip install -e ".[viz]".
-# Kept optional so core solver installs stay lean; the demo scripts' PyVista viewers
-# are installed the same ad hoc way into the crest_py11 env.
+# Solving needs nothing but numpy and scipy. Everything that draws, fetches or
+# fits an object is an extra, so a headless solver install stays lean.
 #
-# NOTE: runtime dependencies still live in requirements.txt; consolidating them here
-# is a later step, because conda_setup_py11_mac.sh deliberately replaces pip's
-# numpy/scipy wheels with conda's openblas build *after* installing requirements.
+# GTSAM, OpenVDB and pybind11 are NOT here and cannot be: they are C++ build
+# dependencies that the conda_setup_*.sh scripts install into $CONDA_PREFIX, and
+# GTSAM is a from-source build of a fork carrying our constrained-module fix.
+# CMakeLists.txt finds all three through the Python interpreter's prefix.
+#
+# numpy/scipy carry BOUNDS rather than the exact pins requirements.txt used to
+# have, and the difference is deliberate. The reason those pins existed is stated
+# in the file they came from: numpy >=2.3 and scipy >=1.16 dropped cp310, so the
+# py3.10 env needs the last releases that still ship those wheels -- a
+# compatibility ceiling, not a demand for one exact build. Expressing it as a
+# ceiling matters on macOS, where conda_setup_py11_mac.sh deliberately replaces
+# pip's Accelerate-linked numpy/scipy with conda's openblas build: an exact pin
+# would make every later `pip install -e .` drag the Accelerate wheel back in and
+# silently undo that fix. A bound is satisfied by whatever conda already put
+# there, so pip leaves it alone.
+dependencies = [
+    "numpy>=2.2.6,<2.3; python_version < '3.11'",
+    "numpy>=2.3.5; python_version >= '3.11'",
+    "scipy>=1.15.3,<1.16; python_version < '3.11'",
+    "scipy>=1.16.3; python_version >= '3.11'",
+]
+
+# `viz`  the PyVista render windows every demo script opens
+# `web`  the viser interactive workbench and its hand renderer
+# `ycb`  fetching and fitting YCB scans (scripts/objects/ycb_browser.py)
+# `dev`  the test suite and the linters
+#
+# 1.1.0 is the latest viser that still ships py3.10-compatible dependencies.
 [project.optional-dependencies]
-viz = ["viser", "trimesh"]
+viz = ["pyvista==0.46.4", "vtk==9.5.2", "matplotlib==3.10.7", "pillow"]
+web = ["viser==1.1.0", "trimesh"]
+ycb = ["trimesh", "scikit-learn", "coacd", "requests", "pillow"]
+onshape = ["requests"]
 dev = ["pytest", "ruff", "mypy"]
 
 
@@ -53,6 +80,24 @@ filterwarnings = ["ignore::DeprecationWarning"]
 line-length = 88
 extend-exclude = ["build"]
 
+# DELIBERATE DEVIATION from CLAUDE.md section 6, which asks for Ruff formatting as
+# well as linting: `ruff check` is enforced and clean, but `ruff format` is NOT run
+# over this tree and CI should not add it.
+#
+# Measured, it reflows 9921 lines across 94 files, and what it removes is meaning.
+# This codebase aligns things on purpose -- the six rows of the stiffness diagonal in
+# hand/finger_config.py carry column-aligned trailing comments so the matrix reads as
+# a table, and HandSolveParams' field comments line up the same way. The formatter
+# splits the first of those across three lines and unaligns the rest. It would also
+# bury the refactor in noise and point `git blame` at a single format commit for most
+# of the file.
+#
+# `E501` follows from that decision rather than being a separate one. 93 of the 100
+# violations are code, not prose, so the only way to clear them is to reflow exactly
+# the lines the formatter would have reflowed. Enforcing a width on code we have
+# deliberately chosen not to lay out mechanically would be incoherent, so line length
+# is advisory: `line-length` below still drives the formatter if anyone opts in, and
+# `E501` is not part of the gate.
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "N"]
 # pep8-naming is selected for the checks that catch real mistakes (N818 on exception
@@ -64,7 +109,15 @@ select = ["E", "F", "I", "UP", "B", "N"]
 # architecture doc). Renaming `euler_to_R` to `euler_to_r`, or `Rz` to `rz`, would
 # break the correspondence between the code and the equations it implements, which is
 # the single thing making this system readable. 188 findings, all of this kind.
-ignore = ["N802", "N803", "N806", "N816"]
+#
+# B905 (`zip()` without `strict=`) is off, and this one is DEBT, not a style choice.
+# Python's default silently truncates to the shortest input, which over the parallel
+# per-finger arrays this code is full of would hide a real mismatch rather than raise
+# on it. Choosing `strict=True` (unequal lengths are a bug) or `strict=False` (the
+# truncation is intended) is a judgement to make per site, by someone who knows what
+# that site iterates. There are 90 of them; making that call blind, inside a refactor
+# whose contract is "change no behavior", is the wrong place. Worth a pass of its own.
+ignore = ["N802", "N803", "N806", "N816", "B905", "E501"]
 
 [tool.ruff.lint.isort]
 # `_pkg` is the test suite's own import-indirection module (tests/_pkg.py), and
@@ -75,3 +128,40 @@ known-first-party = ["_pkg", "gepetto_solvers"]
 # The extension re-export is a deliberate star-import: it is how the C++ symbols
 # reach `import gepetto_solvers`.
 "python/gepetto_solvers/__init__.py" = ["F403", "F405"]
+
+# ---------------------------------------------------------------------------
+# Type checking
+# ---------------------------------------------------------------------------
+# Scoped to `core/` on purpose. That is the foundational layer every project and
+# script builds on, so a wrong signature there propagates; the viser and pyvista
+# layers above it are GUI glue against untyped third-party APIs, where chasing
+# strictness buys noise rather than safety.
+#
+# Not strict mode: this is a numpy codebase where most parameters are "array-like"
+# and most returns are ndarray, and `disallow_untyped_defs` over 12k lines of that
+# would demand annotations that restate the docstrings without checking anything.
+# What is switched on catches the errors that actually bite -- a name that does not
+# exist, a call that cannot work, an Optional used without a guard.
+[tool.mypy]
+files = [
+    "python/gepetto_solvers/core/environment",
+    "python/gepetto_solvers/core/geometry",
+    "python/gepetto_solvers/core/hand",
+    "python/gepetto_solvers/core/robot_plan",
+    "python/gepetto_solvers/core/solvers",
+]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+# The compiled extension has no stubs -- pybind11 exports at runtime, so every
+# `gepetto_solvers.TendonHandSolver` reads as a missing attribute to a static
+# checker. Generating stubs for it is worth doing one day; asserting it is opaque
+# is the honest description until then.
+[[tool.mypy.overrides]]
+module = "gepetto_solvers"
+ignore_missing_imports = true
+follow_imports = "skip"

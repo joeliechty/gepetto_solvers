@@ -1,12 +1,10 @@
 import os
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import matplotlib.pyplot as plt
-
 import numpy as np
 import pyvista as pv
-
 
 frame_arrow_colors = ["red", "green", "blue"]
 

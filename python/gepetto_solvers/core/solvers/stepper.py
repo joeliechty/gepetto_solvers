@@ -5,7 +5,7 @@ GUI can scrub it. Carries mu and the multipliers between calls, which is what
 makes a stepped solve reproduce the one-shot one rather than restarting.
 """
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import numpy as np
 
@@ -88,7 +88,7 @@ class HandIKStepper(HandSolverBase):
     because the carried duals describe the old constraints.
     """
 
-    def __init__(self, params: Optional[HandSolveParams] = None):
+    def __init__(self, params: HandSolveParams | None = None):
         super().__init__(params)
         self._build()
 

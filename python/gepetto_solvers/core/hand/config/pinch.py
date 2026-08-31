@@ -12,7 +12,6 @@ the check, not ``centroid is not None``. 7 of the 15 do not close.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 from .dimensions import FINGER_NAMES
 from .discs import _resolve_contact_mask
@@ -62,8 +61,8 @@ class PinchPose:
                    closest-approach point rather than a contact point. Quoted
                    to the source log's 0.1 mm precision.
     """
-    centroid: Tuple[float, float, float]
-    tensions: Dict[str, float]
+    centroid: tuple[float, float, float]
+    tensions: dict[str, float]
     gap: float
 
     def touches(self, tol=2e-4):
@@ -82,7 +81,7 @@ def _pinch_key(finger_names):
     return tuple(n for n in DIGIT_ORDER if n in wanted)
 
 
-HAND_PINCH_POSES: Dict[Tuple[str, ...], PinchPose] = {
+HAND_PINCH_POSES: dict[tuple[str, ...], PinchPose] = {
     ("index", "thumb"): PinchPose(
         (-0.07212, 0.07190, 0.00335), {"thumb": 1.25, "index": 2.70}, -0.0002),
     ("middle", "thumb"): PinchPose(
@@ -128,7 +127,7 @@ HAND_PINCH_POSES: Dict[Tuple[str, ...], PinchPose] = {
 }
 
 
-def pinch_pose(finger_names) -> Optional[PinchPose]:
+def pinch_pose(finger_names) -> PinchPose | None:
     """The measured :class:`PinchPose` for a set of digits, or None.
 
     None means the combination was never measured, which is the honest answer
@@ -141,7 +140,7 @@ def pinch_pose(finger_names) -> Optional[PinchPose]:
     return HAND_PINCH_POSES.get(_pinch_key(finger_names))
 
 
-def pinch_pose_for_mask(configs, contact_fingers) -> Optional[PinchPose]:
+def pinch_pose_for_mask(configs, contact_fingers) -> PinchPose | None:
     """:func:`pinch_pose` driven by a per-finger bool mask in ``configs``
     order -- the form the solver params and the GUI checkboxes carry."""
     mask = _resolve_contact_mask(configs, contact_fingers)

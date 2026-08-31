@@ -4,7 +4,6 @@ Re-commands the wrist each solve so repeated calls warm-start from the previous
 solution, and cold-restarts when the wrist jumps too far for that to be safe.
 """
 
-from typing import Optional
 
 import numpy as np
 
@@ -55,7 +54,7 @@ class HandFKSolver(HandSolverBase):
     # near either.
     _WRIST_TRACKING_TOL_M = 1e-3
 
-    def __init__(self, params: Optional[HandSolveParams] = None):
+    def __init__(self, params: HandSolveParams | None = None):
         super().__init__(params)
         # A posture the next rebuild starts from, committed by seed_posture()
         # and consumed by the next solve. None -- the case every caller had
@@ -82,7 +81,10 @@ class HandFKSolver(HandSolverBase):
         # Where the values this solver is holding actually sit. None = nothing
         # worth warm-starting from (a solve that failed left them wherever it
         # gave up), which forces the next solve to rebuild.
-        self._warm_wrist = np.array(self.params.wrist_pose, float)
+        # Optional: cleared to None wherever the retained values stop being
+        # something a warm start may begin from.
+        self._warm_wrist: np.ndarray | None = np.array(
+            self.params.wrist_pose, float)
 
     def _warm_start_holds(self, T):
         """Whether the retained values are close enough to ``T`` to start from."""
@@ -214,3 +216,8 @@ class HandFKSolver(HandSolverBase):
                     f"the warm-start jump -- check the tensions and the wrist pose "
                     f"being commanded.")
             self._build()                    # drop the values, retry cold
+
+        # Unreachable: the loop above either returns on success or raises on
+        # last_attempt. Stated rather than implied, so the totality of this
+        # function does not rest on the reader noticing the literal 2-tuple.
+        raise AssertionError("unreachable")

@@ -202,7 +202,10 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
             stop = None
             unbounded.append(name)
         span = None if stop is None else stop - start[name]
-        if span is not None and span <= 0.0:
+        # `stop is not None` is implied by `span is not None` -- see the line
+        # above -- but stating it keeps the narrowing visible to a reader and to
+        # a type checker, neither of which should have to derive it.
+        if stop is not None and span is not None and span <= 0.0:
             notes.append(
                 f"**{name} is not closing**: it is already at "
                 f"{start[name] * 1e3:.1f} mm, at or past the {stop * 1e3:.1f} mm "
@@ -261,10 +264,9 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
     results, iterate_notes = [start_res], ["close 0% -- starting pose"]
     tension = {name: held[index_of[name]] for name in closing}
     reached = dict(start)
-    worst_spread, worst_miss, stopped = 0.0, 0.0, False
+    worst_spread, worst_miss = 0.0, 0.0
     for k in range(1, steps + 1):
         if should_stop is not None and should_stop():
-            stopped = True
             notes.append(
                 f"**stopped** {k - 1}/{steps} of the way through the close -- "
                 f"the poses already recorded are kept, so the scrubber and the "
@@ -312,7 +314,7 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
         worst_miss = max(worst_miss,
                          max(abs(got[name] - want[name]) for name in moving))
         iterate_notes.append(
-            "close {:.0f}%  \n".format(s * 100)
+            f"close {s * 100:.0f}%  \n"
             + ", ".join(f"{name} {got[name] * 1e3:.1f} mm" for name in closing))
 
     travelled = ", ".join(f"{name} {(reached[name] - start[name]) * 1e3:+.1f} mm"

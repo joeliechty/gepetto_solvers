@@ -25,28 +25,44 @@ Run (from the ``crest-sparse/`` directory):
     python scripts/traj_5f_contact_collision.py big_sphere --no-viz --num-fingers 1 -K 5
 """
 
-import os
 import argparse
 import itertools
+import os
 import time
 
 import numpy as np
 
 import gepetto_solvers
-
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
-    tip_node_index, attach_collision, disc_node_indices, proximal_disc_flags)
-from gepetto_solvers.core.geometry.scene import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
-    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER, TENDON_NAMES)
-from gepetto_solvers.core.diagnostics import FingerTraj
-from gepetto_solvers.core.plotting.trajectory_plotter import (
-    plot_trajectory, plot_hand_wrist_trajectory)
 from gepetto_solvers.core.diagnostics import (
-    PlannerLogger, log_planner_parameters, log_prior_table,
-    log_conditioning_report, report_al_iterations)
+    FingerTraj,
+    PlannerLogger,
+    log_conditioning_report,
+    log_planner_parameters,
+    log_prior_table,
+    report_al_iterations,
+)
+from gepetto_solvers.core.geometry.scene import (
+    GRASP_FLEXOR_TENSION,
+    GRASP_SPHERE_CENTER,
+    OBJECT_CENTER,
+    TENDON_NAMES,
+    get_primitive_specs,
+    primitive_surface_gap,
+)
+from gepetto_solvers.core.hand.config import (
+    attach_collision,
+    default_hand_tip_radii,
+    disc_node_indices,
+    get_default_hand_configs,
+    load_hand_dimensions,
+    proximal_disc_flags,
+    tip_node_index,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
+from gepetto_solvers.core.plotting.trajectory_plotter import (
+    plot_hand_wrist_trajectory,
+    plot_trajectory,
+)
 
 PASS_TOL = 1e-4        # max allowed penetration (m)
 CONTACT_TOL = 5e-4     # max allowed |terminal tip gap| (m)
@@ -345,7 +361,7 @@ def per_step_collision_report(args, configs, result, spec, object_pose):
 
         worst_obj = np.inf
         for entries in spheres:
-            for n, pos, _p, is_tip in entries:
+            for _n, pos, _p, is_tip in entries:
                 if k == K and is_tip:
                     continue  # terminal contact factor owns the tip at k=K
                 local = object_rotation.T @ (pos - object_center)
@@ -354,8 +370,8 @@ def per_step_collision_report(args, configs, result, spec, object_pose):
 
         worst_ff = np.inf
         for ia, ib in itertools.combinations(range(len(spheres)), 2):
-            for na, pa, proxa, _ta in spheres[ia]:
-                for nb, pb, proxb, _tb in spheres[ib]:
+            for _na, pa, proxa, _ta in spheres[ia]:
+                for _nb, pb, proxb, _tb in spheres[ib]:
                     if proxa and proxb:
                         continue
                     worst_ff = min(worst_ff,
@@ -421,7 +437,7 @@ def _main(args, results_dir):
 
     # --- Optional collision-OFF baseline (the plain grasp trajectory) ---
     if args.baseline:
-        print(f"[1/2] collision OFF baseline:")
+        print("[1/2] collision OFF baseline:")
         configs_off, radii_off = build_configs(
             args, dims, vdb_path, object_pose, tip_radii, collision=False)
         _planner_off, result_off = plan_trajectory(args, configs_off, "OFF")
@@ -513,13 +529,15 @@ def _main(args, results_dir):
         print(f"Saved experiment results to {results_dir}/")
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandMultiViewPlotter
+    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
+        TendonHandMultiViewPlotter,
+    )
     plotter = TendonHandMultiViewPlotter(
         finger_names, plot_backbone_ellipsoids=False,
         camera_focal_point=list(object_center), camera_distance=0.5,
         primitives=primitives)
     while True:
-        for k, hand_m in enumerate(result.trajectory):
+        for _k, hand_m in enumerate(result.trajectory):
             plotter.update(_solutions(hand_m))
             time.sleep(max(args.dt, 0.15))
         again = input("Replay trajectory? [y/N] ").strip().lower()

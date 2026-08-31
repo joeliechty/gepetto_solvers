@@ -8,7 +8,6 @@ fails loudly instead of silently no-opping.
 """
 
 from dataclasses import dataclass
-from typing import Dict
 
 from .params import HandSolveParams
 
@@ -29,10 +28,10 @@ class PhasePreset:
     height offset etc. are left at whatever the caller already has, since
     those are generic solver knobs rather than part of what DEFINES a phase."""
     label: str
-    overrides: Dict[str, object]
+    overrides: dict[str, object]
 
 
-PHASE_PRESETS: Dict[str, PhasePreset] = {
+PHASE_PRESETS: dict[str, PhasePreset] = {
     "phase0": PhasePreset(
         label="Phase 0: pre-grasp positioning",
         overrides=dict(

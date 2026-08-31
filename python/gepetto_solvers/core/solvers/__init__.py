@@ -46,16 +46,17 @@ and ``from ...core.solvers import X`` behave exactly as before the split.
 # `solvers.object_extent_along`, so it is re-exported here.
 from ..geometry.scene import object_extent_along  # noqa: E402  (kept last for clarity)
 from .base import HandSolverBase
-# `_set_if` is internal, but several docstrings point at `solvers._set_if` as the
-# name of the stale-binding pattern, so it stays resolvable at that path.
-from .capabilities import (
-    _set_if as _set_if,
-)
 from .capabilities import (
     FLEXOR_IDX,
     NUM_FINGERS,
     capabilities,
     tendon_diag,
+)
+
+# `_set_if` is internal, but several docstrings point at `solvers._set_if` as the
+# name of the stale-binding pattern, so it stays resolvable at that path.
+from .capabilities import (
+    _set_if as _set_if,
 )
 from .fk import HandFKSolver
 from .frames import (

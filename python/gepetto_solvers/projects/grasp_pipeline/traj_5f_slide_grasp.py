@@ -35,26 +35,42 @@ Run (from the ``crest-sparse/`` directory):
     python scripts/traj_5f_slide_grasp.py big_sphere --no-viz --num-fingers 1 -K 5
 """
 
-import os
 import argparse
+import os
 import time
 
 import numpy as np
 
 import gepetto_solvers
-
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
-    tip_node_index, disc_node_indices, attach_collision, attach_table)
+from gepetto_solvers.core.diagnostics import (
+    FingerTraj,
+    PlannerLogger,
+    log_conditioning_report,
+)
 from gepetto_solvers.core.geometry.scene import (
-    OBJECT_CENTER, get_primitive_specs, configure_object_surface,
-    GRASP_SPHERE_CENTER, GRASP_FLEXOR_TENSION, TABLE_NORMAL, table_plot_spec,
-    TENDON_NAMES)
-from gepetto_solvers.core.diagnostics import FingerTraj
+    GRASP_FLEXOR_TENSION,
+    GRASP_SPHERE_CENTER,
+    OBJECT_CENTER,
+    TABLE_NORMAL,
+    TENDON_NAMES,
+    configure_object_surface,
+    get_primitive_specs,
+    table_plot_spec,
+)
+from gepetto_solvers.core.hand.config import (
+    attach_collision,
+    attach_table,
+    default_hand_tip_radii,
+    disc_node_indices,
+    get_default_hand_configs,
+    load_hand_dimensions,
+    tip_node_index,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
 from gepetto_solvers.core.plotting.trajectory_plotter import (
-    plot_trajectory, plot_hand_wrist_trajectory)
-from gepetto_solvers.core.diagnostics import PlannerLogger, log_conditioning_report
+    plot_hand_wrist_trajectory,
+    plot_trajectory,
+)
 
 # Reuse the collision-grasp planner + reports verbatim (they are table-agnostic).
 from gepetto_solvers.projects.grasp_pipeline import traj_5f_contact_collision as base
@@ -265,7 +281,7 @@ def _main(args, results_dir):
     tip_radii = default_hand_tip_radii(dims)
     plane_origin, plane_normal = resolve_table(args, spec, object_center)
 
-    mode = ("slide-and-grasp (k_touch=%d)" % args.k_touch
+    mode = (f"slide-and-grasp (k_touch={args.k_touch})"
             if args.k_touch is not None
             else ("free-space approach + table collision" if args.table
                   else "no table (plain collision grasp)"))
@@ -359,13 +375,15 @@ def _main(args, results_dir):
         print(f"Saved experiment results to {results_dir}/")
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandMultiViewPlotter
+    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
+        TendonHandMultiViewPlotter,
+    )
     plotter = TendonHandMultiViewPlotter(
         finger_names, plot_backbone_ellipsoids=False,
         camera_focal_point=list(object_center), camera_distance=0.5,
         primitives=primitives)
     while True:
-        for k, hand_m in enumerate(result.trajectory):
+        for _k, hand_m in enumerate(result.trajectory):
             plotter.update(_solutions(hand_m))
             time.sleep(max(args.dt, 0.15))
         again = input("Replay trajectory? [y/N] ").strip().lower()

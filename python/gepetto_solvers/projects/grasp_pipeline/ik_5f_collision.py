@@ -20,20 +20,24 @@ Run (from the ``python/`` directory):
     python scripts/ik_5f_collision.py --no-viz
 """
 
-import os
 import argparse
+import os
 import time
 
 import numpy as np
 
 import gepetto_solvers
-
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, load_hand_dimensions,
-    attach_collision, tip_node_index)
-from gepetto_solvers.core.geometry.scene import get_primitive_specs, primitive_surface_gap, GRASP_SPHERE_CENTER
 from gepetto_solvers.core.diagnostics import collision_report
+from gepetto_solvers.core.geometry.scene import (
+    GRASP_SPHERE_CENTER,
+    get_primitive_specs,
+)
+from gepetto_solvers.core.hand.config import (
+    attach_collision,
+    get_default_hand_configs,
+    load_hand_dimensions,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
 
 # Above GRASP_FLEXOR_TENSION (2 N, tips exactly on the sphere): curl the
 # unconstrained fingers well into the sphere so collision has work to do.
@@ -131,7 +135,7 @@ def main():
     print(f"  worst finger-finger gap:       {ff_off:+.5f} m")
 
     # --- 2. Collision ON (collision-only envs; no contact) ---
-    print(f"[2/2] collision ON:")
+    print("[2/2] collision ON:")
     configs_on = get_default_hand_configs(dims)
     if args.num_fingers > 0:
         configs_on = configs_on[:args.num_fingers]
@@ -160,7 +164,9 @@ def main():
     if args.no_viz:
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandMultiViewPlotter
+    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
+        TendonHandMultiViewPlotter,
+    )
 
     class _FingerSol:
         pass

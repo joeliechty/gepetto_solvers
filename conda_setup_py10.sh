@@ -94,6 +94,8 @@ if [ "$(command -v python)" != "$CONDA_PREFIX/bin/python" ]; then
     exit 1
 fi
 
-pip install -r requirements.txt
-pip install . -v
+# Runtime dependencies are declared in pyproject.toml; installing the package
+# brings them in. [viz,web] adds the PyVista windows the demo scripts open and
+# the viser workbench.
+pip install ".[viz,web]" -v
 

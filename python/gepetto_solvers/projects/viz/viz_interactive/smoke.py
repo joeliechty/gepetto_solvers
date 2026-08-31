@@ -336,7 +336,10 @@ def _smoke():
             # returns only the status, and the gaps live on the result.
             last = {}
             st = HandIKStepper(params).run(
-                max_steps=5, on_step=lambda r, s: last.update(res=r))
+                # noqa: B023 -- `last` is rebound each iteration and this lambda
+                # is consumed synchronously by run() before the next one, so it
+                # never outlives the binding it captures.
+                max_steps=5, on_step=lambda r, s: last.update(res=r))  # noqa: B023
             res = last.get("res")
             # One snapshot per step plus the initial guess.
             n = res.num_iterates() if res is not None else 0

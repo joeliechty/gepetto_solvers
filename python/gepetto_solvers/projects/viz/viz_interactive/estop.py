@@ -11,7 +11,10 @@ import traceback
 # Software e-stop.
 # ---------------------------------------------------------------------------
 
-class Refused(Exception):
+# noqa: N818 -- `Refused` reads correctly at every call site
+# (`except Refused:`) and names an admission decision rather than a fault.
+# `RefusedError` would suggest something went wrong; nothing did.
+class Refused(Exception):  # noqa: N818
     """Raised by :meth:`EStop.admit` when a solve is not allowed to start --
     either the latch is engaged or another solve already holds it."""
 

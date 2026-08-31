@@ -6,7 +6,6 @@ ANALYTIC surface, independent of the solver.
 """
 
 from dataclasses import dataclass, replace
-from typing import List, Optional
 
 import numpy as np
 
@@ -48,52 +47,52 @@ def _tip_points(frame):
 class HandResult:
     """Uniform result for all three solvers. ``frames`` has length 1 for FK/IK and
     K+1 for the planner, so a step-scrubber can index it the same way regardless."""
-    frames: List[dict]
+    frames: list[dict]
     meta: object
     spec: dict
     object_center: np.ndarray
     object_rotation: np.ndarray
-    finger_names: List[str]
-    tip_radii: List[float]
+    finger_names: list[str]
+    tip_radii: list[float]
     # Which fingers are DESIGNATED for contact (None = all). The mask, not the
     # set a solve happened to constrain: FK constrains none of them but still
     # carries it, so the §1.8 goal overlays -- p_bar, the opposition split, the
     # support-plane equalities -- describe the same finger set in the FK posing
     # state that the controller will enforce once a phase is picked.
-    contact_fingers: Optional[List[bool]] = None
+    contact_fingers: list[bool] | None = None
     # The raw ``TendonHandMarginals`` behind each frame, same indexing as
     # ``frames``. ``frames`` splits a solve up per finger for rendering, which
     # loses the bundle the C++ side wants back: this is the form
     # ``HandSolveParams.initial_state`` takes to warm-start a solver from a
     # posture instead of a straight hand.
-    states: Optional[List[object]] = None
+    states: list[object] | None = None
     # Solver-convergence snapshots: one entry per recorded iteration, each a
     # full ``frames``-shaped list (so an entry is indexed by trajectory step
     # exactly like ``frames`` is). Populated only when the solve ran with
     # ``HandSolveParams.record_iterations`` on a binding that exposes the
     # snapshots; None otherwise. ``iterate_states`` is the raw-marginals
     # parallel, the same relationship ``states`` has to ``frames``.
-    iterates: Optional[List[List[dict]]] = None
-    iterate_states: Optional[List[List[object]]] = None
+    iterates: list[list[dict]] | None = None
+    iterate_states: list[list[object]] | None = None
     # One short markdown line per iterate, supplied by whoever produced the
     # snapshots. A stepped solve knows the cost/violation/mu behind each of its
     # entries directly; a one-shot recorded solve leaves this None and the
     # caller falls back to indexing ``meta``'s AL trace.
-    iterate_notes: Optional[List[str]] = None
+    iterate_notes: list[str] | None = None
     # Which fingers were driven onto the SUPPORT PLANE, the table counterpart of
     # ``contact_fingers`` (which stays the object set). None = none of them, i.e.
     # the object-only solves every caller ran before the two were separable.
     # Appended last on purpose: several call sites build a result positionally.
-    table_contact_fingers: Optional[List[bool]] = None
+    table_contact_fingers: list[bool] | None = None
     # The solve's Augmented Lagrangian state (``gepetto_solvers.ALDuals``): the
     # multipliers and penalty weight, tagged with the identity of the constraint
     # each belongs to. Feed to ``HandSolveParams.initial_duals`` to continue this
     # solve after a rebuild. Only the stepper fills it; None everywhere else.
-    duals: Optional[object] = None
+    duals: object | None = None
     # ``gepetto_solvers.ALTransferReport`` for the transfer INTO this solve, i.e.
     # how many of its constraints inherited a multiplier. None when nothing was
     # carried in.
-    dual_transfer: Optional[object] = None
+    dual_transfer: object | None = None
     # Which of an ``ellipsoid_set`` object's members contact was allowed to
     # target (``scene.grasp_subset_indices``); None = all of them, which is every
     # object that is not a curated ``ycb:`` set.
@@ -102,7 +101,7 @@ class HandResult:
     # readouts have to measure against the same shells the graph did. Reporting a
     # fingertip's distance to the drill housing, when the constraint drove it to
     # the grip, describes a solve that never ran.
-    contact_subset: Optional[List[int]] = None
+    contact_subset: list[int] | None = None
 
     def state(self, k=0):
         """The solved hand state at frame ``k``, for seeding another solver.
@@ -122,6 +121,10 @@ class HandResult:
         works off ``frames``, so a swapped-frames view makes all of it describe
         the intermediate state with no further plumbing. The view drops its own
         ``iterates`` so it cannot be re-scrubbed recursively."""
+        if self.iterates is None:
+            raise ValueError(
+                "this result carries no iterates -- the solve ran without "
+                "record_iterations, so there is nothing to scrub")
         return replace(self, frames=self.iterates[i],
                        states=None if self.iterate_states is None
                        else self.iterate_states[i],

@@ -27,7 +27,6 @@ import time
 import numpy as np
 
 import gepetto_solvers
-
 from gepetto_solvers.core.hand.config import get_default_hand_configs
 from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
 
@@ -93,7 +92,10 @@ def main():
     # to curl the finger. A per-finger phase offset makes the digits curl in a
     # wave so you can see them move relative to one another.
     background_tension = 0.5
-    flexor_amplitude = 0.75  # peak flexor ~= background + 2*amplitude = 2.0 N
+    # NOTE: currently unused -- the oscillating flexor term below is commented
+    # out and the flexor is pinned at background + 1.0, so this sweep moves the
+    # WRIST only despite its name. Kept so restoring the wave is one edit.
+    flexor_amplitude = 0.75  # noqa: F841  peak flexor ~= background + 2*amp = 2.0 N
     finger_phases = np.linspace(0.0, np.pi, len(configs))
     flexor_index = 5
 
@@ -116,7 +118,9 @@ def main():
         # --- Per-finger tendon tensions (staggered flexor sweep) ---
         all_tensions = []
         flexors = []
-        for phase in finger_phases:
+        # noqa: B007 -- `phase` is unused only because the flexor wave below
+        # is commented out; it is the per-digit offset that wave reads.
+        for phase in finger_phases:  # noqa: B007
             tensions_mean = np.full(num_tendons, background_tension)
             flexor = background_tension + 1.0#flexor_amplitude * (np.cos(0.01 * i - np.pi + phase) + 1.0)
             tensions_mean[flexor_index] = flexor

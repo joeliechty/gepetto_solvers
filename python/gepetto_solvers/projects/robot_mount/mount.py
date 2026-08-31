@@ -44,8 +44,14 @@ verify a fit against Onshape's Measure tool.
 
 import numpy as np
 
-from gepetto_solvers.core.hand.config import (FINGER_NAMES, finger_base_offset, load_hand_dimensions,
-                     _Rx, _Ry, _Rz)
+from gepetto_solvers.core.hand.config import (
+    FINGER_NAMES,
+    _Rx,
+    _Ry,
+    _Rz,
+    finger_base_offset,
+    load_hand_dimensions,
+)
 from gepetto_solvers.core.solvers import R_to_euler
 
 DIGIT_NAMES = FINGER_NAMES + ["thumb"]

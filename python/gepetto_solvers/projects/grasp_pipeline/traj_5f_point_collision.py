@@ -32,24 +32,35 @@ Run (from the ``python/`` directory):
     python scripts/traj_5f_point_collision.py --no-viz
 """
 
-import os
 import argparse
+import os
 import time
 
 import numpy as np
 
 import gepetto_solvers
-
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, load_hand_dimensions, attach_collision)
+from gepetto_solvers.core.diagnostics import (
+    FingerTraj,
+    PlannerLogger,
+    collision_report,
+    log_planner_parameters,
+)
 from gepetto_solvers.core.geometry.scene import (
-    get_primitive_specs, primitive_surface_gap, GRASP_SPHERE_CENTER,
-    GRASP_GOALS, TENDON_NAMES)
-from gepetto_solvers.core.diagnostics import collision_report, FingerTraj
+    GRASP_GOALS,
+    GRASP_SPHERE_CENTER,
+    TENDON_NAMES,
+    get_primitive_specs,
+)
+from gepetto_solvers.core.hand.config import (
+    attach_collision,
+    get_default_hand_configs,
+    load_hand_dimensions,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
 from gepetto_solvers.core.plotting.trajectory_plotter import (
-    plot_trajectory, plot_hand_wrist_trajectory)
-from gepetto_solvers.core.diagnostics import PlannerLogger, log_planner_parameters
+    plot_hand_wrist_trajectory,
+    plot_trajectory,
+)
 
 # Target flexor tension at k>=1 (loose prior; the goal priors do the closing).
 BACKGROUND_FLEXOR = 2.0

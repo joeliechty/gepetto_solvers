@@ -38,9 +38,9 @@ import os
 
 import numpy as np
 
+from gepetto_solvers.core.diagnostics import PlannerLogger, log_planner_parameters
+from gepetto_solvers.core.geometry.scene import TABLE_NORMAL, get_primitive_specs
 from gepetto_solvers.core.solvers import SOLVERS, HandSolveParams
-from gepetto_solvers.core.geometry.scene import get_primitive_specs, TABLE_NORMAL
-from gepetto_solvers.core.diagnostics import log_planner_parameters, PlannerLogger
 
 
 # Same ZYX (yaw-pitch-roll) convention the visualizer uses for the wrist slider

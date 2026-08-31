@@ -18,7 +18,6 @@ Run (from the ``python/`` directory):
     python scripts/ik_5f_contact.py sphere
 """
 
-import os
 import argparse
 import time
 
@@ -26,14 +25,22 @@ import numpy as np
 
 import gepetto_solvers
 
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
-    tip_node_index)
 # Shared primitive geometry + grasp scene constants (see scene.py).
 from gepetto_solvers.core.geometry.scene import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
-    configure_object_surface, GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER)
+    GRASP_FLEXOR_TENSION,
+    GRASP_SPHERE_CENTER,
+    OBJECT_CENTER,
+    configure_object_surface,
+    get_primitive_specs,
+    primitive_surface_gap,
+)
+from gepetto_solvers.core.hand.config import (
+    default_hand_tip_radii,
+    get_default_hand_configs,
+    load_hand_dimensions,
+    tip_node_index,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
 
 
 def _add_object_mesh(pv_plotter, spec, center):

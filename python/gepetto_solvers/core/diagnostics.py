@@ -6,15 +6,15 @@ which used to carry a near-duplicate ``PlannerLogger`` -- half the hand scripts
 imported it from there and half from here. There is one copy now.
 """
 
+import itertools
 import os
 import sys
-import itertools
 from datetime import datetime
 
 import numpy as np
 
-from .hand.config import disc_node_indices, proximal_disc_flags
 from .geometry.scene import primitive_surface_gap
+from .hand.config import disc_node_indices, proximal_disc_flags
 
 
 class _Tee:
@@ -346,7 +346,7 @@ def collision_report(configs, solution, spec, object_pose, radius):
 
     worst_obj = np.inf
     for entries in spheres:
-        for n, pos, _p in entries:
+        for _n, pos, _p in entries:
             local = object_rotation.T @ (pos - object_center)
             worst_obj = min(worst_obj, primitive_surface_gap(local, spec) - radius)
 

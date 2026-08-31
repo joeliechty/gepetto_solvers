@@ -61,7 +61,7 @@ def pacing_summary(plan, max_linear, max_angular, max_tendon, min_duration=0.05)
             "angular": angular / max_angular if max_angular > 0 else 0.0,
             "tendon": tendon / max_tendon if max_tendon > 0 else 0.0,
         }
-        winner = max(needs, key=needs.get)
+        winner = max(needs, key=needs.__getitem__)
         counts[winner if needs[winner] > min_duration else "floor"] += 1
         totals["linear"] += linear
         totals["angular"] += angular

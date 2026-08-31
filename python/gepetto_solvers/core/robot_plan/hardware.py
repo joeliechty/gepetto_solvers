@@ -298,7 +298,8 @@ def clamp_to_travel(plan, limits=None):
     if not limits:
         return plan, []
 
-    worst, waypoints = {}, []
+    worst: dict[str, float] = {}
+    waypoints = []
     for waypoint in plan.waypoints:
         clamped = {}
         for name, value in waypoint.tendon_disp.items():

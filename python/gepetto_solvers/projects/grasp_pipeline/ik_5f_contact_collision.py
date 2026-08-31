@@ -21,22 +21,31 @@ Run (from the ``python/`` directory):
     python scripts/ik_5f_contact_collision.py big_sphere --no-viz
 """
 
-import os
 import argparse
-import time
 import itertools
+import os
+import time
 
 import numpy as np
 
 import gepetto_solvers
-
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, default_hand_tip_radii, load_hand_dimensions,
-    tip_node_index, attach_collision, disc_node_indices, proximal_disc_flags)
 from gepetto_solvers.core.geometry.scene import (
-    OBJECT_CENTER, get_primitive_specs, primitive_surface_gap,
-    GRASP_FLEXOR_TENSION, GRASP_SPHERE_CENTER)
+    GRASP_FLEXOR_TENSION,
+    GRASP_SPHERE_CENTER,
+    OBJECT_CENTER,
+    get_primitive_specs,
+    primitive_surface_gap,
+)
+from gepetto_solvers.core.hand.config import (
+    attach_collision,
+    default_hand_tip_radii,
+    disc_node_indices,
+    get_default_hand_configs,
+    load_hand_dimensions,
+    proximal_disc_flags,
+    tip_node_index,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
 
 
 def main():
@@ -151,7 +160,7 @@ def main():
     worst_obj = (None, np.inf)
     for name, entries in zip(finger_names, spheres):
         f_worst = np.inf
-        for n, pos, _p, is_tip in entries:
+        for _n, pos, _p, is_tip in entries:
             if is_tip:
                 continue
             local = object_rotation.T @ (pos - object_center)
@@ -194,7 +203,9 @@ def main():
     if args.no_viz:
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandMultiViewPlotter
+    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
+        TendonHandMultiViewPlotter,
+    )
 
     class _FingerSol:
         pass

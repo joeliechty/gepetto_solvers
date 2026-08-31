@@ -28,9 +28,15 @@ the stale in-tree .so):
 import numpy as np
 
 from gepetto_solvers.core.hand.config import pinch_pose
-from gepetto_solvers.core.solvers import (HandSolveParams, HandIKStepper, HandFKSolver,
-                      capabilities, pregrasp_centroid_witness,
-                      solved_wrist_pose, tip_gap_matrix)
+from gepetto_solvers.core.solvers import (
+    HandFKSolver,
+    HandIKStepper,
+    HandSolveParams,
+    capabilities,
+    pregrasp_centroid_witness,
+    solved_wrist_pose,
+    tip_gap_matrix,
+)
 
 # The default 3-finger pinch the GUI opens on (index, middle, thumb).
 CONTACT_FINGERS = [True, True, False, False, True]
@@ -105,7 +111,10 @@ def check_convergence(max_steps=60):
     stepper = HandIKStepper(p)
     first = last = None
     result = None
-    for i in range(max_steps):
+    # noqa: B007 -- `i` is not used inside the body, but it leaks out of the
+    # loop and the summary below reports `i + 1` steps. B007 only inspects the
+    # body, so its rename suggestion is wrong here.
+    for i in range(max_steps):  # noqa: B007
         result = stepper.step()
         w = pregrasp_centroid_witness(p, result, 0)
         if w is None:

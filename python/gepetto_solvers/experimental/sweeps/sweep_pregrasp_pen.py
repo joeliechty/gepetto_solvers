@@ -12,17 +12,17 @@ Run (from the crest-sparse root, so the INSTALLED build is used):
     python scripts/experimental/sweep_pregrasp_pen.py
 """
 
-import itertools
-import math
 import time
 
 import numpy as np
 
 from gepetto_solvers.core.solvers import (
-    HandSolveParams, HandIKStepper, apply_phase_preset, solved_wrist_pose,
-    FLEXOR_IDX)
-from gepetto_solvers.core.geometry.scene import GRASP_FLEXOR_TENSION
-
+    FLEXOR_IDX,
+    HandIKStepper,
+    HandSolveParams,
+    apply_phase_preset,
+    solved_wrist_pose,
+)
 
 PRIMITIVE = "pen"
 CONTACT_FINGERS = [True, True, False, False, True]  # index, middle, thumb
@@ -152,7 +152,11 @@ def main():
             print(fmt(r))
 
     print("\n=== wrist start pose sweeps ===")
-    from gepetto_solvers.core.solvers import DEFAULT_WRIST_XYZ, DEFAULT_WRIST_RPY, wrist_pose_from_xyzrpy
+    from gepetto_solvers.core.solvers import (
+        DEFAULT_WRIST_RPY,
+        DEFAULT_WRIST_XYZ,
+        wrist_pose_from_xyzrpy,
+    )
     x0, y0, z0 = DEFAULT_WRIST_XYZ
     r0, p0_, yw0 = DEFAULT_WRIST_RPY
     for field, values in wrist_pose_sweeps.items():

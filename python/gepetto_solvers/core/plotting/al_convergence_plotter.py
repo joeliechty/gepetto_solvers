@@ -10,8 +10,8 @@ Populated from ``result.meta.al_iteration_costs / _violations / _mus`` (only set
 when ``config.base.record_iterations = True``).
 """
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def _semilogy(ax, y, color, label, ylabel):

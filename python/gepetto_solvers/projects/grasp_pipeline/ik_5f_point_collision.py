@@ -50,21 +50,28 @@ Run (from the ``python/`` directory):
     python scripts/ik_5f_point_collision.py --no-viz
 """
 
-import os
 import argparse
+import os
 import time
 
 import numpy as np
 
 import gepetto_solvers
 
-from gepetto_solvers.core.objects import OBJECTS_DIR
-from gepetto_solvers.core.hand.config import (
-    get_default_hand_configs, load_hand_dimensions, attach_collision)
-from gepetto_solvers.core.geometry.scene import (
-    get_primitive_specs, primitive_surface_gap, GRASP_SPHERE_CENTER, GRASP_GOALS)
 # Reuse the collision-clearance report (worst finger-object / finger-finger gap).
 from gepetto_solvers.core.diagnostics import collision_report
+from gepetto_solvers.core.geometry.scene import (
+    GRASP_GOALS,
+    GRASP_SPHERE_CENTER,
+    get_primitive_specs,
+)
+from gepetto_solvers.core.hand.config import (
+    attach_collision,
+    get_default_hand_configs,
+    load_hand_dimensions,
+)
+from gepetto_solvers.core.objects import OBJECTS_DIR
+
 
 def solve_hand(configs, args, goal_positions=None):
     """Single-shot hand solve. When ``goal_positions`` is given (one Vector3 per
@@ -178,7 +185,7 @@ def main():
     print(f"[1/2] using {len(goals)} collision-free grasp goal points.")
 
     # --- Collision ON + point goals ---
-    print(f"[2/2] collision ON + point-to-point goals:")
+    print("[2/2] collision ON + point-to-point goals:")
     configs_on = build_configs()
     # Pin the object (sigma 1e-6/dof) so the fingers do all the moving; otherwise
     # the constraints can relieve penetration by shoving the object a fraction of
@@ -193,7 +200,7 @@ def main():
     tips_on = tip_positions(configs_on, sol_on)
     dists = [float(np.linalg.norm(t - g)) for t, g in zip(tips_on, goals)]
 
-    print(f"\nresults:")
+    print("\nresults:")
     print(f"  worst finger-object clearance: {obj_on:+.5f} m  (want >= 0)")
     print(f"  worst finger-finger gap:       {ff_on:+.5f} m  (want >= 0)")
     print("\n  per-finger tip -> goal distance:")
@@ -206,14 +213,16 @@ def main():
     # so a collision-constrained tip can reach them to within ~the collision radius.
     reach_tol = r + 3e-3
     reach_ok = max(dists) <= reach_tol
-    print(f"\nRESULT:", "PASS" if (clearance_ok and reach_ok) else "FAIL",
+    print("\nRESULT:", "PASS" if (clearance_ok and reach_ok) else "FAIL",
           f"(collision-free: {clearance_ok}, reached goals within "
           f"{reach_tol*1e3:.1f} mm: {reach_ok})")
 
     if args.no_viz:
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandMultiViewPlotter
+    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
+        TendonHandMultiViewPlotter,
+    )
 
     class _FingerSol:
         pass
