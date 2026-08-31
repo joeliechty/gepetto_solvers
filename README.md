@@ -1,100 +1,146 @@
-# CREST-Sparse: Continuum Robot ESTimation with Sparse Nonlinear Optimization
-Factor graph–based solvers for continuum robots and other elastic structures.
+# gepetto_solvers
 
-## Description
+Factor graph–based solvers for a tendon-driven robotic hand, and for the continuum
+structures it is built from.
 
-Continuum robot state estimation can be formulated similarly to SLAM, where variables are connected through spatial motion priors and measurement factors.
-This repository demonstrates how to construct factor graph representations of the conditional distribution over continuum robot configurations.
+*(Formerly `crest-sparse` / CREST-Sparse — Continuum Robot ESTimation with Sparse
+Nonlinear Optimization. The package was renamed in 2026-08; the research the code
+implements is the same.)*
 
-We leverage the sparse nonlinear optimization capabilities of GTSAM to efficiently estimate continuum robot states.
-For each model, we provide Python bindings for the underlying solver along with a real-time PyVista plotter for visualizing simulations.
+## What this is
 
-This tree has been pruned to the **tendon hand** and what it needs. A Cosserat rod
-(`src/cosserat_rod/`) builds a tendon-driven finger (`src/tendon_finger/`), and a set
-of fingers sharing one floating wrist variable makes the hand (`src/tendon_hand/`) —
-three solvers over that graph: static FK, single-shot IK, and a K+1-step trajectory
-planner. `src/cosserat_dynamics/` is kept for the dynamics roadmap. The other robot
-models this repo used to carry (shell, multi-robot, parallel robot, standalone tendon
-robot) were removed; they are in the git history if you need them.
+Continuum robot state estimation can be formulated like SLAM: variables connected
+through spatial motion priors and measurement factors. This repository builds factor
+graph representations of the conditional distribution over continuum robot
+configurations, and leans on GTSAM's sparse nonlinear optimization to solve them.
 
-**`python/tests/tendon_hand/README.md` is the real documentation** — what each solver
-builds, which section of the paper it implements, and how every script wires it up.
+The tree is the **tendon hand** and what it needs. A Cosserat rod builds a
+tendon-driven finger, and a set of fingers sharing one floating wrist variable makes
+the hand — three C++ solvers over that graph:
 
-## Build/Install GTSAM
+| | |
+|---|---|
+| `TendonHandSolver` | static FK, and single-shot IK against a contact surface |
+| `TendonHandTrajectoryPlanner` | a K+1-step trajectory with GP temporal priors |
+| `HandIKStepper` (Python) | the IK solve, one Augmented Lagrangian iteration per call |
 
-The Python bindings dynamically load classes from GTSAM, so GTSAM must first be built and installed from source.
+**[docs/tendon_hand.md](docs/tendon_hand.md) is the real documentation** — what each
+solver builds, which section of *Underactuated Object Manipulation* it implements,
+and how everything wires up. Start there. This file only gets you running.
 
-First clone GTSAM and configure the build with CMake:
+## Layout
 
-```bash
-git clone https://github.com/borglab/gtsam.git
-cd gtsam
-git checkout 4.3a1 # Tested GTSAM version
-mkdir build 
-cd build
-cmake ..
+```
+include/gepetto_solvers/   public C++ headers
+src/                       C++ implementation; src/bindings/ holds all the pybind11
+python/gepetto_solvers/    the Python layer, in three tiers:
+    core/                    foundational — hand, environment, geometry, solvers,
+                             robot_plan, objects, plotting, diagnostics
+    projects/                isolated research — grasp_pipeline, viz, robot_mount
+    experimental/            ad hoc diagnostics, not maintained as examples
+scripts/                   thin CLIs, one per demo
+tests/                     the pytest suite
+docs/                      the architecture doc
 ```
 
-At this point, verify that CMake found all required dependencies (e.g., Boost, Eigen, TBB).
-Ensure that there are no critical warnings during configuration.
-For more information on dependencies, see the GTSAM [installation documentation](https://borglab.github.io/gtsam/install/)
+`core/` imports nothing from `projects/` or `experimental/`, and no project imports
+another. That is the whole dependency rule.
 
-If everything looks good, you can now build and install gtsam, which will take several minutes:
+## Install
 
-```bash
-make -j8
-sudo make install
-```
-
-This installs GTSAM headers (needed to build CREST-sparse) in `/usr/local/include` and library files (needed to run CREST-sparse) in `/usr/local/lib`.
-
-## Build/Install CREST-sparse
-
-First clone this repository:
-```bash
-git clone https://github.com/fergujm2/crest-sparse.git
-cd crest-sparse
-```
-
-Next create and activate a Python virtual environment:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Install the python dependencies required for plotting and simulation:
-```bash
-pip install -r requirements.txt
-```
-
-Now build and install the CREST-sparse Python module from the `C++` classes in `src/`:
-```bash
-pip install . -v
-```
-
-The final output should include `Successfully installed crest_sparse`, meaning that you can now `import crest_sparse` in Python when the virtual environment is active. 
-
-## Run Test Scripts
-
-The module for plotting and testing lives in `python/tests/`, where there are several examples you can run to verify the solvers are working.
-
-Run these from the **repo root**, so `import crest_sparse` resolves to the installed
-extension rather than a stale in-tree `.so`:
+**On a fresh machine, use the setup scripts.** They do the part that is genuinely
+hard: building a *forked* GTSAM (4.3a1 plus a constrained-module heap-overflow fix)
+from source into a conda prefix, with the toolchain and channel pins that make
+OpenVDB, Boost and TBB agree with it.
 
 ```bash
-python -m python.tests.tendon_hand.ik_5f_contact big_sphere --no-viz  # single-shot IK
-python -m python.tests.tendon_hand.traj_5f_slide_grasp --no-viz       # trajectory planner
-python -m python.tests.tendon_hand.fk_5f_sweep                        # FK (opens a window)
-python -m python.tests.cosserat.dynamics_sim                          # rod dynamics
+./conda_setup_py12.sh        # Linux, Python 3.12   (py10 is the same, 3.10)
+./conda_setup_py11_mac.sh    # macOS, Python 3.11
 ```
 
-`--no-viz` skips the PyVista render window; scripts without that flag always open one.
-For the interactive web visualizer, `pip install -e ".[viz]"` and then
-`python -m python.tests.tendon_hand.viz_interactive`.
+Each creates the env, builds and installs GTSAM, sets the linker-path activate hook,
+then installs this package. Read the script before running it: it removes an existing
+env of the same name and deletes `../gtsam`.
 
-You may get an initial error that says something like: `ImportError: libgtsam.so.4: cannot open shared object file: No such file or directory`.
-This indicates that the GTSAM library installation directory is not visible to the dynamic linker.
-In most cases this can be resolved by running `sudo ldconfig` and then rerunning the script.
+**Once that env exists**, day-to-day work is just:
 
-When the chosen script runs successfully, a PyVista render window will appear showing real-time solution geometries for the selected model.
-Solution metadata is displayed in the upper-right corner, including optimization solve times and related diagnostics.
+```bash
+conda activate crest_py12          # or crest_py11 / crest_py10
+rm -rf build && pip install -e ".[viz,web,dev]"
+```
+
+Delete `build/` after any structural change — a stale CMake cache outlives the tree
+it describes.
+
+### Extras
+
+`pyproject.toml` is the single source of truth for Python dependencies. Solving needs
+only numpy and scipy; everything that draws, fetches or fits is optional:
+
+| extra | brings | for |
+|---|---|---|
+| `viz` | pyvista, vtk, matplotlib, pillow | the render windows the demo scripts open |
+| `web` | viser, trimesh | the interactive workbench |
+| `ycb` | trimesh, scikit-learn, coacd, requests | fetching and fitting YCB scans |
+| `dev` | pytest, ruff, mypy | the test suite and the linters |
+
+GTSAM, OpenVDB and pybind11 are deliberately **not** listed: they are C++ build
+dependencies the conda scripts install into `$CONDA_PREFIX`, and CMake finds them
+through the Python interpreter's prefix.
+
+## Run
+
+Scripts work from anywhere once the package is installed:
+
+```bash
+python scripts/ik_5f_contact.py big_sphere --no-viz   # single-shot grasp
+python scripts/traj_5f_slide_grasp.py --no-viz        # slide-and-grasp trajectory
+python scripts/fk_5f_sweep.py                         # FK (opens a window)
+python scripts/dynamics_sim.py                        # rod dynamics
+python scripts/viz_interactive.py                     # workbench on :8080
+python scripts/viz_interactive.py --smoke             # its headless self-check
+```
+
+`--no-viz` skips the render window. `scripts/experimental/` holds the diagnostics —
+AL traces, constraint sweeps — which answer one question each and are not examples.
+
+The baked SDF grids (`.vdb`, ~54 MB) are gitignored, so a fresh checkout has none.
+Rebuild them with `python scripts/objects/make_big_sphere.py` (needs conda-only
+`pyopenvdb`), or use the analytic primitives — `coin`, `pen`, `mid_sphere_ellipsoid`,
+`megaminx` — which need no grid at all.
+
+## Tests
+
+```bash
+pytest -m "not slow"    # pure functions, no solver -- under a second
+pytest -m slow          # golden solves + the viz smoke checks -- ~6 minutes
+pytest                  # both
+ruff check .
+mypy
+```
+
+See [tests/README.md](tests/README.md) for the two constraints that shape the suite:
+no committed test may need a `.vdb` grid, and any test asserting a number must pin
+the hand dimensions (`load_hand_dimensions()` silently prefers `gepetto_core`'s CAD
+geometry over the bundled fallback, and the two are not the same hand).
+
+`scripts/capture_baseline.py` captures solver behavior to JSON and diffs two
+captures. It covers the SDF paths the committed suite cannot, and is what a refactor
+should be checked against:
+
+```bash
+python scripts/capture_baseline.py --out ~/before.json
+...
+python scripts/capture_baseline.py --diff ~/before.json ~/after.json
+```
+
+## Troubleshooting
+
+**`ImportError: libgtsam.so.4: cannot open shared object file`** — GTSAM's install
+directory is not visible to the dynamic linker. The setup scripts write an
+`activate.d` hook for this; if you built GTSAM by hand, `sudo ldconfig` and re-run.
+
+**A GUI control does nothing, or `capabilities()` reports `False`** — the installed
+extension is older than the Python layer. `rm -rf build && pip install .`
+
+**A `.vdb` is missing** — the error names the baker to run.

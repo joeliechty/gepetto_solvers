@@ -228,15 +228,15 @@ sweep, worth knowing for scripted jumps.
 ## Reproduction
 
 ```
-# from crest-sparse/python, in the crest_py11 env
-python -m tests.tendon_hand.ik_5f_contact sphere      # solves with loose wrist
-python -m tests.tendon_hand.ik_5f_contact cylinder    # 4 fingers close, thumb ~0.10 m
-python -m tests.tendon_hand.ik_5f_contact cube        # stalls (iters=3)
+# from gepetto_solvers/python, in the crest_py11 env
+python scripts/ik_5f_contact.py sphere      # solves with loose wrist
+python scripts/ik_5f_contact.py cylinder    # 4 fingers close, thumb ~0.10 m
+python scripts/ik_5f_contact.py cube        # stalls (iters=3)
 
 # single finger reaches every primitive (gap 0.000):
-python -m tests.tendon_hand.ik_1f_contact cube
+python scripts/ik_1f_contact.py cube
 
 # warm-started wrist sweep (build once, set_wrist_pose per frame) — iters= drops
 # from the cold-start count to a handful after the first frame:
-python -m tests.tendon_hand.fk_5f_sweep
+python scripts/fk_5f_sweep.py
 ```

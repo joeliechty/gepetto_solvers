@@ -50,7 +50,8 @@ def pinned_dims_module():
     fixture, and pytest will not let a module-scoped fixture depend on a
     function-scoped one.
     """
-    from _pkg import config, solvers as s
+    from _pkg import config
+    from _pkg import solvers as s
 
     original_cfg = config.load_hand_dimensions
     original_slv = getattr(s, "load_hand_dimensions", None)
