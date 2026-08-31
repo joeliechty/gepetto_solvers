@@ -40,11 +40,14 @@ python/gepetto_solvers/    the Python layer, in three tiers:
     experimental/            ad hoc diagnostics, not maintained as examples
 scripts/                   thin CLIs, one per demo
 tests/                     the pytest suite
-docs/                      the architecture doc
+docs/                      the architecture doc, and why the tree is shaped this way
 ```
 
 `core/` imports nothing from `projects/` or `experimental/`, and no project imports
 another. That is the whole dependency rule.
+
+[docs/refactor-2026-08.md](docs/refactor-2026-08.md) records why the tree is shaped
+this way — the decisions taken during the restructure, and what is still open.
 
 ## Install
 

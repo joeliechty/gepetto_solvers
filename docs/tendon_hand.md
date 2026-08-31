@@ -26,6 +26,7 @@ only *how many copies of the state exist* and *which constraints are switched on
 | Watch an IK solve converge one AL iteration at a time | `HandIKStepper` → `viz_interactive.py`, `debug_ik_step_trace.py` | §1.4+§1.5 |
 | Change a constraint mid-solve and *continue* | `initial_state` + `initial_duals` → §5.1 | — |
 | Know what you can delete | §8, the dependency graph | — |
+| Know why the tree is shaped this way | [refactor-2026-08.md](refactor-2026-08.md) | — |
 
 **A note on paper numbering.** Most of the code cites the chapter-1 numbering
 (`§1.1`–`§1.8`, `Eq 1.x`) this README uses throughout. The newest pre-grasp work
@@ -1129,6 +1130,10 @@ hand cannot oppose at all.
 ---
 
 ## 8. What is in the tree, and what used to be
+
+For the 2026-08 restructure that produced the current layout -- the decisions
+behind it and the follow-ups it left -- see
+[refactor-2026-08.md](refactor-2026-08.md).
 
 `gepetto_solvers` used to carry six unrelated robot models sharing a Cosserat rod and
 an optimizer. The hand used two of them. **The other four are gone** — pruned in
