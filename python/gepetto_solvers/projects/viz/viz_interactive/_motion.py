@@ -19,6 +19,10 @@ from .estop import Refused
 
 
 class MotionMixin:
+    # Placeholder shown by the tendon-length readout before the first FK solve.
+    # Read by _gui.py too, which resolves it through the composed class.
+    TENDON_IDLE = "_press **FK** to read the actuated tendon lengths_"
+
     # -- phase 4: the synchronized close --
 
     def _close_hand(self, _=None):

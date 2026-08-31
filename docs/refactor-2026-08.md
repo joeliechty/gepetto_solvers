@@ -7,8 +7,9 @@ This is the record for the person who later asks "why is it like this" — or wh
 wants to do the next one. It is not a changelog; `git log` has that. It documents
 the **decisions**, including the ones that went against the obvious answer.
 
-Branch: `refactor/claude-md-architecture`, eleven commits, `1dfa6f0`..`fb5b792`.
-330 files changed.
+Branch: `refactor/claude-md-architecture`. Eleven commits took the tree to its
+new shape (`1dfa6f0`..`fb5b792`, 330 files); later commits fix what fell out of
+it — see §6.
 
 ---
 
@@ -63,7 +64,7 @@ python/gepetto_solvers/    110 modules in three tiers:
     projects/                isolated; no project imports another
     experimental/            ad hoc diagnostics, not maintained as examples
 scripts/                   26 thin CLIs
-tests/                     102 tests in two tiers
+tests/                     114 tests in two tiers
 ```
 
 ## 3. The order it was done in, and why that order
@@ -288,6 +289,46 @@ four were latent, the rest were caught the moment they were created.
 
 The two in the middle are the argument for the whole Phase 0 approach: neither is
 visible to inspection, and both would have shipped.
+
+### Three that got past the tests entirely
+
+Found by a person opening the app, which is the honest way to describe it. All
+three share a root cause: **nothing exercised the GUI.** The five `--smoke`
+routines drive the solver half and never touch viser, so `_build_gui` — 912
+lines, the largest function in the codebase — first ran in front of a user.
+
+1. **Eight class attributes were dropped from `HandVizApp`.** The mixin split
+   walked the class body for `FunctionDef` nodes and silently discarded
+   everything else. `TENDON_IDLE`, `UNFITTED_SUFFIX`, `WRIST_PRIOR_GAUGE_LIMIT`,
+   `FINGERTIP_SHELL_M`, `GRASPABLE_MAX_M`, `_WRIST_RANGE_MARGIN`,
+   `_TENSION_BISECT_STEPS`, `_TENSION_BISECT_TOL_M`. `ViserHandScene` had no
+   class attributes, so it escaped.
+
+2. **Four function-local relative imports in `core/solvers/witness.py` pointed
+   one package too shallow.** `from .hand.config import …` meant `core.hand.config`
+   when `solvers.py` was a module in `core/`; after the split it means
+   `core.solvers.hand.config`, which does not exist. Ruff cannot resolve module
+   paths, and an import of `witness` does not execute a function body — so both
+   gates were clean.
+
+3. **A circular import between `core/environment/` and `core/hand/config/`.**
+   Introduced by the compatibility re-export: `hand.config.__init__` eagerly
+   imported the `attach_*` family from `environment`, while every `environment`
+   module imports back into `hand.config`. Importing `core.environment.collision`
+   *first* got a half-initialized package and failed. It worked in practice only
+   because everything reached it from the other direction. Fixed with a PEP 562
+   module `__getattr__`, so the re-export resolves on first access rather than at
+   import time.
+
+The gaps those exposed are now closed by `tests/projects/test_mixin_surface.py`:
+it pins both composed classes' member surfaces, walks `_build_gui` for `self.X`
+constant reads and checks each resolves, and — the one that matters —
+**builds the entire GUI against a real viser server.**
+
+The general lesson, and the one to carry into the next refactor: *an import
+check proves nothing about a function body, and a class-body walk that only
+collects methods is not a move.* Both were verified with static tools that
+cannot see the thing being broken.
 
 ---
 

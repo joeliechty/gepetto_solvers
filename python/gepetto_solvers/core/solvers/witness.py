@@ -259,7 +259,7 @@ def pregrasp_centroid_witness(params, result, k=0):
     Needs ``configs`` to recover the wrist pose from the solved frame, which
     it takes from the result's own finger list via :func:`solved_wrist_pose`.
     """
-    from .hand.config import pinch_pose
+    from ..hand.config import pinch_pose
 
     pose = pinch_pose(result.contact_names())
     if pose is None:
@@ -349,7 +349,7 @@ def finger_plane_witness(result, k=0):
 
     Rendering only: nothing here is a constraint the solver saw.
     """
-    from .hand.config import pinch_pose
+    from ..hand.config import pinch_pose
 
     pose = pinch_pose(result.contact_names())
     if pose is None:
@@ -422,12 +422,12 @@ def planar_gap_witness(params, result, k=0):
     """
     import gepetto_solvers
 
-    from .geometry.scene import (
+    from ..geometry.scene import (
         ELLIPSOID_SET_BETA,
         ellipsoid_members,
         plane_ellipse_section,
     )
-    from .hand.config import pinch_pose
+    from ..hand.config import pinch_pose
 
     if not hasattr(gepetto_solvers, "ellipsoid_set_planar_gap"):
         return None

@@ -25,6 +25,19 @@ from .estop import Refused
 
 
 class RobotMixin:
+    # How far past a measured wrist value to grow the slider when the value falls
+    # outside its range, as a fraction of how far outside it fell -- headroom
+    # enough that the widened slider is still draggable either side of where the
+    # robot actually is, rather than pinned against its own new end stop.
+    _WRIST_RANGE_MARGIN = 0.25
+
+    # Bisection budget for the tension recovery below. 14 halvings of the 0-3 N
+    # slider range resolve tension to 0.2 mN, far finer than the ~0.1 mm of
+    # displacement the hardware can distinguish, so the tolerance is what
+    # actually ends it.
+    _TENSION_BISECT_STEPS = 14
+    _TENSION_BISECT_TOL_M = 5e-4
+
     def _robot_speeds(self):
         """The playback-speed slider resolved into real units, per channel.
 

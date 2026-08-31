@@ -15,19 +15,6 @@ one defines the *robot*. They are re-exported below so every existing
 ================  ===================================================
 """
 
-from ...environment.collision import attach_collision
-from ...environment.contact import attach_contact
-from ...environment.pregrasp import (
-    attach_pregrasp_axis_alignment,
-    attach_pregrasp_center,
-    attach_pregrasp_centroid,
-)
-from ...environment.support import (
-    attach_half_space,
-    attach_table,
-    opposition_axis_from_object,
-    opposition_directions,
-)
 from .dimensions import (
     DEFAULT_HAND_DIMENSIONS,
     FINGER_NAMES,
@@ -101,3 +88,38 @@ __all__ = [
     "opposition_axis_from_object",
     "opposition_directions",
 ]
+
+
+# The attach_* family lives in gepetto_solvers.core.environment; it is re-exported
+# here because every existing caller imports it from this module.
+#
+# LAZILY, via PEP 562, and that is load-bearing rather than clever. Those modules
+# import back into this package (`..hand.config.discs`, `..hand.config.morphology`),
+# so importing them at module scope closes a cycle: anyone whose first touch is
+# `core.environment.collision` gets this package half-initialized and the import
+# fails. Deferring to first attribute access breaks the cycle in one direction
+# without changing what `from ...hand.config import attach_contact` returns.
+_ENVIRONMENT_EXPORTS = {
+    "attach_collision": "collision",
+    "attach_contact": "contact",
+    "attach_pregrasp_axis_alignment": "pregrasp",
+    "attach_pregrasp_center": "pregrasp",
+    "attach_pregrasp_centroid": "pregrasp",
+    "attach_half_space": "support",
+    "attach_table": "support",
+    "opposition_axis_from_object": "support",
+    "opposition_directions": "support",
+}
+
+
+def __getattr__(name):
+    module = _ENVIRONMENT_EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    return getattr(import_module(f"...environment.{module}", __name__), name)
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_ENVIRONMENT_EXPORTS))

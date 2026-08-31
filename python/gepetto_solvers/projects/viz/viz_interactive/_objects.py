@@ -34,6 +34,16 @@ from .constants import (
 
 
 class ObjectPanelMixin:
+    # Dropdown suffix for a catalog object with no committed fit yet. Selecting
+    # one downloads and fits it on the spot (see _on_object_selected).
+    UNFITTED_SUFFIX = "  [fit on select]"
+
+    # The fingertips ride a shell of roughly this radius about the hand base, and
+    # a curl can close on an object only a little smaller than it. Measured, not
+    # derived -- see the reachability investigation behind GRASP_SPHERE_CENTER.
+    FINGERTIP_SHELL_M = 0.055
+    GRASPABLE_MAX_M = 0.050
+
     def _object_pose_from_sliders(self):
         """``(center, rotation)`` for the object: its derived pose plus the
         Object-pose slider offsets.

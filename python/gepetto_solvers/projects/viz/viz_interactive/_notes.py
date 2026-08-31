@@ -23,6 +23,14 @@ from .constants import (
 
 
 class NotesMixin:
+    # Wrist priors looser than this (sigma, m and rad) stop fixing the wrist's
+    # gauge in any solve whose other constraints are all INEQUALITIES. Measured
+    # on the pen pre-grasp scene (pinch-centroid + collision + opposition): every
+    # cell at sigma >= 10 on EITHER prior throws IndeterminantLinearSystem near
+    # W0, every cell at <= 1 solves, and adding the other pre-grasp constraints
+    # does not move the boundary.
+    WRIST_PRIOR_GAUGE_LIMIT = 10.0
+
     def _set_status(self, text):
         self.g_status.content = text
 
