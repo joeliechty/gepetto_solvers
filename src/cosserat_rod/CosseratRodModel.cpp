@@ -1,12 +1,12 @@
-#include "CosseratRodModel.h"
+#include "gepetto_solvers/cosserat_rod/CosseratRodModel.h"
 
-#include "CosseratTwistFactor.h"
-#include "CosseratStressFactor.h"
-#include "BoundaryStressFactor.h"
-#include "RootCosseratTwistFactor.h"
-#include "RootCosseratStressFactor.h"
-#include "RootBoundaryStressFactor.h"
-#include "PlanarBendFactor.h"
+#include "gepetto_solvers/cosserat_rod/CosseratTwistFactor.h"
+#include "gepetto_solvers/cosserat_rod/CosseratStressFactor.h"
+#include "gepetto_solvers/cosserat_rod/BoundaryStressFactor.h"
+#include "gepetto_solvers/cosserat_rod/RootCosseratTwistFactor.h"
+#include "gepetto_solvers/cosserat_rod/RootCosseratStressFactor.h"
+#include "gepetto_solvers/cosserat_rod/RootBoundaryStressFactor.h"
+#include "gepetto_solvers/cosserat_rod/PlanarBendFactor.h"
 #include <gtsam/base/Vector.h>
 
 using namespace gtsam;

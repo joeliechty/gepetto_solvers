@@ -1,6 +1,6 @@
-#include "RootCosseratStressFactor.h"
+#include "gepetto_solvers/cosserat_rod/RootCosseratStressFactor.h"
 
-#include "utils/WrenchTransforms.h"
+#include "gepetto_solvers/utils/WrenchTransforms.h"
 
 using namespace gtsam;
 

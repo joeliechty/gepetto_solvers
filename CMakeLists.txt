@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(crest_sparse LANGUAGES CXX)
+project(gepetto_solvers LANGUAGES CXX)
 
 # Set release build flags for performance
 if(NOT CMAKE_BUILD_TYPE)
@@ -29,27 +29,77 @@ else()
     message(WARNING "OpenMP not found, collision detection will be single-threaded")
 endif()
 
-file(GLOB_RECURSE SOURCES "src/*.cpp")
+# Sources are listed explicitly rather than globbed. `file(GLOB_RECURSE)` means a
+# deleted or added file needs no build-file edit, which sounds convenient and is
+# how the last prune produced a build that still referenced a deleted directory
+# from a stale cache -- documented in the architecture doc as a trap worth
+# avoiding. An explicit list makes the file set part of the reviewed diff, and
+# makes a missing file a configure-time error instead of a link-time one.
+set(GEPETTO_SOLVERS_SOURCES
+    src/cosserat_dynamics/CosseratDynamicsFactor.cpp
+    src/cosserat_dynamics/CosseratDynamicsSolver.cpp
 
-pybind11_add_module(_crest_sparse ${SOURCES})
+    src/cosserat_rod/BoundaryStressFactor.cpp
+    src/cosserat_rod/CosseratRodModel.cpp
+    src/cosserat_rod/CosseratStressFactor.cpp
+    src/cosserat_rod/CosseratTwistFactor.cpp
+    src/cosserat_rod/PlanarBendFactor.cpp
+    src/cosserat_rod/RootBoundaryStressFactor.cpp
+    src/cosserat_rod/RootCosseratStressFactor.cpp
+    src/cosserat_rod/RootCosseratTwistFactor.cpp
 
-include_directories(
+    src/measurement/PositionPriorFactor.cpp
+
+    src/tendon_finger/TendonDiscWrenchFactor.cpp
+    src/tendon_finger/TendonFingerModel.cpp
+    src/tendon_finger/TendonLengthFactor.cpp
+
+    src/tendon_hand/TendonHandGraph.cpp
+    src/tendon_hand/TendonHandModel.cpp
+    src/tendon_hand/TendonHandPriors.cpp
+    src/tendon_hand/TendonHandSolver.cpp
+    src/tendon_hand/TendonHandTrajectoryPlanner.cpp
+    src/tendon_hand/TendonHandValues.cpp
+
+    src/utils/SolverBase.cpp
+    src/utils/WrenchTransforms.cpp
+
+    # The pybind11 layer, all of it in one place.
+    src/bindings/bind_cosserat_dynamics.cpp
+    src/bindings/bind_cosserat_rod.cpp
+    src/bindings/bind_tendon_finger.cpp
+    src/bindings/bind_tendon_hand.cpp
+    src/bindings/module.cpp
+)
+
+pybind11_add_module(_gepetto_solvers ${GEPETTO_SOLVERS_SOURCES})
+
+target_compile_features(_gepetto_solvers PRIVATE cxx_std_17)
+
+# Public headers live in include/gepetto_solvers/<module>/, so every internal
+# include reads `#include "gepetto_solvers/<module>/X.h"` -- the same path a
+# consumer outside this build would use. src/ is on the path too, but only so the
+# bindings can reach their own bindings.h; nothing else in src/ is includable.
+target_include_directories(_gepetto_solvers PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_include_directories(_gepetto_solvers PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GTSAM_INCLUDE_DIR}
     ${EIGEN_INCLUDE_DIR}
 )
 
-target_link_libraries(_crest_sparse PRIVATE gtsam OpenVDB::openvdb)
+target_link_libraries(_gepetto_solvers PRIVATE gtsam OpenVDB::openvdb)
 
 if(OpenMP_CXX_FOUND)
-    target_link_libraries(_crest_sparse PRIVATE OpenMP::OpenMP_CXX)
-    target_compile_definitions(_crest_sparse PRIVATE CREST_USE_OPENMP)
+    target_link_libraries(_gepetto_solvers PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(_gepetto_solvers PRIVATE GEPETTO_USE_OPENMP)
 endif()
 
-install(TARGETS _crest_sparse LIBRARY DESTINATION crest_sparse)
+install(TARGETS _gepetto_solvers LIBRARY DESTINATION gepetto_solvers)
 
-# target_compile_features(crest_sparse PRIVATE cxx_std_17)
-# target_compile_options(crest_sparse PRIVATE -O3 -fPIC)
+# target_compile_features(gepetto_solvers PRIVATE cxx_std_17)
+# target_compile_options(gepetto_solvers PRIVATE -O3 -fPIC)
 
-# set_target_properties(crest_sparse PROPERTIES
-#     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python/crest_sparse")
+# set_target_properties(gepetto_solvers PROPERTIES
+#     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/python/gepetto_solvers")

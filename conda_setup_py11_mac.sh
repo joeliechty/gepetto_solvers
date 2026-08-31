@@ -57,9 +57,18 @@ echo 'export DYLD_LIBRARY_PATH=$CONDA_PREFIX/lib:$DYLD_LIBRARY_PATH' > $CONDA_PR
 # Build/Install CREST-sparse
 echo "Building and installing CREST-sparse..."
 cd $CREST_SPARSE_DIR
-pip install -r requirements.txt
+# Runtime dependencies are declared in pyproject.toml; installing the package
+# brings them in. [viz,web] adds the PyVista windows the demo scripts open and
+# the viser workbench.
+pip install ".[viz,web]" -v
+
 # pip's numpy/scipy wheels are built against macOS Accelerate which may lack newer
 # LAPACK symbols on this OS version. Replace them with conda versions (use openblas).
+#
+# This MUST run AFTER `pip install`, not before it: numpy and scipy are declared
+# dependencies now, so installing the package resolves them, and doing the swap
+# first would simply have the Accelerate wheels put back. They are declared with
+# a lower bound rather than an exact pin for the same reason -- conda's newer
+# build satisfies it, so a later `pip install -e .` will not undo this either.
 pip uninstall numpy scipy -y
 conda install -c conda-forge numpy scipy --force-reinstall -y
-pip install . -v

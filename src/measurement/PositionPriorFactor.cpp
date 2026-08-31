@@ -1,4 +1,4 @@
-#include "PositionPriorFactor.h"
+#include "gepetto_solvers/measurement/PositionPriorFactor.h"
 
 using namespace gtsam;
 
