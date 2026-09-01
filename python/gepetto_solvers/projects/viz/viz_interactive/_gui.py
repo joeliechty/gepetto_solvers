@@ -16,11 +16,8 @@ from gepetto_solvers.core.geometry.scene import (
     TABLE_SPAN,
 )
 from gepetto_solvers.core.solvers import (
-    CLOSE_FRACTION,
     DEFAULT_WRIST_RPY,
     DEFAULT_WRIST_XYZ,
-    LIFT_HEIGHT_M,
-    LIFT_STEPS,
     PHASE_PRESETS,
     HandSolveParams,
 )
@@ -30,7 +27,6 @@ from .constants import (
     CONTACT_SHELL_MODES,
     DEFAULT_CONTACT_SHELL_MODE,
     DEFAULT_PHASE,
-    FINGER_LABELS,
     OPPOSITION_SIDES,
     SDF_DROPDOWN_LABELS,
 )
@@ -89,7 +85,7 @@ class GuiMixin:
 
         step_hint = (None if self.caps["ik_stepping"]
                      else "requires a rebuilt _gepetto_solvers with "
-                          "TendonHandSolver.reset_al_duals")
+                          "HandSolver.reset_al_duals")
 
         with gui.add_folder("Solver"):
             # Opens on whatever __init__ resolved (see _resolve_default_primitive,
@@ -152,7 +148,7 @@ class GuiMixin:
                      "replays the close and the Robot folder plays it as "
                      "waypoints.")
             self.g_close_frac = gui.add_slider(
-                "close depth (fraction)", 0.1, 1.0, 0.05, CLOSE_FRACTION,
+                "close depth (fraction)", 0.1, 1.0, 0.05, self.hand.motion.close_fraction,
                 hint="How far into the tendon travel each finger HAS LEFT the "
                      "close goes. 1.0 drives every digit onto its hardware stop, "
                      "where finger_servo_node saturates and the last waypoints "
@@ -177,9 +173,9 @@ class GuiMixin:
                      "pose is kept, so the Solve steps scrubber replays the lift "
                      "and the Robot folder plays it as waypoints.")
             self.g_lift_height = gui.add_slider(
-                "lift height (m)", 0.0, 0.3, 0.01, LIFT_HEIGHT_M,
+                "lift height (m)", 0.0, 0.3, 0.01, self.hand.motion.lift_height_m,
                 hint=f"How far up the wrist goes, along world +Z. Split into "
-                     f"{LIFT_STEPS} equal steps whatever the height, so the "
+                     f"{self.hand.motion.lift_steps} equal steps whatever the height, so the "
                      f"taller the lift the bigger each step -- past ~50 mm a "
                      f"step the FK warm start stops carrying the hand and every "
                      f"pose rebuilds from cold (slower, still correct; the "
@@ -263,7 +259,7 @@ class GuiMixin:
                       "carries -- the penalty schedule restarts either way."
                       if self.caps["solver_seed"]
                       else "requires a rebuilt _gepetto_solvers with "
-                           "TendonHandSolverConfig.initial_state"))
+                           "HandSolverConfig.initial_state"))
             self.g_carry_duals = gui.add_checkbox(
                 "carry AL duals", False, disabled=not self.caps["dual_transfer"],
                 hint=("Also carry the Augmented Lagrangian multipliers, matched "
@@ -277,7 +273,7 @@ class GuiMixin:
                       "Tick to see the difference."
                       if self.caps["dual_transfer"]
                       else "requires a rebuilt _gepetto_solvers with "
-                           "TendonHandSolver.set_initial_duals"))
+                           "HandSolver.set_initial_duals"))
             self.g_reset = gui.add_button(
                 "Reset defaults", icon=self.viser.Icon.ROTATE,
                 hint="Put every control back to the value it opened with -- "
@@ -351,7 +347,7 @@ class GuiMixin:
             self.g_flexors = [
                 gui.add_slider(lbl, 0.0, 3.0, 0.01,
                                open_flexors.get(lbl, GRASP_FLEXOR_TENSION))
-                for lbl in FINGER_LABELS]
+                for lbl in self.digit_names]
             # What the solve gives BACK for the tensions above: the sliders
             # command a pull, this says how much actuated tendon that pull
             # actually took in. Rewritten on every render, so it follows the
@@ -675,7 +671,7 @@ class GuiMixin:
                 # avoidance but are not driven onto a surface. Whatever is
                 # ticked here survives every phase preset (see
                 # _apply_phase_preset) -- only Reset puts this back.
-                _pinch_default = {"index", "middle", "thumb"}
+                _pinch_default = set(self.hand.default_contact_digits)
                 self.g_contacts = [
                     gui.add_checkbox(
                         lbl, lbl in _pinch_default,
@@ -688,7 +684,7 @@ class GuiMixin:
                              "they stay out of the object and off the table "
                              "without being driven onto either, opposed "
                              "against, or centered on.")
-                    for lbl in FINGER_LABELS]
+                    for lbl in self.digit_names]
 
         with gui.add_folder("Collision", expand_by_default=False):
             self.g_coll_radius = gui.add_slider("sphere radius (m)", 0.001, 0.01, 0.0005, 0.003)

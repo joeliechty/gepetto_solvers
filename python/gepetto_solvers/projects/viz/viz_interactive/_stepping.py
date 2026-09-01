@@ -10,7 +10,6 @@ import threading
 import numpy as np
 
 from gepetto_solvers.core.solvers import (
-    FLEXOR_IDX,
     HandIKStepper,
     R_to_euler,
     solved_wrist_pose,
@@ -234,7 +233,7 @@ class StepperMixin:
         solved, clamped = [], False
         for name in res.finger_names:
             q = float(np.asarray(
-                res.frames[0][name].marginals.tensions.mean, float)[FLEXOR_IDX])
+                res.frames[0][name].marginals.tensions.mean, float)[self._drive_index()])
             clamped = clamped or not (lo <= q <= hi)
             solved.append(min(max(q, lo), hi))
         self._restoring = True
@@ -468,7 +467,7 @@ class StepperMixin:
             # which happens whenever the app is run from the python/ directory.
             self.g_warm_status.content = (
                 "**unavailable** -- this binding has no "
-                "`TendonHandSolverConfig.initial_state`  \n"
+                "`HandSolverConfig.initial_state`  \n"
                 f"loaded from `{binding_path()}`  \n"
                 "*(run from the crest-sparse root -- `python -m "
                 "python.tests.tendon_hand.viz_interactive` -- so the installed "

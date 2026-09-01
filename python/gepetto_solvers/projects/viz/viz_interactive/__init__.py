@@ -1,4 +1,6 @@
-"""Interactive viser workbench for the tendon hand.
+"""Interactive viser workbench.
+
+Poses whichever hand ``--hand`` names (default: the registry default).
 
 Pose the hand with FK, then step the IK solve one Augmented Lagrangian outer
 iteration at a time and scrub the result; drive the staged pre-grasp pipeline;
@@ -77,19 +79,32 @@ def main():
     parser.add_argument("--smoke", action="store_true",
                         help="Headless self-check of the solver classes (no viser).")
     parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument(
+        "--hand", default=None,
+        help="Which hand to pose, by registry name (default: the registry's "
+             "default). Every panel is sized and named off it.")
     args = parser.parse_args()
 
     if args.smoke:
         sys.exit(_smoke())
 
     import viser
+
+    from gepetto_solvers.core.hands import get_hand, registered_hands
+
+    try:
+        hand = get_hand(args.hand)
+    except KeyError as exc:
+        parser.error(f"{exc} Available: {', '.join(registered_hands())}.")
     server = viser.ViserServer(port=args.port)
-    app = HandVizApp(server)
+    app = HandVizApp(server, hand=hand)
     # Which binding got loaded, and what it can do. Printed unconditionally: a
     # capability-gated control that is silently disabled is indistinguishable
     # from one that does not work, and the usual cause is a stale .so shadowing
     # the installed build (see binding_path()).
     print(f"gepetto_solvers: {binding_path()}")
+    print(f"hand: {hand.name} ({hand.kinematics} kinematics, "
+          f"{len(hand.digit_names)} digits: {', '.join(hand.digit_names)})")
     missing = [k for k, v in app.caps.items() if not v]
     if missing:
         print(f"  capabilities MISSING from this build: {', '.join(missing)}")

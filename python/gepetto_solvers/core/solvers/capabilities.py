@@ -1,12 +1,10 @@
-"""What the installed extension can do, and the two constants everything shares.
+"""What the installed extension can do.
 
 The installed ``.so`` routinely lags the C++ source, so every newer config field
 is set through :func:`_set_if` and :func:`capabilities` tells a caller -- chiefly
 the visualizers -- which controls to grey out instead of crashing. A control that
 silently does nothing is almost always a False here.
 """
-
-import numpy as np
 
 import gepetto_solvers
 
@@ -15,25 +13,11 @@ from ..objects import OBJECTS_DIR
 #: The ``objects/`` directory holding the baked .vdb SDF grids.
 _OBJECTS_DIR = OBJECTS_DIR
 
-# Anatomical hand digit count / config order: index, middle, ring, pinky, thumb.
-NUM_FINGERS = 5
-
-
-# The flexor tendon is index 5 in the 6-tendon anatomical routing (scene.TENDON_NAMES).
-FLEXOR_IDX = 5
-
-
-def tendon_diag(passive, active, n=6, idx=FLEXOR_IDX):
-    """Diagonal tendon covariance with a distinct entry for the ACTUATED tendon.
-
-    Every tendon prior in this hand is anisotropic in the same way: five
-    spring-backed passives that behave one way and one motor-driven flexor that
-    behaves another. Writing that as one helper keeps the split from drifting
-    apart between the priors that have to agree about it.
-    """
-    d = np.full(int(n), float(passive))
-    d[idx] = float(active)
-    return np.diag(d)
+# The digit count, the actuator layout and which actuator is driven are
+# properties of ONE hand, so they are not constants here any more -- read them
+# off ``hand.digit_names`` and ``hand.actuation``
+# (gepetto_solvers.core.hands.base.Actuation, whose prior_cov() replaces what
+# used to be tendon_diag()).
 
 
 def _set_if(obj, name, value):
@@ -54,9 +38,14 @@ def capabilities():
     """What the *installed* binding supports, so callers (the visualizer) can gate
     unsupported controls instead of crashing on a stale build."""
     env = gepetto_solvers.EnvironmentConfig()
-    pc = gepetto_solvers.TendonHandTrajectoryPlannerConfig()
+    pc = gepetto_solvers.HandTrajectoryPlannerConfig()
     fc = gepetto_solvers.TendonFingerSolverConfig()
     return {
+        # Pluggable hand kinematics: HandSpec / make_tendon_hand_spec and the
+        # registry the graph builder loads a mechanism from. False on a binding
+        # from before the hand was separated from its kinematics, where nothing
+        # below can be built at all.
+        "hand_spec": hasattr(gepetto_solvers, "make_tendon_hand_spec"),
         "ellipsoid": hasattr(env, "ellipsoid_semi_axes"),
         # Section 1.2 ellipsoid SETS (the YCB objects). Gated separately from
         # "ellipsoid" because the set factor landed much later than the single
@@ -72,26 +61,26 @@ def capabilities():
         "k_touch": hasattr(pc, "k_touch"),
         # Per-iteration solve snapshots off the single-shot solver, so the
         # visualizer can scrub an IK solve's convergence. The trajectory planner
-        # has had this for longer; TendonHandSolver only gained it with the
+        # has had this for longer; HandSolver only gained it with the
         # iterate scrubber, so a stale binding must not offer the control.
-        "solve_iterates": hasattr(gepetto_solvers.TendonHandSolver,
+        "solve_iterates": hasattr(gepetto_solvers.HandSolver,
                                   "get_intermediate_solutions"),
         # Driving the AL outer loop one iteration at a time (HandIKStepper).
         # Probed via reset_al_duals because the other half of that build --
-        # TendonHandSolver honoring skip_marginals -- is a behavior change no
+        # HandSolver honoring skip_marginals -- is a behavior change no
         # hasattr can see, and setting the flag on a binding without it would
         # read an empty marginals object. Both ship together.
-        "ik_stepping": hasattr(gepetto_solvers.TendonHandSolver, "reset_al_duals"),
+        "ik_stepping": hasattr(gepetto_solvers.HandSolver, "reset_al_duals"),
         # Seeding a single-shot solve / stepper with a posture from an earlier
         # solve (HandSolveParams.initial_state), the way the controller has
         # always been seedable. Without it a rebuilt stepper can only cold-start.
-        "solver_seed": hasattr(gepetto_solvers.TendonHandSolverConfig(),
+        "solver_seed": hasattr(gepetto_solvers.HandSolverConfig(),
                                "initial_state"),
         # Carrying the AL multipliers across a REBUILD, matched by constraint
-        # identity (TendonHandSolver.set_initial_duals). Without it a rebuilt
+        # identity (HandSolver.set_initial_duals). Without it a rebuilt
         # solver restarts the penalty schedule from scratch, which is visible as
         # the hand drifting off constraints it had already satisfied.
-        "dual_transfer": hasattr(gepetto_solvers.TendonHandSolver,
+        "dual_transfer": hasattr(gepetto_solvers.HandSolver,
                                  "set_initial_duals"),
         # Eq 2.18-2.19 pre-grasp hand-centering. Needs a rebuilt binding with
         # EnvironmentConfig.pregrasp_center_node.
@@ -141,7 +130,7 @@ def capabilities():
         # measurement only, so a binding without it loses the overlay and
         # nothing else.
         "planar_gap": hasattr(gepetto_solvers, "ellipsoid_set_planar_gap"),
-        # Whether TendonHandSolver.solve releases the GIL while the C++ solve
+        # Whether HandSolver.solve releases the GIL while the C++ solve
         # runs. Without it the whole interpreter is frozen for the duration of
         # every AL outer iteration (~1.4 s measured), so the visualizer's E-STOP
         # cannot even be RECEIVED: viser dispatches button callbacks on a thread

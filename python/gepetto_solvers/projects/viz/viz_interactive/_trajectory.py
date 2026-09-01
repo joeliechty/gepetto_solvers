@@ -9,11 +9,7 @@ that class's ``__init__`` sets up.
 import numpy as np
 
 from gepetto_solvers.core.geometry.scene import table_corner
-from gepetto_solvers.core.solvers import FLEXOR_IDX, R_to_euler, solved_wrist_pose
-
-from .constants import (
-    FINGER_LABELS,
-)
+from gepetto_solvers.core.solvers import R_to_euler, solved_wrist_pose
 
 
 class TrajectoryMixin:
@@ -55,7 +51,7 @@ class TrajectoryMixin:
         T = np.asarray(solved_wrist_pose(self.fk_solver.configs, res.frames[0]),
                        float)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
-        lengths = [float(np.asarray(length, float)[FLEXOR_IDX]) * 1e3
+        lengths = [float(np.asarray(length, float)[self._drive_index()]) * 1e3
                    for length in res.tendon_lengths(0)]
         return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
 
@@ -86,11 +82,11 @@ class TrajectoryMixin:
         open_lengths = self._open_lengths()
         # The ORDER has to be the result's own, because that is the order
         # `_traj_row` reads `tendon_lengths(0)` in and therefore the order the
-        # panel's first five channels are in. Falling back to FINGER_LABELS only
+        # panel's first five channels are in. Falling back to self.digit_names only
         # covers the case where nothing is solved, where there is no plot to
         # align with anyway.
         names = (list(self.result.finger_names)
-                 if self.result is not None else list(FINGER_LABELS))
+                 if self.result is not None else list(self.digit_names))
         lengths = []
         for name in names:
             disp = state.tendon_disp.get(name)

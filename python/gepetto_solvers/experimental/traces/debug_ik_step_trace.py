@@ -68,7 +68,8 @@ from gepetto_solvers.core.geometry.scene import (
     get_primitive_specs,
     primitive_surface_gap,
 )
-from gepetto_solvers.core.hand.config import (
+from gepetto_solvers.core.hands import get_hand
+from gepetto_solvers.core.hands.tendon_5f import (
     disc_node_indices,
     proximal_disc_flags,
     tip_node_index,
@@ -76,7 +77,6 @@ from gepetto_solvers.core.hand.config import (
 from gepetto_solvers.core.solvers import (
     DEFAULT_WRIST_RPY,
     DEFAULT_WRIST_XYZ,
-    NUM_FINGERS,
     HandIKStepper,
     HandSolveParams,
     capabilities,
@@ -100,8 +100,14 @@ DEFAULT_PRIMITIVE = HandSolveParams().primitive
 PASS_TOL = 1e-4
 
 
-def parse_mask(text, n=NUM_FINGERS):
-    """``"1,0,0,0,1"`` -> ``[True, False, False, False, True]``."""
+def parse_mask(text, n=None):
+    """``"1,0,0,0,1"`` -> ``[True, False, False, False, True]``.
+
+    ``n`` defaults to the default hand's digit count, resolved on call rather
+    than baked into the signature -- the flag list has to be one per digit of
+    whatever hand is being traced."""
+    if n is None:
+        n = len(get_hand().digit_names)
     parts = [p.strip() for p in text.split(",") if p.strip() != ""]
     if len(parts) != n:
         raise argparse.ArgumentTypeError(
@@ -512,7 +518,7 @@ def build_params(args):
     p.sigma_wrist_pos = args.sigma_wrist_pos
     p.sigma_wrist_rot = args.sigma_wrist_rot
     p.passive_tension = args.passive
-    p.flexor_tensions = [args.flexor] * NUM_FINGERS
+    p.flexor_tensions = [args.flexor] * len(get_hand().digit_names)
     if args.contact_fingers is not None:
         p.contact_fingers = args.contact_fingers
     p.object_contact = args.object_contact
@@ -652,7 +658,7 @@ def main(argv=None):
     try:
         if not capabilities()["ik_stepping"]:
             print("This harness needs a _gepetto_solvers with "
-                  "TendonHandSolver.reset_al_duals (the same build the GUI's "
+                  "HandSolver.reset_al_duals (the same build the GUI's "
                   "Step button needs). Rebuild the extension.")
             return 1
 

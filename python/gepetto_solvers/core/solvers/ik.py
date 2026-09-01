@@ -19,7 +19,7 @@ class HandIKSolver(HandSolverBase):
     def solve(self) -> HandResult:
         self._attach_environment()
 
-        cfg = gepetto_solvers.TendonHandSolverConfig()
+        cfg = gepetto_solvers.HandSolverConfig()
         cfg.wrist_pose = self.params.wrist_pose
         cfg.sigma_wrist_pos = self.params.sigma_wrist_pos
         cfg.sigma_wrist_rot = self.params.sigma_wrist_rot
@@ -35,7 +35,7 @@ class HandIKSolver(HandSolverBase):
             # iteration either way.
             _set_if(cfg.base, "iteration_sample_interval", 1)
 
-        solver = gepetto_solvers.TendonHandSolver(self.configs, cfg)
+        solver = gepetto_solvers.HandSolver(self._hand_spec(), cfg)
         sol = solver.solve(self._tension_priors(self._flexor_tension_cov()),
                            self._tip_wrenches())
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)

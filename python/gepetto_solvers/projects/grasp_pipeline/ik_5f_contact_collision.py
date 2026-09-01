@@ -29,6 +29,9 @@ import time
 import numpy as np
 
 import gepetto_solvers
+from gepetto_solvers.core.environment import (
+    attach_collision,
+)
 from gepetto_solvers.core.geometry.scene import (
     GRASP_FLEXOR_TENSION,
     GRASP_SPHERE_CENTER,
@@ -36,8 +39,7 @@ from gepetto_solvers.core.geometry.scene import (
     get_primitive_specs,
     primitive_surface_gap,
 )
-from gepetto_solvers.core.hand.config import (
-    attach_collision,
+from gepetto_solvers.core.hands.tendon_5f import (
     default_hand_tip_radii,
     disc_node_indices,
     get_default_hand_configs,
@@ -105,7 +107,7 @@ def main():
     attach_collision(configs, vdb_path, object_pose,
                      radius=args.collision_radius, sigma=args.collision_sigma)
 
-    hand_config = gepetto_solvers.TendonHandSolverConfig()
+    hand_config = gepetto_solvers.HandSolverConfig()
     hand_config.wrist_pose = np.eye(4)
     hand_config.sigma_wrist_pos = args.sigma_wrist_pos
     hand_config.sigma_wrist_rot = args.sigma_wrist_rot
@@ -114,7 +116,7 @@ def main():
     hand_config.base.al_mu_increase_rate = args.al_rate
     hand_config.base.al_max_iterations = args.al_iters
 
-    solver = gepetto_solvers.TendonHandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(configs, hand_config)
     print(f"Built hand solver with {solver.num_fingers()} fingers "
           f"(collision avoidance ON).")
 
@@ -135,7 +137,7 @@ def main():
     # --- Contact still holds: each tip tangent to the surface ---
     print("\nTip contact gaps (target ~0):")
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
-                                         solution.marginals.fingers):
+                                         solution.marginals.digits):
         tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius
@@ -144,7 +146,7 @@ def main():
     # --- Collision sphere world positions per finger ---
     r_col = args.collision_radius
     spheres = []          # per finger: list of (node_idx, pos, proximal)
-    for (_, cfg), fm in zip(configs, solution.marginals.fingers):
+    for (_, cfg), fm in zip(configs, solution.marginals.digits):
         nodes = disc_node_indices(cfg)
         prox = proximal_disc_flags(cfg)
         tip_idx = tip_node_index(cfg)
@@ -203,15 +205,15 @@ def main():
     if args.no_viz:
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
-        TendonHandMultiViewPlotter,
+    from gepetto_solvers.core.plotting.hand_plotter import (
+        HandMultiViewPlotter,
     )
 
     class _FingerSol:
         pass
 
     solutions = {}
-    for name, fm in zip(finger_names, solution.marginals.fingers):
+    for name, fm in zip(finger_names, solution.marginals.digits):
         s = _FingerSol()
         s.marginals = fm
         s.meta = solution.meta
@@ -220,7 +222,7 @@ def main():
     # Four windows around the hand (three azimuths 90 deg apart + near-top-down)
     # with the grasp object rendered, so contact and clearance are visible from
     # any side.
-    plotter = TendonHandMultiViewPlotter(
+    plotter = HandMultiViewPlotter(
         finger_names,
         plot_backbone_ellipsoids=False,
         camera_focal_point=list(object_center),

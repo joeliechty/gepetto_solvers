@@ -2,7 +2,7 @@
 
 This is the position-goal counterpart of ``ik_5f_collision.py`` and the
 single-shot analogue of ``traj_5f_point_collision.py``.
-A single ``TendonHandSolver`` solve (tensions in, poses out) is driven by two
+A single ``HandSolver`` solve (tensions in, poses out) is driven by two
 things at once:
 
   * per-finger world-frame **tip-position goals** -- soft ``PositionPriorFactor``s
@@ -42,7 +42,7 @@ penetrating basin -- see traj_5f_point_collision.py,
 which PASSES (collision-free + reaches these same goals). Making the single-shot
 solver enforce collision would need a real fix: a mu schedule that keeps
 collision active against the goal prior, or warm-starting the single-shot from
-the trajectory's collision-free approach (TendonHandSolver retains values_
+the trajectory's collision-free approach (HandSolver retains values_
 across solve() calls and exposes set_wrist_pose for exactly this).
 ======================================================================
 
@@ -60,13 +60,15 @@ import gepetto_solvers
 
 # Reuse the collision-clearance report (worst finger-object / finger-finger gap).
 from gepetto_solvers.core.diagnostics import collision_report
+from gepetto_solvers.core.environment import (
+    attach_collision,
+)
 from gepetto_solvers.core.geometry.scene import (
     GRASP_GOALS,
     GRASP_SPHERE_CENTER,
     get_primitive_specs,
 )
-from gepetto_solvers.core.hand.config import (
-    attach_collision,
+from gepetto_solvers.core.hands.tendon_5f import (
     get_default_hand_configs,
     load_hand_dimensions,
 )
@@ -77,7 +79,7 @@ def solve_hand(configs, args, goal_positions=None):
     """Single-shot hand solve. When ``goal_positions`` is given (one Vector3 per
     finger) the solver adds a soft tip-position prior per finger; otherwise the
     solve is driven purely by the tension priors (baseline)."""
-    hand_config = gepetto_solvers.TendonHandSolverConfig()
+    hand_config = gepetto_solvers.HandSolverConfig()
     hand_config.wrist_pose = np.eye(4)
     hand_config.sigma_wrist_pos = 1e-4
     hand_config.sigma_wrist_rot = 1e-3
@@ -102,7 +104,7 @@ def solve_hand(configs, args, goal_positions=None):
                                       for g in goal_positions]
         hand_config.goal_position_cov = args.goal_cov * np.eye(3)
 
-    solver = gepetto_solvers.TendonHandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(configs, hand_config)
 
     num_tendons = configs[0][1].num_tendons
     # Tight passive tendons, loose flexor (the collision-test pattern): the flexor
@@ -131,7 +133,7 @@ def solve_hand(configs, args, goal_positions=None):
 def tip_positions(configs, solution):
     """World-frame tip position of every finger in a hand solution."""
     tips = []
-    for (_, _cfg), fm in zip(configs, solution.marginals.fingers):
+    for (_, _cfg), fm in zip(configs, solution.marginals.digits):
         tips.append(np.array(fm.rod.states[-1].pose.mean)[:3, 3])
     return tips
 
@@ -220,8 +222,8 @@ def main():
     if args.no_viz:
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
-        TendonHandMultiViewPlotter,
+    from gepetto_solvers.core.plotting.hand_plotter import (
+        HandMultiViewPlotter,
     )
 
     class _FingerSol:
@@ -229,12 +231,12 @@ def main():
 
     finger_names = [name for name, _ in configs_on]
     solutions = {}
-    for name, fm in zip(finger_names, sol_on.marginals.fingers):
+    for name, fm in zip(finger_names, sol_on.marginals.digits):
         s = _FingerSol()
         s.marginals = fm
         s.meta = sol_on.meta
         solutions[name] = s
-    plotter = TendonHandMultiViewPlotter(
+    plotter = HandMultiViewPlotter(
         finger_names,
         plot_backbone_ellipsoids=False,
         camera_focal_point=list(GRASP_SPHERE_CENTER),

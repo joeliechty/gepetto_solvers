@@ -14,12 +14,13 @@ from dataclasses import replace
 
 import numpy as np
 
-from .hardware import _solvers
+from .hardware import _drive_index, _hand, _solvers
 from .se3 import _rotation_error
-from .types import FLEXOR_IDX, SolvePlan, Waypoint
+from .types import SolvePlan, Waypoint
 
 
-def build_plan(result, configs, corner_viz, open_lengths, source="history"):
+def build_plan(result, configs, corner_viz, open_lengths, source="history",
+               hand=None):
     """A :class:`SolvePlan` from a solved :class:`~.solvers.HandResult`.
 
     ``source``:
@@ -55,12 +56,13 @@ def build_plan(result, configs, corner_viz, open_lengths, source="history"):
                  for i in range(n)]
 
     solved_wrist_pose = _solvers().solved_wrist_pose
+    idx = _drive_index(_hand(hand))
     waypoints = []
     for view, note in zip(views, notes):
         lengths = view.tendon_lengths(0)
         waypoints.append(Waypoint(
             wrist_pose=np.asarray(solved_wrist_pose(configs, view.frames[0]), float),
-            tendon_disp={name: open_lengths[name] - float(length[FLEXOR_IDX])
+            tendon_disp={name: open_lengths[name] - float(length[idx])
                          for name, length in zip(view.finger_names, lengths)
                          if name in open_lengths},
             note=note))

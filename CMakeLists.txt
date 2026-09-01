@@ -50,16 +50,23 @@ set(GEPETTO_SOLVERS_SOURCES
 
     src/measurement/PositionPriorFactor.cpp
 
-    src/tendon_finger/TendonDiscWrenchFactor.cpp
-    src/tendon_finger/TendonFingerModel.cpp
-    src/tendon_finger/TendonLengthFactor.cpp
+    src/digits/tendon/TendonDiscWrenchFactor.cpp
+    src/digits/tendon/TendonFingerModel.cpp
+    src/digits/tendon/TendonLengthFactor.cpp
 
-    src/tendon_hand/TendonHandGraph.cpp
-    src/tendon_hand/TendonHandModel.cpp
-    src/tendon_hand/TendonHandPriors.cpp
-    src/tendon_hand/TendonHandSolver.cpp
-    src/tendon_hand/TendonHandTrajectoryPlanner.cpp
-    src/tendon_hand/TendonHandValues.cpp
+    # The kinematics-agnostic hand: the graph builder, its constraint tagger and
+    # the registry the kinematics is loaded from.
+    src/hand/ConstraintTagger.cpp
+    src/hand/HandGraph.cpp
+    src/hand/HandKinematicsRegistry.cpp
+    src/hand/HandModel.cpp
+    src/hand/HandSolver.cpp
+    src/hand/HandTrajectoryPlanner.cpp
+    src/hand/HandValues.cpp
+
+    # One translation unit per hand kinematics. Each self-registers at static
+    # init, so listing it here is what makes it loadable by name.
+    src/hand/kinematics/tendon/TendonHandKinematics.cpp
 
     src/utils/SolverBase.cpp
     src/utils/WrenchTransforms.cpp
@@ -67,8 +74,8 @@ set(GEPETTO_SOLVERS_SOURCES
     # The pybind11 layer, all of it in one place.
     src/bindings/bind_cosserat_dynamics.cpp
     src/bindings/bind_cosserat_rod.cpp
-    src/bindings/bind_tendon_finger.cpp
-    src/bindings/bind_tendon_hand.cpp
+    src/bindings/bind_digits_tendon.cpp
+    src/bindings/bind_hand.cpp
     src/bindings/module.cpp
 )
 

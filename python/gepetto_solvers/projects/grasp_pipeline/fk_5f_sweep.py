@@ -10,7 +10,7 @@ Finger morphology (bone lengths, palm origins/angles) comes from the
 falls back to hard-coded ``DEFAULT_HAND_DIMENSIONS`` otherwise, so this runs
 standalone. No contact is attached -> a pure-kinematics solve driven by tensions.
 
-The wrist prior mean starts at ``TendonHandSolverConfig.wrist_pose`` but is
+The wrist prior mean starts at ``HandSolverConfig.wrist_pose`` but is
 re-commanded each frame through ``solver.set_wrist_pose(T)``, which re-aims the
 shared wrist prior *without* rebuilding the solver. Because the solver retains
 its ``values_`` across ``solve()`` calls, each frame **warm-starts** from the
@@ -27,8 +27,10 @@ import time
 import numpy as np
 
 import gepetto_solvers
-from gepetto_solvers.core.hand.config import get_default_hand_configs
-from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
+from gepetto_solvers.core.hands.tendon_5f import (
+    get_default_hand_configs,
+)
+from gepetto_solvers.core.plotting.hand_plotter import HandPlotter
 
 
 def _wrist_pose(i):
@@ -51,7 +53,7 @@ def _wrist_pose(i):
 
 
 class _FingerSol:
-    """Duck-typed per-finger solution the TendonHandPlotter consumes."""
+    """Duck-typed per-finger solution the HandPlotter consumes."""
     pass
 
 
@@ -60,7 +62,7 @@ def main():
     finger_names = [name for name, _ in configs]
     num_tendons = configs[0][1].num_tendons  # 6
 
-    hand_config = gepetto_solvers.TendonHandSolverConfig()
+    hand_config = gepetto_solvers.HandSolverConfig()
     hand_config.base.linear_solver_type = "MULTIFRONTAL_QR"
     # Only the first frame is a cold start (straight hand -> curled at full
     # tension); every frame after warm-starts from the previous solution, so this
@@ -73,7 +75,7 @@ def main():
     hand_config.sigma_wrist_pos = 1e-4
     hand_config.sigma_wrist_rot = 1e-3
 
-    plotter = TendonHandPlotter(
+    plotter = HandPlotter(
         finger_names,
         plot_backbone_ellipsoids=False,
         camera_azimuth=165,
@@ -102,7 +104,7 @@ def main():
     # Build the solver ONCE. Rebuilding each frame would discard the retained
     # solution and force a straight-hand cold start every time; instead we keep
     # this instance and re-command the wrist each frame (warm-started sweep).
-    solver = gepetto_solvers.TendonHandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(configs, hand_config)
 
     start_time = time.time()
     num_iters = 10000
@@ -135,11 +137,11 @@ def main():
         # Solved flexor tendon length per finger (meters). The lengths come back
         # per finger as the full num_tendons vector; index 5 is the flexor.
         flexor_lengths = [fm.tendon_lengths[flexor_index]
-                          for fm in solution.marginals.fingers]
+                          for fm in solution.marginals.digits]
 
         # --- Feed the plotter one shim per finger ---
         solutions = {}
-        for name, fm in zip(finger_names, solution.marginals.fingers):
+        for name, fm in zip(finger_names, solution.marginals.digits):
             s = _FingerSol()
             s.marginals = fm
             s.meta = solution.meta
@@ -147,7 +149,7 @@ def main():
         plotter.update(solutions)
 
         if i % 50 == 0:
-            tip = np.array(solution.marginals.fingers[0].rod.states[-1].pose.mean)
+            tip = np.array(solution.marginals.digits[0].rod.states[-1].pose.mean)
             print(f"Iteration {i}/{num_iters} | iters={solution.meta.iterations} "
                   f"err={solution.meta.error:.3g}")
             width = max(len(name) for name in finger_names)

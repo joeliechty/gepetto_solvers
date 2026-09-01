@@ -462,7 +462,9 @@ def main(argv=None):
         print(f"  [warn] could not read the part bounding box ({exc}); candidate "
               f"conventions cannot be scored, falling back to the derived one.")
 
-    from gepetto_solvers.core.hand.config import load_hand_dimensions
+    from gepetto_solvers.core.hands.tendon_5f import (
+    load_hand_dimensions,
+)
     dims = load_hand_dimensions()
 
     scores, R_used, used_name = None, mount.R_WRIST_FROM_STL, mount.DERIVED_CANDIDATE

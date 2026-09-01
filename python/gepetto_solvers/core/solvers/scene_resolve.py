@@ -10,6 +10,9 @@ Every caller of :func:`default_half_space_axis` must pass the result through it.
 
 import numpy as np
 
+from ..environment import (
+    opposition_axis_from_object,
+)
 from ..geometry.scene import (
     GRASP_SPHERE_CENTER,
     OBJECT_CENTER,
@@ -17,7 +20,6 @@ from ..geometry.scene import (
     object_extent_along,
     object_principal_inplane_axis,
 )
-from ..hand.config import opposition_axis_from_object
 
 # ---------------------------------------------------------------------------
 # Scene helpers (shared object placement, mirroring the demo scripts).

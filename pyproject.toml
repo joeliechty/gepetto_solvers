@@ -146,7 +146,7 @@ known-first-party = ["_pkg", "gepetto_solvers"]
 files = [
     "python/gepetto_solvers/core/environment",
     "python/gepetto_solvers/core/geometry",
-    "python/gepetto_solvers/core/hand",
+    "python/gepetto_solvers/core/hands",
     "python/gepetto_solvers/core/robot_plan",
     "python/gepetto_solvers/core/solvers",
 ]
@@ -158,7 +158,7 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 # The compiled extension has no stubs -- pybind11 exports at runtime, so every
-# `gepetto_solvers.TendonHandSolver` reads as a missing attribute to a static
+# `gepetto_solvers.HandSolver` reads as a missing attribute to a static
 # checker. Generating stubs for it is worth doing one day; asserting it is opaque
 # is the honest description until then.
 [[tool.mypy.overrides]]

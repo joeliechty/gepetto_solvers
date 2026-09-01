@@ -41,6 +41,9 @@ from gepetto_solvers.core.diagnostics import (
     log_prior_table,
     report_al_iterations,
 )
+from gepetto_solvers.core.environment import (
+    attach_collision,
+)
 from gepetto_solvers.core.geometry.scene import (
     GRASP_FLEXOR_TENSION,
     GRASP_SPHERE_CENTER,
@@ -49,8 +52,7 @@ from gepetto_solvers.core.geometry.scene import (
     get_primitive_specs,
     primitive_surface_gap,
 )
-from gepetto_solvers.core.hand.config import (
-    attach_collision,
+from gepetto_solvers.core.hands.tendon_5f import (
     default_hand_tip_radii,
     disc_node_indices,
     get_default_hand_configs,
@@ -266,7 +268,7 @@ def _log_solve_landscape(args, plan_config, num_tendons, tensions_cov,
 def plan_trajectory(args, configs, label, object_pose=None, log_landscape=False):
     num_tendons = configs[0][1].num_tendons
 
-    plan_config = gepetto_solvers.TendonHandTrajectoryPlannerConfig()
+    plan_config = gepetto_solvers.HandTrajectoryPlannerConfig()
     plan_config.K = args.steps
     plan_config.dt = args.dt
     plan_config.wrist_pose = np.eye(4)
@@ -309,7 +311,7 @@ def plan_trajectory(args, configs, label, object_pose=None, log_landscape=False)
                              tip_wrench_cov, start_cov,
                              object_pose if object_pose is not None else np.eye(4))
 
-    planner = gepetto_solvers.TendonHandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(configs, plan_config)
     print(f"[{label}] built planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 
@@ -349,7 +351,7 @@ def per_step_collision_report(args, configs, result, spec, object_pose):
     worst_obj_all, worst_ff_all = np.inf, np.inf
     for k, hand_m in enumerate(result.trajectory):
         spheres = []  # per finger: (node, pos, proximal, is_tip)
-        for (_, cfg), fm in zip(configs, hand_m.fingers):
+        for (_, cfg), fm in zip(configs, hand_m.digits):
             tip_idx = tip_node_index(cfg)
             entries = []
             for n, p in zip(disc_node_indices(cfg), proximal_disc_flags(cfg)):
@@ -394,7 +396,7 @@ def terminal_contact_report(configs, tip_radii, result, spec, object_pose):
     print("\nTerminal (k=K) tip contact gaps (target ~0):")
     worst = 0.0
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
-                                         result.trajectory[-1].fingers):
+                                         result.trajectory[-1].digits):
         tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius
@@ -487,7 +489,7 @@ def _main(args, results_dir):
     finger_names = [name for name, _ in configs]
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
+        finger_traj = FingerTraj([hand_m.digits[i] for hand_m in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))
@@ -510,13 +512,13 @@ def _main(args, results_dir):
 
     def _solutions(hand_m):
         return {name: _FingerSol(fm, result.meta)
-                for name, fm in zip(finger_names, hand_m.fingers)}
+                for name, fm in zip(finger_names, hand_m.digits)}
 
     if args.save_figures:
         # Single-window off-screen frames -> GIF (the multi-view plotter is for
         # interactive inspection; the frames pipeline is single-window).
-        from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
-        plotter = TendonHandPlotter(
+        from gepetto_solvers.core.plotting.hand_plotter import HandPlotter
+        plotter = HandPlotter(
             finger_names, plot_backbone_ellipsoids=False,
             camera_azimuth=165, camera_elevation=20,
             camera_focal_point=list(object_center), camera_distance=0.5,
@@ -529,10 +531,10 @@ def _main(args, results_dir):
         print(f"Saved experiment results to {results_dir}/")
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
-        TendonHandMultiViewPlotter,
+    from gepetto_solvers.core.plotting.hand_plotter import (
+        HandMultiViewPlotter,
     )
-    plotter = TendonHandMultiViewPlotter(
+    plotter = HandMultiViewPlotter(
         finger_names, plot_backbone_ellipsoids=False,
         camera_focal_point=list(object_center), camera_distance=0.5,
         primitives=primitives)

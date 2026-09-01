@@ -47,7 +47,7 @@ namespace gepetto_solvers {
 //     gtsam::ZeroCostConstraint -- its zero set is exactly Eq 1.13. This is the
 //     center-direct form (it constrains the sphere CENTER c_i, with no witness point),
 //     matching the paper, which defines no witness variant for the set. The
-//     single-ellipsoid precedent is TendonHandModel::build_graph, which already wraps
+//     single-ellipsoid precedent is HandModel::build_graph, which already wraps
 //     EllipsoidCollisionGapFactor as the Eq 1.101 center-direct contact equality.
 //
 // Per-member distance is Taubin's first-order approximation rather than the raw

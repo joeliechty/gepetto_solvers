@@ -5,7 +5,7 @@
 // Every geometric constraint in the system used to live here, in one 2218-line
 // file holding 21 classes. They now sit one per header under
 // `gepetto_solvers/environment/`, and this header includes all of them -- so the
-// three files that include it (TendonHandModel.h, TendonFingerSolver.h and the
+// three files that include it (HandModel.h, TendonFingerSolver.h and the
 // tendon_finger bindings) are unchanged, and anything wanting a single factor can
 // include just that one.
 //

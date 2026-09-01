@@ -27,7 +27,9 @@ the stale in-tree .so):
 
 import numpy as np
 
-from gepetto_solvers.core.hand.config import pinch_pose
+from gepetto_solvers.core.hands.tendon_5f import (
+    pinch_pose,
+)
 from gepetto_solvers.core.solvers import (
     HandFKSolver,
     HandIKStepper,
@@ -62,7 +64,7 @@ def _params(**kw):
     return p
 
 
-#: The graph wrapper an AL EQUALITY is registered as (TendonHandModel::add_eq).
+#: The graph wrapper an AL EQUALITY is registered as (HandModel::add_eq).
 #: This scene has no other equality constraint -- object and table contact are
 #: both off -- so its count is exactly the number of pinch-centroid factors.
 _EQ_FACTOR = "gtsam::ZeroCostConstraint"

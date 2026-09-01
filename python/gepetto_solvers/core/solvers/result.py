@@ -31,7 +31,7 @@ class _FingerSol:
 def _make_frame(finger_names, hand_marginals, meta):
     """One render frame: ``{finger_name: _FingerSol}`` for a single hand state."""
     return {name: _FingerSol(fm, meta)
-            for name, fm in zip(finger_names, hand_marginals.fingers)}
+            for name, fm in zip(finger_names, hand_marginals.digits)}
 
 
 def _tip_points(frame):
@@ -60,7 +60,7 @@ class HandResult:
     # support-plane equalities -- describe the same finger set in the FK posing
     # state that the controller will enforce once a phase is picked.
     contact_fingers: list[bool] | None = None
-    # The raw ``TendonHandMarginals`` behind each frame, same indexing as
+    # The raw ``HandState`` behind each frame, same indexing as
     # ``frames``. ``frames`` splits a solve up per finger for rendering, which
     # loses the bundle the C++ side wants back: this is the form
     # ``HandSolveParams.initial_state`` takes to warm-start a solver from a
@@ -102,6 +102,15 @@ class HandResult:
     # fingertip's distance to the drill housing, when the constraint drove it to
     # the grip, describes a solve that never ran.
     contact_subset: list[int] | None = None
+    # Name of the digit that opposes the others on the hand this was solved for
+    # (the thumb on an anatomical hand), or None where the hand declares none.
+    #
+    # Carried on the RESULT because the witness readouts describe constraints
+    # that are DEFINED by that opposition -- the half-space split, the pre-grasp
+    # centering and axis alignment. They used to match the literal string
+    # "thumb", which silently measured nothing on any hand that does not have
+    # one. Appended last: several call sites build a result positionally.
+    opposing_digit: str | None = None
 
     def state(self, k=0):
         """The solved hand state at frame ``k``, for seeding another solver.

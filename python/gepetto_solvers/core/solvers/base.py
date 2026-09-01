@@ -11,8 +11,7 @@ import numpy as np
 
 import gepetto_solvers
 
-from ..geometry.scene import grasp_subset_indices
-from ..hand.config import (
+from ..environment import (
     attach_collision,
     attach_contact,
     attach_half_space,
@@ -20,13 +19,11 @@ from ..hand.config import (
     attach_pregrasp_center,
     attach_pregrasp_centroid,
     attach_table,
-    default_hand_tip_radii,
-    get_default_hand_configs,
-    load_hand_dimensions,
     opposition_directions,
-    pinch_pose_for_mask,
 )
-from .capabilities import _OBJECTS_DIR, FLEXOR_IDX, _set_if
+from ..geometry.scene import grasp_subset_indices
+from ..hands import get_hand
+from .capabilities import _OBJECTS_DIR, _set_if
 from .params import HandSolveParams
 from .result import HandResult
 from .scene_resolve import (
@@ -41,16 +38,25 @@ from .scene_resolve import (
 # ---------------------------------------------------------------------------
 
 class HandSolverBase:
-    """Shared setup for the tendon-hand solvers: builds the anatomical hand from
-    ``gepetto_core`` dims and holds the resolved scene. Subclasses implement
-    :meth:`solve`."""
+    """Shared setup for the hand solvers: holds the hand being posed and the
+    resolved scene. Subclasses implement :meth:`solve`.
 
-    def __init__(self, params: HandSolveParams | None = None):
+    The HAND is a parameter, not a constant. ``hand`` takes a
+    :class:`~gepetto_solvers.core.hands.base.Hand` directly; otherwise
+    ``params.hand`` names one in the registry. Everything hand-specific --
+    the digit list, the actuation layout, which digit opposes the rest, the
+    measured pinch table -- is read off it, so the solver itself contains no
+    statement about what kind of mechanism it is posing.
+    """
+
+    def __init__(self, params: HandSolveParams | None = None, hand=None):
         self.params = params or HandSolveParams()
-        self.dims = load_hand_dimensions()
-        self.configs = get_default_hand_configs(self.dims)
-        self.tip_radii = default_hand_tip_radii(self.dims)
-        self.finger_names = [name for name, _ in self.configs]
+        self.hand = hand if hand is not None else get_hand(self.params.hand)
+        # Fresh configs per solver: the attach_* family mutates them in place,
+        # so two solvers sharing one list would see each other's constraints.
+        self.configs = self.hand.digit_configs()
+        self.tip_radii = self.hand.tip_radii
+        self.finger_names = list(self.hand.digit_names)
         self._attach_planar_bending()
         self.spec, self.object_center, self.object_rotation, self.object_pose = \
             resolve_scene(self.params)
@@ -64,7 +70,7 @@ class HandSolverBase:
         """Rod physics, so it rides on the per-finger config rather than the
         environment. Attached from ``__init__`` rather than
         ``_attach_environment`` because it is not environment-dependent and
-        because ``HandFKSolver`` builds its ``TendonHandSolver`` in its own
+        because ``HandFKSolver`` builds its ``HandSolver`` in its own
         ``__init__`` -- a later attach would miss FK entirely."""
         for _, cfg in self.configs:
             _set_if(cfg, "planar_bending", self.params.planar_bending)
@@ -109,7 +115,7 @@ class HandSolverBase:
         can report gaps against the shells the graph actually targeted."""
         mask = self._object_contact_mask()
         in_plane = self.params.object_contact and self.params.object_contact_in_plane
-        pinch = pinch_pose_for_mask(self.configs, mask) if in_plane else None
+        pinch = self.hand.pinch_pose(mask) if in_plane else None
         self.contact_subset = grasp_subset_indices(
             self.spec, self.params.use_grasp_subset)
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
@@ -121,6 +127,12 @@ class HandSolverBase:
                        in_plane=in_plane,
                        pinch_centroid=(pinch.centroid if pinch is not None else None),
                        contact_subset=self.contact_subset)
+
+    def _hand_spec(self):
+        """The C++ ``HandSpec`` for this solve, built from the configs AFTER the
+        environment has been attached to them -- the spec's task half is made of
+        exactly those envs."""
+        return self.hand.build_spec(self.configs)
 
     def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)
@@ -186,7 +198,8 @@ class HandSolverBase:
             axis, _flipped = orient_opposition_axis(
                 axis, thumb, others, flip=self.params.half_space_flip)
             self.params.half_space_axis = np.asarray(axis, float)
-        directions = opposition_directions(self.configs, axis=axis)
+        directions = opposition_directions(
+            self.configs, thumb_index=self.hand.opposing_index, axis=axis)
         split = (self.params.half_space_split if self.params.half_space_split is not None
                 else self.object_center)
         attach_half_space(self.configs, split, directions,
@@ -217,9 +230,10 @@ class HandSolverBase:
                 for name in self.finger_names}
         tips = self._fk_probe_tips
         mask = self.params.contact_fingers
+        opposing = self.hand.opposing_digit
         others = [tips[n] for n, on in zip(self.finger_names, mask)
-                  if on and n != "thumb"]
-        return tips.get("thumb"), others
+                  if on and n != opposing]
+        return (tips.get(opposing) if opposing is not None else None), others
 
     def _attach_pregrasp_center(self):
         """Attach the Eq 2.18-2.19 pre-grasp hand-centering constraint, using
@@ -252,7 +266,7 @@ class HandSolverBase:
         and a constraint that quietly does nothing is the trap this whole
         family of toggles keeps setting.
         """
-        pose = pinch_pose_for_mask(self.configs, self.params.contact_fingers)
+        pose = self.hand.pinch_pose(self.params.contact_fingers)
         if pose is None:
             return None
         h_clear = self.params.h_clear if self.params.h_clear is not None else 0.02
@@ -293,19 +307,24 @@ class HandSolverBase:
     # -- prior builders --
 
     def _tension_priors(self, cov, means=None):
-        """One ``VectorXGaussian`` per finger: passive tendons at the background
-        hold, flexor (index 5) at that finger's commanded tension.
+        """One ``VectorXGaussian`` per digit: passive actuators at the background
+        hold, driven ones at that digit's commanded value.
 
-        ``means`` overrides the per-finger mean vectors wholesale -- the Section
+        Which entries are driven comes from ``hand.actuation``, so a hand with a
+        different actuator count or more than one driven actuator per digit needs
+        no change here.
+
+        ``means`` overrides the per-digit mean vectors wholesale -- the Section
         1.8 phase-0 pre-grasp posture commands ``Q_pre`` that way.
         """
+        act = self.hand.actuation
         priors = []
-        for i, (_, cfg) in enumerate(self.configs):
+        for i in range(len(self.configs)):
             if means is not None:
                 mean = np.asarray(means[i], float)
             else:
-                mean = np.full(cfg.num_tendons, self.params.passive_tension)
-                mean[FLEXOR_IDX] = self.params.flexor_tensions[i]
+                mean = np.full(act.n, self.params.passive_tension)
+                act.set_drive(mean, self.params.flexor_tensions[i])
             priors.append(gepetto_solvers.VectorXGaussian(mean, cov))
         return priors
 
@@ -321,17 +340,16 @@ class HandSolverBase:
         return [gepetto_solvers.Vector6Gaussian(np.zeros(6), cov) for _ in self.configs]
 
     def _flexor_tension_cov(self):
-        """The "tight-passive / loose-flexor" tension-prior covariance used
-        outside the leading settle steps: the five passives at
+        """The "tight-passive / loose-driven" actuation-prior covariance used
+        outside the leading settle steps: passives at
         ``params.passive_tension_sigma ** 2`` (their physics -- a spring holds
-        roughly constant tension, so this is normally left tight), the
-        actuated flexor (index 5) at ``params.flexor_tension_sigma ** 2`` so
-        contact can drive it away from its commanded value. Read live every
-        call, like ``_tip_wrenches()``, so a mid-solve slider drag takes
-        effect on the next step with no stepper rebuild."""
-        cov = np.diag([self.params.passive_tension_sigma ** 2] * 6)
-        cov[FLEXOR_IDX, FLEXOR_IDX] = self.params.flexor_tension_sigma ** 2
-        return cov
+        roughly constant tension, so this is normally left tight), and the
+        DRIVEN actuators at ``params.flexor_tension_sigma ** 2`` so contact can
+        push them away from their commanded value. Read live every call, like
+        ``_tip_wrenches()``, so a mid-solve slider drag takes effect on the next
+        step with no stepper rebuild."""
+        return self.hand.actuation.prior_cov(
+            self.params.passive_tension_sigma, self.params.flexor_tension_sigma)
 
     def _result(self, frames, meta, contact_fingers=None, states=None,
                 iterates=None, iterate_states=None, iterate_notes=None,
@@ -345,7 +363,8 @@ class HandSolverBase:
                           self.object_rotation, self.finger_names, self.tip_radii,
                           contact_fingers, states, iterates, iterate_states,
                           iterate_notes, table_contact_fingers, duals,
-                          dual_transfer, contact_subset=self.contact_subset)
+                          dual_transfer, contact_subset=self.contact_subset,
+                          opposing_digit=self.hand.opposing_digit)
 
     def solve(self) -> HandResult:  # pragma: no cover - abstract
         raise NotImplementedError

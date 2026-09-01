@@ -9,8 +9,6 @@ the hand-open pose.
 
 from dataclasses import replace
 
-from .types import FLEXOR_IDX
-
 
 def _solvers():
     """The solver module, imported on use rather than at import time.
@@ -21,59 +19,36 @@ def _solvers():
     not have to carry a factor-graph solver into a real-time control loop to get
     them -- the whole point of moving that loop out of the visualizer was to stop
     it sharing a process with heavy machinery.
-
-    The constant above is checked against the real one here, so the duplication
-    cannot silently drift.
     """
     from .. import solvers
-    if solvers.FLEXOR_IDX != FLEXOR_IDX:
-        raise RuntimeError(
-            f"FLEXOR_IDX disagrees: robot_plan says {FLEXOR_IDX}, solvers says "
-            f"{solvers.FLEXOR_IDX}. Every tendon displacement in this module is "
-            f"read at that index.")
     return solvers
 
 
-# Solver digit -> the finger name the hardware knows it by (HandConfig.finger_names).
-# `thumb_add` has no flexor tendon and is never commanded from a plan -- see
-# HandConfig's TODO(all-fingers) and finger_servo_node._range_for.
-HARDWARE_FINGER_NAMES = {
-    "index": "index_flex",
-    "middle": "middle_flex",
-    "ring": "ring_flex",
-    "pinky": "pinky_flex",
-    "thumb": "thumb_flex",
-}
+def _hand(hand=None):
+    """The hand these hardware numbers belong to.
+
+    Every function here takes ``hand=None`` and lands on the default, so the
+    existing no-argument callers are unchanged; a caller working with another
+    hand passes it and gets THAT hand's actuator map, open tensions and travel
+    limits instead of this one's.
+    """
+    if hand is not None:
+        return hand
+    from ..hands import get_hand
+    return get_hand()
 
 
-# How far the model's own open-hand tendon lengths may sit from the hardware's
-# calibrated ``HandConfig.zero_bend_lengths`` before build_plan complains. The two
-# are independent derivations of the same quantity (the hardware numbers are
-# themselves "calculated from factor graph", but from a possibly older morphology),
-# so a few mm of disagreement is expected and a few cm means they have drifted
-# apart and the displacements will be biased by the difference.
-OPEN_LENGTH_WARN_M = 0.005
+def _drive_index(hand):
+    """The index of the actuated tendon in a digit's length vector.
+
+    Every displacement in this module is read at this index. A hand that drives
+    more than one actuator per digit has no single such index, and
+    ``drive_value`` says so rather than silently reading the first.
+    """
+    return hand.actuation.drive_indices[0]
 
 
-# The tension used to prove which way flexion moves the actuated tendon (see
-# check_open_lengths). Well inside the GUI's 0-3 N slider range, and large enough
-# that the resulting length change dwarfs solver noise.
-_FLEXION_PROBE_TENSION = 1.5
-
-
-# Fallback copy of HandConfig's open-pose tension set (zero_bend_passive_tension /
-# zero_bend_flexor_tensions), for a machine with no gepetto_core install. Keyed by
-# SOLVER digit. Keep in step with gepetto_core/config.py -- these two agreeing is
-# what makes the model's open hand and the hardware's the same hand.
-_OPEN_PASSIVE_TENSION = 0.5
-
-
-_OPEN_FLEXOR_TENSIONS = {
-    "index": 0.84, "middle": 0.84, "ring": 0.84, "pinky": 1.03, "thumb": 0.84,
-}
-
-
-def open_tendon_lengths(params=None, solver=None):
+def open_tendon_lengths(params=None, solver=None, hand=None):
     """Per-finger actuated-tendon length with the hand OPEN, from the model itself.
 
     ``params`` is a ``solvers.HandSolveParams`` and ``solver`` a
@@ -110,20 +85,22 @@ def open_tendon_lengths(params=None, solver=None):
     its live solver would otherwise find its hand had fallen open.
     """
     solvers = _solvers()
+    hand = _hand(hand)
     params = params or solvers.HandSolveParams()
     if solver is None:
-        solver = solvers.HandFKSolver(replace(params))
+        solver = solvers.HandFKSolver(replace(params), hand)
     borrowed = solver.params
-    solver.params = _open_pose_params(params, solver.finger_names)
+    solver.params = _open_pose_params(params, solver.finger_names, hand)
     try:
         result = solver.solve()
     finally:
         solver.params = borrowed
-    return {name: float(lengths[FLEXOR_IDX])
+    idx = _drive_index(hand)
+    return {name: float(lengths[idx])
             for name, lengths in zip(result.finger_names, result.tendon_lengths(0))}
 
 
-def open_pose_tensions():
+def open_pose_tensions(hand=None):
     """``(passive, {solver digit: flexor tension})`` for the calibrated open hand.
 
     From ``HandConfig`` when gepetto_core is importable, else the fallback copy
@@ -131,16 +108,17 @@ def open_pose_tensions():
     that this one is load-bearing rather than a cross-check, so the fallback is a
     real copy of the numbers rather than a None.
     """
+    hw = _hand(hand).hardware
     config = _hand_config()
     if config is None:
-        return _OPEN_PASSIVE_TENSION, dict(_OPEN_FLEXOR_TENSIONS)
-    flexors = {solver_name: float(config.zero_bend_flexor_tensions[hardware_name])
-               for solver_name, hardware_name in HARDWARE_FINGER_NAMES.items()
-               if hardware_name in config.zero_bend_flexor_tensions}
+        return hw.open_passive, dict(hw.open_drive)
+    flexors = {digit: float(config.zero_bend_flexor_tensions[actuator])
+               for digit, actuator in hw.actuator_names.items()
+               if actuator in config.zero_bend_flexor_tensions}
     return float(config.zero_bend_passive_tension), flexors
 
 
-def _open_pose_params(params, finger_names):
+def _open_pose_params(params, finger_names, hand=None):
     """``params`` posed at the calibrated open hand, as a copy.
 
     ``finger_names`` is the solver's own digit order, since ``flexor_tensions`` is
@@ -149,13 +127,13 @@ def _open_pose_params(params, finger_names):
     order, or with a digit missing. A digit the calibration says nothing about
     keeps whatever ``params`` holds for it.
     """
-    passive, flexors = open_pose_tensions()
+    passive, flexors = open_pose_tensions(hand)
     tensions = [float(flexors.get(name, held))
                 for name, held in zip(finger_names, params.flexor_tensions)]
     return replace(params, flexor_tensions=tensions, passive_tension=passive)
 
 
-def check_open_lengths(open_lengths, params=None):
+def check_open_lengths(open_lengths, params=None, hand=None):
     """Cross-check the model's open lengths, and PROVE the flexion sign.
 
     Two failures this catches, both of which otherwise show up only as a hand
@@ -177,29 +155,32 @@ def check_open_lengths(open_lengths, params=None):
 
     # -- the sign, measured --
     solvers = _solvers()
+    hand = _hand(hand)
+    probe_tension = hand.hardware.flexion_probe
     params = params or solvers.HandSolveParams()
     n = len(params.flexor_tensions)
-    probe = replace(params, flexor_tensions=[_FLEXION_PROBE_TENSION] * n)
-    flexed = solvers.HandFKSolver(probe).solve()
-    deltas = {name: open_lengths[name] - float(lengths[FLEXOR_IDX])
+    probe = replace(params, flexor_tensions=[probe_tension] * n)
+    flexed = solvers.HandFKSolver(probe, hand).solve()
+    idx = _drive_index(hand)
+    deltas = {name: open_lengths[name] - float(lengths[idx])
               for name, lengths in zip(flexed.finger_names, flexed.tendon_lengths(0))
               if name in open_lengths}
     worst = min(deltas.values()) if deltas else 0.0
     if worst <= 0.0:
         ok = False
         notes.append(
-            f"**tendon sign check FAILED**: at {_FLEXION_PROBE_TENSION:g} N of "
+            f"**tendon sign check FAILED**: at {probe_tension:g} N of "
             f"flexor tension the actuated tendon did not shorten on every finger "
             f"(worst {worst * 1e3:+.2f} mm). Playback would drive the hand the "
             f"wrong way; refusing to build a plan.")
     else:
         notes.append(
-            f"tendon sign check: flexing at {_FLEXION_PROBE_TENSION:g} N pulls in "
+            f"tendon sign check: flexing at {probe_tension:g} N pulls in "
             f"{min(deltas.values()) * 1e3:.1f}-{max(deltas.values()) * 1e3:.1f} mm "
-            f"across the five digits (positive = pulled in, as commanded)")
+            f"across the {len(deltas)} digits (positive = pulled in, as commanded)")
 
     # -- the hardware's own numbers, if they are reachable --
-    hardware = _hardware_open_lengths()
+    hardware = _hardware_open_lengths(hand)
     if hardware is None:
         notes.append("_HandConfig unavailable -- open lengths not cross-checked "
                      "against the hardware calibration._")
@@ -209,7 +190,7 @@ def check_open_lengths(open_lengths, params=None):
              for name in open_lengths if name in hardware}
     if drift:
         worst_name = max(drift, key=lambda k: abs(drift[k]))
-        if abs(drift[worst_name]) > OPEN_LENGTH_WARN_M:
+        if abs(drift[worst_name]) > hand.hardware.open_length_warn:
             notes.append(
                 f"**open-length drift {drift[worst_name] * 1e3:+.1f} mm on "
                 f"{worst_name}** (model {open_lengths[worst_name] * 1e3:.1f} mm vs "
@@ -239,20 +220,20 @@ def _hand_config():
     return HandConfig()
 
 
-def _hardware_open_lengths():
+def _hardware_open_lengths(hand=None):
     """``HandConfig.zero_bend_lengths`` keyed by SOLVER digit name, or None."""
     config = _hand_config()
     if config is None:
         return None
     out = {}
-    for solver_name, hardware_name in HARDWARE_FINGER_NAMES.items():
-        if hardware_name in config.finger_names:
-            index = config.finger_names.index(hardware_name)
-            out[solver_name] = float(config.zero_bend_lengths[index])
+    for digit, actuator in _hand(hand).hardware.actuator_names.items():
+        if actuator in config.finger_names:
+            index = config.finger_names.index(actuator)
+            out[digit] = float(config.zero_bend_lengths[index])
     return out
 
 
-def hardware_travel_limits():
+def hardware_travel_limits(hand=None):
     """Per solver digit, the usable flexion travel ``(0.0, max_m)`` from
     ``HandConfig``, or None when gepetto_core is not installed.
 
@@ -263,14 +244,14 @@ def hardware_travel_limits():
     if config is None:
         return None
     out = {}
-    for solver_name, hardware_name in HARDWARE_FINGER_NAMES.items():
-        if hardware_name not in config.finger_names:
+    for digit, actuator in _hand(hand).hardware.actuator_names.items():
+        if actuator not in config.finger_names:
             continue
-        index = config.finger_names.index(hardware_name)
+        index = config.finger_names.index(actuator)
         travel = float(config.zero_bend_lengths[index]
                        - config.fully_flexed_lengths[index])
         if travel > 0.0:
-            out[solver_name] = (0.0, travel)
+            out[digit] = (0.0, travel)
     return out
 
 

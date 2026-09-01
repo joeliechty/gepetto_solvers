@@ -46,17 +46,14 @@ and ``from ...core.solvers import X`` behave exactly as before the split.
 # `solvers.object_extent_along`, so it is re-exported here.
 from ..geometry.scene import object_extent_along  # noqa: E402  (kept last for clarity)
 from .base import HandSolverBase
-from .capabilities import (
-    FLEXOR_IDX,
-    NUM_FINGERS,
-    capabilities,
-    tendon_diag,
-)
 
 # `_set_if` is internal, but several docstrings point at `solvers._set_if` as the
 # name of the stale-binding pattern, so it stays resolvable at that path.
 from .capabilities import (
     _set_if as _set_if,
+)
+from .capabilities import (
+    capabilities,
 )
 from .fk import HandFKSolver
 from .frames import (
@@ -74,13 +71,6 @@ from .frames import (
 )
 from .ik import HandIKSolver
 from .motion import (
-    CLOSE_FRACTION,
-    CLOSE_PROBE_STEP,
-    CLOSE_REFINE,
-    CLOSE_STEPS,
-    CLOSE_TOL_M,
-    LIFT_HEIGHT_M,
-    LIFT_STEPS,
     lift_wrist,
     synchronized_close,
 )
@@ -134,10 +124,7 @@ __all__ = [
     "PhasePreset",
     "apply_phase_preset",
     # capabilities
-    "FLEXOR_IDX",
-    "NUM_FINGERS",
     "capabilities",
-    "tendon_diag",
     # frames
     "DEFAULT_WRIST_RPY",
     "DEFAULT_WRIST_XYZ",
@@ -171,13 +158,6 @@ __all__ = [
     "pregrasp_centroid_witness",
     "tip_gap_matrix",
     # motion
-    "CLOSE_FRACTION",
-    "CLOSE_PROBE_STEP",
-    "CLOSE_REFINE",
-    "CLOSE_STEPS",
-    "CLOSE_TOL_M",
-    "LIFT_HEIGHT_M",
-    "LIFT_STEPS",
     "lift_wrist",
     "synchronized_close",
 ]

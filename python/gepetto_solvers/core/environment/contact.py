@@ -9,8 +9,10 @@ environment -- so collision and plane avoidance keep protecting it -- but no
 
 import numpy as np
 
-from ..hand.config.discs import _resolve_contact_mask
-from ..hand.config.morphology import tip_node_index
+from ..hands.tendon_5f import (
+    _resolve_contact_mask,
+    tip_node_index,
+)
 
 
 def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
@@ -29,7 +31,7 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     mask: a finger whose flag is False still gets the env — so
     :func:`attach_collision` / :func:`attach_table` can hang off it and keep that
     finger out of the object — but *without* ``target_contact_node``, so the C++
-    layer treats it as a collision-only env: ``TendonHandModel::build_graph``
+    layer treats it as a collision-only env: ``HandModel::build_graph``
     adds no witness contact factor for it and ``get_initial_values`` seeds no
     witness point. That is the same shape the trajectory planner already builds
     for every step before k=K, so it is a well-trodden path. Use it to solve for

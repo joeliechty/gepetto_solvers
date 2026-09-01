@@ -1,5 +1,5 @@
 """viser scene renderer for the tendon hand -- the web-viewer analogue of the
-PyVista ``TendonHandPlotter``.
+PyVista ``HandPlotter``.
 
 Pure rendering: given a viser server and one solved hand *frame* (the
 ``{finger_name: solution}`` shim the solvers produce), it draws each finger's
@@ -10,7 +10,7 @@ and no GUI live here; the interactive app (``projects/viz/viz_interactive.py``)
 owns those.
 
 The world-frame geometry reproduces exactly what the PyVista mesh managers
-compute (``core/plotting/tendon_hand_plotter.py``):
+compute (``core/plotting/hand_plotter.py``):
 
 * backbone  -- node translations ``rod.states[n].pose.mean[:3, 3]``.
 * tendons   -- ``R @ hole + t`` for each active hole, with the disc pose

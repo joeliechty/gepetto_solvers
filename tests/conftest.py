@@ -40,26 +40,35 @@ def pinned_dims(monkeypatch):
     Pinning the fallback is the right direction: it is the copy that ships with this
     repo, so it is the one a checkout can reproduce anywhere.
 
-    The patch is applied to every module that imported the function into its own
-    namespace (``from .config import load_hand_dimensions`` binds a new name, so
-    patching ``config`` alone would not reach ``solvers``).
+    Nothing needs patching any more: a hand takes its dimensions as a
+    constructor argument (see :func:`pinned_hand`), so a test that wants the
+    bundled ones asks for them rather than intercepting a lookup. This fixture
+    is the dimension TABLE, for tests that assert on it directly.
     """
-    from _pkg import config, solvers
+    from _pkg import config
 
-    def _fallback():
-        return config.DEFAULT_HAND_DIMENSIONS
-
-    monkeypatch.setattr(config, "load_hand_dimensions", _fallback)
-    monkeypatch.setattr(solvers, "load_hand_dimensions", _fallback, raising=False)
     return config.DEFAULT_HAND_DIMENSIONS
 
 
 @pytest.fixture
-def hand_configs(pinned_dims):
-    """The anatomical 5-digit hand, built from the pinned dims."""
+def pinned_hand(pinned_dims):
+    """A :class:`TendonHand5F` built from the bundled dimensions.
+
+    The hand to hand a solver in any test that asserts a measured number. Pass
+    it as ``HandFKSolver(params, pinned_hand)``; without it the solver builds the
+    DEFAULT hand, whose dimensions come from ``gepetto_core`` when that is
+    installed and from the bundled table when it is not -- two different hands,
+    so the assertion would pass or fail depending on the machine.
+    """
     from _pkg import config
 
-    return config.get_default_hand_configs(pinned_dims)
+    return config.TendonHand5F(pinned_dims)
+
+
+@pytest.fixture
+def hand_configs(pinned_hand):
+    """The anatomical 5-digit hand's per-digit solver configs, pinned."""
+    return pinned_hand.digit_configs()
 
 
 def assert_allclose(actual, desired, rtol=1e-9, atol=1e-12, err_msg=""):

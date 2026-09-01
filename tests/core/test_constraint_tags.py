@@ -1,6 +1,6 @@
 """The Augmented Lagrangian constraint tags, and the dual transfer they enable.
 
-This is the guard for anything that touches ``TendonHandModel::build_graph``.
+This is the guard for anything that touches ``HandModel::build_graph``.
 
 ``WarmALState`` indexes multipliers by a constraint's POSITION in
 ``ConstrainedOptProblem::eConstraints()``, which is graph insertion order. The C++

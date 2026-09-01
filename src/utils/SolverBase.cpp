@@ -323,7 +323,7 @@ SolutionMetadata SolverBase::optimize() {
     // after the optimizer itself, and a real-time controller (Section 1.8) re-runs
     // this loop every control tick while only ever using the MEANS. Subclasses
     // that honor this flag must extract means-only marginals in extract_solution()
-    // (e.g. TendonHandModel::get_marginals_means_only); marginals_ is left as the
+    // (e.g. HandModel::get_state_means_only); marginals_ is left as the
     // default-constructed empty object, so reading covariances from it is invalid.
     if (config_.skip_marginals) {
         // Still report the objective-only error, which is cheap and is what the

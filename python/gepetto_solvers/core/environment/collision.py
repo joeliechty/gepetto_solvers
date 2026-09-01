@@ -9,7 +9,10 @@ environment -- so collision and plane avoidance keep protecting it -- but no
 
 import numpy as np
 
-from ..hand.config.discs import disc_node_indices, proximal_disc_flags
+from ..hands.tendon_5f import (
+    disc_node_indices,
+    proximal_disc_flags,
+)
 
 
 def attach_collision(configs, vdb_path, object_pose, *,

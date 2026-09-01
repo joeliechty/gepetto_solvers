@@ -50,8 +50,6 @@ The names below are the module's public surface and are re-exported here, so
 
 from .building import build_plan, prepend_current, summarize
 from .hardware import (
-    HARDWARE_FINGER_NAMES,
-    OPEN_LENGTH_WARN_M,
     check_open_lengths,
     clamp_to_travel,
     hardware_travel_limits,
@@ -75,11 +73,10 @@ from .se3 import (
     se3_exp,
     se3_log,
 )
-from .types import FLEXOR_IDX, PathSchedule, Sample, SolvePlan, Waypoint
+from .types import PathSchedule, Sample, SolvePlan, Waypoint
 
 __all__ = [
     # types
-    "FLEXOR_IDX",
     "PathSchedule",
     "Sample",
     "SolvePlan",
@@ -89,8 +86,6 @@ __all__ = [
     "se3_exp",
     "se3_log",
     # hardware
-    "HARDWARE_FINGER_NAMES",
-    "OPEN_LENGTH_WARN_M",
     "check_open_lengths",
     "clamp_to_travel",
     "hardware_travel_limits",

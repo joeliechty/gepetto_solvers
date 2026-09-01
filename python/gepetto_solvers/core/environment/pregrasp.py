@@ -9,8 +9,10 @@ environment -- so collision and plane avoidance keep protecting it -- but no
 
 import numpy as np
 
-from ..hand.config.discs import _resolve_contact_mask
-from ..hand.config.morphology import tip_node_index
+from ..hands.tendon_5f import (
+    _resolve_contact_mask,
+    tip_node_index,
+)
 
 
 def attach_pregrasp_center(configs, *, clearance_height=0.0, clearance_normal=None,
@@ -18,11 +20,11 @@ def attach_pregrasp_center(configs, *, clearance_height=0.0, clearance_normal=No
     """Attach the pre-grasp hand-centering constraint (Eq 2.18-2.19) to every
     PARTICIPATING finger's env, in place. Returns ``configs`` for chaining.
 
-    A HAND-LEVEL constraint: the C++ layer collects every finger with
-    ``pregrasp_center_node`` set, groups the one named "thumb" against the
-    rest, and adds ONE Vector3 equality centering their sphere-center midpoint
+    A HAND-LEVEL constraint: the C++ layer collects every digit with
+    ``pregrasp_center_node`` set, groups the one at ``HandSpec.opposing_digit``
+    against the rest, and adds ONE Vector3 equality centering their midpoint
     over the object (raised by ``clearance_height`` along ``clearance_normal``).
-    Requires the thumb AND at least one other finger to participate, and a
+    Requires the opposing digit AND at least one other digit to participate, and a
     nonzero ``clearance_normal``, or the C++ layer silently skips the
     constraint.
 
@@ -55,11 +57,11 @@ def attach_pregrasp_axis_alignment(configs, axis, *, contact_fingers=None, conta
     ``configs`` for chaining.
 
     A HAND-LEVEL constraint, same shape as :func:`attach_pregrasp_center`: the
-    C++ layer collects every finger with ``pregrasp_align_node`` set, groups
-    the one named "thumb" against the rest, and adds ONE scalar equality
+    C++ layer collects every digit with ``pregrasp_align_node`` set, groups the
+    one at ``HandSpec.opposing_digit`` against the rest, and adds ONE scalar equality
     aligning the vector between their sphere-center centroids with ``axis``,
-    direction-agnostically (squared cosine). Requires the thumb AND at least
-    one other finger to participate, and a nonzero ``axis``, or the C++ layer
+    direction-agnostically (squared cosine). Requires the opposing digit AND at least
+    one other digit to participate, and a nonzero ``axis``, or the C++ layer
     silently skips the constraint.
 
     ``axis`` is a caller-supplied world-frame direction -- typically

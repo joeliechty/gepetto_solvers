@@ -217,8 +217,8 @@ def plot_hand_wrist_trajectory(result, hand_base_offset, dt=None,
     Parameters
     ----------
     result : hand trajectory planner result
-        ``result.trajectory`` is a list of TendonHandMarginals (one per step),
-        each with a ``.fingers`` list of per-finger marginals.
+        ``result.trajectory`` is a list of HandState (one per step),
+        each with a ``.digits`` list of per-finger marginals.
     hand_base_offset : (4, 4) array
         Finger 0's ``hand_base_offset`` (config.hand_base_offset), the fixed SE(3)
         transform from the wrist to that finger's base node.
@@ -231,7 +231,7 @@ def plot_hand_wrist_trajectory(result, hand_base_offset, dt=None,
     pos = np.zeros((K1, 3))
     eul = np.zeros((K1, 3))
     for k, hand_m in enumerate(result.trajectory):
-        base0 = np.asarray(hand_m.fingers[0].rod.states[0].pose.mean, dtype=float)
+        base0 = np.asarray(hand_m.digits[0].rod.states[0].pose.mean, dtype=float)
         T_wrist = base0 @ offset_inv
         pos[k] = T_wrist[:3, 3]
         eul[k] = Rotation.from_matrix(T_wrist[:3, :3]).as_euler("xyz", degrees=True)

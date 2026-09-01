@@ -10,11 +10,8 @@ import threading
 import numpy as np
 
 from gepetto_solvers.core import robot_plan
-from gepetto_solvers.core.solvers import FLEXOR_IDX, lift_wrist, synchronized_close
+from gepetto_solvers.core.solvers import lift_wrist, synchronized_close
 
-from .constants import (
-    FINGER_LABELS,
-)
 from .estop import Refused
 
 
@@ -79,7 +76,7 @@ class MotionMixin:
 
     def _close_admitted(self):
         """The close itself, for a caller that ALREADY HOLDS the gate."""
-        fingers = [label for label, box in zip(FINGER_LABELS, self.g_contacts)
+        fingers = [label for label, box in zip(self.digit_names, self.g_contacts)
                    if box.value]
         if not fingers:
             self._set_status(
@@ -322,8 +319,8 @@ class MotionMixin:
         for name in res.finger_names:
             tension = float(np.asarray(
                 res.frames[0][name].marginals.tensions.mean,
-                float)[FLEXOR_IDX])
-            length = float(lengths[name][FLEXOR_IDX])
+                float)[self._drive_index()])
+            length = float(lengths[name][self._drive_index()])
             row = f"{name:<6} {tension:5.2f} N   {length * 1e3:7.2f} mm"
             if open_lengths is not None and name in open_lengths:
                 # Signed the way robot_plan commands it: POSITIVE is tendon

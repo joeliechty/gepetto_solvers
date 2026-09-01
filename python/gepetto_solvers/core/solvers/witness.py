@@ -15,7 +15,7 @@ from ..geometry.scene import (
     primitive_surface_witness,
     subset_spec,
 )
-from ..hand.config import (
+from ..hands.tendon_5f import (
     get_default_hand_configs,
 )
 from .frames import solved_wrist_pose
@@ -164,6 +164,7 @@ def half_space_witness(params, result, k=0, names=None):
         names = (list(result.finger_names) if mask is None else
                  [n for n, on in zip(result.finger_names, mask) if on])
     wanted = set(names)
+    opposing = result.opposing_digit
 
     def tip(name):
         return np.asarray(frame[name].marginals.rod.states[-1].pose.mean,
@@ -182,8 +183,8 @@ def half_space_witness(params, result, k=0, names=None):
         axis, _flipped = orient_opposition_axis(
             default_half_space_axis(result.spec, result.object_rotation,
                                     params.plane_normal),
-            tip("thumb") if "thumb" in result.finger_names else np.zeros(3),
-            [tip(n) for n in wanted if n != "thumb"],
+            (tip(opposing) if opposing in result.finger_names else np.zeros(3)),
+            [tip(n) for n in wanted if n != opposing],
             flip=params.half_space_flip)
 
     out = {}
@@ -191,7 +192,7 @@ def half_space_witness(params, result, k=0, names=None):
         if name not in wanted:
             continue
         c = tip(name)
-        m_hat = axis if name == "thumb" else -axis
+        m_hat = axis if name == opposing else -axis
         # The boundary this finger is actually held to: the split pushed out by
         # the standoff along its own m_hat (0 => the plain splitting plane).
         p_bound = p_split + float(params.half_space_margin) * m_hat
@@ -203,20 +204,22 @@ def half_space_witness(params, result, k=0, names=None):
 
 def pregrasp_center_witness(params, result, k=0):
     """``(hand_centroid_pt, target_pt, gap_m)`` for the Eq 2.18-2.19 pre-grasp
-    hand-centering constraint at frame ``k``, or None if the thumb or the
-    opposing set has no fingers designated (:meth:`HandResult.contact_names`).
+    hand-centering constraint at frame ``k``, or None if the OPPOSING digit
+    (``result.opposing_digit``) or the opposed set has no fingers designated
+    (:meth:`HandResult.contact_names`).
 
-    ``hand_centroid_pt`` is the midpoint of the thumb's and the opposing
-    (non-thumb, contact-designated) fingers' contact-sphere centers --
+    ``hand_centroid_pt`` is the midpoint of the OPPOSING digit's and the
+    opposed (contact-designated) digits' contact-sphere centers --
     ``c_hand`` in the paper's notation. ``target_pt`` is the object centroid
     raised by ``h_clear`` along ``plane_normal``. ``gap_m`` is their Euclidean
     separation (0 at the constraint's zero set); unlike the other witness
     functions this is a single HAND-level tuple, not one per finger.
     """
     names = result.contact_names()
-    if "thumb" not in names:
+    opposing = result.opposing_digit
+    if opposing is None or opposing not in names:
         return None
-    others = [n for n in names if n != "thumb"]
+    others = [n for n in names if n != opposing]
     if not others:
         return None
 
@@ -226,9 +229,9 @@ def pregrasp_center_witness(params, result, k=0):
         fm = frame[name].marginals
         return np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
 
-    c_thumb = tip("thumb")
+    c_opposing = tip(opposing)
     c_others = np.mean([tip(n) for n in others], axis=0)
-    hand_centroid = 0.5 * (c_thumb + c_others)
+    hand_centroid = 0.5 * (c_opposing + c_others)
 
     n_hat = np.asarray(params.plane_normal, dtype=float).reshape(3)
     n_hat = n_hat / (np.linalg.norm(n_hat) or 1.0)
@@ -259,7 +262,9 @@ def pregrasp_centroid_witness(params, result, k=0):
     Needs ``configs`` to recover the wrist pose from the solved frame, which
     it takes from the result's own finger list via :func:`solved_wrist_pose`.
     """
-    from ..hand.config import pinch_pose
+    from ..hands.tendon_5f import (
+    pinch_pose,
+)
 
     pose = pinch_pose(result.contact_names())
     if pose is None:
@@ -281,11 +286,12 @@ def pregrasp_centroid_witness(params, result, k=0):
 
 
 def pregrasp_axis_witness(params, result, k=0):
-    """``(c_thumb, c_others_mean, angle_deg)`` for the pre-grasp short-axis
-    alignment constraint at frame ``k``, or None if the thumb or the opposing
-    set has no fingers designated (:meth:`HandResult.contact_names`).
+    """``(c_opposing, c_others_mean, angle_deg)`` for the pre-grasp short-axis
+    alignment constraint at frame ``k``, or None if the OPPOSING digit
+    (``result.opposing_digit``) or the opposed set has no fingers designated
+    (:meth:`HandResult.contact_names`).
 
-    ``angle_deg`` is the acute angle between the achieved thumb-vs-opposing
+    ``angle_deg`` is the acute angle between the achieved opposing-vs-opposed
     connecting vector and ``default_half_space_axis`` -- 0 at the constraint's
     zero set (either parallel or antiparallel), up to 90 at worst. Recomputes
     the SAME axis :meth:`HandSolverBase._attach_pregrasp_axis_alignment` uses,
@@ -294,9 +300,10 @@ def pregrasp_axis_witness(params, result, k=0):
     constraint actually used.
     """
     names = result.contact_names()
-    if "thumb" not in names:
+    opposing = result.opposing_digit
+    if opposing is None or opposing not in names:
         return None
-    others = [n for n in names if n != "thumb"]
+    others = [n for n in names if n != opposing]
     if not others:
         return None
 
@@ -306,9 +313,9 @@ def pregrasp_axis_witness(params, result, k=0):
         fm = frame[name].marginals
         return np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
 
-    c_thumb = tip("thumb")
+    c_opposing = tip(opposing)
     c_others = np.mean([tip(n) for n in others], axis=0)
-    v = c_thumb - c_others
+    v = c_opposing - c_others
     vn = np.linalg.norm(v)
     if vn < 1e-9:
         return None
@@ -319,7 +326,7 @@ def pregrasp_axis_witness(params, result, k=0):
     cos_a = abs(float(v_hat @ axis))
     cos_a = min(1.0, max(-1.0, cos_a))
     angle_deg = float(np.degrees(np.arccos(cos_a)))
-    return (c_thumb, c_others, angle_deg)
+    return (c_opposing, c_others, angle_deg)
 
 
 def finger_plane_witness(result, k=0):
@@ -349,7 +356,9 @@ def finger_plane_witness(result, k=0):
 
     Rendering only: nothing here is a constraint the solver saw.
     """
-    from ..hand.config import pinch_pose
+    from ..hands.tendon_5f import (
+    pinch_pose,
+)
 
     pose = pinch_pose(result.contact_names())
     if pose is None:
@@ -427,7 +436,9 @@ def planar_gap_witness(params, result, k=0):
         ellipsoid_members,
         plane_ellipse_section,
     )
-    from ..hand.config import pinch_pose
+    from ..hands.tendon_5f import (
+    pinch_pose,
+)
 
     if not hasattr(gepetto_solvers, "ellipsoid_set_planar_gap"):
         return None

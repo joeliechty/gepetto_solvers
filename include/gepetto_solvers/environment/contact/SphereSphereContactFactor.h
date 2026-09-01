@@ -27,7 +27,7 @@ namespace gepetto_solvers {
 // that used to live here has been REMOVED. The table sliding equality now
 // constrains the contact sphere's CENTER directly, as the single residual
 // PlaneCollisionGapFactor wrapped in a gtsam::ZeroCostConstraint (see
-// TendonHandModel::build_graph and the support_contact_node notes above).
+// HandModel::build_graph and the support_contact_node notes above).
 // Four of the witness form's five rows existed only to pin the gauge of the
 // free contact point it introduced; for a PLANE that point buys nothing, since
 // a scalar residual on the center leaves no rotational freedom to brick the

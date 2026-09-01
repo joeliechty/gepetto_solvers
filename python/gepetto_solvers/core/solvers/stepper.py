@@ -80,7 +80,7 @@ class HandIKStepper(HandSolverBase):
     hand hyperextend and crawl back, which is a solver transient rather than
     anything the solve is being asked to do.
 
-    Like :class:`HandFKSolver` this owns its ``gepetto_solvers.TendonHandSolver`` for
+    Like :class:`HandFKSolver` this owns its ``gepetto_solvers.HandSolver`` for
     its lifetime -- that is what lets anything carry at all, since a solver
     rebuilt per call cold-starts even its values. Tensions and the wrist pose are
     passed per step, so they stay live between steps; anything that changes the
@@ -88,8 +88,8 @@ class HandIKStepper(HandSolverBase):
     because the carried duals describe the old constraints.
     """
 
-    def __init__(self, params: HandSolveParams | None = None):
-        super().__init__(params)
+    def __init__(self, params: HandSolveParams | None = None, hand=None):
+        super().__init__(params, hand)
         self._build()
 
     # -- construction / restart --
@@ -97,7 +97,7 @@ class HandIKStepper(HandSolverBase):
     def _build(self):
         self._attach_environment()
 
-        cfg = gepetto_solvers.TendonHandSolverConfig()
+        cfg = gepetto_solvers.HandSolverConfig()
         cfg.wrist_pose = self.params.wrist_pose
         cfg.sigma_wrist_pos = self.params.sigma_wrist_pos
         cfg.sigma_wrist_rot = self.params.sigma_wrist_rot
@@ -142,7 +142,7 @@ class HandIKStepper(HandSolverBase):
         self._tols = (cfg.base.al_abs_violation_tol, cfg.base.al_abs_cost_tol,
                       cfg.base.al_rel_violation_tol, cfg.base.al_rel_cost_tol)
 
-        self._solver = gepetto_solvers.TendonHandSolver(self.configs, cfg)
+        self._solver = gepetto_solvers.HandSolver(self._hand_spec(), cfg)
         # Multipliers carried in from a previous solver, re-seated onto THIS
         # solver's constraints by identity on its first solve. Set on the solver
         # rather than the config because the remap needs this graph, which does
@@ -150,7 +150,7 @@ class HandIKStepper(HandSolverBase):
         if (self.params.initial_duals is not None
                 and hasattr(self._solver, "set_initial_duals")):
             self._solver.set_initial_duals(self.params.initial_duals)
-        self._history = []      # TendonHandMarginals per step (initial guess first)
+        self._history = []      # HandState per step (initial guess first)
         self._frames = []       # the same states as render frames
         self._notes = []        # one readout line per history entry
         self._steps = 0

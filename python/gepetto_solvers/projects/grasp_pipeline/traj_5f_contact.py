@@ -45,7 +45,7 @@ from gepetto_solvers.core.geometry.scene import (
     get_primitive_specs,
     primitive_surface_gap,
 )
-from gepetto_solvers.core.hand.config import (
+from gepetto_solvers.core.hands.tendon_5f import (
     default_hand_tip_radii,
     get_default_hand_configs,
     load_hand_dimensions,
@@ -228,7 +228,7 @@ def _main(args, results_dir):
     # --- Trajectory planner config ---
     num_tendons = configs[0][1].num_tendons  # 6 for the anatomical finger
 
-    plan_config = gepetto_solvers.TendonHandTrajectoryPlannerConfig()
+    plan_config = gepetto_solvers.HandTrajectoryPlannerConfig()
     plan_config.K = args.steps
     plan_config.dt = args.dt
     plan_config.wrist_pose = np.eye(4)
@@ -258,7 +258,7 @@ def _main(args, results_dir):
                            if spec["type"] == "ellipsoid" else spec["vdb"]),
     })
 
-    planner = gepetto_solvers.TendonHandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(configs, plan_config)
     print(f"Built hand trajectory planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 
@@ -298,14 +298,14 @@ def _main(args, results_dir):
     print("------+-----------------------------------------+----------------")
     prev_base = None
     for k, hand_m in enumerate(result.trajectory):
-        base_pose = np.array(hand_m.fingers[0].rod.states[0].pose.mean)
+        base_pose = np.array(hand_m.digits[0].rod.states[0].pose.mean)
         base_xyz = base_pose[:3, 3]
         step_disp = (0.0 if prev_base is None
                      else float(np.linalg.norm(base_xyz - prev_base)))
         prev_base = base_xyz
 
         gaps = []
-        for (_, _cfg), tip_radius, fm in zip(configs, tip_radii, hand_m.fingers):
+        for (_, _cfg), tip_radius, fm in zip(configs, tip_radii, hand_m.digits):
             tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
             tip_local = object_rotation.T @ (tip_pos - object_center)
             gaps.append(primitive_surface_gap(tip_local, spec) - tip_radius)
@@ -316,7 +316,7 @@ def _main(args, results_dir):
     # Terminal grasp check (should match the static test's near-zero gaps).
     print("\nTerminal (k=K) per-finger surface gaps:")
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
-                                         result.trajectory[K].fingers):
+                                         result.trajectory[K].digits):
         tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius
@@ -337,7 +337,7 @@ def _main(args, results_dir):
     # one shared wrist-pose trajectory figure.
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
+        finger_traj = FingerTraj([hand_m.digits[i] for hand_m in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))
@@ -350,7 +350,7 @@ def _main(args, results_dir):
         print(f"Saved experiment results to {results_dir}/")
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
+    from gepetto_solvers.core.plotting.hand_plotter import HandPlotter
 
     plotter_kwargs = dict(
         plot_backbone_ellipsoids=False,
@@ -366,9 +366,9 @@ def _main(args, results_dir):
 
     def _show_hand(hand_m):
         plotter.update({name: _FingerSol(fm, result.meta)
-                        for name, fm in zip(finger_names, hand_m.fingers)})
+                        for name, fm in zip(finger_names, hand_m.digits)})
 
-    plotter = TendonHandPlotter(finger_names, **plotter_kwargs)
+    plotter = HandPlotter(finger_names, **plotter_kwargs)
     title = (f"{args.primitive} solver iterations (terminal grasp)"
              if args.debug_iterations else f"{args.primitive} grasp trajectory")
     plotter.plotter.plotter.add_text(title, position="upper_left", font_size=12,

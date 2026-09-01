@@ -75,7 +75,7 @@ class ViserHandScene(
                      distance=0.28):
         """(position, look_at) for a camera orbiting ``focal`` on the -X (palmar)
         side, using the same azimuth/elevation/+Z-up spherical convention as the
-        PyVista TendonHandPlotter. Viewing from here the finger curl reads as a
+        PyVista HandPlotter. Viewing from here the finger curl reads as a
         grasp closing toward you rather than hyperextending away."""
         f = np.asarray(focal, float).reshape(3)
         az, el = np.deg2rad(azimuth_deg), np.deg2rad(elevation_deg)

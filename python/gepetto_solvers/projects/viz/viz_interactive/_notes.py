@@ -14,12 +14,10 @@ from gepetto_solvers.core.geometry.scene import (
     get_primitive_specs,
     object_principal_inplane_axis,
 )
-from gepetto_solvers.core.hand.config import pinch_pose
-from gepetto_solvers.core.solvers import half_space_witness, resolve_scene
-
-from .constants import (
-    FINGER_LABELS,
+from gepetto_solvers.core.hands.tendon_5f import (
+    pinch_pose,
 )
+from gepetto_solvers.core.solvers import half_space_witness, resolve_scene
 
 
 class NotesMixin:
@@ -63,7 +61,7 @@ class NotesMixin:
         or they vanish too). Say it out loud instead."""
         if not self.params.pregrasp_centroid:
             return []
-        names = [n for n, c in zip(FINGER_LABELS, self.g_contacts) if c.value]
+        names = [n for n, c in zip(self.digit_names, self.g_contacts) if c.value]
         pose = pinch_pose(names)
         if pose is None:
             return [f"**pinch-centroid: INACTIVE** -- no measured pinch pose "
@@ -151,7 +149,7 @@ class NotesMixin:
         if ellipsoid_members(spec) is None:
             return False, (f"a `{spec['type']}` object has no ellipsoid "
                            f"cross-section for the pulling plane to cut")
-        names = [n for n, c in zip(FINGER_LABELS, self.g_contacts) if c.value]
+        names = [n for n, c in zip(self.digit_names, self.g_contacts) if c.value]
         if pinch_pose(names) is None:
             return False, (f"no measured pinch pose for "
                            f"({', '.join(names) or 'no fingers'}), so Eq 11 has "
@@ -269,7 +267,7 @@ class NotesMixin:
         the finger mask is the one dependency it has left."""
         if not self.params.half_space:
             return []
-        names = [n for n, c in zip(FINGER_LABELS, self.g_contacts) if c.value]
+        names = [n for n, c in zip(self.digit_names, self.g_contacts) if c.value]
         if not names:
             return ["**opposition half-space: INACTIVE** -- no fingers checked "
                     "in the *fingers* folder, so there is nothing to oppose"]
@@ -375,10 +373,11 @@ class NotesMixin:
         visibly untouched, which reads as the solver giving up rather than as
         the constraint asking for a 180 degree roll."""
         res = self._iter_view()
-        if res is None or "thumb" not in res.finger_names:
+        opposing = self.hand.opposing_digit
+        if res is None or opposing is None or opposing not in res.finger_names:
             return []
         gaps = half_space_witness(self.params, res, 0)
-        if not gaps or "thumb" not in gaps:
+        if not gaps or opposing not in gaps:
             return []
         worst = min(v[2] for v in gaps.values())
         mode = self.g_half_sides.value

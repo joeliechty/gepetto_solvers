@@ -9,8 +9,10 @@ environment -- so collision and plane avoidance keep protecting it -- but no
 
 import numpy as np
 
-from ..hand.config.discs import _resolve_contact_mask
-from ..hand.config.morphology import tip_node_index
+from ..hands.tendon_5f import (
+    _resolve_contact_mask,
+    tip_node_index,
+)
 
 
 def attach_table(configs, plane_origin, plane_normal, *,

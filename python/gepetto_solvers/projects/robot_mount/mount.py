@@ -44,7 +44,7 @@ verify a fit against Onshape's Measure tool.
 
 import numpy as np
 
-from gepetto_solvers.core.hand.config import (
+from gepetto_solvers.core.hands.tendon_5f import (
     FINGER_NAMES,
     _Rx,
     _Ry,
