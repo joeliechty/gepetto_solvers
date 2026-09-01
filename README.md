@@ -101,9 +101,14 @@ only numpy and scipy; everything that draws, fetches or fits is optional:
 | `ycb` | trimesh, scikit-learn, coacd, requests | fetching and fitting YCB scans |
 | `dev` | pytest, ruff, mypy | the test suite and the linters |
 
-GTSAM, OpenVDB and pybind11 are deliberately **not** listed: they are C++ build
-dependencies the conda scripts install into `$CONDA_PREFIX`, and CMake finds them
-through the Python interpreter's prefix.
+GTSAM, OpenVDB, pybind11 and Pinocchio are deliberately **not** listed: they are
+C++ build dependencies the conda scripts install into `$CONDA_PREFIX`, and CMake
+finds them through the Python interpreter's prefix.
+
+Pinocchio supplies rigid-body kinematics and its analytical derivatives for hands
+described by a URDF (`src/hand/kinematics/rigid/`). Kinematics only —
+`urdf::buildModel` reads no mesh files, so nothing in the build depends on a
+robot's visual geometry being present.
 
 ## Run
 

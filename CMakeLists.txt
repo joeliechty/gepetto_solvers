@@ -21,6 +21,15 @@ find_package(GTSAM REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OpenVDB REQUIRED)
 
+# Pinocchio: rigid-body kinematics and its analytical derivatives, for hands
+# whose mechanism is described by a URDF rather than by code (see
+# src/hand/kinematics/rigid/). Found through the interpreter prefix like every
+# other C++ dependency here -- the conda setup scripts install it.
+#
+# Kinematics only: pinocchio::urdf::buildModel needs no mesh files, so nothing
+# in this build depends on a robot's visual/collision geometry being present.
+find_package(pinocchio REQUIRED)
+
 # OpenMP for parallel collision detection
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
@@ -90,13 +99,32 @@ target_compile_features(_gepetto_solvers PRIVATE cxx_std_17)
 target_include_directories(_gepetto_solvers PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+# EIGEN3_INCLUDE_DIR, and FIRST, both deliberately.
+#
+# There are two Eigen trees in the prefix and they are not interchangeable:
+# GTSAM installs a STRIPPED copy at include/gtsam/3rdparty/Eigen (no
+# unsupported/ modules) and exports it as an interface include dir, while conda's
+# eigen package is the complete tree. Pinocchio includes
+# <unsupported/Eigen/CXX11/Tensor>, so a build that resolves Eigen to GTSAM's
+# copy fails to compile the moment a translation unit pulls in both libraries.
+# Listing the complete tree first makes it win.
+#
+# They must also be the SAME VERSION: gtsam/config.h bakes in
+# GTSAM_EIGEN_VERSION_WORLD/MAJOR and static-asserts them against whatever Eigen
+# the including TU actually sees, so a mismatch is a hard error rather than a
+# silent ABI hazard. GTSAM is built against 3.4, which is why the setup scripts
+# pin the Eigen-3.4 build of pinocchio -- see the note beside it there.
+#
+# (The variable used to be spelled EIGEN_INCLUDE_DIR, which Eigen3Config does not
+# define; it expanded to nothing and the build worked only because GTSAM's copy
+# was sufficient for GTSAM alone.)
 target_include_directories(_gepetto_solvers PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GTSAM_INCLUDE_DIR}
-    ${EIGEN_INCLUDE_DIR}
 )
 
-target_link_libraries(_gepetto_solvers PRIVATE gtsam OpenVDB::openvdb)
+target_link_libraries(_gepetto_solvers PRIVATE gtsam OpenVDB::openvdb pinocchio::pinocchio)
 
 if(OpenMP_CXX_FOUND)
     target_link_libraries(_gepetto_solvers PRIVATE OpenMP::OpenMP_CXX)
