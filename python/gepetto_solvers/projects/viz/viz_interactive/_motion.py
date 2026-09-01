@@ -311,14 +311,14 @@ class MotionMixin:
         if res is None:
             handle.content = self.TENDON_IDLE
             return
-        lengths = dict(zip(res.finger_names, res.tendon_lengths(0)))
+        lengths = dict(zip(res.finger_names, res.displacements(0)))
         open_lengths = self._open_lengths_cache
         # Whole lines as code spans: markdown collapses runs of spaces
         # everywhere else, and the columns are the point of the readout.
         lines = [f"**actuated tendon ({self.mode})**"]
         for name in res.finger_names:
             tension = float(np.asarray(
-                res.frames[0][name].marginals.tensions.mean,
+                res.frames[0][name].marginals.actuation.mean,
                 float)[self._drive_index()])
             length = float(lengths[name][self._drive_index()])
             row = f"{name:<6} {tension:5.2f} N   {length * 1e3:7.2f} mm"

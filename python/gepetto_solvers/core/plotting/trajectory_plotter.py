@@ -7,19 +7,19 @@ from scipy.spatial.transform import Rotation
 def _extract_trajectory_data(trajectory):
     """Extract arrays from a list of marginals."""
     K = len(trajectory)
-    tc = trajectory[0].tendon_config
+    tc = trajectory[0].extras.tendon_config
     disc_pose_idx = list(tc.disc_pose_idx)
     num_discs = tc.num_discs
 
     # Tensions: (K, num_tendons)
-    tensions = np.array([m.tensions.mean for m in trajectory])
+    tensions = np.array([m.actuation.mean for m in trajectory])
 
     # Disc positions and orientations: (K, num_discs, 3) and (K, num_discs, 3)
     disc_positions = np.zeros((K, num_discs, 3))
     disc_euler_xyz = np.zeros((K, num_discs, 3))
     for k, m in enumerate(trajectory):
         for d in range(num_discs):
-            T = m.rod.states[disc_pose_idx[d]].pose.mean
+            T = m.sites[disc_pose_idx[d]].pose.mean
             disc_positions[k, d] = T[:3, 3]
             disc_euler_xyz[k, d] = Rotation.from_matrix(T[:3, :3]).as_euler('xyz', degrees=True)
 
@@ -27,16 +27,16 @@ def _extract_trajectory_data(trajectory):
     internal_wrenches = np.zeros((K, num_discs, 6))
     for k, m in enumerate(trajectory):
         for d in range(num_discs):
-            internal_wrenches[k, d] = m.rod.states[disc_pose_idx[d]].wrench.mean
+            internal_wrenches[k, d] = m.sites[disc_pose_idx[d]].wrench.mean
 
     # External wrenches at disc nodes: (K, num_discs, 6)
     external_wrenches = np.zeros((K, num_discs, 6))
     for k, m in enumerate(trajectory):
         for d in range(num_discs):
-            external_wrenches[k, d] = m.external_wrenches[d].mean
+            external_wrenches[k, d] = m.extras.external_wrenches[d].mean
 
     # Tendon lengths: (K, num_tendons)
-    tendon_lengths = np.array([m.tendon_lengths for m in trajectory])
+    tendon_lengths = np.array([m.displacement for m in trajectory])
 
     return {
         "tensions": tensions,
@@ -231,7 +231,7 @@ def plot_hand_wrist_trajectory(result, hand_base_offset, dt=None,
     pos = np.zeros((K1, 3))
     eul = np.zeros((K1, 3))
     for k, hand_m in enumerate(result.trajectory):
-        base0 = np.asarray(hand_m.digits[0].rod.states[0].pose.mean, dtype=float)
+        base0 = np.asarray(hand_m.digits[0].sites[0].pose.mean, dtype=float)
         T_wrist = base0 @ offset_inv
         pos[k] = T_wrist[:3, 3]
         eul[k] = Rotation.from_matrix(T_wrist[:3, :3]).as_euler("xyz", degrees=True)
@@ -298,7 +298,7 @@ def plot_trajectory_comparison(result, control_traj, planner_config, tendon_name
 
     # Discrete planned time axis (K+1 points)
     discrete_times = np.array([k * dt for k in range(K + 1)])
-    discrete_lengths = np.array([result.trajectory[k].tendon_lengths for k in range(K + 1)])
+    discrete_lengths = np.array([result.trajectory[k].displacement for k in range(K + 1)])
 
     # Interpolated time axis
     interp_times = np.arange(len(control_traj)) * control_dt

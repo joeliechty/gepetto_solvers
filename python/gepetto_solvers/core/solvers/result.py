@@ -17,15 +17,75 @@ from .witness import plane_witness
 
 
 class _FingerSol:
-    """Duck-typed per-finger solution the viser/pyvista renderers consume:
-    exposes ``.marginals`` (a ``TendonFingerMarginals``) and ``.meta``. Same shim
-    the demo scripts build inline (e.g. ``ik_5f_contact.py``)."""
+    """One digit of one solved frame, as the renderers and witnesses consume it.
+
+    ``.marginals`` is a ``DigitState`` and ``.meta`` the solve metadata. The
+    accessors below are the point: they are what let a reader ask for "the tip
+    pose" or "the collision-sphere sites" without knowing whether the digit is a
+    Cosserat rod or a chain of revolute joints. Reach through to ``.marginals``
+    only for something genuinely mechanism-specific -- and then via
+    :meth:`tendon`, which returns None on a hand that has no tendons rather than
+    raising.
+
+    The demo scripts build this shim inline (e.g. ``ik_5f_contact.py``), so it
+    has to stay cheap to construct."""
 
     __slots__ = ("marginals", "meta")
 
     def __init__(self, marginals, meta):
         self.marginals = marginals
         self.meta = meta
+
+    # -- geometry, the mechanism-neutral half --
+
+    def num_sites(self):
+        """How many places this digit exposes, base to tip."""
+        return len(self.marginals.sites)
+
+    def site_pose(self, i):
+        """The 4x4 world pose of site ``i``. Negative indices count from the tip,
+        matching the node addressing ``EnvironmentConfig`` uses."""
+        return np.asarray(self.marginals.sites[i].pose.mean, float)
+
+    def site_point(self, i):
+        """The world position of site ``i``."""
+        return self.site_pose(i)[:3, 3]
+
+    def tip_pose(self):
+        """The 4x4 world pose of the tip -- the site every contact and gap
+        witness measures from."""
+        return self.site_pose(-1)
+
+    def tip_point(self):
+        return self.tip_pose()[:3, 3]
+
+    def sphere_sites(self):
+        """Site indices carrying a collision sphere.
+
+        Read off the STATE rather than off a config, deliberately: an overlay can
+        then never mark a sphere the solve did not actually carry."""
+        return list(self.marginals.collision_sites)
+
+    # -- actuation --
+
+    def actuation(self):
+        """What drives this digit: tendon tensions, or joint positions."""
+        return np.asarray(self.marginals.actuation.mean, float)
+
+    def displacement(self):
+        """The digit's displacement readout (tendon lengths), or an empty array
+        on a hand whose actuation IS its position."""
+        return np.asarray(self.marginals.displacement, float)
+
+    # -- the mechanism-specific half --
+
+    def tendon(self):
+        """This digit's ``TendonDigitExtras``, or None on a hand without tendons.
+
+        The routing, the per-disc external wrenches and the tension Jacobian all
+        live here. A caller that needs them is by definition tendon-specific and
+        should gate on this being non-None."""
+        return getattr(self.marginals, "extras", None)
 
 
 def _make_frame(finger_names, hand_marginals, meta):
@@ -36,11 +96,8 @@ def _make_frame(finger_names, hand_marginals, meta):
 
 def _tip_points(frame):
     """Every fingertip of one render frame, as an ``(n, 3)`` array in frame
-    order -- the last rod node of each finger, which is the same point the
-    contact and gap witnesses measure from."""
-    return np.array([
-        np.asarray(fs.marginals.rod.states[-1].pose.mean, float)[:3, 3]
-        for fs in frame.values()])
+    order -- the same point the contact and gap witnesses measure from."""
+    return np.array([fs.tip_point() for fs in frame.values()])
 
 
 @dataclass
@@ -178,9 +235,8 @@ class HandResult:
         R = self.object_rotation
         spec = subset_spec(self.spec, self.contact_subset)
         for name, radius in zip(self.finger_names, self.tip_radii):
-            fm = frame[name].marginals
-            # Same node the renderer draws the contact sphere on (tip_node_index).
-            tip = np.asarray(fm.rod.states[-1].pose.mean)[:3, 3]
+            # Same site the renderer draws the contact sphere on.
+            tip = frame[name].tip_point()
             dist, foot_local, n_local = primitive_surface_witness(
                 R.T @ (tip - self.object_center), spec)
             surface_pt = self.object_center + R @ foot_local
@@ -193,12 +249,28 @@ class HandResult:
         reusing the analytic surface distance the demos report with."""
         return {name: gap for name, (_, _, gap) in self.contact_witness(k).items()}
 
-    def tendon_lengths(self, k=0):
-        """Per-finger tendon lengths at frame ``k``, in ``finger_names`` order --
-        the L component of Theta_curr a Section 1.8 control tick anchors on."""
+    def displacements(self, k=0):
+        """Per-digit displacement at frame ``k``, in ``finger_names`` order --
+        tendon lengths on the tendon hand, the L component of Theta_curr a
+        Section 1.8 control tick anchors on. Empty per digit on a hand whose
+        actuation is already its position."""
         frame = self.frames[k]
-        return [np.asarray(frame[name].marginals.tendon_lengths, float)
-                for name in self.finger_names]
+        return [frame[name].displacement() for name in self.finger_names]
+
+    def actuations(self, k=0):
+        """Per-digit actuation at frame ``k``, in ``finger_names`` order --
+        tendon tensions on the tendon hand, joint positions on a rigid one."""
+        frame = self.frames[k]
+        return [frame[name].actuation() for name in self.finger_names]
+
+    def wrist_pose(self, k=0):
+        """The solved wrist as a 4x4 at frame ``k``.
+
+        Straight off the state bundle: each kinematics answers it for itself, so
+        no caller has to know that the tendon hand's node 0 is not a variable.
+        Falls back to None on a result built before the bundle carried it."""
+        state = self.state(k)
+        return None if state is None else np.asarray(state.wrist_pose, float)
 
     def worst_gap(self, k=0):
         """Largest |gap| to the OBJECT over the fingers that were *asked* to touch

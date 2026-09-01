@@ -31,8 +31,8 @@ def _sphere_nodes(fm):
     the marginals rather than the configs -- the same ``disc_pose_idx`` walk the
     renderer draws, so an overlay can never mark a sphere the picture does not
     show. The tip is the last rod state, matching ``contact_witness``."""
-    tip = len(fm.rod.states) - 1
-    return [(int(i), int(i) == tip) for i in fm.tendon_config.disc_pose_idx]
+    tip = len(fm.sites) - 1
+    return [(int(i), int(i) == tip) for i in fm.extras.tendon_config.disc_pose_idx]
 
 
 def _plane_measure(center, radius, origin, n_hat):
@@ -69,7 +69,7 @@ def plane_witness(params, result, k=0, names=None):
         if name not in wanted:
             continue
         fm = frame[name].marginals
-        c = np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
+        c = np.asarray(fm.sites[-1].pose.mean, float)[:3, 3]
         out[name] = _plane_measure(c, float(radius), origin, n_hat)
     return out
 
@@ -96,7 +96,7 @@ def free_sphere_plane_witness(params, result, k=0, names=None):
     out = {}
     for name, tip_radius in zip(result.finger_names, result.tip_radii):
         fm = frame[name].marginals
-        poses = fm.rod.states
+        poses = fm.sites
         for node, is_tip in _sphere_nodes(fm):
             # A contact finger's tip is the designated support sphere and is
             # reported by plane_witness; every other sphere lands here.
@@ -167,7 +167,7 @@ def half_space_witness(params, result, k=0, names=None):
     opposing = result.opposing_digit
 
     def tip(name):
-        return np.asarray(frame[name].marginals.rod.states[-1].pose.mean,
+        return np.asarray(frame[name].marginals.sites[-1].pose.mean,
                           float)[:3, 3]
 
     if params.half_space_axis is not None:
@@ -227,7 +227,7 @@ def pregrasp_center_witness(params, result, k=0):
 
     def tip(name):
         fm = frame[name].marginals
-        return np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
+        return np.asarray(fm.sites[-1].pose.mean, float)[:3, 3]
 
     c_opposing = tip(opposing)
     c_others = np.mean([tip(n) for n in others], axis=0)
@@ -311,7 +311,7 @@ def pregrasp_axis_witness(params, result, k=0):
 
     def tip(name):
         fm = frame[name].marginals
-        return np.asarray(fm.rod.states[-1].pose.mean, float)[:3, 3]
+        return np.asarray(fm.sites[-1].pose.mean, float)[:3, 3]
 
     c_opposing = tip(opposing)
     c_others = np.mean([tip(n) for n in others], axis=0)
@@ -375,7 +375,7 @@ def finger_plane_witness(result, k=0):
     for name in result.finger_names:
         if name not in frame:
             continue
-        states = frame[name].marginals.rod.states
+        states = frame[name].marginals.sites
         base = np.asarray(states[0].pose.mean, float)[:3, 3]
         tip = np.asarray(states[-1].pose.mean, float)[:3, 3]
         out[name] = (base, tip, pinch_pt)
@@ -484,7 +484,7 @@ def planar_gap_witness(params, result, k=0):
         cfg = by_name.get(name)
         if name not in frame or cfg is None:
             continue
-        T_tip = np.asarray(frame[name].marginals.rod.states[-1].pose.mean, float)
+        T_tip = np.asarray(frame[name].marginals.sites[-1].pose.mean, float)
         tip = T_tip[:3, 3]
         # Eq 11's p_base, in the WRIST frame -- the finger's mounting offset, not a
         # solved node pose (node 0 has no key of its own under root reparameterization).

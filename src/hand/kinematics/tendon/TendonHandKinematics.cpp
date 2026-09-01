@@ -267,22 +267,31 @@ void TendonHandKinematics::insert_from_state(Values& values,
             std::to_string(fingers_.size()));
 
     for (size_t i = 0; i < fingers_.size(); ++i) {
-        const TendonFingerMarginals& fm = state.digits[i];
+        const DigitState& fm = state.digits[i];
+        // The tendon-only half of the bundle. A state produced by another
+        // kinematics has none, and cannot seed this hand.
+        const auto* extras = dynamic_cast<const TendonDigitExtras*>(fm.extras.get());
+        if (!extras)
+            throw std::invalid_argument(
+                "insert_from_state: digit " + std::to_string(i) +
+                " carries no tendon state, so it did not come from a tendon "
+                "hand; a posture can only seed the kinematics that produced it");
+
         std::visit([&](const auto& fp) {
             using FingerType = typename std::remove_reference_t<decltype(*fp)>;
             constexpr int N = FingerType::NumTendons;
 
             const int num_nodes = fp->get_num_nodes();
-            if (static_cast<int>(fm.rod.states.size()) != num_nodes)
+            if (static_cast<int>(fm.sites.size()) != num_nodes)
                 throw std::invalid_argument(
                     "insert_from_state: digit " + std::to_string(i) +
-                    " has " + std::to_string(fm.rod.states.size()) +
-                    " rod states, this hand has " + std::to_string(num_nodes) +
+                    " has " + std::to_string(fm.sites.size()) +
+                    " sites, this hand has " + std::to_string(num_nodes) +
                     " nodes");
-            if (fm.tensions.mean.size() != N)
+            if (fm.actuation.mean.size() != N)
                 throw std::invalid_argument(
                     "insert_from_state: digit " + std::to_string(i) +
-                    " has " + std::to_string(fm.tensions.mean.size()) +
+                    " has " + std::to_string(fm.actuation.mean.size()) +
                     " tendons, this hand has " + std::to_string(N));
 
             // Rod chain. Node 0's pose is NOT a variable under the hand-base
@@ -290,7 +299,7 @@ void TendonHandKinematics::insert_from_state(Values& values,
             // pose insert is skipped.
             const bool skip_node0_pose = fp->rod_->uses_root();
             for (int j = 0; j < num_nodes; ++j) {
-                const auto& s = fm.rod.states[j];
+                const auto& s = fm.sites[j];
                 if (!(skip_node0_pose && j == 0))
                     values.insert(fp->rod_->get_pose_key(j), Pose3(s.pose.mean));
                 values.insert(fp->rod_->get_stress_key(j), Vector6(s.stress.mean));
@@ -304,43 +313,63 @@ void TendonHandKinematics::insert_from_state(Values& values,
             const auto& disc_pose_idx = fp->get_tendon_config().disc_pose_idx;
             for (size_t d = 1; d < disc_pose_idx.size(); ++d) {
                 const int node = disc_pose_idx[d];
-                if (node < 0 || node >= static_cast<int>(fm.external_wrenches.size()))
+                if (node < 0 ||
+                    node >= static_cast<int>(extras->external_wrenches.size()))
                     continue;
                 values.insert(fp->get_disc_wrench_key(static_cast<int>(d)),
-                              Vector6(fm.external_wrenches[node].mean));
+                              Vector6(extras->external_wrenches[node].mean));
             }
 
             values.insert(fp->get_tensions_key(),
-                          Eigen::Vector<double, N>(fm.tensions.mean));
+                          Eigen::Vector<double, N>(fm.actuation.mean));
 
-            if (static_cast<int>(fm.tendon_lengths.size()) == N) {
+            if (static_cast<int>(fm.displacement.size()) == N) {
                 Eigen::Vector<double, N> L;
-                for (int t = 0; t < N; ++t) L(t) = fm.tendon_lengths[t];
+                for (int t = 0; t < N; ++t) L(t) = fm.displacement[t];
                 values.insert(fp->get_lengths_key(), L);
             }
         }, fingers_[i]);
     }
 
-    // The shared wrist. No digit carries it directly: under the hand-base
-    // reparameterization node 0's pose is not a variable but the composition
-    // T_0 = T_wrist o T_offset, so the loop above deliberately skipped it and
-    // the wrist would otherwise be missing from the bundle entirely. A warm
-    // start built from that would hold every rod pose from the state and the
-    // wrist at whatever the receiving model was constructed with -- an
-    // inconsistent guess that the Root factors and the wrist prior immediately
-    // tear back apart, i.e. the hand snapping to the commanded base pose on the
-    // first iteration. Invert the relation instead and carry it.
+    // The shared wrist, taken straight from the bundle.
     //
-    // This inversion is a TENDON-hand fact, not a hand-wide one: it holds only
-    // because the reparameterization removed node 0 as a variable. A mechanism
-    // that owns its wrist variable outright would simply read it, which is why
-    // this lives here and not in HandModel.
+    // It has to be carried rather than skipped: under the hand-base
+    // reparameterization node 0's pose is not a variable but the composition
+    // T_0 = T_wrist o T_offset, so the loop above deliberately did not insert
+    // it. A warm start missing the wrist would hold every rod pose from the
+    // state and the wrist at whatever the receiving model was constructed with
+    // -- an inconsistent guess that the Root factors and the wrist prior tear
+    // back apart on the first iteration, i.e. the hand snapping to the
+    // commanded base pose.
+    //
+    // extract() reads it off the wrist variable directly, so there is no longer
+    // an offset inversion here (or in Python) to get it wrong.
     const bool uses_root = !fingers_.empty() && std::visit(
         [](const auto& fp) { return fp->rod_->uses_root(); }, fingers_[0]);
-    if (uses_root && !hand_base_offsets_.empty()) {
-        const Pose3 T0(state.digits[0].rod.states[0].pose.mean);
-        values.insert(wrist_key_, T0 * hand_base_offsets_[0].inverse());
-    }
+    if (uses_root)
+        values.insert(wrist_key_, Pose3(state.wrist_pose));
+}
+
+
+DigitState TendonHandKinematics::to_digit_state(const TendonFingerMarginals& fm) {
+    DigitState d;
+
+    d.sites.reserve(fm.rod.states.size());
+    for (const auto& s : fm.rod.states)
+        d.sites.push_back(SiteState{s.pose, s.stress, s.wrench});
+
+    d.actuation = fm.tensions;
+    d.displacement = fm.tendon_lengths;
+    // The disc set IS the collision-sphere set on this hand.
+    d.collision_sites = fm.tendon_config.disc_pose_idx;
+
+    auto extras = std::make_shared<TendonDigitExtras>();
+    extras->tendon_config = fm.tendon_config;
+    extras->external_wrenches = fm.external_wrenches;
+    extras->J_pose_tensions = fm.J_pose_tensions;
+    d.extras = std::move(extras);
+
+    return d;
 }
 
 
@@ -350,10 +379,18 @@ HandState TendonHandKinematics::extract(const Values& values,
     out.digits.reserve(fingers_.size());
     out.digit_names = digit_names_;
 
+    // The shared wrist, read straight off the variable that carries it. Node 0
+    // is not a variable under the root reparameterization, so this is the only
+    // place it exists -- and reading it here is what spares every caller the
+    // offset inversion they used to do for themselves.
+    if (values.exists(wrist_key_))
+        out.wrist_pose = values.at<Pose3>(wrist_key_).matrix();
+
     if (marginals) {
         for (const auto& finger : fingers_) {
             std::visit([&](const auto& fp) {
-                out.digits.push_back(fp->get_marginals(values, *marginals));
+                out.digits.push_back(
+                    to_digit_state(fp->get_marginals(values, *marginals)));
             }, finger);
         }
         return out;
@@ -373,7 +410,8 @@ HandState TendonHandKinematics::extract(const Values& values,
             auto zero_joint = [N](Key, Key) {
                 return Matrix::Zero(6 + N, 6 + N);
             };
-            out.digits.push_back(fp->get_marginals(values, zero_cov, zero_joint));
+            out.digits.push_back(
+                to_digit_state(fp->get_marginals(values, zero_cov, zero_joint)));
         }, finger);
     }
     return out;

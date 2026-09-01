@@ -7,6 +7,7 @@
 #include "gepetto_solvers/hand/HandSolver.h"
 #include "gepetto_solvers/hand/HandSpec.h"
 #include "gepetto_solvers/hand/HandTrajectoryPlanner.h"
+#include "gepetto_solvers/hand/kinematics/tendon/TendonHandKinematics.h"  // TendonDigitExtras
 
 namespace py = pybind11;
 
@@ -73,11 +74,57 @@ void bind_hand(py::module& m) {
                        "previous solve on the same hand). None => the "
                        "straight-rod, zero-tension cold start.");
 
+    // --- the solved state, and the neutral shape it takes ---
+
+    py::class_<SiteState>(m, "SiteState")
+        .def(py::init<>())
+        .def_readwrite("pose", &SiteState::pose)
+        .def_readwrite("stress", &SiteState::stress,
+                       "Continuum-rod stress; zero on a mechanism with none.")
+        .def_readwrite("wrench", &SiteState::wrench,
+                       "Continuum-rod wrench; zero on a mechanism with none.");
+
+    py::class_<DigitExtras, std::shared_ptr<DigitExtras>>(
+        m, "DigitExtras",
+        "Base class for per-digit state only one kind of mechanism has. Check "
+        "for None, then read the derived type (e.g. TendonDigitExtras).");
+
+    py::class_<gepetto_solvers::TendonDigitExtras, DigitExtras,
+               std::shared_ptr<gepetto_solvers::TendonDigitExtras>>(
+        m, "TendonDigitExtras")
+        .def(py::init<>())
+        .def_readwrite("tendon_config",
+                       &gepetto_solvers::TendonDigitExtras::tendon_config)
+        .def_readwrite("external_wrenches",
+                       &gepetto_solvers::TendonDigitExtras::external_wrenches)
+        .def_readwrite("J_pose_tensions",
+                       &gepetto_solvers::TendonDigitExtras::J_pose_tensions);
+
+    py::class_<DigitState>(m, "DigitState")
+        .def(py::init<>())
+        .def_readwrite("sites", &DigitState::sites,
+                       "One per site, base first and tip last.")
+        .def_readwrite("actuation", &DigitState::actuation,
+                       "What drives this digit: tendon tensions on the tendon "
+                       "hand, joint positions on a rigid-body one.")
+        .def_readwrite("displacement", &DigitState::displacement,
+                       "The digit's displacement readout where it has one "
+                       "distinct from its actuation (tendon lengths). Empty "
+                       "when actuation IS position.")
+        .def_readwrite("collision_sites", &DigitState::collision_sites,
+                       "Indices into `sites` that carry a collision sphere.")
+        .def_readwrite("extras", &DigitState::extras,
+                       "Mechanism-specific state, or None.");
+
     py::class_<HandState>(m, "HandState")
         .def(py::init<>())
         .def_readwrite("digits", &HandState::digits,
                        "One entry per digit, in digit order.")
-        .def_readwrite("digit_names", &HandState::digit_names);
+        .def_readwrite("digit_names", &HandState::digit_names)
+        .def_readwrite("wrist_pose", &HandState::wrist_pose,
+                       "The shared wrist as a 4x4 in the world frame. Carried "
+                       "rather than derived: recovering it is a per-mechanism "
+                       "question, and this is each kinematics' answer to it.");
 
     py::class_<Solution<HandState>>(m, "HandSolution")
         .def(py::init<>())

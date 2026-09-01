@@ -226,7 +226,7 @@ def sphere_positions(stepper, result):
         fm = frame[name].marginals
         prox = proximal_disc_flags(cfg, stepper.params.num_proximal_discs)
         tip = tip_node_index(cfg)
-        out.append([(n, np.asarray(fm.rod.states[n].pose.mean, float)[:3, 3],
+        out.append([(n, np.asarray(fm.sites[n].pose.mean, float)[:3, 3],
                      bool(p), n == tip)
                     for n, p in zip(disc_node_indices(cfg), prox)])
     return out
@@ -303,7 +303,7 @@ def base_pose(stepper, result):
     thing to look at when a solve cannot reach the object."""
     frame = result.frames[0]
     node0 = np.asarray(
-        frame[stepper.finger_names[0]].marginals.rod.states[0].pose.mean, float)
+        frame[stepper.finger_names[0]].marginals.sites[0].pose.mean, float)
     return node0 @ np.linalg.inv(
         np.asarray(stepper.configs[0][1].hand_base_offset, float))
 
@@ -333,15 +333,15 @@ def print_kinematic_state(stepper, result, indent="    ", nodes=False):
           f"moved {np.linalg.norm(T[:3, 3] - cmd[:3, 3]) * 1e3:.3f} mm)")
     for name in stepper.finger_names:
         fm = frame[name].marginals
-        tip = np.asarray(fm.rod.states[-1].pose.mean, float)
-        print(f"{indent}  [{name:>6}] Q(N) {_fmt(fm.tensions.mean, 4)}")
-        print(f"{indent}           L(m) {_fmt(fm.tendon_lengths, 5)}")
+        tip = np.asarray(fm.sites[-1].pose.mean, float)
+        print(f"{indent}  [{name:>6}] Q(N) {_fmt(fm.actuation.mean, 4)}")
+        print(f"{indent}           L(m) {_fmt(fm.displacement, 5)}")
         print(f"{indent}           tip  pos {_fmt(tip[:3, 3], 5)}  "
               f"rpy {_fmt(rpy_from_R(tip[:3, :3]))}")
         if nodes:
-            print(f"{indent}           rod nodes ({len(fm.rod.states)}), "
+            print(f"{indent}           rod nodes ({len(fm.sites)}), "
                   f"position | stress:")
-            for i, st in enumerate(fm.rod.states):
+            for i, st in enumerate(fm.sites):
                 pos = np.asarray(st.pose.mean, float)[:3, 3]
                 print(f"{indent}             {i:>3}  {_fmt(pos, 5)}  "
                       f"|s|={np.linalg.norm(np.asarray(st.stress.mean, float)):.4g}")

@@ -60,7 +60,7 @@ def adopt_tensions(res):
     out, clamped = [], False
     for name in res.finger_names:
         q = float(np.asarray(
-            res.frames[0][name].marginals.tensions.mean,
+            res.frames[0][name].marginals.actuation.mean,
             float)[get_hand().actuation.drive_indices[0]])
         clamped = clamped or not (FLEXOR_LO <= q <= FLEXOR_HI)
         out.append(min(max(q, FLEXOR_LO), FLEXOR_HI))

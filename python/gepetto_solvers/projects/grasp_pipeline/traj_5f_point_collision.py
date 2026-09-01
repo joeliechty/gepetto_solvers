@@ -179,8 +179,8 @@ def _main(args, results_dir):
     plan_config.sigma_wrist_pos = args.sigma_wrist_pos
     plan_config.sigma_wrist_rot = args.sigma_wrist_rot
     plan_config.gp_wrist_Qc = args.gp_wrist * np.eye(6)
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = np.zeros((0, 0))
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = np.zeros((0, 0))
 
     plan_config.goal_positions = [np.asarray(g, dtype=float) for g in goals]
     plan_config.goal_position_cov = args.goal_cov * np.eye(3)
@@ -198,7 +198,9 @@ def _main(args, results_dir):
         "object_pose": object_pose,
     })
 
-    planner = gepetto_solvers.HandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"Built collision point-to-point planner: {planner.num_fingers()} "
           f"fingers, K={args.steps} steps.")
 
@@ -235,7 +237,7 @@ def _main(args, results_dir):
                                        spec, object_pose, r)
         dists = []
         for i, fm in enumerate(hand_m.digits):
-            tip = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+            tip = np.array(fm.sites[-1].pose.mean)[:3, 3]
             dists.append(float(np.linalg.norm(tip - goals[i])))
         tag = "  <- start" if k == 0 else ("  <- goal" if k == K else "")
         print(f"  {k:>3} | {obj_c:+.5f} m         | {ff_g:+.5f} m             "
@@ -248,7 +250,7 @@ def _main(args, results_dir):
     print("\nTerminal (k=K) per-finger tip-to-goal distances:")
     term_dists = []
     for i, (name, _) in enumerate(configs):
-        tip = np.array(result.trajectory[K].digits[i].rod.states[-1].pose.mean)[:3, 3]
+        tip = np.array(result.trajectory[K].digits[i].sites[-1].pose.mean)[:3, 3]
         d = float(np.linalg.norm(tip - goals[i]))
         term_dists.append(d)
         print(f"  [{name:>6}] dist {d:.5f} m")

@@ -136,7 +136,7 @@ def parse_args():
                         help="Wrist-pose GP process-noise scale (diag of gp_wrist_Qc). "
                              "Smaller => smoother/less wrist motion between steps.")
     parser.add_argument("--gp-tense", type=float, default=1.0,
-                        help="Tension GP process-noise scale (diag of gp_tense_Qc).")
+                        help="Tension GP process-noise scale (diag of gp_actuation_Qc).")
     parser.add_argument("--gp-len", type=float, default=0.0,
                         help="Length GP process-noise scale; 0 disables the length GP.")
     parser.add_argument("--sigma-wrist-pos", type=float, default=1e-4,
@@ -235,8 +235,8 @@ def _main(args, results_dir):
     plan_config.sigma_wrist_pos = args.sigma_wrist_pos
     plan_config.sigma_wrist_rot = args.sigma_wrist_rot
     plan_config.gp_wrist_Qc = args.gp_wrist * np.eye(6)
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = (args.gp_len * np.eye(num_tendons)
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = (args.gp_len * np.eye(num_tendons)
                              if args.gp_len > 0.0 else np.zeros((0, 0)))
     plan_config.base.linear_solver_type = "MULTIFRONTAL_QR"
     plan_config.base.al_initial_mu = args.al_mu
@@ -258,7 +258,9 @@ def _main(args, results_dir):
                            if spec["type"] == "ellipsoid" else spec["vdb"]),
     })
 
-    planner = gepetto_solvers.HandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"Built hand trajectory planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 
@@ -298,7 +300,7 @@ def _main(args, results_dir):
     print("------+-----------------------------------------+----------------")
     prev_base = None
     for k, hand_m in enumerate(result.trajectory):
-        base_pose = np.array(hand_m.digits[0].rod.states[0].pose.mean)
+        base_pose = np.array(hand_m.digits[0].sites[0].pose.mean)
         base_xyz = base_pose[:3, 3]
         step_disp = (0.0 if prev_base is None
                      else float(np.linalg.norm(base_xyz - prev_base)))
@@ -306,7 +308,7 @@ def _main(args, results_dir):
 
         gaps = []
         for (_, _cfg), tip_radius, fm in zip(configs, tip_radii, hand_m.digits):
-            tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+            tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
             tip_local = object_rotation.T @ (tip_pos - object_center)
             gaps.append(primitive_surface_gap(tip_local, spec) - tip_radius)
         tag = "  <- start" if k == 0 else ("  <- goal" if k == K else "")
@@ -317,7 +319,7 @@ def _main(args, results_dir):
     print("\nTerminal (k=K) per-finger surface gaps:")
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
                                          result.trajectory[K].digits):
-        tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+        tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius
         print(f"  [{name:>6}] tip {tip_pos}  |  surface gap {gap:+.5f} m  "

@@ -110,7 +110,7 @@ def build_tip_table(verbose=True):
         params.flexor_tensions = [float(q)] * len(FINGER_NAMES)
         frame = solver.solve().frames[0]
         for name in FINGER_NAMES:
-            pose = np.asarray(frame[name].marginals.rod.states[-1].pose.mean, float)
+            pose = np.asarray(frame[name].marginals.sites[-1].pose.mean, float)
             tips[name].append(pose[:3, 3])
         worst_wrist = max(worst_wrist, float(
             np.abs(solved_wrist_pose(solver.configs, frame) - np.eye(4)).max()))
@@ -156,7 +156,7 @@ def check_independence(table, tol_mm=0.1):
         frame = HandFKSolver(params).solve().frames[0]
         for name in FINGER_NAMES:
             got = np.asarray(
-                frame[name].marginals.rod.states[-1].pose.mean, float)[:3, 3]
+                frame[name].marginals.sites[-1].pose.mean, float)[:3, 3]
             want = table[name][int(np.argmin(np.abs(Q_GRID - case[name])))]
             worst = max(worst, float(np.linalg.norm(got - want)) * 1000.0)
 
@@ -311,7 +311,7 @@ def roundtrip(table, result, tol_mm=0.5):
     params.flexor_tensions = [result["tensions"].get(n, 0.6) for n in FINGER_NAMES]
     frame = HandFKSolver(params).solve().frames[0]
     tips = np.stack([
-        np.asarray(frame[n].marginals.rod.states[-1].pose.mean, float)[:3, 3]
+        np.asarray(frame[n].marginals.sites[-1].pose.mean, float)[:3, 3]
         for n in result["combo"]])
     return float(np.linalg.norm(tips.mean(axis=0) - result["centroid"])) * 1000.0
 

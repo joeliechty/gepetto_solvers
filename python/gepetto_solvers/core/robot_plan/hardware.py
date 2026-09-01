@@ -97,7 +97,7 @@ def open_tendon_lengths(params=None, solver=None, hand=None):
         solver.params = borrowed
     idx = _drive_index(hand)
     return {name: float(lengths[idx])
-            for name, lengths in zip(result.finger_names, result.tendon_lengths(0))}
+            for name, lengths in zip(result.finger_names, result.displacements(0))}
 
 
 def open_pose_tensions(hand=None):
@@ -163,7 +163,7 @@ def check_open_lengths(open_lengths, params=None, hand=None):
     flexed = solvers.HandFKSolver(probe, hand).solve()
     idx = _drive_index(hand)
     deltas = {name: open_lengths[name] - float(lengths[idx])
-              for name, lengths in zip(flexed.finger_names, flexed.tendon_lengths(0))
+              for name, lengths in zip(flexed.finger_names, flexed.displacements(0))
               if name in open_lengths}
     worst = min(deltas.values()) if deltas else 0.0
     if worst <= 0.0:

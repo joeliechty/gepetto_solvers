@@ -225,7 +225,7 @@ class HandSolverBase:
 
             frame = HandFKSolver(self.params).solve().frames[0]
             self._fk_probe_tips = {
-                name: np.asarray(frame[name].marginals.rod.states[-1].pose.mean,
+                name: np.asarray(frame[name].marginals.sites[-1].pose.mean,
                                  float)[:3, 3]
                 for name in self.finger_names}
         tips = self._fk_probe_tips

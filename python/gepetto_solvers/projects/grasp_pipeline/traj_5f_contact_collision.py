@@ -282,8 +282,8 @@ def plan_trajectory(args, configs, label, object_pose=None, log_landscape=False)
     qc_pos = args.gp_wrist_pos ** 2 / args.dt
     plan_config.gp_wrist_Qc = np.diag([qc_rot, qc_rot, qc_rot,
                                        qc_pos, qc_pos, qc_pos])
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = np.zeros((0, 0))
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = np.zeros((0, 0))
     # Cholesky, explicitly: the AL path coerces any QR string to Cholesky anyway
     # (inequality AntiFactors linearize to negated Hessians QR cannot eliminate —
     # the inner LM would silently stall; see SolverBase.cpp), so configure what
@@ -311,7 +311,9 @@ def plan_trajectory(args, configs, label, object_pose=None, log_landscape=False)
                              tip_wrench_cov, start_cov,
                              object_pose if object_pose is not None else np.eye(4))
 
-    planner = gepetto_solvers.HandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"[{label}] built planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 
@@ -357,7 +359,7 @@ def per_step_collision_report(args, configs, result, spec, object_pose):
             for n, p in zip(disc_node_indices(cfg), proximal_disc_flags(cfg)):
                 if n == 0:
                     continue
-                pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
+                pos = np.array(fm.sites[n].pose.mean)[:3, 3]
                 entries.append((n, pos, bool(p), n == tip_idx))
             spheres.append(entries)
 
@@ -397,7 +399,7 @@ def terminal_contact_report(configs, tip_radii, result, spec, object_pose):
     worst = 0.0
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
                                          result.trajectory[-1].digits):
-        tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+        tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius
         worst = max(worst, abs(gap))

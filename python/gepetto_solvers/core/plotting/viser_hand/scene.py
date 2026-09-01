@@ -154,7 +154,7 @@ class ViserHandScene(
             if name not in frame:
                 continue
             fm = frame[name].marginals
-            states = fm.rod.states
+            states = fm.sites
             poses = [np.asarray(st.pose.mean) for st in states]
             positions = np.array([T[:3, 3] for T in poses])
 
@@ -189,7 +189,7 @@ class ViserHandScene(
 
             # Collision spheres on the disc nodes.
             if collision and self.show_collision_spheres:
-                for di, node_idx in enumerate(fm.tendon_config.disc_pose_idx):
+                for di, node_idx in enumerate(fm.extras.tendon_config.disc_pose_idx):
                     kn = f"/hand/{name}/collision/{di}"
                     self._dynamic[kn] = self.scene.add_icosphere(
                         kn, radius=float(collision_radius), color=_COLLISION_RGB,

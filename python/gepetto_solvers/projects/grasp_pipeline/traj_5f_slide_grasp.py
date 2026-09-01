@@ -247,7 +247,7 @@ def per_step_table_report(args, configs, result, plane_origin, plane_normal, tip
             for n in disc_node_indices(cfg):
                 if n == 0:
                     continue
-                pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
+                pos = np.array(fm.sites[n].pose.mean)[:3, 3]
                 sdf = float((pos - p0).dot(n_hat))       # signed dist to plane
                 if n == tip_idx:
                     tip_dists.append(sdf - r_tip)
@@ -408,8 +408,8 @@ def plan_trajectory(args, configs):
     qc_rot = args.gp_wrist_rot ** 2 / args.dt
     qc_pos = args.gp_wrist_pos ** 2 / args.dt
     plan_config.gp_wrist_Qc = np.diag([qc_rot, qc_rot, qc_rot, qc_pos, qc_pos, qc_pos])
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = np.zeros((0, 0))
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = np.zeros((0, 0))
     plan_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY"
     plan_config.base.al_initial_mu = args.al_mu
     plan_config.base.al_mu_increase_rate = args.al_rate
@@ -428,7 +428,9 @@ def plan_trajectory(args, configs):
     start_mean = np.array([0.5, 0.5, 0.5, 0.5, 0.5, args.start_flexor])
     start_cov = np.diag([1e-6] * num_tendons)
 
-    planner = gepetto_solvers.HandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"[plan] built planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 

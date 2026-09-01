@@ -233,7 +233,7 @@ class StepperMixin:
         solved, clamped = [], False
         for name in res.finger_names:
             q = float(np.asarray(
-                res.frames[0][name].marginals.tensions.mean, float)[self._drive_index()])
+                res.frames[0][name].marginals.actuation.mean, float)[self._drive_index()])
             clamped = clamped or not (lo <= q <= hi)
             solved.append(min(max(q, lo), hi))
         self._restoring = True

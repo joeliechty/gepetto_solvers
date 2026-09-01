@@ -78,7 +78,7 @@ def _smoke_close():
     # the reporting cannot make this pass.
     disp = []
     for i in range(n):
-        lengths = dict(zip(result.finger_names, result.at_iterate(i).tendon_lengths(0)))
+        lengths = dict(zip(result.finger_names, result.at_iterate(i).displacements(0)))
         disp.append({name: open_lengths[name] - float(lengths[name][drive])
                      for name in fingers})
     span = {name: disp[-1][name] - disp[0][name] for name in fingers}
@@ -138,7 +138,7 @@ def _smoke_lift():
         """Fingertip positions at a recorded pose -- the node the renderer draws
         the contact sphere on."""
         return {name: np.asarray(
-            view.frames[0][name].marginals.rod.states[-1].pose.mean, float)[:3, 3]
+            view.frames[0][name].marginals.sites[-1].pose.mean, float)[:3, 3]
             for name in view.finger_names}
 
     start_tips = tips(result.at_iterate(0))

@@ -116,7 +116,9 @@ def main():
     hand_config.base.al_mu_increase_rate = args.al_rate
     hand_config.base.al_max_iterations = args.al_iters
 
-    solver = gepetto_solvers.HandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), hand_config)
     print(f"Built hand solver with {solver.num_fingers()} fingers "
           f"(collision avoidance ON).")
 
@@ -138,7 +140,7 @@ def main():
     print("\nTip contact gaps (target ~0):")
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
                                          solution.marginals.digits):
-        tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+        tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius
         print(f"  [{name:>6}] surface gap {gap:+.5f} m (r={tip_radius:.4f})")
@@ -152,7 +154,7 @@ def main():
         tip_idx = tip_node_index(cfg)
         entries = []
         for n, p in zip(nodes, prox):
-            pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
+            pos = np.array(fm.sites[n].pose.mean)[:3, 3]
             entries.append((n, pos, bool(p), n == tip_idx))
         spheres.append(entries)
 

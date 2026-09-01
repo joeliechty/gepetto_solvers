@@ -139,7 +139,9 @@ def main():
     hand_config.base.al_mu_increase_rate = args.al_rate
     hand_config.base.al_max_iterations = args.al_iters
 
-    solver = gepetto_solvers.HandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), hand_config)
     print(f"Built hand solver with {solver.num_fingers()} fingers.")
 
     # Same tension pattern as the single-finger test: passive tendons pinned,
@@ -165,7 +167,7 @@ def main():
           f"error={solution.meta.error:.4g}")
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
                                          solution.marginals.digits):
-        tip_pose = np.array(fm.rod.states[-1].pose.mean)
+        tip_pose = np.array(fm.sites[-1].pose.mean)
         tip_pos = tip_pose[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius

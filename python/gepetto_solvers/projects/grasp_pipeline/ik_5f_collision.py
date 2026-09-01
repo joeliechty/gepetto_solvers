@@ -62,7 +62,9 @@ def solve_hand(configs, args):
     hand_config.base.al_mu_increase_rate = args.al_rate
     hand_config.base.al_max_iterations = args.al_iters
 
-    solver = gepetto_solvers.HandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), hand_config)
 
     num_tendons = configs[0][1].num_tendons
     # Tight passive tendons, loose flexor (the grasp-test pattern): the flexor

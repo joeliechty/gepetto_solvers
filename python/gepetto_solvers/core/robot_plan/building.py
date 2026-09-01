@@ -59,7 +59,7 @@ def build_plan(result, configs, corner_viz, open_lengths, source="history",
     idx = _drive_index(_hand(hand))
     waypoints = []
     for view, note in zip(views, notes):
-        lengths = view.tendon_lengths(0)
+        lengths = view.displacements(0)
         waypoints.append(Waypoint(
             wrist_pose=np.asarray(solved_wrist_pose(configs, view.frames[0]), float),
             tendon_disp={name: open_lengths[name] - float(length[idx])

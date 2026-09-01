@@ -13,6 +13,29 @@
 
 namespace gepetto_solvers {
 
+// The parts of a solved tendon digit that only a tendon hand has.
+//
+// Everything here was a named field on the old rod-shaped state bundle. It moved
+// behind DigitState::extras when that bundle stopped being tendon-specific: the
+// routing has no analogue on a rigid-body hand, and both of the other two have
+// essentially no readers (J_pose_tensions has none at all, external_wrenches
+// one plot), so isolating them costs nothing and stops the neutral layer
+// claiming every hand has tendons.
+struct TendonDigitExtras : DigitExtras {
+    // Resolved routing: which rod node each disc sits on, and where each
+    // tendon's hole is in that disc's frame. The tendon and disc overlays are
+    // drawn from it.
+    TendonConfig tendon_config;
+
+    // Per-disc external wrench.
+    std::vector<Vector6Gaussian> external_wrenches;
+
+    // d(tip pose)/d(tensions). No reader today; kept because it is expensive to
+    // recompute and cheap to carry.
+    Eigen::MatrixXd J_pose_tensions;
+};
+
+
 // The tendon hand's kinematics: a set of TendonFingerModel<N> digits that all
 // share ONE floating wrist variable.
 //
@@ -100,6 +123,10 @@ private:
     gtsam::Key wrist_key_;
 
     const FingerVariant& finger_at(int digit) const;
+
+    // TendonFingerMarginals -> the neutral DigitState, with the tendon-only
+    // parts packed into a TendonDigitExtras. The one place the two shapes meet.
+    static DigitState to_digit_state(const TendonFingerMarginals& fm);
 };
 
 }  // namespace gepetto_solvers

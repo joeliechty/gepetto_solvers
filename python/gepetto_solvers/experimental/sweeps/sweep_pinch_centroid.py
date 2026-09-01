@@ -152,7 +152,7 @@ def check_table_consistency(result, p):
 
     frame = fk_result.frames[0]
     tips = np.stack([
-        np.asarray(frame[n].marginals.rod.states[-1].pose.mean, float)[:3, 3]
+        np.asarray(frame[n].marginals.sites[-1].pose.mean, float)[:3, 3]
         for n in names])
     radii = [r for r, c in zip(fk_result.tip_radii, CONTACT_FINGERS) if c]
 

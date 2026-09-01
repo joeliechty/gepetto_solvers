@@ -104,7 +104,9 @@ def solve_hand(configs, args, goal_positions=None):
                                       for g in goal_positions]
         hand_config.goal_position_cov = args.goal_cov * np.eye(3)
 
-    solver = gepetto_solvers.HandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), hand_config)
 
     num_tendons = configs[0][1].num_tendons
     # Tight passive tendons, loose flexor (the collision-test pattern): the flexor
@@ -134,7 +136,7 @@ def tip_positions(configs, solution):
     """World-frame tip position of every finger in a hand solution."""
     tips = []
     for (_, _cfg), fm in zip(configs, solution.marginals.digits):
-        tips.append(np.array(fm.rod.states[-1].pose.mean)[:3, 3])
+        tips.append(np.array(fm.sites[-1].pose.mean)[:3, 3])
     return tips
 
 

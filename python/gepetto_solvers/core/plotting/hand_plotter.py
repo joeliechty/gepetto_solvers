@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pyvista as pv
 import vtk
@@ -24,15 +26,15 @@ class TendonMeshManager:
         self.color_offset = tendon_color_offset
 
     def update_tendons(self, solution, plotter):
-        num_tendons = solution.marginals.tendon_config.num_tendons
-        num_discs = solution.marginals.tendon_config.num_discs
+        num_tendons = solution.marginals.extras.tendon_config.num_tendons
+        num_discs = solution.marginals.extras.tendon_config.num_discs
 
         if plotter.frame == 0:
             self.tendon_meshes = []
             for i in range(num_tendons):
                 active_count = 0
                 for ii in range(num_discs):
-                    hole = solution.marginals.tendon_config.hole_locations[ii][i]
+                    hole = solution.marginals.extras.tendon_config.hole_locations[ii][i]
                     if hole is not None:
                         active_count += 1
                     else:
@@ -52,11 +54,11 @@ class TendonMeshManager:
                 continue
             points = []
             for ii in range(num_discs):
-                hole = solution.marginals.tendon_config.hole_locations[ii][tendon_idx]
+                hole = solution.marginals.extras.tendon_config.hole_locations[ii][tendon_idx]
                 if hole is None:
                     break
-                disc_pose_idx = solution.marginals.tendon_config.disc_pose_idx[ii]
-                T = solution.marginals.rod.states[disc_pose_idx].pose.mean
+                disc_pose_idx = solution.marginals.extras.tendon_config.disc_pose_idx[ii]
+                T = solution.marginals.sites[disc_pose_idx].pose.mean
                 p_world = T[:3, :3] @ hole + T[:3, 3]
                 points.append(p_world)
 
@@ -64,11 +66,11 @@ class TendonMeshManager:
                 mesh.points[:] = points
 
     def update_discs(self, solution, plotter):
-        num_discs = solution.marginals.tendon_config.num_discs
-        disc_pose_idx = solution.marginals.tendon_config.disc_pose_idx
+        num_discs = solution.marginals.extras.tendon_config.num_discs
+        disc_pose_idx = solution.marginals.extras.tendon_config.disc_pose_idx
 
         if plotter.frame == 0:
-            routing_radius = solution.marginals.tendon_config.routing_radius
+            routing_radius = solution.marginals.extras.tendon_config.routing_radius
             disc_radius = 1.3 * routing_radius
             disc_width = 0.3 * routing_radius
             hole_radius = 0.05 * routing_radius
@@ -101,7 +103,7 @@ class TendonMeshManager:
                     actor.SetUserTransform(disc_transform)
 
         for ii in range(num_discs):
-            T = solution.marginals.rod.states[disc_pose_idx[ii]].pose.mean
+            T = solution.marginals.sites[disc_pose_idx[ii]].pose.mean
             self.disc_transforms[ii].SetMatrix(T.flatten().tolist())
 
     def update(self, solution, plotter):
@@ -237,8 +239,11 @@ class HandPlotter:
             if name not in solutions_dict:
                 continue
             solution = solutions_dict[name]
+            # CosseratRodMeshManager reads `.states`, because it is also driven
+            # by the cosserat demo with a real CosseratRodMarginals. A digit's
+            # sites are the same list under a neutral name, so hand it that.
             self.rod_managers[name].update(
-                solution.marginals.rod, self.plotter)
+                SimpleNamespace(states=solution.marginals.sites), self.plotter)
             self.tendon_managers[name].update(solution, self.plotter)
 
         if self.plot_world_axes and not self._world_axes_added:

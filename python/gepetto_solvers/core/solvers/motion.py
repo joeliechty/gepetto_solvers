@@ -182,7 +182,7 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
         """One FK pose, plus what each closing tendon had taken in at it."""
         params.flexor_tensions = list(tensions)
         res = fk_solver.solve()
-        lengths = dict(zip(res.finger_names, res.tendon_lengths(0)))
+        lengths = dict(zip(res.finger_names, res.displacements(0)))
         return res, {name: open_lengths[name] - float(lengths[name][drive])
                      for name in closing}
 

@@ -91,7 +91,7 @@ def parse_args():
                         help="Wrist-pose GP process-noise scale (diag of gp_wrist_Qc). "
                              "Smaller => smoother/less wrist motion between steps.")
     parser.add_argument("--gp-tense", type=float, default=1.0,
-                        help="Tension GP process-noise scale (diag of gp_tense_Qc).")
+                        help="Tension GP process-noise scale (diag of gp_actuation_Qc).")
     parser.add_argument("--gp-len", type=float, default=0.0,
                         help="Length GP process-noise scale; 0 disables the length GP.")
     parser.add_argument("--sigma-wrist-pos", type=float, default=1e-4,
@@ -155,8 +155,8 @@ def _main(args, results_dir):
     plan_config.sigma_wrist_pos = args.sigma_wrist_pos
     plan_config.sigma_wrist_rot = args.sigma_wrist_rot
     plan_config.gp_wrist_Qc = args.gp_wrist * np.eye(6)
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = (args.gp_len * np.eye(num_tendons)
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = (args.gp_len * np.eye(num_tendons)
                              if args.gp_len > 0.0 else np.zeros((0, 0)))
 
     # Per-finger terminal tip-position goals (world frame). This replaces the
@@ -172,7 +172,9 @@ def _main(args, results_dir):
         "goal_positions": GOAL_POSITIONS,
     })
 
-    planner = gepetto_solvers.HandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"Built hand point-to-point planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 
@@ -209,7 +211,7 @@ def _main(args, results_dir):
     print("------+-----------------------------------------+------------------")
     prev_base = None
     for k, hand_m in enumerate(result.trajectory):
-        base_pose = np.array(hand_m.digits[0].rod.states[0].pose.mean)
+        base_pose = np.array(hand_m.digits[0].sites[0].pose.mean)
         base_xyz = base_pose[:3, 3]
         step_disp = (0.0 if prev_base is None
                      else float(np.linalg.norm(base_xyz - prev_base)))
@@ -217,7 +219,7 @@ def _main(args, results_dir):
 
         dists = []
         for i, fm in enumerate(hand_m.digits):
-            tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+            tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
             dists.append(float(np.linalg.norm(tip_pos - GOAL_POSITIONS[i])))
         tag = "  <- start" if k == 0 else ("  <- goal" if k == K else "")
         print(f"  {k:>3} | [{base_xyz[0]:+.4f} {base_xyz[1]:+.4f} {base_xyz[2]:+.4f}] "
@@ -227,7 +229,7 @@ def _main(args, results_dir):
     print("\nTerminal (k=K) per-finger tip-to-goal distances:")
     for i, (name, _) in enumerate(configs):
         fm = result.trajectory[K].digits[i]
-        tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+        tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
         dist = float(np.linalg.norm(tip_pos - GOAL_POSITIONS[i]))
         print(f"  [{name:>6}] tip {tip_pos}  goal {GOAL_POSITIONS[i]}  "
               f"|  dist {dist:.5f} m")

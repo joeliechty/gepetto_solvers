@@ -104,7 +104,9 @@ def main():
     # Build the solver ONCE. Rebuilding each frame would discard the retained
     # solution and force a straight-hand cold start every time; instead we keep
     # this instance and re-command the wrist each frame (warm-started sweep).
-    solver = gepetto_solvers.HandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), hand_config)
 
     start_time = time.time()
     num_iters = 10000
@@ -136,7 +138,7 @@ def main():
 
         # Solved flexor tendon length per finger (meters). The lengths come back
         # per finger as the full num_tendons vector; index 5 is the flexor.
-        flexor_lengths = [fm.tendon_lengths[flexor_index]
+        flexor_lengths = [fm.displacement[flexor_index]
                           for fm in solution.marginals.digits]
 
         # --- Feed the plotter one shim per finger ---
@@ -149,7 +151,7 @@ def main():
         plotter.update(solutions)
 
         if i % 50 == 0:
-            tip = np.array(solution.marginals.digits[0].rod.states[-1].pose.mean)
+            tip = np.array(solution.marginals.digits[0].sites[-1].pose.mean)
             print(f"Iteration {i}/{num_iters} | iters={solution.meta.iterations} "
                   f"err={solution.meta.error:.3g}")
             width = max(len(name) for name in finger_names)

@@ -343,7 +343,7 @@ def collision_report(configs, solution, spec, object_pose, radius):
     for (_, cfg), fm in zip(configs, solution.marginals.digits):
         entries = []
         for n, p in zip(disc_node_indices(cfg), proximal_disc_flags(cfg)):
-            pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
+            pos = np.array(fm.sites[n].pose.mean)[:3, 3]
             entries.append((n, pos, bool(p)))
         spheres.append(entries)
 

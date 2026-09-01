@@ -52,7 +52,7 @@ class TrajectoryMixin:
                        float)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
         lengths = [float(np.asarray(length, float)[self._drive_index()]) * 1e3
-                   for length in res.tendon_lengths(0)]
+                   for length in res.displacements(0)]
         return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
 
 

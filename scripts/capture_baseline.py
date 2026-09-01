@@ -109,7 +109,7 @@ def _tip_positions(result, k: int) -> list[list[float]]:
     """Fingertip world positions at frame ``k``, in finger order."""
     frame = result.frames[k]
     return [
-        np.asarray(frame[name].marginals.rod.states[-1].pose.mean, float)[
+        np.asarray(frame[name].marginals.sites[-1].pose.mean, float)[
             :3, 3
         ].tolist()
         for name in result.finger_names
@@ -147,8 +147,13 @@ def _record(result, params) -> dict:
         except Exception as exc:  # FK attaches no contact; nothing to measure
             frame["surface_gaps"] = f"<unavailable: {type(exc).__name__}>"
         try:
+            # The KEY stays "tendon_lengths" although the accessor is now
+            # result.displacements(): a capture is only useful against older
+            # captures, and renaming the field would make every one taken before
+            # the state bundle was generalized incomparable. It is the same
+            # number.
             frame["tendon_lengths"] = [
-                np.asarray(v, float).tolist() for v in result.tendon_lengths(k)
+                np.asarray(v, float).tolist() for v in result.displacements(k)
             ]
         except Exception as exc:
             frame["tendon_lengths"] = f"<unavailable: {type(exc).__name__}>"
