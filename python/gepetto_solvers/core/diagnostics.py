@@ -14,7 +14,10 @@ from datetime import datetime
 import numpy as np
 
 from .geometry.scene import primitive_surface_gap
-from .hand.config import disc_node_indices, proximal_disc_flags
+from .hands.tendon_5f import (
+    disc_node_indices,
+    proximal_disc_flags,
+)
 
 
 class _Tee:
@@ -221,7 +224,7 @@ def log_conditioning_report(diag_source, top_k=8, near_null_tol=1e-9,
     ``diag_source`` is any solved solver/planner exposing
     ``get_hessian_and_gradient()``, ``get_factor_error_summary()`` and
     ``get_initial_factor_error_summary()`` (TendonFingerSolver and, once its
-    diagnostics are bound, TendonHandTrajectoryPlanner both qualify).
+    diagnostics are bound, HandTrajectoryPlanner both qualify).
 
     Reports, at the final solution:
       * Hessian size, gradient norm (residual gradient of the linearized cost);
@@ -337,10 +340,10 @@ def collision_report(configs, solution, spec, object_pose, radius):
     object_center = object_pose[:3, 3]
 
     spheres = []
-    for (_, cfg), fm in zip(configs, solution.marginals.fingers):
+    for (_, cfg), fm in zip(configs, solution.marginals.digits):
         entries = []
         for n, p in zip(disc_node_indices(cfg), proximal_disc_flags(cfg)):
-            pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
+            pos = np.array(fm.sites[n].pose.mean)[:3, 3]
             entries.append((n, pos, bool(p)))
         spheres.append(entries)
 

@@ -16,8 +16,8 @@ import time
 
 import numpy as np
 
+from gepetto_solvers.core.hands import get_hand
 from gepetto_solvers.core.solvers import (
-    FLEXOR_IDX,
     HandIKStepper,
     HandSolveParams,
     apply_phase_preset,
@@ -60,7 +60,8 @@ def adopt_tensions(res):
     out, clamped = [], False
     for name in res.finger_names:
         q = float(np.asarray(
-            res.frames[0][name].marginals.tensions.mean, float)[FLEXOR_IDX])
+            res.frames[0][name].marginals.actuation.mean,
+            float)[get_hand().actuation.drive_indices[0]])
         clamped = clamped or not (FLEXOR_LO <= q <= FLEXOR_HI)
         out.append(min(max(q, FLEXOR_LO), FLEXOR_HI))
     return out, clamped

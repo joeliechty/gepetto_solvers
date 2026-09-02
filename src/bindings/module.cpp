@@ -139,8 +139,9 @@ void bind_utils(py::module& m) {
 PYBIND11_MODULE(_gepetto_solvers, m) {
     bind_cosserat_rod(m);
     bind_cosserat_dynamics(m);
-    bind_tendon_finger(m);
-    bind_tendon_hand(m);
+    bind_digits_tendon(m);
+    bind_digits_rigid(m);
+    bind_hand(m);
     bind_utils(m);
 
     // Whether the solve() bindings drop the GIL for the duration of the C++

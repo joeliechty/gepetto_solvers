@@ -14,12 +14,38 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..geometry.scene import GRASP_FLEXOR_TENSION, TABLE_NORMAL
-from .capabilities import NUM_FINGERS
 from .frames import default_wrist_pose
 
 # ---------------------------------------------------------------------------
 # Params / results.
 # ---------------------------------------------------------------------------
+
+def _default_digit_count():
+    """How many digits the DEFAULT hand has.
+
+    The per-digit lists below (``flexor_tensions``, ``contact_fingers``) are
+    positional, so their length has to match the hand being posed. Resolved
+    lazily, per instance, rather than captured at import: importing the hands
+    package from module scope here would close a cycle (a hand imports the
+    compiled bindings, which the solvers also pull in), and a caller who
+    registers a hand after this module is imported would get a stale count.
+
+    A caller posing a hand with a different digit count must set these two
+    fields to match it -- there is no way to infer which digits they meant.
+
+    Cached: building a hand is not free (the tendon one parses a CAD geometry
+    table and announces it), and every HandSolveParams() would otherwise pay for
+    it -- including one built to pose a DIFFERENT hand entirely.
+    """
+    global _DEFAULT_DIGIT_COUNT
+    if _DEFAULT_DIGIT_COUNT is None:
+        from ..hands import get_hand
+        _DEFAULT_DIGIT_COUNT = len(get_hand().digit_names)
+    return _DEFAULT_DIGIT_COUNT
+
+
+_DEFAULT_DIGIT_COUNT: int | None = None
+
 
 @dataclass
 class HandSolveParams:
@@ -28,6 +54,30 @@ class HandSolveParams:
     Shared by FK / IK / planner; each solver reads only the fields it needs. The
     interactive visualizer mutates one instance of this from its GUI controls.
     """
+    # --- The hand ---
+    # Which hand to pose, by registry name (gepetto_solvers.core.hands). Every
+    # hand-specific fact the solve needs -- the digit list, the actuation
+    # layout, which digit opposes the rest, the measured pinch table -- is read
+    # off the hand this names, so the per-digit fields below (flexor_tensions,
+    # contact_fingers) must be sized to ITS digit count.
+    #
+    # A caller holding a Hand object passes it to the solver directly
+    # (HandSolverBase(params, hand=...)) and this field is not consulted; it
+    # exists so a hand choice can ride along in a params dataclass that is
+    # serialized, preset, or driven from a GUI.
+    hand: str = "tendon_5f"
+
+    # Commanded joint positions for a JOINT-SPACE hand: one vector per digit,
+    # one entry per joint of that digit. This is q_S, the mean of p(q).
+    #
+    # Separate from `flexor_tensions` because that is one SCALAR per digit and
+    # cannot say where four independent joints should go. Each hand reads
+    # whichever it needs through `Hand.actuation_means`, so a caller only fills
+    # the one its hand uses. None means the neutral configuration -- the open
+    # hand -- for a hand that reads this at all, and is ignored entirely by one
+    # that does not.
+    joint_targets: list | None = None
+
     # --- Scene / object ---
     # The Section 1.8 default scene: a 35 mm-radius analytic sphere, half-buried
     # in the support plane (see table_burial). Resting ON the table its crown
@@ -105,7 +155,7 @@ class HandSolveParams:
     # --- Tensions (per-finger flexor + shared passive background) ---
     passive_tension: float = 0.5
     flexor_tensions: list[float] = field(
-        default_factory=lambda: [GRASP_FLEXOR_TENSION] * NUM_FINGERS)
+        default_factory=lambda: [GRASP_FLEXOR_TENSION] * _default_digit_count())
     tip_wrench_sigma: float = 1e-3
     # How loose the ACTUATED (flexor) tendon's tension prior is once contact
     # is expected to move it away from its commanded value -- squared into
@@ -129,7 +179,7 @@ class HandSolveParams:
     # WHICH surfaces the True fingers are driven onto is object_contact /
     # table_contact below.
     contact_fingers: list[bool] = field(
-        default_factory=lambda: [True] * NUM_FINGERS)
+        default_factory=lambda: [True] * _default_digit_count())
 
     # --- WHICH SURFACE those fingers are driven onto (IK / planner) ---
     # Orthogonal to contact_fingers, which stays the FINGER selection: the
@@ -211,7 +261,7 @@ class HandSolveParams:
     # rebuild -- which is the only way to change the CONSTRAINT SET and continue
     # from where the solve got to, since a new constraint set needs a new solver
     # and a new solver otherwise cold-starts. Needs a binding with
-    # ``TendonHandSolverConfig.initial_state`` (capabilities()["solver_seed"]).
+    # ``HandSolverConfig.initial_state`` (capabilities()["solver_seed"]).
     initial_state: object | None = None
 
     # The other half of a warm start: the Augmented Lagrangian multipliers and
@@ -355,7 +405,8 @@ class HandSolveParams:
     # regularization, so how they are split across the six tendons is what
     # decides which parts of the hand can move in a tick.
     #
-    # Only tendon 5 (FLEXOR_IDX) is actuated. The other five are spring-backed,
+    # Only the DRIVEN tendon (hand.actuation.drive_indices) is actuated. The
+    # others are spring-backed,
     # and the two facts that follow are not symmetric:
     #
     #   TENSION  A spring holds roughly CONSTANT tension as it takes up slack,

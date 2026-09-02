@@ -12,7 +12,7 @@ import traceback
 import numpy as np
 
 from gepetto_solvers.core import robot_plan
-from gepetto_solvers.core.solvers import FLEXOR_IDX, R_to_euler
+from gepetto_solvers.core.solvers import R_to_euler
 
 from .constants import (
     MAX_TENDON_SPEED,
@@ -400,9 +400,9 @@ class RobotMixin:
                 tensions[index_of[name]] = 0.5 * (lo[name] + hi[name])
             self.params.flexor_tensions = list(tensions)
             result = self.fk_solver.solve()
-            lengths = dict(zip(result.finger_names, result.tendon_lengths(0)))
+            lengths = dict(zip(result.finger_names, result.displacements(0)))
             for name in names:
-                got = open_lengths[name] - float(lengths[name][FLEXOR_IDX])
+                got = open_lengths[name] - float(lengths[name][self._drive_index()])
                 residual[name] = got - measured[name]
                 # Monotone increasing: too little displacement means not enough
                 # tension, so the answer is in the upper half.

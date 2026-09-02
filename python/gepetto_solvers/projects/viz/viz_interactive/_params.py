@@ -47,13 +47,27 @@ class ParamsSyncMixin:
         # derives the height from the object's own along-normal extent, so this
         # is correct per object with nothing to re-tune per pick.
         params.table_burial = 0.0
+        # The hand's own start pose. HandSolveParams' wrist default is the
+        # TENDON hand's measured hover, which aims a hand whose fingers extend
+        # differently at nothing -- so it is the hand that says where it starts,
+        # not the params dataclass.
+        wrist, means = self.hand.default_pose()
+        params.wrist_pose = wrist
+        if self.has("single_drive"):
+            params.flexor_tensions = [
+                float(self.hand.actuation.drive_value(m)) for m in means]
+        else:
+            params.joint_targets = [list(map(float, m)) for m in means]
         return params
 
 
     # -- solver plumbing --
 
     def _rebuild_fk(self):
-        self.fk_solver = HandFKSolver(self.params)
+        # `hand` is not optional here: without it the solver builds the
+        # DEFAULT hand, and the app would pose one robot while every panel
+        # described another -- which looks like a working workbench.
+        self.fk_solver = HandFKSolver(self.params, self.hand)
         # The FK solver is rebuilt whenever the object changes, and the object is
         # part of the stepper's constraint set too.
         self._invalidate_stepper()
@@ -72,10 +86,18 @@ class ParamsSyncMixin:
         p.primitive = self._label_to_key[self.g_object.value]
         p.object_center, p.object_rotation = self._object_pose_from_sliders()
         self._sync_wrist()
-        p.passive_tension = self.g_passive.value
-        p.flexor_tensions = [s.value for s in self.g_flexors]
-        p.flexor_tension_sigma = 10.0 ** self.g_flexor_sigma.value
-        p.passive_tension_sigma = 10.0 ** self.g_passive_sigma.value
+        # The actuation panel, in whichever shape this hand got. Only one of
+        # the two exists -- see GuiMixin._build_joint_sliders.
+        if self.g_passive is not None:
+            p.passive_tension = self.g_passive.value
+            p.flexor_tensions = [s.value for s in self.g_flexors]
+            p.flexor_tension_sigma = 10.0 ** self.g_flexor_sigma.value
+            p.passive_tension_sigma = 10.0 ** self.g_passive_sigma.value
+        if self.g_joints:
+            # q_S, the mean of p(q). One vector per digit.
+            p.joint_targets = [[j.value for j in row] for row in self.g_joints]
+            p.flexor_tension_sigma = 10.0 ** self.g_joint_sigma.value
+            p.passive_tension_sigma = 10.0 ** self.g_joint_sigma.value
         p.ellipsoid_set_beta = float(self.g_set_beta.value)
         p.use_grasp_subset = CONTACT_SHELL_MODES[self.g_contact_shells.value]
         p.contact_fingers = [c.value for c in self.g_contacts]

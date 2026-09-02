@@ -21,6 +21,15 @@ find_package(GTSAM REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OpenVDB REQUIRED)
 
+# Pinocchio: rigid-body kinematics and its analytical derivatives, for hands
+# whose mechanism is described by a URDF rather than by code (see
+# src/hand/kinematics/rigid/). Found through the interpreter prefix like every
+# other C++ dependency here -- the conda setup scripts install it.
+#
+# Kinematics only: pinocchio::urdf::buildModel needs no mesh files, so nothing
+# in this build depends on a robot's visual/collision geometry being present.
+find_package(pinocchio REQUIRED)
+
 # OpenMP for parallel collision detection
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
@@ -50,16 +59,28 @@ set(GEPETTO_SOLVERS_SOURCES
 
     src/measurement/PositionPriorFactor.cpp
 
-    src/tendon_finger/TendonDiscWrenchFactor.cpp
-    src/tendon_finger/TendonFingerModel.cpp
-    src/tendon_finger/TendonLengthFactor.cpp
+    src/digits/tendon/TendonDiscWrenchFactor.cpp
+    src/digits/tendon/TendonFingerModel.cpp
+    src/digits/tendon/TendonLengthFactor.cpp
 
-    src/tendon_hand/TendonHandGraph.cpp
-    src/tendon_hand/TendonHandModel.cpp
-    src/tendon_hand/TendonHandPriors.cpp
-    src/tendon_hand/TendonHandSolver.cpp
-    src/tendon_hand/TendonHandTrajectoryPlanner.cpp
-    src/tendon_hand/TendonHandValues.cpp
+    # The only translation unit that includes Pinocchio -- see the note at the
+    # top of the file for why that is deliberate.
+    src/digits/rigid/PinocchioFKFactor.cpp
+
+    # The kinematics-agnostic hand: the graph builder, its constraint tagger and
+    # the registry the kinematics is loaded from.
+    src/hand/ConstraintTagger.cpp
+    src/hand/HandGraph.cpp
+    src/hand/HandKinematicsRegistry.cpp
+    src/hand/HandModel.cpp
+    src/hand/HandSolver.cpp
+    src/hand/HandTrajectoryPlanner.cpp
+    src/hand/HandValues.cpp
+
+    # One translation unit per hand kinematics. Each self-registers at static
+    # init, so listing it here is what makes it loadable by name.
+    src/hand/kinematics/rigid/RigidHandKinematics.cpp
+    src/hand/kinematics/tendon/TendonHandKinematics.cpp
 
     src/utils/SolverBase.cpp
     src/utils/WrenchTransforms.cpp
@@ -67,8 +88,9 @@ set(GEPETTO_SOLVERS_SOURCES
     # The pybind11 layer, all of it in one place.
     src/bindings/bind_cosserat_dynamics.cpp
     src/bindings/bind_cosserat_rod.cpp
-    src/bindings/bind_tendon_finger.cpp
-    src/bindings/bind_tendon_hand.cpp
+    src/bindings/bind_digits_rigid.cpp
+    src/bindings/bind_digits_tendon.cpp
+    src/bindings/bind_hand.cpp
     src/bindings/module.cpp
 )
 
@@ -83,13 +105,32 @@ target_compile_features(_gepetto_solvers PRIVATE cxx_std_17)
 target_include_directories(_gepetto_solvers PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+# EIGEN3_INCLUDE_DIR, and FIRST, both deliberately.
+#
+# There are two Eigen trees in the prefix and they are not interchangeable:
+# GTSAM installs a STRIPPED copy at include/gtsam/3rdparty/Eigen (no
+# unsupported/ modules) and exports it as an interface include dir, while conda's
+# eigen package is the complete tree. Pinocchio includes
+# <unsupported/Eigen/CXX11/Tensor>, so a build that resolves Eigen to GTSAM's
+# copy fails to compile the moment a translation unit pulls in both libraries.
+# Listing the complete tree first makes it win.
+#
+# They must also be the SAME VERSION: gtsam/config.h bakes in
+# GTSAM_EIGEN_VERSION_WORLD/MAJOR and static-asserts them against whatever Eigen
+# the including TU actually sees, so a mismatch is a hard error rather than a
+# silent ABI hazard. GTSAM is built against 3.4, which is why the setup scripts
+# pin the Eigen-3.4 build of pinocchio -- see the note beside it there.
+#
+# (The variable used to be spelled EIGEN_INCLUDE_DIR, which Eigen3Config does not
+# define; it expanded to nothing and the build worked only because GTSAM's copy
+# was sufficient for GTSAM alone.)
 target_include_directories(_gepetto_solvers PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${GTSAM_INCLUDE_DIR}
-    ${EIGEN_INCLUDE_DIR}
 )
 
-target_link_libraries(_gepetto_solvers PRIVATE gtsam OpenVDB::openvdb)
+target_link_libraries(_gepetto_solvers PRIVATE gtsam OpenVDB::openvdb pinocchio::pinocchio)
 
 if(OpenMP_CXX_FOUND)
     target_link_libraries(_gepetto_solvers PRIVATE OpenMP::OpenMP_CXX)

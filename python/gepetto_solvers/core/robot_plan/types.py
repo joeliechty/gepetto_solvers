@@ -1,18 +1,19 @@
-"""The four data structures a plan is made of, and the flexor index.
+"""The four data structures a plan is made of.
 
 Deliberately dependency-free: a plan is numpy and dataclasses, nothing more, so
 the ROS side can import these without dragging in a solver.
+
+The actuated-tendon INDEX used to be duplicated here, so that the timing half
+(`plan_schedule`, `sample_at`, `interpolate`) needed nothing but numpy, with a
+runtime check that the copy still agreed with the solver's. It is now a property
+of the hand (``hand.actuation.drive_indices``) and read only by the half of this
+package that already imports a solver -- so the timing half keeps its zero
+dependencies and there is no copy left to disagree.
 """
 
 from dataclasses import dataclass, field
 
 import numpy as np
-
-#: Index of the actuated flexor in a finger's tendon-length vector. Duplicated
-#: from `solvers` rather than imported so that the TIMING half of this module --
-#: `plan_schedule`, `sample_at`, `interpolate` -- needs nothing but numpy. See
-#: `_solvers` below, which checks the two still agree.
-FLEXOR_IDX = 5
 
 
 @dataclass

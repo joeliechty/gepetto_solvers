@@ -41,6 +41,7 @@ class ViserHandScene(
                  show_discs=False, show_disc_frames=False,
                  show_contact_spheres=True,
                  show_collision_spheres=True, show_gap_lines=True,
+                 show_link_meshes=True,
                  show_finger_planes=False, show_planar_gap=False):
         self.server = server
         self.scene = server.scene
@@ -50,6 +51,9 @@ class ViserHandScene(
         self.show_disc_frames = show_disc_frames
         self.show_contact_spheres = show_contact_spheres
         self.show_collision_spheres = show_collision_spheres
+        # On by default: a hand that HAS meshes looks like itself with
+        # them, and the overlays are drawn over the top.
+        self.show_link_meshes = show_link_meshes
         self.show_gap_lines = show_gap_lines
         # Off by default: five translucent sheets through the middle of the
         # grasp hide the fingertips and the object surface behind them, so this
@@ -75,7 +79,7 @@ class ViserHandScene(
                      distance=0.28):
         """(position, look_at) for a camera orbiting ``focal`` on the -X (palmar)
         side, using the same azimuth/elevation/+Z-up spherical convention as the
-        PyVista TendonHandPlotter. Viewing from here the finger curl reads as a
+        PyVista HandPlotter. Viewing from here the finger curl reads as a
         grasp closing toward you rather than hyperextending away."""
         f = np.asarray(focal, float).reshape(3)
         az, el = np.deg2rad(azimuth_deg), np.deg2rad(elevation_deg)
@@ -90,9 +94,20 @@ class ViserHandScene(
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
                collision=False, gaps=None, table_gaps=None,
                half_space_gaps=None, center_gap=None, axis_align=None,
-               centroid_gap=None, finger_planes=None, planar_gaps=None):
+               centroid_gap=None, finger_planes=None, planar_gaps=None,
+               link_meshes=None, wrist_pose=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
-        an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
+        an object exposing ``.marginals`` (a ``DigitState``).
+
+        ``link_meshes`` is the hand's optional visual geometry, as
+        ``[(attach, path, T_local)]`` from ``Hand.visual_meshes`` -- ``attach``
+        is None for a mesh riding on the wrist (``wrist_pose``) or
+        ``(digit, site)`` for one riding on a site, and ``T_local`` takes the
+        mesh out of its own coordinates into that frame (glTF is Y-up where
+        URDF is Z-up, and the file itself does not say so). PURELY COSMETIC: collision in this repository is
+        the sphere set the solve carries, never a mesh, so these are drawn and
+        nothing else. Omit them and the hand is drawn as a skeleton, which is a
+        complete drawing in its own right.
 
         ``gaps`` is the optional fingertip-to-object overlay: a
         ``{finger: (sphere_pt, surface_pt, gap_m)}`` map as returned by
@@ -154,16 +169,36 @@ class ViserHandScene(
             if name not in frame:
                 continue
             fm = frame[name].marginals
-            states = fm.rod.states
+            states = fm.sites
             poses = [np.asarray(st.pose.mean) for st in states]
             positions = np.array([T[:3, 3] for T in poses])
 
-            # Backbone.
+            # The digit itself. A continuum rod really is a smooth curve
+            # through its nodes, so it gets a spline; a rigid linkage is
+            # straight segments between joint frames, and drawing a spline
+            # through those would show a bend where the hardware has none.
+            #
+            # Told apart by whether the digit carries continuum state, which is
+            # the honest question -- not by the hand's name.
             n = f"/hand/{name}/rod"
-            self._dynamic[n] = self.scene.add_spline_catmull_rom(
-                n, positions, curve_type="catmullrom",
-                line_width=self.backbone_width, color=_ROD_RGB)
-            keep.add(n)
+            if getattr(fm, "extras", None) is not None:
+                self._dynamic[n] = self.scene.add_spline_catmull_rom(
+                    n, positions, curve_type="catmullrom",
+                    line_width=self.backbone_width, color=_ROD_RGB)
+                keep.add(n)
+            else:
+                # Degenerate segments are dropped. A link's frame sits at its
+                # own joint's origin, so a digit's FIRST link is coincident with
+                # that digit's mount and the bar between them has zero length.
+                # It is a real frame -- it is what the base joint rotates -- so
+                # it keeps its site; it just has nothing to draw.
+                segs = np.stack([positions[:-1], positions[1:]], axis=1)
+                segs = segs[np.linalg.norm(segs[:, 1] - segs[:, 0], axis=1) > 1e-9]
+                if len(segs):
+                    self._dynamic[n] = self.scene.add_line_segments(
+                        n, segs, colors=_ROD_RGB,
+                        line_width=self.backbone_width)
+                    keep.add(n)
 
             # Tendons.
             keep |= self._update_tendons(name, fm, poses)
@@ -189,7 +224,9 @@ class ViserHandScene(
 
             # Collision spheres on the disc nodes.
             if collision and self.show_collision_spheres:
-                for di, node_idx in enumerate(fm.tendon_config.disc_pose_idx):
+                # Off the STATE's own site list, so this marks exactly the
+                # spheres the solve carried -- on any hand.
+                for di, node_idx in enumerate(fm.collision_sites):
                     kn = f"/hand/{name}/collision/{di}"
                     self._dynamic[kn] = self.scene.add_icosphere(
                         kn, radius=float(collision_radius), color=_COLLISION_RGB,
@@ -231,6 +268,9 @@ class ViserHandScene(
         # The point the finger planes fan about -- one marker for all of them.
         if self.show_finger_planes and finger_planes:
             keep |= self._update_pinch_point(next(iter(finger_planes.values()))[2])
+
+        if self.show_link_meshes:
+            keep |= self._update_link_meshes(link_meshes, frame, wrist_pose)
 
         self._prune(keep)
 

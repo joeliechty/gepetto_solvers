@@ -47,6 +47,10 @@ from gepetto_solvers.core.diagnostics import (
     PlannerLogger,
     log_conditioning_report,
 )
+from gepetto_solvers.core.environment import (
+    attach_collision,
+    attach_table,
+)
 from gepetto_solvers.core.geometry.scene import (
     GRASP_FLEXOR_TENSION,
     GRASP_SPHERE_CENTER,
@@ -57,9 +61,7 @@ from gepetto_solvers.core.geometry.scene import (
     get_primitive_specs,
     table_plot_spec,
 )
-from gepetto_solvers.core.hand.config import (
-    attach_collision,
-    attach_table,
+from gepetto_solvers.core.hands.tendon_5f import (
     default_hand_tip_radii,
     disc_node_indices,
     get_default_hand_configs,
@@ -240,12 +242,12 @@ def per_step_table_report(args, configs, result, plane_origin, plane_normal, tip
     for k, hand_m in enumerate(result.trajectory):
         clr = np.inf
         tip_dists = []
-        for (_, cfg), r_tip, fm in zip(configs, tip_radii, hand_m.fingers):
+        for (_, cfg), r_tip, fm in zip(configs, tip_radii, hand_m.digits):
             tip_idx = tip_node_index(cfg)
             for n in disc_node_indices(cfg):
                 if n == 0:
                     continue
-                pos = np.array(fm.rod.states[n].pose.mean)[:3, 3]
+                pos = np.array(fm.sites[n].pose.mean)[:3, 3]
                 sdf = float((pos - p0).dot(n_hat))       # signed dist to plane
                 if n == tip_idx:
                     tip_dists.append(sdf - r_tip)
@@ -333,7 +335,7 @@ def _main(args, results_dir):
     finger_names = [name for name, _ in configs]
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
+        finger_traj = FingerTraj([hand_m.digits[i] for hand_m in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))
@@ -358,11 +360,11 @@ def _main(args, results_dir):
 
     def _solutions(hand_m):
         return {name: _FingerSol(fm, result.meta)
-                for name, fm in zip(finger_names, hand_m.fingers)}
+                for name, fm in zip(finger_names, hand_m.digits)}
 
     if args.save_figures:
-        from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
-        plotter = TendonHandPlotter(
+        from gepetto_solvers.core.plotting.hand_plotter import HandPlotter
+        plotter = HandPlotter(
             finger_names, plot_backbone_ellipsoids=False,
             camera_azimuth=165, camera_elevation=20,
             camera_focal_point=list(object_center), camera_distance=0.5,
@@ -375,10 +377,10 @@ def _main(args, results_dir):
         print(f"Saved experiment results to {results_dir}/")
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
-        TendonHandMultiViewPlotter,
+    from gepetto_solvers.core.plotting.hand_plotter import (
+        HandMultiViewPlotter,
     )
-    plotter = TendonHandMultiViewPlotter(
+    plotter = HandMultiViewPlotter(
         finger_names, plot_backbone_ellipsoids=False,
         camera_focal_point=list(object_center), camera_distance=0.5,
         primitives=primitives)
@@ -397,7 +399,7 @@ def plan_trajectory(args, configs):
     does not know about: the Section 1.6 k_touch phase split)."""
     num_tendons = configs[0][1].num_tendons
 
-    plan_config = gepetto_solvers.TendonHandTrajectoryPlannerConfig()
+    plan_config = gepetto_solvers.HandTrajectoryPlannerConfig()
     plan_config.K = args.steps
     plan_config.dt = args.dt
     plan_config.wrist_pose = np.eye(4)
@@ -406,8 +408,8 @@ def plan_trajectory(args, configs):
     qc_rot = args.gp_wrist_rot ** 2 / args.dt
     qc_pos = args.gp_wrist_pos ** 2 / args.dt
     plan_config.gp_wrist_Qc = np.diag([qc_rot, qc_rot, qc_rot, qc_pos, qc_pos, qc_pos])
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = np.zeros((0, 0))
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = np.zeros((0, 0))
     plan_config.base.linear_solver_type = "MULTIFRONTAL_CHOLESKY"
     plan_config.base.al_initial_mu = args.al_mu
     plan_config.base.al_mu_increase_rate = args.al_rate
@@ -426,7 +428,9 @@ def plan_trajectory(args, configs):
     start_mean = np.array([0.5, 0.5, 0.5, 0.5, 0.5, args.start_flexor])
     start_cov = np.diag([1e-6] * num_tendons)
 
-    planner = gepetto_solvers.TendonHandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"[plan] built planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 

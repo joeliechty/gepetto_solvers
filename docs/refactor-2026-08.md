@@ -378,8 +378,8 @@ Ordered by how much they matter.
 ```bash
 rm -rf build && pip install -e ".[viz,web,dev]"
 
-pytest -m "not slow"     # 80 tests, under a second
-pytest -m slow           # 22 tests: golden solves + viz smoke, ~6 min
+pytest -m "not slow"     # 110 tests, under a second
+pytest -m slow           # 23 tests: golden solves + viz smoke, ~6 min
 ruff check .
 mypy
 
@@ -402,3 +402,51 @@ Two things it will not catch, and what to do instead:
 
 And note the diff refuses to compare captures taken with different hand
 dimensions, for the reason in §3.
+
+
+---
+
+## 9. Follow-up: separating the hand from the solvers (2026-09)
+
+The restructure above left one thing still fused: the solvers *were* the tendon
+hand. `TendonHandModel` held a `std::variant<TendonFingerModel<1..10>>`, the
+graph builder called into it directly, and the Python layer carried the hand's
+identity as module constants — `FINGER_NAMES`, `FLEXOR_IDX` (declared twice, in
+two packages, cross-checked at runtime), `HAND_PINCH_POSES`,
+`HARDWARE_FINGER_NAMES`, and the literal string `"thumb"` matched in five Python
+modules and three places in C++.
+
+That is now split along the line the math already had:
+
+* **`HandKinematics`** (C++) contributes the factors internal to a mechanism and
+  answers `site_pose_key({digit, node})`. `HandModel::build_graph` builds the
+  task constraints around it and never learns what it is posing. Registered by
+  name; `TendonHandKinematics` is the first implementation and is a MOVE of what
+  was inline in the graph builder, not a rewrite.
+* **`Hand`** (Python) carries the digits, the actuation layout, the opposing
+  digit and the measured tables, and names the kinematics to load.
+
+Renames were complete, with no aliases: `tendon_hand/` → `hand/`,
+`tendon_finger/` → `digits/tendon/`, `TendonHandSolver` → `HandSolver`,
+`TendonHandMarginals` → `HandState` (`.fingers` → `.digits`),
+`core/hand/config/` → `core/hands/tendon_5f/`. Every in-repo caller, script and
+test moved in the same change.
+
+**The gate held.** The golden sums, the constraint-tag ordering and the AL dual
+transfer were all unchanged, and the baseline diff was empty across all six
+scenarios — which is what proves the graph is the same graph.
+
+Two things this deliberately did NOT generalize, both recorded where they live:
+
+* **`HandState` still holds `std::vector<TendonFingerMarginals>`** — see the note
+  in `HandState.h`. It is the transport for a finished solve, produced and
+  consumed entirely behind `HandKinematics::extract` / `insert_from_state`, and
+  the graph builder never touches it. A mechanism whose state is not
+  rod-and-tendon shaped needs a variant payload there and a matching split in
+  the Python readers of `state.digits[i].rod`; that is worth doing against a real
+  second payload rather than against a guess.
+* **Dynamics.** `HandModel` calls its kinematics through a contributor-shaped
+  hook so a `HandDynamics` can join it in a fixed order without disturbing the
+  constraint numbering. Nothing was built.
+
+See [adding_a_hand.md](adding_a_hand.md).

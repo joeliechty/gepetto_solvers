@@ -37,7 +37,8 @@ def binding_path():
     return gepetto_solvers.__file__
 
 
-FINGER_LABELS = ["index", "middle", "ring", "pinky", "thumb"]
+# The digit list used to be a constant here. It is a property of the HAND, so it
+# is read off ``app.hand.digit_names`` -- which is what lets --hand select one.
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +185,7 @@ _CLOSE_SYNC_TOL = 0.02
 
 
 # ...and how far each finger may miss the displacement it was commanded to. Ten
-# times solvers.CLOSE_TOL_M, i.e. still under the ~1 mm the tendon hardware
+# times the hand's motion.close_tol_m, i.e. still under the ~1 mm the hardware
 # resolves, so a pass here means the ramp is real and not just self-consistent.
 _CLOSE_TRACK_TOL_M = 2e-3
 

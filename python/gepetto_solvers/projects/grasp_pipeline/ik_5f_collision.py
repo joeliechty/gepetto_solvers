@@ -1,7 +1,7 @@
 """Collision-only kinematic solve of the five-finger hand (no contact).
 
 The simplest exercise of Section 1.5 collision avoidance: a single-shot
-``TendonHandSolver`` kinematic solve (as in ``fk_5f_sweep.py`` -- tensions
+``HandSolver`` kinematic solve (as in ``fk_5f_sweep.py`` -- tensions
 in, poses out, no contact constraints anywhere), with the big grasp sphere
 placed at the flexed-fingertip locus and the flexor tension cranked high enough
 that the unconstrained hand curls *through* the sphere.
@@ -28,12 +28,14 @@ import numpy as np
 
 import gepetto_solvers
 from gepetto_solvers.core.diagnostics import collision_report
+from gepetto_solvers.core.environment import (
+    attach_collision,
+)
 from gepetto_solvers.core.geometry.scene import (
     GRASP_SPHERE_CENTER,
     get_primitive_specs,
 )
-from gepetto_solvers.core.hand.config import (
-    attach_collision,
+from gepetto_solvers.core.hands.tendon_5f import (
     get_default_hand_configs,
     load_hand_dimensions,
 )
@@ -45,7 +47,7 @@ FLEXOR_TENSION = 3.0
 
 
 def solve_hand(configs, args):
-    hand_config = gepetto_solvers.TendonHandSolverConfig()
+    hand_config = gepetto_solvers.HandSolverConfig()
     hand_config.wrist_pose = np.eye(4)
     hand_config.sigma_wrist_pos = 1e-4
     hand_config.sigma_wrist_rot = 1e-3
@@ -60,7 +62,9 @@ def solve_hand(configs, args):
     hand_config.base.al_mu_increase_rate = args.al_rate
     hand_config.base.al_max_iterations = args.al_iters
 
-    solver = gepetto_solvers.TendonHandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), hand_config)
 
     num_tendons = configs[0][1].num_tendons
     # Tight passive tendons, loose flexor (the grasp-test pattern): the flexor
@@ -164,8 +168,8 @@ def main():
     if args.no_viz:
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import (
-        TendonHandMultiViewPlotter,
+    from gepetto_solvers.core.plotting.hand_plotter import (
+        HandMultiViewPlotter,
     )
 
     class _FingerSol:
@@ -173,14 +177,14 @@ def main():
 
     finger_names = [name for name, _ in configs_on]
     solutions = {}
-    for name, fm in zip(finger_names, sol_on.marginals.fingers):
+    for name, fm in zip(finger_names, sol_on.marginals.digits):
         s = _FingerSol()
         s.marginals = fm
         s.meta = sol_on.meta
         solutions[name] = s
     # Four windows around the hand (three azimuths 90 deg apart + near-top-down)
     # with the collision object rendered, so penetration is visible from any side.
-    plotter = TendonHandMultiViewPlotter(
+    plotter = HandMultiViewPlotter(
         finger_names,
         plot_backbone_ellipsoids=False,
         camera_focal_point=list(GRASP_SPHERE_CENTER),

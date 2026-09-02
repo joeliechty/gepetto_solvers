@@ -44,7 +44,7 @@ from gepetto_solvers.core.diagnostics import (
     log_planner_parameters,
 )
 from gepetto_solvers.core.geometry.scene import GRASP_FLEXOR_TENSION, TENDON_NAMES
-from gepetto_solvers.core.hand.config import (
+from gepetto_solvers.core.hands.tendon_5f import (
     get_default_hand_configs,
     load_hand_dimensions,
 )
@@ -91,7 +91,7 @@ def parse_args():
                         help="Wrist-pose GP process-noise scale (diag of gp_wrist_Qc). "
                              "Smaller => smoother/less wrist motion between steps.")
     parser.add_argument("--gp-tense", type=float, default=1.0,
-                        help="Tension GP process-noise scale (diag of gp_tense_Qc).")
+                        help="Tension GP process-noise scale (diag of gp_actuation_Qc).")
     parser.add_argument("--gp-len", type=float, default=0.0,
                         help="Length GP process-noise scale; 0 disables the length GP.")
     parser.add_argument("--sigma-wrist-pos", type=float, default=1e-4,
@@ -148,15 +148,15 @@ def _main(args, results_dir):
     # --- Trajectory planner config (identical start conditions to the grasp test) ---
     num_tendons = configs[0][1].num_tendons  # 6 for the anatomical finger
 
-    plan_config = gepetto_solvers.TendonHandTrajectoryPlannerConfig()
+    plan_config = gepetto_solvers.HandTrajectoryPlannerConfig()
     plan_config.K = args.steps
     plan_config.dt = args.dt
     plan_config.wrist_pose = np.eye(4)
     plan_config.sigma_wrist_pos = args.sigma_wrist_pos
     plan_config.sigma_wrist_rot = args.sigma_wrist_rot
     plan_config.gp_wrist_Qc = args.gp_wrist * np.eye(6)
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = (args.gp_len * np.eye(num_tendons)
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = (args.gp_len * np.eye(num_tendons)
                              if args.gp_len > 0.0 else np.zeros((0, 0)))
 
     # Per-finger terminal tip-position goals (world frame). This replaces the
@@ -172,7 +172,9 @@ def _main(args, results_dir):
         "goal_positions": GOAL_POSITIONS,
     })
 
-    planner = gepetto_solvers.TendonHandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"Built hand point-to-point planner: {planner.num_fingers()} fingers, "
           f"K={args.steps} steps.")
 
@@ -209,15 +211,15 @@ def _main(args, results_dir):
     print("------+-----------------------------------------+------------------")
     prev_base = None
     for k, hand_m in enumerate(result.trajectory):
-        base_pose = np.array(hand_m.fingers[0].rod.states[0].pose.mean)
+        base_pose = np.array(hand_m.digits[0].sites[0].pose.mean)
         base_xyz = base_pose[:3, 3]
         step_disp = (0.0 if prev_base is None
                      else float(np.linalg.norm(base_xyz - prev_base)))
         prev_base = base_xyz
 
         dists = []
-        for i, fm in enumerate(hand_m.fingers):
-            tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+        for i, fm in enumerate(hand_m.digits):
+            tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
             dists.append(float(np.linalg.norm(tip_pos - GOAL_POSITIONS[i])))
         tag = "  <- start" if k == 0 else ("  <- goal" if k == K else "")
         print(f"  {k:>3} | [{base_xyz[0]:+.4f} {base_xyz[1]:+.4f} {base_xyz[2]:+.4f}] "
@@ -226,8 +228,8 @@ def _main(args, results_dir):
     # Terminal goal check (per-finger tip-to-goal distance should be ~0).
     print("\nTerminal (k=K) per-finger tip-to-goal distances:")
     for i, (name, _) in enumerate(configs):
-        fm = result.trajectory[K].fingers[i]
-        tip_pos = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+        fm = result.trajectory[K].digits[i]
+        tip_pos = np.array(fm.sites[-1].pose.mean)[:3, 3]
         dist = float(np.linalg.norm(tip_pos - GOAL_POSITIONS[i]))
         print(f"  [{name:>6}] tip {tip_pos}  goal {GOAL_POSITIONS[i]}  "
               f"|  dist {dist:.5f} m")
@@ -239,7 +241,7 @@ def _main(args, results_dir):
     # --- Save the state / trajectory figures (headless-safe; always saved). ---
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = FingerTraj([hand_m.fingers[i] for hand_m in result.trajectory])
+        finger_traj = FingerTraj([hand_m.digits[i] for hand_m in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))
@@ -252,7 +254,7 @@ def _main(args, results_dir):
         print(f"Saved experiment results to {results_dir}/")
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
+    from gepetto_solvers.core.plotting.hand_plotter import HandPlotter
 
     plotter_kwargs = dict(
         plot_backbone_ellipsoids=False,
@@ -266,7 +268,7 @@ def _main(args, results_dir):
         plotter_kwargs["save_frames_dir_name"] = "frames"
         plotter_kwargs["frames_base_dir"] = results_dir
 
-    plotter = TendonHandPlotter(finger_names, **plotter_kwargs)
+    plotter = HandPlotter(finger_names, **plotter_kwargs)
     plotter.plotter.plotter.add_text("hand point-to-point trajectory",
                                      position="upper_left", font_size=12)
     # Scatter the per-finger goal points as visual targets (best-effort).
@@ -278,7 +280,7 @@ def _main(args, results_dir):
 
     for k, hand_m in enumerate(result.trajectory):
         solutions = {name: _FingerSol(fm, result.meta)
-                     for name, fm in zip(finger_names, hand_m.fingers)}
+                     for name, fm in zip(finger_names, hand_m.digits)}
         print(f"Displaying step {k}/{K}")
         plotter.update(solutions)
         if not args.save_figures:

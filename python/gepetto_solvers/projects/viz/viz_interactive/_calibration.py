@@ -10,7 +10,9 @@ import traceback
 import numpy as np
 
 from gepetto_solvers.core.geometry.scene import TABLE_SPAN
-from gepetto_solvers.core.hand.config import proximal_disc_flags
+from gepetto_solvers.core.hands.tendon_5f import (
+    proximal_disc_flags,
+)
 from gepetto_solvers.core.solvers import (
     R_to_euler,
     disc_frame_error,
@@ -23,7 +25,6 @@ from .constants import (
     CAL_DISCS,
     CAL_GRID_SPACING,
     CAL_REFINE_PASSES,
-    FINGER_LABELS,
     _euler_to_R,
 )
 from .estop import Refused
@@ -305,7 +306,7 @@ class CalibrationMixin:
                 f"CAD-measured hand. x/y are grid coordinates from the corner "
                 f"frame; the lines are every {CAL_GRID_SPACING * 100:.0f} cm.")
             self.g_cal_finger = gui.add_dropdown(
-                "finger", FINGER_LABELS, initial_value=FINGER_LABELS[0])
+                "finger", self.digit_names, initial_value=self.digit_names[0])
             self.g_cal_disc = gui.add_dropdown(
                 "landmark disc", list(self._cal_disc_labels),
                 initial_value=default_disc_label,

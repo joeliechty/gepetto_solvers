@@ -42,7 +42,7 @@ namespace gepetto_solvers {
 // evaluateError() rather than a hand-built KeyVector and unwhitenedError().
 //
 // It also means the factor references the wrist variable DIRECTLY
-// (TendonHandModel::wrist_key), sidestepping the root-reparameterization trap
+// (HandModel::wrist_key), sidestepping the root-reparameterization trap
 // that node-0 of a finger has no pose key of its own when uses_root() -- there
 // is no finger node here to remap.
 //

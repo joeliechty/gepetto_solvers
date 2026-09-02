@@ -11,7 +11,6 @@ import gepetto_solvers
 
 from .base import HandSolverBase
 from .capabilities import _set_if
-from .frames import solved_wrist_pose
 from .params import HandSolveParams
 from .result import HandResult, _make_frame, _tip_points
 
@@ -54,8 +53,8 @@ class HandFKSolver(HandSolverBase):
     # near either.
     _WRIST_TRACKING_TOL_M = 1e-3
 
-    def __init__(self, params: HandSolveParams | None = None):
-        super().__init__(params)
+    def __init__(self, params: HandSolveParams | None = None, hand=None):
+        super().__init__(params, hand)
         # A posture the next rebuild starts from, committed by seed_posture()
         # and consumed by the next solve. None -- the case every caller had
         # before phase 4 needed one -- is the straight-rod cold guess.
@@ -69,7 +68,7 @@ class HandFKSolver(HandSolverBase):
         ``seed`` is a :meth:`HandResult.state` from any solver over this same
         hand; the C++ side merges it over the cold guess, so a state that does
         not carry every variable still works."""
-        cfg = gepetto_solvers.TendonHandSolverConfig()
+        cfg = gepetto_solvers.HandSolverConfig()
         cfg.wrist_pose = self.params.wrist_pose
         cfg.sigma_wrist_pos = self.params.sigma_wrist_pos
         cfg.sigma_wrist_rot = self.params.sigma_wrist_rot
@@ -77,7 +76,7 @@ class HandFKSolver(HandSolverBase):
         cfg.base.max_iterations = 500
         if seed is not None:
             _set_if(cfg, "initial_state", seed)
-        self._solver = gepetto_solvers.TendonHandSolver(self.configs, cfg)
+        self._solver = gepetto_solvers.HandSolver(self._hand_spec(), cfg)
         # Where the values this solver is holding actually sit. None = nothing
         # worth warm-starting from (a solve that failed left them wherever it
         # gave up), which forces the next solve to rebuild.
@@ -161,11 +160,15 @@ class HandFKSolver(HandSolverBase):
                 break
         return frame, sol
 
+    #: Isotropic actuation-prior sigma for a contact-free solve.
+    #:
+    #: A tight-passive/loose-driven prior is underdetermined with nothing to
+    #: trade against, and GTSAM raises IndeterminantLinearSystem on the actuation
+    #: variable (see fk_5f_sweep.py). Uniform avoids that for any hand.
+    _FK_ACTUATION_SIGMA = 1e-2
+
     def _solve_once(self):
-        # Uniform prior on every tendon: a tight-passive/loose-flexor prior is
-        # underdetermined without contact (IndeterminantLinearSystem on the
-        # tension variable) -- see fk_5f_sweep.py.
-        cov = (1e-2) ** 2 * np.eye(6)
+        cov = self.hand.actuation.uniform_cov(self._FK_ACTUATION_SIGMA)
         sol = self._solver.solve(self._tension_priors(cov), self._tip_wrenches())
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)
         return frame, sol
@@ -192,8 +195,12 @@ class HandFKSolver(HandSolverBase):
         for last_attempt in (False, True):
             try:
                 frame, sol = self._solve_once()
-                offset = float(np.linalg.norm(
-                    solved_wrist_pose(self.configs, frame)[:3, 3] - T[:3, 3]))
+                # Off the state bundle rather than by inverting a mounting
+                # offset: each kinematics answers where its wrist ended up, so
+                # this works for a hand that owns its wrist variable outright as
+                # well as for one that reparameterizes it away.
+                solved = np.asarray(sol.marginals.wrist_pose, float)
+                offset = float(np.linalg.norm(solved[:3, 3] - T[:3, 3]))
                 if offset <= self._WRIST_TRACKING_TOL_M:
                     if seeded:
                         frame, sol = self._settle(frame)

@@ -3,7 +3,7 @@
 Every function here mutates the per-finger configs in place and returns them for
 chaining. Which fields get set decides which factors the C++ layer builds, so
 this package is where a solve's *problem* is defined, as distinct from
-:mod:`gepetto_solvers.core.hand`, which defines the *robot*.
+:mod:`gepetto_solvers.core.hands`, which defines the *robot*.
 
 ===============  ====================================================
 :mod:`contact`   drive fingertips onto the object surface
@@ -12,10 +12,12 @@ this package is where a solve's *problem* is defined, as distinct from
 :mod:`pregrasp`  position the wrist before anything closes
 ===============  ====================================================
 
-All of these used to live in ``hand/config.py``, which is why
-``gepetto_solvers.core.hand.config`` still re-exports them: an environment
-builder is not hand configuration, but every existing caller imports it from
-there.
+Nothing here knows what KIND of hand it is attaching to. Each function writes
+node indices and radii onto a per-digit ``EnvironmentConfig``, and the C++ graph
+builder resolves those through the hand's kinematics -- so the same environment
+attaches to a tendon hand and to a mechanism that is not built from digits at
+all. The two hand-shaped decisions a caller must still make, which digits
+participate and which one opposes the rest, are passed in.
 """
 
 from .collision import attach_collision

@@ -9,10 +9,8 @@ import numpy as np
 
 from gepetto_solvers.core import robot_plan
 from gepetto_solvers.core.geometry.scene import GRASP_FLEXOR_TENSION, table_corner
+from gepetto_solvers.core.hands import get_hand
 from gepetto_solvers.core.solvers import (
-    FLEXOR_IDX,
-    LIFT_HEIGHT_M,
-    LIFT_STEPS,
     HandFKSolver,
     HandIKStepper,
     HandSolveParams,
@@ -41,7 +39,6 @@ from .constants import (
     _LIFT_RIGID_TOL_M,
     CAL_DEFAULT_DISC,
     CAL_REFINE_PASSES,
-    FINGER_LABELS,
 )
 
 
@@ -56,15 +53,18 @@ def _smoke_close():
     and fail on the worst disagreement between digits.
     """
     print("Smoke-testing the phase-4 synchronized close...")
-    fingers = ["index", "middle", "thumb"]
+    hand = get_hand()
+    digits = list(hand.digit_names)
+    drive = hand.actuation.drive_indices[0]
+    fingers = list(hand.default_contact_digits)
 
     params = apply_phase_preset(HandSolveParams(), "phase4")
     _passive, open_flexors = robot_plan.open_pose_tensions()
     # From the calibrated OPEN hand, which is where the Close button starts from
     # on a freshly opened app and the only starting pose with a fixed meaning.
     params.flexor_tensions = [open_flexors.get(name, GRASP_FLEXOR_TENSION)
-                              for name in FINGER_LABELS]
-    solver = HandFKSolver(params)
+                              for name in digits]
+    solver = HandFKSolver(params, hand)
     open_lengths = robot_plan.open_tendon_lengths(params, solver)
     limits = robot_plan.hardware_travel_limits()
     travel = None if limits is None else {name: hi
@@ -78,8 +78,8 @@ def _smoke_close():
     # the reporting cannot make this pass.
     disp = []
     for i in range(n):
-        lengths = dict(zip(result.finger_names, result.at_iterate(i).tendon_lengths(0)))
-        disp.append({name: open_lengths[name] - float(lengths[name][FLEXOR_IDX])
+        lengths = dict(zip(result.finger_names, result.at_iterate(i).displacements(0)))
+        disp.append({name: open_lengths[name] - float(lengths[name][drive])
                      for name in fingers})
     span = {name: disp[-1][name] - disp[0][name] for name in fingers}
     worst_sync, worst_track = 0.0, 0.0
@@ -120,12 +120,15 @@ def _smoke_lift():
     file, so it is measured rather than trusted.
     """
     print("Smoke-testing the phase-5 wrist lift...")
+    hand = get_hand()
+    lift_height = hand.motion.lift_height_m
+    lift_steps = hand.motion.lift_steps
 
     params = apply_phase_preset(HandSolveParams(), "phase5")
     # Off a CLOSED hand, since that is what the button lifts in practice, and a
     # curled rod is the harder thing to translate rigidly than a straight one.
-    params.flexor_tensions = [GRASP_FLEXOR_TENSION] * len(FINGER_LABELS)
-    solver = HandFKSolver(params)
+    params.flexor_tensions = [GRASP_FLEXOR_TENSION] * len(hand.digit_names)
+    solver = HandFKSolver(params, hand)
 
     z0 = float(params.wrist_pose[2, 3])
     result, notes = lift_wrist(solver)
@@ -135,14 +138,14 @@ def _smoke_lift():
         """Fingertip positions at a recorded pose -- the node the renderer draws
         the contact sphere on."""
         return {name: np.asarray(
-            view.frames[0][name].marginals.rod.states[-1].pose.mean, float)[:3, 3]
+            view.frames[0][name].marginals.sites[-1].pose.mean, float)[:3, 3]
             for name in view.finger_names}
 
     start_tips = tips(result.at_iterate(0))
     worst_arrive, worst_rigid = 0.0, 0.0
     for i in range(n):
         view = result.at_iterate(i)
-        want = z0 + i * (LIFT_HEIGHT_M / LIFT_STEPS)
+        want = z0 + i * (lift_height / lift_steps)
         got = solved_wrist_pose(solver.configs, view.frames[0])
         worst_arrive = max(worst_arrive, abs(float(got[2, 3]) - want))
         # Every tip should sit exactly where it started, plus the rise so far.
@@ -151,11 +154,11 @@ def _smoke_lift():
                           max(float(np.linalg.norm(p - (start_tips[name] + rise)))
                               for name, p in tips(view).items()))
 
-    stepped = n == LIFT_STEPS + 1
+    stepped = n == lift_steps + 1
     arrived = worst_arrive <= _LIFT_ARRIVE_TOL_M
     rigid = worst_rigid <= _LIFT_RIGID_TOL_M
     ok = stepped and arrived and rigid
-    print(f"  [    lift] poses={n} (expect {LIFT_STEPS + 1}) "
+    print(f"  [    lift] poses={n} (expect {lift_steps + 1}) "
           f"rise={(float(solver.params.wrist_pose[2, 3]) - z0) * 1e3:+.1f} mm "
           f"[{'ok' if ok else 'BAD'}]")
     print(f"           - arrived within {worst_arrive * 1e3:.3f} mm of every "
@@ -180,7 +183,8 @@ def _smoke_calibration():
     """
     print("Smoke-testing the calibration landmark placement...")
     ok = True
-    finger, disc = FINGER_LABELS[0], CAL_DEFAULT_DISC
+    hand = get_hand()
+    finger, disc = hand.digit_names[0], CAL_DEFAULT_DISC
 
     params = HandSolveParams()
     params.table_burial = 0.0
@@ -188,17 +192,17 @@ def _smoke_calibration():
 
     # -- the premise: which discs move when the tendons pull --
     def transforms(tension):
-        params.flexor_tensions = [tension] * len(FINGER_LABELS)
+        params.flexor_tensions = [tension] * len(hand.digit_names)
         frame = solver.solve().frames[0]
         return {name: [wrist_to_disc(solver.configs, frame, name, d)
                        for d in (disc, disc + 1)]
-                for name in FINGER_LABELS}
+                for name in hand.digit_names}
 
     slack, pulled = transforms(0.0), transforms(2.5)
     rigid_mm = max(np.linalg.norm(slack[n][0][:3, 3] - pulled[n][0][:3, 3])
-                   for n in FINGER_LABELS) * 1e3
+                   for n in hand.digit_names) * 1e3
     moved_mm = min(np.linalg.norm(slack[n][1][:3, 3] - pulled[n][1][:3, 3])
-                   for n in FINGER_LABELS) * 1e3
+                   for n in hand.digit_names) * 1e3
     premise = (rigid_mm < _CAL_RIGID_TOL_MM and moved_mm > _CAL_ARTICULATED_MIN_MM)
     ok = ok and premise
     print(f"  [ rigidity] disc {disc} moves {rigid_mm * 1e3:.1f} um, disc "
@@ -319,7 +323,7 @@ def _smoke():
     # to bisect. A handful of steps is enough to prove the loop runs and carries;
     # convergence is what the GUI's Auto solve is for.
     if not caps["ik_stepping"]:
-        print("  [IK-step] skipped -- binding has no TendonHandSolver.reset_al_duals")
+        print("  [IK-step] skipped -- binding has no HandSolver.reset_al_duals")
     else:
         cases = [("IK", False, False)]
         if caps["table"]:

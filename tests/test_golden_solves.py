@@ -44,7 +44,7 @@ def _tips(result, k=0):
     frame = result.frames[k]
     return np.array(
         [
-            np.asarray(frame[n].marginals.rod.states[-1].pose.mean, float)[:3, 3]
+            np.asarray(frame[n].marginals.sites[-1].pose.mean, float)[:3, 3]
             for n in result.finger_names
         ]
     )
@@ -56,7 +56,7 @@ def _assert_frame_well_formed(result, k, n_fingers=5):
     assert tips.shape == (n_fingers, 3)
     assert np.isfinite(tips).all()
 
-    lengths = result.tendon_lengths(k)
+    lengths = result.displacements(k)
     assert len(lengths) == n_fingers
     for arr in lengths:
         arr = np.asarray(arr, float)
@@ -84,7 +84,7 @@ def test_fk_golden_sums(pinned_dims):
     result = solvers.HandFKSolver(solvers.HandSolveParams()).solve()
 
     assert _tips(result).sum() == pytest.approx(0.941626180859, rel=RTOL)
-    tendon_sum = float(np.sum([np.sum(x) for x in result.tendon_lengths(0)]))
+    tendon_sum = float(np.sum([np.sum(x) for x in result.displacements(0)]))
     assert tendon_sum == pytest.approx(4.048889415094, rel=RTOL)
 
 
@@ -139,7 +139,7 @@ def test_ik_golden_sums(pinned_dims):
     assert sum(result.surface_gaps().values()) == pytest.approx(
         0.024360234813, rel=RTOL
     )
-    tendon_sum = float(np.sum([np.sum(x) for x in result.tendon_lengths(0)]))
+    tendon_sum = float(np.sum([np.sum(x) for x in result.displacements(0)]))
     assert tendon_sum == pytest.approx(3.866361765158, rel=RTOL)
 
 

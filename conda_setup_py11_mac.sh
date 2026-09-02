@@ -29,7 +29,21 @@ conda activate crest_py11
 
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."
-conda install -c conda-forge openvdb libboost-devel tbb-devel openvdb cmake eigen pybind11 llvm-openmp openssh git -y
+# Pinocchio: rigid-body kinematics + analytical derivatives, for URDF-described
+# hands (src/hand/kinematics/rigid/).
+#
+# PINNED TO THE EIGEN-3.4 BUILD, and that pin is load-bearing. GTSAM bakes
+# GTSAM_EIGEN_VERSION_WORLD/MAJOR into gtsam/config.h and static-asserts them
+# against whatever Eigen an including translation unit sees; our GTSAM is built
+# against 3.4. conda-forge's newest pinocchio (4.1) is built against Eigen 5, so
+# a single .cpp including both fails to compile outright. The 4.0.0 h9a60d09_0
+# build is the newest one against Eigen 3.4. It also pins boost <1.89 -- there is
+# no Eigen-3.4 pinocchio built against boost 1.90 -- which is why boost is 1.88
+# here; GTSAM links boost by unversioned soname and loads fine against it.
+#
+# If you bump this, check `conda search -c conda-forge libpinocchio --info` for
+# the eigen-abi pin and keep it on whatever major.minor GTSAM was built with.
+conda install -c conda-forge openvdb libboost-devel tbb-devel openvdb cmake eigen pybind11 llvm-openmp "libpinocchio=4.0.0=h9a60d09_0" pinocchio=4.0.0 openssh git -y
 # conda install -c conda-forge openvdb libboost-devteel cmake eigen pybind11 llvm-openmp -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)

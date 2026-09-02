@@ -6,6 +6,7 @@ mixins below, which share the attributes ``__init__`` sets up here.
 
 
 
+from gepetto_solvers.core.hands import get_hand
 from gepetto_solvers.core.solvers import capabilities
 
 from ._calibration import CalibrationMixin
@@ -19,9 +20,6 @@ from ._render import SceneRenderMixin
 from ._robot import RobotMixin
 from ._stepping import StepperMixin
 from ._trajectory import TrajectoryMixin
-from .constants import (
-    FINGER_LABELS,
-)
 from .estop import EStop
 
 
@@ -38,10 +36,47 @@ class HandVizApp(
     CalibrationMixin,
     GuiMixin,
 ):
-    def __init__(self, server, ros_mode=False, bridge=None):
+    def _link_meshes(self):
+        """The hand's visual link geometry, loaded once and remembered.
+
+        VISUAL ONLY -- collision is the sphere set the solve carries, and the
+        factor graph never sees a mesh. A hand that supplies none draws as a
+        skeleton, which is a complete drawing in its own right.
+        """
+        if self._link_mesh_cache is None:
+            supplier = getattr(self.hand, "visual_meshes", None)
+            self._link_mesh_cache = supplier() if supplier is not None else []
+        return self._link_mesh_cache
+
+    def has(self, feature):
+        """Whether the hand being posed supports ``feature``.
+
+        The panel-level counterpart of ``self.caps``, and the two answer
+        different questions: caps says what the compiled binding can do, this
+        says what this ROBOT can do. A control for something the hand does not
+        have is not greyed out here -- the whole folder is absent, because a
+        tendon-length readout on a hand with no tendons is not a disabled
+        feature, it is a category error.
+        """
+        return feature in self.hand.features
+
+    def _drive_index(self):
+        """Index of the actuated actuator in a digit's tendon-length/tension
+        vector, from the hand being posed. Every displacement and commanded
+        tension the panel reads or writes is at this index."""
+        return self.hand.actuation.drive_indices[0]
+
+    def __init__(self, server, ros_mode=False, bridge=None, hand=None):
         import viser  # local import so --smoke needs no viser
         self.viser = viser
         self.server = server
+        # The hand this workbench poses. Everything downstream -- the digit
+        # checkboxes, the tension sliders, the scene's finger channels, the
+        # calibration landmark list -- is sized and named off it, so --hand
+        # selects a different mechanism without a control here changing.
+        self.hand = hand if hand is not None else get_hand()
+        self.digit_names = list(self.hand.digit_names)
+        self._link_mesh_cache = None
         # ROS mode adds the Robot folder -- play a solve on the hardware, read the
         # hardware back -- and extends the e-stop to the servo publishers. Off by
         # default so the standalone app is byte-for-byte the app it was; the
@@ -101,7 +136,7 @@ class HandVizApp(
         self._ycb_busy = False
 
         from gepetto_solvers.core.plotting.viser_hand import ViserHandScene
-        self.scene = ViserHandScene(server, FINGER_LABELS)
+        self.scene = ViserHandScene(server, self.digit_names)
 
         # The control-trajectory plots, in their own window docked to the LEFT of
         # the 3D view (the main control panel is on the right, so the two do not
@@ -110,7 +145,7 @@ class HandVizApp(
         # top-level entity, so it is not placed in any folder that happens to be
         # open. See _plotting/traj_panel.py.
         from gepetto_solvers.core.plotting.traj_panel import TrajectoryPanel
-        self.traj = TrajectoryPanel(server, FINGER_LABELS)
+        self.traj = TrajectoryPanel(server, self.digit_names)
         #: Measured robot states from the last playback, keyed by the waypoint
         #: (== iterate) index they were sampled at. None when nothing has been
         #: played, or when what was played cannot be lined up against the plotted

@@ -10,10 +10,8 @@ import threading
 import numpy as np
 
 from gepetto_solvers.core.solvers import (
-    FLEXOR_IDX,
     HandIKStepper,
     R_to_euler,
-    solved_wrist_pose,
 )
 
 from .constants import (
@@ -174,7 +172,7 @@ class StepperMixin:
             else:
                 self.params.initial_state = None
                 self.params.initial_duals = None
-            self.stepper = HandIKStepper(self.params)
+            self.stepper = HandIKStepper(self.params, self.hand)
         return self.stepper
 
 
@@ -199,7 +197,7 @@ class StepperMixin:
         res = self._iter_view()
         if res is None:
             return
-        T = solved_wrist_pose(self.fk_solver.configs, res.frames[0])
+        T = res.wrist_pose(0)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
         self._restoring = True   # these are OUR writes; no live-FK re-solve
         try:
@@ -234,7 +232,7 @@ class StepperMixin:
         solved, clamped = [], False
         for name in res.finger_names:
             q = float(np.asarray(
-                res.frames[0][name].marginals.tensions.mean, float)[FLEXOR_IDX])
+                res.frames[0][name].marginals.actuation.mean, float)[self._drive_index()])
             clamped = clamped or not (lo <= q <= hi)
             solved.append(min(max(q, lo), hi))
         self._restoring = True
@@ -468,7 +466,7 @@ class StepperMixin:
             # which happens whenever the app is run from the python/ directory.
             self.g_warm_status.content = (
                 "**unavailable** -- this binding has no "
-                "`TendonHandSolverConfig.initial_state`  \n"
+                "`HandSolverConfig.initial_state`  \n"
                 f"loaded from `{binding_path()}`  \n"
                 "*(run from the crest-sparse root -- `python -m "
                 "python.tests.tendon_hand.viz_interactive` -- so the installed "

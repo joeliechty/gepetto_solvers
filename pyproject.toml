@@ -39,10 +39,13 @@ dependencies = [
     "scipy>=1.16.3; python_version >= '3.11'",
 ]
 
-# `viz`  the PyVista render windows every demo script opens
-# `web`  the viser interactive workbench and its hand renderer
-# `ycb`  fetching and fitting YCB scans (scripts/objects/ycb_browser.py)
-# `dev`  the test suite and the linters
+# `viz`     the PyVista render windows every demo script opens
+# `web`     the viser interactive workbench and its hand renderer
+# `ycb`     fetching and fitting YCB scans (scripts/objects/ycb_browser.py)
+# `vendor`  re-vendoring a robot description from upstream
+#           (scripts/vendor_allegro_v5_meshes.py) -- run by hand when upstream
+#           changes, never at runtime, since its output is committed
+# `dev`     the test suite and the linters
 #
 # 1.1.0 is the latest viser that still ships py3.10-compatible dependencies.
 [project.optional-dependencies]
@@ -50,6 +53,7 @@ viz = ["pyvista==0.46.4", "vtk==9.5.2", "matplotlib==3.10.7", "pillow"]
 web = ["viser==1.1.0", "trimesh"]
 ycb = ["trimesh", "scikit-learn", "coacd", "requests", "pillow"]
 onshape = ["requests"]
+vendor = ["trimesh", "fast-simplification"]
 dev = ["pytest", "ruff", "mypy"]
 
 
@@ -146,7 +150,7 @@ known-first-party = ["_pkg", "gepetto_solvers"]
 files = [
     "python/gepetto_solvers/core/environment",
     "python/gepetto_solvers/core/geometry",
-    "python/gepetto_solvers/core/hand",
+    "python/gepetto_solvers/core/hands",
     "python/gepetto_solvers/core/robot_plan",
     "python/gepetto_solvers/core/solvers",
 ]
@@ -158,7 +162,7 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 # The compiled extension has no stubs -- pybind11 exports at runtime, so every
-# `gepetto_solvers.TendonHandSolver` reads as a missing attribute to a static
+# `gepetto_solvers.HandSolver` reads as a missing attribute to a static
 # checker. Generating stubs for it is worth doing one day; asserting it is opaque
 # is the honest description until then.
 [[tool.mypy.overrides]]

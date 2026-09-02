@@ -9,11 +9,7 @@ that class's ``__init__`` sets up.
 import numpy as np
 
 from gepetto_solvers.core.geometry.scene import table_corner
-from gepetto_solvers.core.solvers import FLEXOR_IDX, R_to_euler, solved_wrist_pose
-
-from .constants import (
-    FINGER_LABELS,
-)
+from gepetto_solvers.core.solvers import R_to_euler
 
 
 class TrajectoryMixin:
@@ -46,17 +42,17 @@ class TrajectoryMixin:
         exists to make visible. Reading the sliders would draw flat lines.
 
         The wrist also has to be RECOVERED rather than read: nothing in a result
-        reports it directly, so `solved_wrist_pose` inverts finger 0's base
+        reports it directly, so the state bundle carries the solved wrist
         offset out of its node-0 pose. Split into xyzrpy here because a 4x4 is
         not plottable, using the same ZYX convention (and the same radians) the
         Wrist start pose sliders use, so a number read off a plot goes straight
         back into the slider it came from.
         """
-        T = np.asarray(solved_wrist_pose(self.fk_solver.configs, res.frames[0]),
+        T = np.asarray(res.wrist_pose(0),
                        float)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
-        lengths = [float(np.asarray(length, float)[FLEXOR_IDX]) * 1e3
-                   for length in res.tendon_lengths(0)]
+        lengths = [float(np.asarray(length, float)[self._drive_index()]) * 1e3
+                   for length in res.displacements(0)]
         return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
 
 
@@ -86,11 +82,11 @@ class TrajectoryMixin:
         open_lengths = self._open_lengths()
         # The ORDER has to be the result's own, because that is the order
         # `_traj_row` reads `tendon_lengths(0)` in and therefore the order the
-        # panel's first five channels are in. Falling back to FINGER_LABELS only
+        # panel's first five channels are in. Falling back to self.digit_names only
         # covers the case where nothing is solved, where there is no plot to
         # align with anyway.
         names = (list(self.result.finger_names)
-                 if self.result is not None else list(FINGER_LABELS))
+                 if self.result is not None else list(self.digit_names))
         lengths = []
         for name in names:
             disp = state.tendon_disp.get(name)

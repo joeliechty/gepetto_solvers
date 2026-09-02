@@ -14,27 +14,54 @@ through spatial motion priors and measurement factors. This repository builds fa
 graph representations of the conditional distribution over continuum robot
 configurations, and leans on GTSAM's sparse nonlinear optimization to solve them.
 
-The tree is the **tendon hand** and what it needs. A Cosserat rod builds a
-tendon-driven finger, and a set of fingers sharing one floating wrist variable makes
-the hand — three C++ solvers over that graph:
+Each solve poses **a hand** — a mechanism sharing one floating wrist variable —
+against whichever task constraints are switched on. Three solvers build that graph:
 
 | | |
 |---|---|
-| `TendonHandSolver` | static FK, and single-shot IK against a contact surface |
-| `TendonHandTrajectoryPlanner` | a K+1-step trajectory with GP temporal priors |
+| `HandSolver` | static FK, and single-shot IK against a contact surface |
+| `HandTrajectoryPlanner` | a K+1-step trajectory with GP temporal priors |
 | `HandIKStepper` (Python) | the IK solve, one Augmented Lagrangian iteration per call |
 
-**[docs/tendon_hand.md](docs/tendon_hand.md) is the real documentation** — what each
+None of the three knows what KIND of hand it is posing. A hand supplies its own
+**kinematics** — the factors internal to the mechanism — through the
+`HandKinematics` interface, and the graph builder adds contact, collision,
+support-plane and pre-grasp constraints around it without ever asking.
+
+Two hands ship:
+
+| `--hand` | mechanism |
+|---|---|
+| `tendon_5f` | four fingers and a thumb, each a Cosserat rod driven by six tendons (the default) |
+| `allegro` | Allegro Hand **V5**, right, type B: 16 revolute joints in four chains, posed from the manufacturer's URDF by Pinocchio |
+
+```bash
+python scripts/viz_interactive.py                 # tendon_5f
+python scripts/viz_interactive.py --hand allegro
+```
+
+The workbench builds itself around whichever it is given: the panels a hand has
+no use for are absent rather than dead, and a joint-space hand gets per-joint
+sliders where a tendon hand gets one pull per digit.
+
+**[docs/hand_solvers.md](docs/hand_solvers.md) is the real documentation** — what each
 solver builds, which section of *Underactuated Object Manipulation* it implements,
 and how everything wires up. Start there. This file only gets you running.
+[docs/adding_a_hand.md](docs/adding_a_hand.md) is the how-to for a second hand,
+and [docs/formulation_vs_code.md](docs/formulation_vs_code.md) records every
+place the code deliberately departs from the written maths — read that one if the
+equations in front of you disagree with what the source does.
 
 ## Layout
 
 ```
 include/gepetto_solvers/   public C++ headers
+    hand/                    the kinematics-agnostic model, solver and planner;
+                             hand/kinematics/<name>/ is one mechanism each
+    digits/tendon/           the tendon finger the tendon kinematics is built from
 src/                       C++ implementation; src/bindings/ holds all the pybind11
 python/gepetto_solvers/    the Python layer, in three tiers:
-    core/                    foundational — hand, environment, geometry, solvers,
+    core/                    foundational — hands, environment, geometry, solvers,
                              robot_plan, objects, plotting, diagnostics
     projects/                isolated research — grasp_pipeline, viz, robot_mount
     experimental/            ad hoc diagnostics, not maintained as examples
@@ -87,9 +114,14 @@ only numpy and scipy; everything that draws, fetches or fits is optional:
 | `ycb` | trimesh, scikit-learn, coacd, requests | fetching and fitting YCB scans |
 | `dev` | pytest, ruff, mypy | the test suite and the linters |
 
-GTSAM, OpenVDB and pybind11 are deliberately **not** listed: they are C++ build
-dependencies the conda scripts install into `$CONDA_PREFIX`, and CMake finds them
-through the Python interpreter's prefix.
+GTSAM, OpenVDB, pybind11 and Pinocchio are deliberately **not** listed: they are
+C++ build dependencies the conda scripts install into `$CONDA_PREFIX`, and CMake
+finds them through the Python interpreter's prefix.
+
+Pinocchio supplies rigid-body kinematics and its analytical derivatives for hands
+described by a URDF (`src/hand/kinematics/rigid/`). Kinematics only —
+`urdf::buildModel` reads no mesh files, so nothing in the build depends on a
+robot's visual geometry being present.
 
 ## Run
 
@@ -123,9 +155,9 @@ mypy
 ```
 
 See [tests/README.md](tests/README.md) for the two constraints that shape the suite:
-no committed test may need a `.vdb` grid, and any test asserting a number must pin
-the hand dimensions (`load_hand_dimensions()` silently prefers `gepetto_core`'s CAD
-geometry over the bundled fallback, and the two are not the same hand).
+no committed test may need a `.vdb` grid, and any test asserting a number must take
+the `pinned_hand` fixture (`load_hand_dimensions()` silently prefers `gepetto_core`'s
+CAD geometry over the bundled fallback, and the two are not the same hand).
 
 `scripts/capture_baseline.py` captures solver behavior to JSON and diffs two
 captures. It covers the SDF paths the committed suite cannot, and is what a refactor

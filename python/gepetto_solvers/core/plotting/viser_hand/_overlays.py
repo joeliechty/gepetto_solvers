@@ -21,11 +21,25 @@ from .palette import (
     GAP_GREEN_MAX_M,
 )
 
+#: Link-mesh shading. Light and translucent on purpose: the meshes are scenery,
+#: and the contact spheres, gap lines and frames drawn over them are the things
+#: a reader is actually measuring by.
+_LINK_MESH_RGB = (170, 178, 189)
+_LINK_MESH_ALPHA = 140
+
 
 class OverlayMixin:
     def _update_tendons(self, name, fm, poses):
+        """Tendon routes, for a digit that has any.
+
+        A hand with no tendons carries no routing to draw, and says so by
+        leaving ``extras`` unset -- so this returns nothing rather than the
+        caller having to know which kind of hand it is holding."""
         keep = set()
-        tc = fm.tendon_config
+        extras = getattr(fm, "extras", None)
+        if extras is None:
+            return keep
+        tc = extras.tendon_config
         for ti in range(tc.num_tendons):
             pts = []
             for di in range(tc.num_discs):
@@ -320,7 +334,10 @@ class OverlayMixin:
 
     def _update_discs(self, name, fm, poses):
         keep = set()
-        tc = fm.tendon_config
+        extras = getattr(fm, "extras", None)
+        if extras is None:
+            return keep   # no routing discs on this hand
+        tc = extras.tendon_config
         r = 1.3 * tc.routing_radius
         h = 0.3 * tc.routing_radius
         for di, node_idx in enumerate(tc.disc_pose_idx):
@@ -354,8 +371,11 @@ class OverlayMixin:
         hide the frame most worth seeing, and would silently shift the numbering
         of every triad on screen relative to ``disc_pose_idx``.
         """
+        extras = getattr(fm, "extras", None)
+        if extras is None:
+            return set()   # no routing discs on this hand
         keep = set()
-        tc = fm.tendon_config
+        tc = extras.tendon_config
         # Sized off the disc rather than fixed: the axes have to read against the
         # disc they sit on (drawn at 1.3 * routing_radius) at any finger scale,
         # and just past its rim is where they are legible without swamping the
@@ -369,5 +389,72 @@ class OverlayMixin:
                 axes_radius=float(length) * 0.04,
                 wxyz=_wxyz_from_R(T[:3, :3]),
                 position=tuple(T[:3, 3]))
+            keep.add(n)
+        return keep
+
+
+    # -- link meshes -------------------------------------------------------
+    #
+    # VISUAL ONLY. Collision in this repository is the sphere set the solve
+    # carries (DigitState.collision_sites), and the graph never sees a mesh --
+    # so nothing here can affect a solve, and a checkout without the mesh files
+    # loses the skin and nothing else.
+
+    def _link_mesh(self, path):
+        """One loaded mesh, cached for the life of the scene.
+
+        Loading is the expensive part and the geometry never changes -- only the
+        transform it is drawn at does -- so the file is read once and reused
+        every frame. A file that fails to load is cached as None so a broken
+        mesh is not re-read once per frame forever.
+        """
+        cache = self.__dict__.setdefault("_mesh_cache", {})
+        key = str(path)
+        if key not in cache:
+            try:
+                import trimesh
+
+                cache[key] = trimesh.load(path, force="mesh")
+            except Exception:
+                cache[key] = None
+        return cache[key]
+
+    def _update_link_meshes(self, link_meshes, frame, wrist_pose):
+        """Draw each link mesh at the pose the solve already put its site at.
+
+        No second kinematic pass: every visual origin on the hands that carry
+        meshes is the identity, so a mesh rides directly on its site's frame.
+        """
+        keep = set()
+        if not link_meshes:
+            return keep
+
+        for i, entry in enumerate(link_meshes):
+            attach, path, T_local = entry
+            mesh = self._link_mesh(path)
+            if mesh is None:
+                continue
+            if attach is None:
+                if wrist_pose is None:
+                    continue
+                T = np.asarray(wrist_pose, float)
+            else:
+                digit, site = attach
+                if digit >= len(self.finger_names):
+                    continue
+                fs = frame.get(self.finger_names[digit])
+                if fs is None or site >= len(fs.marginals.sites):
+                    continue
+                T = np.asarray(fs.marginals.sites[site].pose.mean, float)
+
+            # T_local first: it takes the mesh out of its own coordinates and
+            # into the frame it attaches to (for glTF, the Y-up to Z-up
+            # correction). Then the site pose puts that frame in the world.
+            placed = mesh.copy()
+            placed.apply_transform(np.asarray(T) @ np.asarray(T_local, float))
+            placed.visual.vertex_colors = np.array(
+                [*_LINK_MESH_RGB, _LINK_MESH_ALPHA], dtype=np.uint8)
+            n = f"/hand/mesh/{i}"
+            self._dynamic[n] = self.scene.add_mesh_trimesh(n, placed)
             keep.add(n)
         return keep

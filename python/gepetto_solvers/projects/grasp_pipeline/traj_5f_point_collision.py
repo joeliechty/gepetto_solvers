@@ -45,14 +45,16 @@ from gepetto_solvers.core.diagnostics import (
     collision_report,
     log_planner_parameters,
 )
+from gepetto_solvers.core.environment import (
+    attach_collision,
+)
 from gepetto_solvers.core.geometry.scene import (
     GRASP_GOALS,
     GRASP_SPHERE_CENTER,
     TENDON_NAMES,
     get_primitive_specs,
 )
-from gepetto_solvers.core.hand.config import (
-    attach_collision,
+from gepetto_solvers.core.hands.tendon_5f import (
     get_default_hand_configs,
     load_hand_dimensions,
 )
@@ -75,7 +77,7 @@ class _FingerSol:
 
 class _HandStepShim:
     """Wraps a per-step hand marginals as ``.marginals`` so collision_report(),
-    which reads ``solution.marginals.fingers``, can be reused per step."""
+    which reads ``solution.marginals.digits``, can be reused per step."""
     def __init__(self, hand_marginals):
         self.marginals = hand_marginals
 
@@ -170,15 +172,15 @@ def _main(args, results_dir):
                      cull_margin=(args.cull_margin if args.cull_margin >= 0 else None))
 
     # --- Trajectory planner config. ---
-    plan_config = gepetto_solvers.TendonHandTrajectoryPlannerConfig()
+    plan_config = gepetto_solvers.HandTrajectoryPlannerConfig()
     plan_config.K = args.steps
     plan_config.dt = args.dt
     plan_config.wrist_pose = np.eye(4)
     plan_config.sigma_wrist_pos = args.sigma_wrist_pos
     plan_config.sigma_wrist_rot = args.sigma_wrist_rot
     plan_config.gp_wrist_Qc = args.gp_wrist * np.eye(6)
-    plan_config.gp_tense_Qc = args.gp_tense * np.eye(num_tendons)
-    plan_config.gp_len_Qc = np.zeros((0, 0))
+    plan_config.gp_actuation_Qc = args.gp_tense * np.eye(num_tendons)
+    plan_config.gp_displacement_Qc = np.zeros((0, 0))
 
     plan_config.goal_positions = [np.asarray(g, dtype=float) for g in goals]
     plan_config.goal_position_cov = args.goal_cov * np.eye(3)
@@ -196,7 +198,9 @@ def _main(args, results_dir):
         "object_pose": object_pose,
     })
 
-    planner = gepetto_solvers.TendonHandTrajectoryPlanner(configs, plan_config)
+    planner = gepetto_solvers.HandTrajectoryPlanner(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), plan_config)
     print(f"Built collision point-to-point planner: {planner.num_fingers()} "
           f"fingers, K={args.steps} steps.")
 
@@ -232,8 +236,8 @@ def _main(args, results_dir):
         obj_c, ff_g = collision_report(configs, _HandStepShim(hand_m),
                                        spec, object_pose, r)
         dists = []
-        for i, fm in enumerate(hand_m.fingers):
-            tip = np.array(fm.rod.states[-1].pose.mean)[:3, 3]
+        for i, fm in enumerate(hand_m.digits):
+            tip = np.array(fm.sites[-1].pose.mean)[:3, 3]
             dists.append(float(np.linalg.norm(tip - goals[i])))
         tag = "  <- start" if k == 0 else ("  <- goal" if k == K else "")
         print(f"  {k:>3} | {obj_c:+.5f} m         | {ff_g:+.5f} m             "
@@ -246,7 +250,7 @@ def _main(args, results_dir):
     print("\nTerminal (k=K) per-finger tip-to-goal distances:")
     term_dists = []
     for i, (name, _) in enumerate(configs):
-        tip = np.array(result.trajectory[K].fingers[i].rod.states[-1].pose.mean)[:3, 3]
+        tip = np.array(result.trajectory[K].digits[i].sites[-1].pose.mean)[:3, 3]
         d = float(np.linalg.norm(tip - goals[i]))
         term_dists.append(d)
         print(f"  [{name:>6}] dist {d:.5f} m")
@@ -268,7 +272,7 @@ def _main(args, results_dir):
     # --- Save state / wrist figures (headless-safe; always saved). ---
     print("\nSaving trajectory figures...")
     for i, name in enumerate(finger_names):
-        finger_traj = FingerTraj([hm.fingers[i] for hm in result.trajectory])
+        finger_traj = FingerTraj([hm.digits[i] for hm in result.trajectory])
         plot_trajectory(
             finger_traj, tendon_names=TENDON_NAMES, show=False,
             save_path=os.path.join(results_dir, f"{exp_label}_states_{name}.png"))
@@ -280,7 +284,7 @@ def _main(args, results_dir):
         print(f"Saved experiment results to {results_dir}/")
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
+    from gepetto_solvers.core.plotting.hand_plotter import HandPlotter
 
     plotter_kwargs = dict(
         plot_backbone_ellipsoids=False,
@@ -292,7 +296,7 @@ def _main(args, results_dir):
         plotter_kwargs["save_frames_dir_name"] = "frames"
         plotter_kwargs["frames_base_dir"] = results_dir
 
-    plotter = TendonHandPlotter(finger_names, **plotter_kwargs)
+    plotter = HandPlotter(finger_names, **plotter_kwargs)
     plotter.plotter.plotter.add_text("collision-free point-to-point trajectory",
                                      position="upper_left", font_size=12)
     try:
@@ -304,7 +308,7 @@ def _main(args, results_dir):
 
     for k, hand_m in enumerate(result.trajectory):
         solutions = {name: _FingerSol(fm, result.meta)
-                     for name, fm in zip(finger_names, hand_m.fingers)}
+                     for name, fm in zip(finger_names, hand_m.digits)}
         print(f"Displaying step {k}/{K}")
         plotter.update(solutions)
         if not args.save_figures:

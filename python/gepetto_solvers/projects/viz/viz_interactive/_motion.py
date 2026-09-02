@@ -10,11 +10,8 @@ import threading
 import numpy as np
 
 from gepetto_solvers.core import robot_plan
-from gepetto_solvers.core.solvers import FLEXOR_IDX, lift_wrist, synchronized_close
+from gepetto_solvers.core.solvers import lift_wrist, synchronized_close
 
-from .constants import (
-    FINGER_LABELS,
-)
 from .estop import Refused
 
 
@@ -79,7 +76,7 @@ class MotionMixin:
 
     def _close_admitted(self):
         """The close itself, for a caller that ALREADY HOLDS the gate."""
-        fingers = [label for label, box in zip(FINGER_LABELS, self.g_contacts)
+        fingers = [label for label, box in zip(self.digit_names, self.g_contacts)
                    if box.value]
         if not fingers:
             self._set_status(
@@ -286,6 +283,52 @@ class MotionMixin:
         return self._open_lengths_cache
 
 
+    def _report_actuation(self, res):
+        """The COMMANDED STATE of the robot, printed under the sliders that set
+        it -- whichever shape this hand's actuation takes.
+
+        A tendon hand's is a pull and a length, so it gets
+        :meth:`_report_tendon_lengths`. A joint-space hand's is a joint vector,
+        and there is no length distinct from it, so it gets the angles the solve
+        arrived at beside the ones commanded.
+
+        Read from the RESULT rather than the sliders in both cases, and for the
+        same reason: past the first iterate the state that produced this pose is
+        the solver's, not the slider's, and printing the slider's next to a
+        solved pose would be a pairing that never happened.
+        """
+        if self.has("displacement"):
+            return self._report_tendon_lengths(res)
+        return self._report_joint_states(res)
+
+    def _report_joint_states(self, res):
+        """Per-digit joint angles: commanded (q_S) beside solved."""
+        handle = getattr(self, "g_actuation_report", None)
+        if handle is None:
+            return
+        if res is None:
+            handle.content = "_solve to see the joint states_"
+            return
+
+        commanded = self.hand.actuation_means(self.params)
+        names = list(self.hand.actuation.names)
+        lines = [f"**joint states ({self.mode}), rad**",
+                 f"`{'digit':<7}" + "".join(f"{n:>17}" for n in names) + "`"]
+        for i, name in enumerate(res.finger_names):
+            solved = np.asarray(res.frames[0][name].actuation(), float)
+            cells = "".join(
+                f"{commanded[i][j]:+8.3f}/{solved[j]:+7.3f}"
+                for j in range(len(names)))
+            lines.append(f"`{name:<7}{cells}`")
+
+        T = res.wrist_pose(0)
+        if T is not None:
+            xyz = T[:3, 3] * 1e3
+            lines.append("")
+            lines.append("**wrist (mm)**  "
+                         f"`x {xyz[0]:+7.1f}  y {xyz[1]:+7.1f}  z {xyz[2]:+7.1f}`")
+        handle.content = "  \n".join(lines)
+
     def _report_tendon_lengths(self, res):
         """The ACTUATED (flexor) tendon length the solve arrived at, per finger,
         printed under the tension sliders that commanded it.
@@ -314,16 +357,16 @@ class MotionMixin:
         if res is None:
             handle.content = self.TENDON_IDLE
             return
-        lengths = dict(zip(res.finger_names, res.tendon_lengths(0)))
+        lengths = dict(zip(res.finger_names, res.displacements(0)))
         open_lengths = self._open_lengths_cache
         # Whole lines as code spans: markdown collapses runs of spaces
         # everywhere else, and the columns are the point of the readout.
         lines = [f"**actuated tendon ({self.mode})**"]
         for name in res.finger_names:
             tension = float(np.asarray(
-                res.frames[0][name].marginals.tensions.mean,
-                float)[FLEXOR_IDX])
-            length = float(lengths[name][FLEXOR_IDX])
+                res.frames[0][name].marginals.actuation.mean,
+                float)[self._drive_index()])
+            length = float(lengths[name][self._drive_index()])
             row = f"{name:<6} {tension:5.2f} N   {length * 1e3:7.2f} mm"
             if open_lengths is not None and name in open_lengths:
                 # Signed the way robot_plan commands it: POSITIVE is tendon

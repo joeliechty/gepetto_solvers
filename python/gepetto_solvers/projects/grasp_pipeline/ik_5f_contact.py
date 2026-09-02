@@ -34,7 +34,7 @@ from gepetto_solvers.core.geometry.scene import (
     get_primitive_specs,
     primitive_surface_gap,
 )
-from gepetto_solvers.core.hand.config import (
+from gepetto_solvers.core.hands.tendon_5f import (
     default_hand_tip_radii,
     get_default_hand_configs,
     load_hand_dimensions,
@@ -130,7 +130,7 @@ def main():
     # The object is placed at the fixed-wrist fingertip locus, so the wrist is
     # pinned (tight prior) rather than floated; contact is reachable without
     # moving the hand.
-    hand_config = gepetto_solvers.TendonHandSolverConfig()
+    hand_config = gepetto_solvers.HandSolverConfig()
     hand_config.wrist_pose = np.eye(4)
     hand_config.sigma_wrist_pos = args.sigma_wrist_pos
     hand_config.sigma_wrist_rot = args.sigma_wrist_rot
@@ -139,7 +139,9 @@ def main():
     hand_config.base.al_mu_increase_rate = args.al_rate
     hand_config.base.al_max_iterations = args.al_iters
 
-    solver = gepetto_solvers.TendonHandSolver(configs, hand_config)
+    solver = gepetto_solvers.HandSolver(
+        gepetto_solvers.make_tendon_hand_spec(
+        configs, opposing_digit=len(configs) - 1), hand_config)
     print(f"Built hand solver with {solver.num_fingers()} fingers.")
 
     # Same tension pattern as the single-finger test: passive tendons pinned,
@@ -164,8 +166,8 @@ def main():
     print(f"Solved in {dt_ms:.1f} ms | iters={solution.meta.iterations} | "
           f"error={solution.meta.error:.4g}")
     for (name, _), tip_radius, fm in zip(configs, tip_radii,
-                                         solution.marginals.fingers):
-        tip_pose = np.array(fm.rod.states[-1].pose.mean)
+                                         solution.marginals.digits):
+        tip_pose = np.array(fm.sites[-1].pose.mean)
         tip_pos = tip_pose[:3, 3]
         tip_local = object_rotation.T @ (tip_pos - object_center)
         gap = primitive_surface_gap(tip_local, spec) - tip_radius
@@ -175,13 +177,13 @@ def main():
     if args.no_viz:
         return
 
-    from gepetto_solvers.core.plotting.tendon_hand_plotter import TendonHandPlotter
+    from gepetto_solvers.core.plotting.hand_plotter import HandPlotter
 
     class _FingerSol:
         pass
 
     solutions = {}
-    for name, fm in zip(finger_names, solution.marginals.fingers):
+    for name, fm in zip(finger_names, solution.marginals.digits):
         s = _FingerSol()
         s.marginals = fm
         s.meta = solution.meta
@@ -199,7 +201,7 @@ def main():
 
     plotters = []
     for name, azimuth, elevation in camera_views:
-        plotter = TendonHandPlotter(
+        plotter = HandPlotter(
             finger_names,
             plot_backbone_ellipsoids=False,
             camera_azimuth=azimuth,

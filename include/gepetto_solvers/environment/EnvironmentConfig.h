@@ -65,7 +65,7 @@ struct EnvironmentConfig {
     //
     // self_collision (default true) switches the FINGER-FINGER pairs on and
     // off -- cross-finger sphere pairs in the hand, SphereSphereCollisionGap-
-    // Factor. Only TendonHandModel builds these (a single finger cannot
+    // Factor. Only HandModel builds these (a single finger cannot
     // collide with another), so it is inert for the single-finger solvers.
     // Needs collision_node_indices to be non-empty like the other two, since
     // the spheres are what it constrains.
@@ -111,7 +111,7 @@ struct EnvironmentConfig {
     // Optional explicit initial value for this contact's witness point, given
     // in the object-local frame. When unset (the default), the witness is
     // seeded by ray-marching from the object-local origin toward the finger tip
-    // until the SDF crosses zero (see TendonHandModel::get_initial_values). Set
+    // until the SDF crosses zero (see HandModel::get_initial_values). Set
     // it to override that heuristic -- e.g. to seed an opposing thumb's witness
     // on the far side of the object so the solver starts in the enclosing grasp
     // configuration instead of collapsing every witness onto one side. Only an
@@ -141,13 +141,13 @@ struct EnvironmentConfig {
     // across the seams where the members meet -- which is where a sliding finger
     // spends its time.
     //
-    // PRECEDENCE, in the order has_object_surface() and the TendonHandModel
+    // PRECEDENCE, in the order has_object_surface() and the HandModel
     // builders test it: a non-empty ellipsoid_set wins over ellipsoid_semi_axes,
     // which wins over sdf_grid. Empty (the default) => every existing env builds
     // exactly the pre-existing graph.
     //
     // A set has NO witness-point contact form. The paper defines only the
-    // center-direct equality (Eq 1.13) for it, so TendonHandModel always takes
+    // center-direct equality (Eq 1.13) for it, so HandModel always takes
     // that form here and rejects the two witness-only settings outright rather
     // than silently falling back -- see uses_center_direct_contact().
     std::vector<EllipsoidPrimitive> ellipsoid_set;
@@ -285,7 +285,7 @@ struct EnvironmentConfig {
     // its own opt-in field, the same shape as pregrasp_center_node/
     // pregrasp_align_node below. The constraint is a statement about where one
     // node sits relative to a splitting line: it needs no support plane and no
-    // table contact, and TendonHandModel builds it in a pass of its own gated
+    // table contact, and HandModel builds it in a pass of its own gated
     // on nothing but the fields here. Unset falls back to table_contact_node,
     // which is where this constraint used to live, so a caller that has not
     // been updated keeps working. Inert unless half_space_enabled, a node
@@ -310,9 +310,9 @@ struct EnvironmentConfig {
     // the witness removes three variables and four residual rows per finger (5
     // -> 1), which is the point of the real-time sliding phase.
     //
-    // NOTE this flag now only FORCES the form: TendonHandModel already uses it by
+    // NOTE this flag now only FORCES the form: HandModel already uses it by
     // default for any ellipsoid contact (see uses_center_direct_contact()), so
-    // setting it there is redundant but harmless. Read only by TendonHandModel;
+    // setting it there is redundant but harmless. Read only by HandModel;
     // the single-finger TendonFingerSolver and TendonFingerTrajectoryPlanner
     // ignore it and always use the witness form.
     // Requires ellipsoid_semi_axes to be set; ignored when target_contact_node
@@ -404,7 +404,7 @@ struct EnvironmentConfig {
 // Does this env carry an object surface to contact or avoid, in any of its three
 // representations? THE one definition of that question.
 //
-// It used to be spelled inline at five sites in TendonHandModel, two of which
+// It used to be spelled inline at five sites in HandModel, two of which
 // carry comments warning they must stay identical -- get_initial_values decides
 // whether the shared object variable is seeded at all, and build_graph decides
 // whether it is anchored, so a predicate that drifts between them anchors an
@@ -421,7 +421,7 @@ inline bool has_object_surface(const EnvironmentConfig& env) {
 // ellipsoid_set, or the whole set when no subset was asked for.
 //
 // Shared for the same reason has_object_surface() is: the two contact sites in
-// TendonHandModel::build_graph (the 3D equality and its in-plane Eq 13 variant)
+// HandModel::build_graph (the 3D equality and its in-plane Eq 13 variant)
 // must narrow identically, or switching contact FORM would silently also change
 // which shells are being touched.
 //

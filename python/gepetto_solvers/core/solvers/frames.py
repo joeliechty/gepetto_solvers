@@ -45,17 +45,33 @@ def wrist_pose_from_xyzrpy(xyz, rpy):
 
 
 def solved_wrist_pose(configs, frame):
-    """The wrist pose a solved frame actually ended at, as a 4x4.
+    """The wrist pose a solved frame actually ended at, as a 4x4, recovered from
+    a FRAME alone.
 
     The wrist is a VARIABLE, not a fixed input: its prior is soft (sigma_wrist_*)
     and contact pulls against it, so a solve that presses the hand onto a table
-    moves the base tens of millimetres away from the commanded pose. Nothing in
-    the result reports it directly, but each finger's node-0 pose is
-    ``T_0 = T_wrist o T_offset``, so inverting finger 0's offset recovers it (all
-    fingers agree to machine precision -- they share the one variable)."""
+    moves the base tens of millimetres away from the commanded pose.
+
+    This inverts digit 0's mounting offset out of its base site, which is exact
+    for any hand: ``HandKinematics::digit_base_offset`` defines site 0 as the
+    digit's FIXED attachment, ``T_0 = T_wrist o T_offset``, so the relation holds
+    whatever the mechanism does downstream of it. All digits agree to machine
+    precision -- they share the one wrist variable.
+
+    Prefer :meth:`HandResult.wrist_pose` where a result is in hand: the state
+    bundle carries the wrist directly, so it needs no configs and no inversion.
+    This exists for the callers that only have a frame."""
     name, cfg = configs[0]
-    T0 = np.asarray(frame[name].marginals.rod.states[0].pose.mean, float)
-    return T0 @ np.linalg.inv(np.asarray(cfg.hand_base_offset, float))
+    offset = getattr(cfg, "hand_base_offset", None)
+    if offset is None:
+        raise TypeError(
+            f"solved_wrist_pose needs a config carrying hand_base_offset, and "
+            f"{type(cfg).__name__} has none. A hand whose mounting offsets live "
+            f"in its kinematics rather than its configs cannot be handled this "
+            f"way -- use HandResult.wrist_pose(k), which reads the wrist the "
+            f"solve actually reported.")
+    T0 = np.asarray(frame[name].marginals.sites[0].pose.mean, float)
+    return T0 @ np.linalg.inv(np.asarray(offset, float))
 
 
 def disc_pose(frame, finger_name, disc):
@@ -67,8 +83,8 @@ def disc_pose(frame, finger_name, disc):
     at on screen and then find on the physical hand.
     """
     fm = frame[finger_name].marginals
-    node = fm.tendon_config.disc_pose_idx[disc]
-    return np.asarray(fm.rod.states[node].pose.mean, float)
+    node = fm.extras.tendon_config.disc_pose_idx[disc]
+    return np.asarray(fm.sites[node].pose.mean, float)
 
 
 def wrist_to_disc(configs, frame, finger_name, disc):

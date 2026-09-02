@@ -30,7 +30,7 @@ struct WarmALState {
     std::vector<double>        lambda_ineq;
 
     // Stable identity of the constraint each multiplier belongs to, in the same
-    // order (see TendonHandModel::constraint_tags). Empty on a solver that does
+    // order (see HandModel::constraint_tags). Empty on a solver that does
     // not tag its constraints -- such a state can still be carried WITHIN one
     // solver, where positions do not move, just not across a rebuild.
     std::vector<std::string> tag_eq;

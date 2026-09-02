@@ -10,6 +10,7 @@ import numpy as np
 
 from gepetto_solvers.core.geometry.scene import TABLE_SPAN, TABLE_THICKNESS
 from gepetto_solvers.core.solvers import (
+    R_to_euler,
     finger_plane_witness,
     half_space_witness,
     planar_gap_witness,
@@ -20,12 +21,6 @@ from gepetto_solvers.core.solvers import (
     resolve_constraint_plane_origin,
     resolve_scene,
     resolve_table_origin,
-    solved_wrist_pose,
-)
-from gepetto_solvers.projects.robot_mount.mount import (
-    MOUNT_WRIST_RPY,
-    MOUNT_WRIST_XYZ,
-    measured_mount_pose,
 )
 
 
@@ -44,18 +39,37 @@ class SceneRenderMixin:
             self._aim_camera(client)
 
 
+    def _mount_pose(self):
+        """``T_flange<-wrist`` for the hand being posed, or None if it has none.
+
+        Read off the HAND, because where a hand bolts to the arm is a fact about
+        that hand: the tendon hand's is a fit against its Onshape assembly, the
+        Allegro hand's is a `tf2_echo` off the running robot, and they are
+        different transforms measured different ways. A single shared constant
+        would mount whichever hand it was not measured on 130 mm and a quarter
+        turn wrong, with nothing on screen to say so.
+        """
+        pose = getattr(self.hand, "mount_pose", None)
+        return pose() if pose is not None else None
+
+
     def _pose_at_mount(self, _=None):
         """Drive the wrist sliders to the measured robot mount and re-pose.
 
         With the wrist at ``T_flange<-wrist``, the viser world frame IS the flange
-        frame, so what you see is the hand as it hangs off the arm in the CAD
-        assembly -- the check the measurement actually needs. Turns the mount
-        frames on, since arriving here with them off shows nothing new.
+        frame, so what you see is the hand as it hangs off the arm -- the check
+        the measurement actually needs. Turns the mount frames on, since arriving
+        here with them off shows nothing new.
         """
+        T = self._mount_pose()
+        if T is None:
+            return                       # the button is disabled for such a hand
+        xyz = tuple(float(v) for v in T[:3, 3])
+        rpy = R_to_euler(T[:3, :3])
         for handle, value in zip(
                 (self.g_tx, self.g_ty, self.g_tz,
                  self.g_roll, self.g_pitch, self.g_yaw),
-                tuple(MOUNT_WRIST_XYZ) + tuple(MOUNT_WRIST_RPY)):
+                xyz + tuple(rpy)):
             # Sliders quantize to their step, so the pose actually solved is the
             # rounded one; _render_mount draws from the sliders for that reason.
             handle.value = float(value)
@@ -75,12 +89,13 @@ class SceneRenderMixin:
         ``res`` is the iterate being rendered, so the frames track the convergence
         scrubber too. Falls back to the commanded pose before the first solve.
         """
-        if not self.g_show_mount.value:
+        mount = self._mount_pose()
+        if not self.g_show_mount.value or mount is None:
             self.scene.clear_mount_frames()
             return
-        T_wrist = (solved_wrist_pose(self.fk_solver.configs, res.frames[0])
+        T_wrist = (res.wrist_pose(0)
                    if res is not None else self.params.wrist_pose)
-        self.scene.set_mount_frames(T_wrist, measured_mount_pose())
+        self.scene.set_mount_frames(T_wrist, mount)
 
 
     def _table_origin(self):
@@ -141,7 +156,7 @@ class SceneRenderMixin:
         if self.result is None:
             # Nothing solved yet, so the commanded wrist pose is all there is.
             self._render_mount()
-            self._report_tendon_lengths(None)
+            self._report_actuation(None)
             self._update_traj()
             return
         # Render whichever solve snapshot the convergence scrubber selects; with
@@ -150,7 +165,7 @@ class SceneRenderMixin:
         # Every result here is a single state, so there is only ever frame 0.
         res = self._iter_view(live)
         self._render_mount(res)
-        self._report_tendon_lengths(res)
+        self._report_actuation(res)
         # Only the fingers this solve drove onto a surface get a gap line for it;
         # a distance readout on a finger nothing asked to touch is just noise.
         # The two sets are independent, so a finger can carry both lines, one, or
@@ -199,6 +214,13 @@ class SceneRenderMixin:
                           center_gap=center_gap,
                           axis_align=axis_align,
                           centroid_gap=centroid_gap,
+                          # Visual only. Collision is the sphere set above; the
+                          # graph never sees a mesh, so this cannot change a
+                          # solve -- and a hand without meshes just draws as a
+                          # skeleton.
+                          link_meshes=(self._link_meshes()
+                                       if self.g_show_meshes.value else None),
+                          wrist_pose=res.wrist_pose(0),
                           finger_planes=planes,
                           planar_gaps=planar)
         # Last: the plots describe the state just drawn, and they are the one

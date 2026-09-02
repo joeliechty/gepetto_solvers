@@ -9,7 +9,6 @@ from dataclasses import replace
 
 import numpy as np
 
-from .capabilities import FLEXOR_IDX
 from .frames import solved_wrist_pose
 
 # ---------------------------------------------------------------------------
@@ -60,60 +59,61 @@ from .frames import solved_wrist_pose
 # Solve-steps scrubber and the Robot folder's history playback handle a close
 # with no plumbing of their own.
 
-#: How many FK poses a close is recorded at, not counting the starting pose.
-#: These become the plan's waypoints, and `robot_plan.sample_at` lerps tendon
-#: displacement WITHIN a segment, so the count is about how faithfully the
-#: curved tension schedule is followed, not about how smooth playback is -- the
-#: interpolator fills the rest in at its own control rate either way.
-CLOSE_STEPS = 12
-
-
-#: How far into the travel each grasping finger HAS LEFT the close goes, by
-#: default. Not 1.0: the last of the travel is where `clamp_to_travel` and the
-#: servo node's own saturation live, and a close ending exactly on the stop
-#: spends its final waypoints commanding a position the motors cannot reach.
-CLOSE_FRACTION = 0.9
-
-
-#: Tension step (N) used to measure the starting slope of each finger's
-#: displacement curve. Small enough to be a local slope, large enough that the
-#: resulting length change is well clear of solver noise (~0.4 mm on the index).
-CLOSE_PROBE_STEP = 0.1
-
-
-#: How close to its commanded displacement a finger must land, in metres, before
-#: the walk accepts a step. 0.2 mm -- under half the tolerance
-#: `_tensions_for_displacement` recovers the robot's measured state to, and well
-#: under the ~1 mm the tendon nodes resolve.
-CLOSE_TOL_M = 2e-4
-
-
-#: How many secant corrections a single step may take before it is accepted as
-#: it stands. The curve is nearly straight over one step, so one correction
-#: normally does it; the cap is what stops a finger that has run out of curve
-#: (already at the tension ceiling) from spinning.
-CLOSE_REFINE = 3
-
-
-#: How far a phase-5 lift raises the wrist, in metres of world +Z.
-LIFT_HEIGHT_M = 0.15
-
-
-#: How many FK poses a lift is recorded at, not counting the starting pose.
-#: What matters here is the SIZE OF ONE STEP, not the total: 0.15 m over 12
-#: steps is 12.5 mm a step, well under `HandFKSolver._WARM_START_MAX_POS_M`
-#: (50 mm), so every pose warm-starts off the one before instead of rebuilding
-#: the graph -- and, more to the point, the hand is MOVED rather than dragged.
-#: A step past that bound is not merely slower: a warm start re-aims the wrist
-#: prior while leaving every rod node where it was, so the optimizer has to haul
-#: the whole hand across the gap and can land short of the commanded pose
-#: without saying so. Raising the height without raising the steps is the way
-#: to walk into that.
-LIFT_STEPS = 12
+# The ramp constants below used to be module-level. They are MEASURED -- how much
+# travel a given tension buys, where each digit stops, how far a step may move
+# the wrist before the FK warm start stops holding -- so they belong to one hand
+# and now live on ``hand.motion`` (a
+# :class:`~gepetto_solvers.core.hands.base.MotionProfile`). Every function here
+# reads them off the solver it was handed. What each one is for:
+#
+#   close_steps       How many FK poses a close is recorded at, not counting the
+#                     start. These become the plan's waypoints, and
+#                     `robot_plan.sample_at` lerps tendon displacement WITHIN a
+#                     segment, so the count is about how faithfully the curved
+#                     tension schedule is followed, not about how smooth playback
+#                     is -- the interpolator fills the rest in at its own control
+#                     rate either way.
+#
+#   close_fraction    How far into the travel each grasping finger HAS LEFT the
+#                     close goes. Not 1.0: the last of the travel is where
+#                     `clamp_to_travel` and the servo node's own saturation live,
+#                     and a close ending exactly on the stop spends its final
+#                     waypoints commanding a position the motors cannot reach.
+#
+#   close_probe_step  Tension step (N) used to measure the starting slope of each
+#                     finger's displacement curve. Small enough to be a local
+#                     slope, large enough that the resulting length change is
+#                     well clear of solver noise.
+#
+#   close_tol_m       How close to its commanded displacement a finger must land
+#                     before the walk accepts a step -- under half the tolerance
+#                     `_tensions_for_displacement` recovers the robot's measured
+#                     state to, and well under what the tendon nodes resolve.
+#
+#   close_refine      How many secant corrections a single step may take before
+#                     it is accepted as it stands. The curve is nearly straight
+#                     over one step, so one correction normally does it; the cap
+#                     is what stops a finger that has run out of curve (already
+#                     at the tension ceiling) from spinning.
+#
+#   lift_height_m     How far a phase-5 lift raises the wrist, in metres of
+#                     world +Z.
+#
+#   lift_steps        How many FK poses a lift is recorded at. What matters is
+#                     the SIZE OF ONE STEP, not the total: the step must stay
+#                     well under `HandFKSolver._WARM_START_MAX_POS_M`, so every
+#                     pose warm-starts off the one before instead of rebuilding
+#                     the graph -- and, more to the point, the hand is MOVED
+#                     rather than dragged. A step past that bound is not merely
+#                     slower: a warm start re-aims the wrist prior while leaving
+#                     every rod node where it was, so the optimizer has to haul
+#                     the whole hand across the gap and can land short of the
+#                     commanded pose without saying so. Raising the height
+#                     without raising the steps is the way to walk into that.
 
 
 def synchronized_close(fk_solver, open_lengths, fingers, travel,
-                       fraction=CLOSE_FRACTION, steps=CLOSE_STEPS,
+                       fraction=None, steps=None,
                        tension_ceiling=3.0, on_progress=None, should_stop=None):
     """Close ``fingers`` together, and hand back every pose along the way.
 
@@ -166,6 +166,12 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
     # The tensions the hand is being pulled with right now. Digits outside the
     # closing set keep theirs for the whole ramp, and the closing ones only ever
     # go UP from here (see the clamp in the walk below).
+    profile = fk_solver.hand.motion
+    drive = fk_solver.hand.actuation.drive_indices[0]
+    if fraction is None:
+        fraction = profile.close_fraction
+    if steps is None:
+        steps = profile.close_steps
     held = [float(t) for t in params.flexor_tensions]
     ceiling = float(tension_ceiling)
     steps = max(1, int(steps))
@@ -176,8 +182,8 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
         """One FK pose, plus what each closing tendon had taken in at it."""
         params.flexor_tensions = list(tensions)
         res = fk_solver.solve()
-        lengths = dict(zip(res.finger_names, res.tendon_lengths(0)))
-        return res, {name: open_lengths[name] - float(lengths[name][FLEXOR_IDX])
+        lengths = dict(zip(res.finger_names, res.displacements(0)))
+        return res, {name: open_lengths[name] - float(lengths[name][drive])
                      for name in closing}
 
     # Where the close starts: the pose the sliders describe, kept as iterate 0 so
@@ -237,7 +243,7 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
         on_progress("close: measuring tendon travel per newton")
     probe = list(held)
     for name in moving:
-        probe[index_of[name]] = min(held[index_of[name]] + CLOSE_PROBE_STEP,
+        probe[index_of[name]] = min(held[index_of[name]] + profile.close_probe_step,
                                     ceiling)
     _res, probed = _pose(probe)
     slope = {}
@@ -283,7 +289,7 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
         # keeps the walk monotone: a correction is never allowed to pull the hand
         # back open, which is the move the warm start cannot undo.
         got, res = reached, None
-        for _attempt in range(CLOSE_REFINE + 1):
+        for _attempt in range(profile.close_refine + 1):
             command = list(held)
             for name in closing:
                 if name in slope:
@@ -292,7 +298,7 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
                                                   tension[name], ceiling))
                 command[index_of[name]] = tension[name]
             res, got = _pose(command)
-            if max(abs(got[name] - want[name]) for name in moving) <= CLOSE_TOL_M:
+            if max(abs(got[name] - want[name]) for name in moving) <= profile.close_tol_m:
                 break
         results.append(res)
 
@@ -337,7 +343,7 @@ def synchronized_close(fk_solver, open_lengths, fingers, travel,
     return result, notes
 
 
-def lift_wrist(fk_solver, height=LIFT_HEIGHT_M, steps=LIFT_STEPS,
+def lift_wrist(fk_solver, height=None, steps=None,
                on_progress=None, should_stop=None):
     """Raise the wrist ``height`` metres along world +Z, recording every pose.
 
@@ -363,7 +369,7 @@ def lift_wrist(fk_solver, height=LIFT_HEIGHT_M, steps=LIFT_STEPS,
     in particular nothing in the model holds the object being lifted.
 
     The rise is split into ``steps`` so each one stays inside the FK solver's
-    warm-start bound (see :data:`LIFT_STEPS`). ``should_stop`` is polled between
+    warm-start bound (see ``hand.motion``). ``should_stop`` is polled between
     poses (the e-stop); a stop KEEPS everything solved so far and returns it as
     a shorter lift, like the close. On a stop or a failed solve, the params are
     left holding the last pose that actually came back, so they never describe a
@@ -371,8 +377,9 @@ def lift_wrist(fk_solver, height=LIFT_HEIGHT_M, steps=LIFT_STEPS,
     """
     params = fk_solver.params
     T0 = np.array(params.wrist_pose, float)
-    height = float(height)
-    steps = max(1, int(steps))
+    profile = fk_solver.hand.motion
+    height = float(profile.lift_height_m if height is None else height)
+    steps = max(1, int(profile.lift_steps if steps is None else steps))
     rise = height / steps
     notes = []
 
