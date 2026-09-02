@@ -11,12 +11,13 @@ import numpy as np
 
 from ..hands.tendon_5f import (
     _resolve_contact_mask,
-    tip_node_index,
 )
+from .support import _site
 
 
 def attach_pregrasp_center(configs, *, clearance_height=0.0, clearance_normal=None,
-                           contact_fingers=None, contact_node=None):
+                           contact_fingers=None, contact_node=None,
+                           contact_nodes=None):
     """Attach the pre-grasp hand-centering constraint (Eq 2.18-2.19) to every
     PARTICIPATING finger's env, in place. Returns ``configs`` for chaining.
 
@@ -45,13 +46,13 @@ def attach_pregrasp_center(configs, *, clearance_height=0.0, clearance_normal=No
         env.pregrasp_clearance_height = clearance_height
         env.pregrasp_clearance_normal = normal
         env.pregrasp_center_node = (
-            (contact_node if contact_node is not None else tip_node_index(cfg))
-            if mask[i] else None)
+            _site(contact_node, contact_nodes, i, cfg) if mask[i] else None)
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs
 
 
-def attach_pregrasp_axis_alignment(configs, axis, *, contact_fingers=None, contact_node=None):
+def attach_pregrasp_axis_alignment(configs, axis, *, contact_fingers=None,
+                                   contact_node=None, contact_nodes=None):
     """Attach the pre-grasp short-axis alignment constraint (companion to
     Eq 2.16-2.17) to every PARTICIPATING finger's env, in place. Returns
     ``configs`` for chaining.
@@ -85,8 +86,7 @@ def attach_pregrasp_axis_alignment(configs, axis, *, contact_fingers=None, conta
             continue
         env.pregrasp_align_axis = m_hat
         env.pregrasp_align_node = (
-            (contact_node if contact_node is not None else tip_node_index(cfg))
-            if mask[i] else None)
+            _site(contact_node, contact_nodes, i, cfg) if mask[i] else None)
         cfg.sdf_contact = env            # write the (mutated) env back
     return configs
 

@@ -16,6 +16,7 @@ from ..hands.tendon_5f import (
 
 
 def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
+                   contact_nodes=None,
                    tip_radii=None, radius=None, contact_fingers=None,
                    object_pose_cov=None, proxy_and_exact=False,
                    drop_normal_row=False, ellipsoid_set_beta=None,
@@ -142,6 +143,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
             env.object_contact_in_plane = True
             env.contact_plane_centroid = centroid
         if mask[i]:
-            env.target_contact_node = tip_node_index(cfg)
+            env.target_contact_node = (tip_node_index(cfg)
+                                       if contact_nodes is None
+                                       else contact_nodes[i])
         cfg.sdf_contact = env
     return configs

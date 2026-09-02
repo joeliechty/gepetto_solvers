@@ -12,7 +12,6 @@ import numpy as np
 from gepetto_solvers.core.solvers import (
     HandIKStepper,
     R_to_euler,
-    solved_wrist_pose,
 )
 
 from .constants import (
@@ -198,7 +197,7 @@ class StepperMixin:
         res = self._iter_view()
         if res is None:
             return
-        T = solved_wrist_pose(self.fk_solver.configs, res.frames[0])
+        T = res.wrist_pose(0)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
         self._restoring = True   # these are OUR writes; no live-FK re-solve
         try:

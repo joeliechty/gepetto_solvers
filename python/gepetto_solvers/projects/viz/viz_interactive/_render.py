@@ -20,7 +20,6 @@ from gepetto_solvers.core.solvers import (
     resolve_constraint_plane_origin,
     resolve_scene,
     resolve_table_origin,
-    solved_wrist_pose,
 )
 from gepetto_solvers.projects.robot_mount.mount import (
     MOUNT_WRIST_RPY,
@@ -78,7 +77,7 @@ class SceneRenderMixin:
         if not self.g_show_mount.value:
             self.scene.clear_mount_frames()
             return
-        T_wrist = (solved_wrist_pose(self.fk_solver.configs, res.frames[0])
+        T_wrist = (res.wrist_pose(0)
                    if res is not None else self.params.wrist_pose)
         self.scene.set_mount_frames(T_wrist, measured_mount_pose())
 

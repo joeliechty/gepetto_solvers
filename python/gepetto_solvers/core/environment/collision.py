@@ -16,6 +16,7 @@ from ..hands.tendon_5f import (
 
 
 def attach_collision(configs, vdb_path, object_pose, *,
+                     collision_nodes=None, collision_proximal=None,
                      radius=0.003, sigma=1e-4, num_proximal_discs=2,
                      object_pose_cov=None, cull_margin=None, avoidance=True,
                      self_collision=True):
@@ -56,7 +57,7 @@ def attach_collision(configs, vdb_path, object_pose, *,
     if object_pose_cov is None:
         object_pose_cov = 1e-8 * np.eye(6)
 
-    for _, cfg in configs:
+    for i, (_, cfg) in enumerate(configs):
         env = cfg.sdf_contact            # copy (or None) via the optional binding
         if env is None:
             env = gepetto_solvers.EnvironmentConfig()
@@ -65,7 +66,9 @@ def attach_collision(configs, vdb_path, object_pose, *,
             env.object_pose_cov = object_pose_cov
             env.object_pose_per_step = False
 
-        nodes = disc_node_indices(cfg)
+        # The hand's own sites when it supplies them; a rod's discs otherwise.
+        nodes = (disc_node_indices(cfg) if collision_nodes is None
+                 else list(collision_nodes[i]))
         env.collision_avoidance = bool(avoidance)
         if not hasattr(env, "self_collision"):
             if not self_collision:
@@ -79,7 +82,10 @@ def attach_collision(configs, vdb_path, object_pose, *,
         env.collision_sigma = sigma
         env.collision_node_indices = nodes
         env.collision_node_radii = [radius] * len(nodes)
-        env.collision_node_is_proximal = proximal_disc_flags(cfg, num_proximal_discs)
+        env.collision_node_is_proximal = (
+            proximal_disc_flags(cfg, num_proximal_discs)
+            if collision_proximal is None
+            else [int(bool(f)) for f in collision_proximal[i]])
         if cull_margin is not None:
             env.collision_cull_margin = cull_margin
         cfg.sdf_contact = env            # write the (mutated) env back

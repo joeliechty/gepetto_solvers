@@ -211,13 +211,44 @@ class Hand(Protocol):
         when this hand has no measurement for that combination."""
         ...
 
-    def build_spec(self, configs: list[tuple[str, object]]):
+    #: What this hand supports, from the vocabulary in :data:`FEATURES`. The
+    #: workbench gates whole panels on it, so a control that would do nothing on
+    #: this hand is ABSENT rather than present and dead.
+    features: frozenset[str]
+
+    def build_spec(self, configs: list[tuple[str, object]], params=None):
         """The C++ ``HandSpec`` for ``configs`` (as returned by
         :meth:`digit_configs`, after the environment has been attached to it).
 
         Taking the configs rather than rebuilding them is the point: by this
         stage they carry the task environment the solver attached, and that is
         what the spec's task half is made of.
+
+        ``params`` is the solve's :class:`HandSolveParams`, for a hand whose
+        SPEC depends on it -- a joint-space hand seeds its configuration from
+        the commanded one, so that the solve starts at zero kinematics residual.
+        A hand that does not need it ignores it.
+        """
+        ...
+
+    def default_pose(self):
+        """``(wrist_pose 4x4, actuation means)`` -- where this hand starts.
+
+        A hand's neutral posture and the wrist pose that aims it at the default
+        scene are properties of ITS geometry: the tendon hand's palm lies along
+        its base frame's -x, the Allegro hand's fingers extend +z, so the pose
+        that hovers one palm-down over an object points the other away from it.
+        The workbench seeds its sliders from this.
+        """
+        ...
+
+    def actuation_means(self, params) -> list:
+        """One actuation mean vector per digit -- the q_S of p(q), or the
+        commanded tensions.
+
+        Exists because ``params.flexor_tensions`` is one SCALAR per digit, which
+        cannot command four independent joints. Each hand turns the params it
+        cares about into the vector its actuation variable actually takes.
         """
         ...
 
@@ -225,6 +256,34 @@ class Hand(Protocol):
     def opposing_index(self) -> int:
         """Index of :attr:`opposing_digit`, or -1 when there is none."""
         ...
+
+
+#: The feature vocabulary. A hand declares the subset it supports, and the
+#: workbench and the solvers gate on it.
+#:
+#: These are capabilities of the HAND, distinct from ``solvers.capabilities()``,
+#: which reports what the compiled binding can do. Both gate controls; they
+#: answer different questions ("can this robot do it" vs "can this build do it").
+FEATURES = frozenset({
+    # Tendon routing exists: the tendon/disc overlays and the routing readouts.
+    "tendons",
+    # One actuator per digit is motor-driven, so "the" commanded value is a
+    # single number -- what every drive_indices[0] reader assumes.
+    "single_drive",
+    # A displacement readout distinct from the actuation (tendon length), which
+    # the hardware plan is expressed in.
+    "displacement",
+    # The rod planar-bending approximation.
+    "planar_bending",
+    # A measured pinch table, so the pre-grasp centroid constraint has a target.
+    "pinch_table",
+    # Disc-addressed calibration landmarks.
+    "calibration",
+    # A hardware bridge to play a plan on.
+    "robot_plan",
+    # Measured close/lift ramp constants.
+    "close_ramp",
+})
 
 
 # ---------------------------------------------------------------------------

@@ -121,6 +121,7 @@ class HandSolverBase:
         attach_contact(self.configs, self.spec, _OBJECTS_DIR,
                        self.params.primitive, self.object_pose,
                        tip_radii=self.tip_radii,
+                       contact_nodes=self._contact_nodes(),
                        contact_fingers=mask,
                        drop_normal_row=self.params.contact_drop_normal_row,
                        ellipsoid_set_beta=self.params.ellipsoid_set_beta,
@@ -131,8 +132,25 @@ class HandSolverBase:
     def _hand_spec(self):
         """The C++ ``HandSpec`` for this solve, built from the configs AFTER the
         environment has been attached to them -- the spec's task half is made of
-        exactly those envs."""
-        return self.hand.build_spec(self.configs)
+        exactly those envs.
+
+        ``params`` goes with them because a hand whose kinematics is seeded from
+        the commanded posture needs it: a joint-space hand seeded at the same
+        configuration its prior is centred on converges in one iteration."""
+        return self.hand.build_spec(self.configs, self.params)
+
+    # -- where the constraints attach --
+    #
+    # The hand names its own sites. A rod derives them from its disc spacing and
+    # a URDF hand from its link frames, so neither the environment layer nor
+    # this class can derive them -- they are asked for.
+
+    def _contact_nodes(self):
+        return [self.hand.contact_node(i) for i in range(len(self.configs))]
+
+    def _collision_sites(self):
+        sites = [self.hand.collision_sites(i) for i in range(len(self.configs))]
+        return [s for s, _ in sites], [f for _, f in sites]
 
     def _attach_collision(self, avoidance=True):
         """Add Section 1.5 collision spheres onto each finger's (already attached)
@@ -145,7 +163,10 @@ class HandSolverBase:
         builds its own inequalities on the same set."""
         vdb = (None if self.spec["type"] in ("ellipsoid", "ellipsoid_set")
                else os.path.normpath(os.path.join(_OBJECTS_DIR, self.spec["vdb"])))
+        nodes, proximal = self._collision_sites()
         attach_collision(self.configs, vdb, self.object_pose,
+                         collision_nodes=nodes,
+                         collision_proximal=proximal,
                          radius=self.params.collision_radius,
                          sigma=self.params.collision_sigma,
                          num_proximal_discs=self.params.num_proximal_discs,
@@ -164,6 +185,7 @@ class HandSolverBase:
         attach_table(self.configs, origin, self.params.plane_normal,
                      avoidance=self.params.plane_avoidance,
                      tip_radii=self.tip_radii,
+                     contact_nodes=self._contact_nodes(),
                      contact_fingers=self._table_contact_mask())
 
     def _attach_opposition(self):
@@ -204,6 +226,7 @@ class HandSolverBase:
                 else self.object_center)
         attach_half_space(self.configs, split, directions,
                           contact_fingers=self.params.contact_fingers,
+                          contact_nodes=self._contact_nodes(),
                           margin=self.params.half_space_margin)
 
     def _opposition_tips(self):
@@ -242,6 +265,7 @@ class HandSolverBase:
         h_clear = self.params.h_clear if self.params.h_clear is not None else 0.02
         attach_pregrasp_center(self.configs, clearance_height=h_clear,
                                clearance_normal=self.params.plane_normal,
+                               contact_nodes=self._contact_nodes(),
                                contact_fingers=self.params.contact_fingers)
 
     def _attach_pregrasp_axis_alignment(self):
@@ -254,6 +278,7 @@ class HandSolverBase:
         axis = default_half_space_axis(self.spec, self.object_rotation,
                                        self.params.plane_normal)
         attach_pregrasp_axis_alignment(self.configs, axis,
+                                       contact_nodes=self._contact_nodes(),
                                        contact_fingers=self.params.contact_fingers)
 
     def _attach_pregrasp_centroid(self):
@@ -317,16 +342,10 @@ class HandSolverBase:
         ``means`` overrides the per-digit mean vectors wholesale -- the Section
         1.8 phase-0 pre-grasp posture commands ``Q_pre`` that way.
         """
-        act = self.hand.actuation
-        priors = []
-        for i in range(len(self.configs)):
-            if means is not None:
-                mean = np.asarray(means[i], float)
-            else:
-                mean = np.full(act.n, self.params.passive_tension)
-                act.set_drive(mean, self.params.flexor_tensions[i])
-            priors.append(gepetto_solvers.VectorXGaussian(mean, cov))
-        return priors
+        if means is None:
+            means = self.hand.actuation_means(self.params)
+        return [gepetto_solvers.VectorXGaussian(np.asarray(m, float), cov)
+                for m in means]
 
     def _length_priors(self, means, cov):
         """One ``VectorXGaussian`` per finger pinning that finger's tendon lengths

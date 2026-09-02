@@ -6,11 +6,13 @@ built on it, the way :mod:`gepetto_solvers.core.hands.tendon_5f` is for the
 tendon hand.
 
 ===================  ===================================================
+:mod:`hand`          :class:`AllegroHand`, the Hand implementation
 :mod:`spec`          digits, joints, sites, and the kinematics config
 ``urdf/``            the vendored Drake-corrected URDF; see its NOTICE.md
 ===================  ===================================================
 """
 
 from . import spec
+from .hand import AllegroHand, DigitEnv
 
-__all__ = ["spec"]
+__all__ = ["AllegroHand", "DigitEnv", "spec"]

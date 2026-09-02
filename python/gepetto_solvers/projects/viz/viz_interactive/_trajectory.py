@@ -9,7 +9,7 @@ that class's ``__init__`` sets up.
 import numpy as np
 
 from gepetto_solvers.core.geometry.scene import table_corner
-from gepetto_solvers.core.solvers import R_to_euler, solved_wrist_pose
+from gepetto_solvers.core.solvers import R_to_euler
 
 
 class TrajectoryMixin:
@@ -42,13 +42,13 @@ class TrajectoryMixin:
         exists to make visible. Reading the sliders would draw flat lines.
 
         The wrist also has to be RECOVERED rather than read: nothing in a result
-        reports it directly, so `solved_wrist_pose` inverts finger 0's base
+        reports it directly, so the state bundle carries the solved wrist
         offset out of its node-0 pose. Split into xyzrpy here because a 4x4 is
         not plottable, using the same ZYX convention (and the same radians) the
         Wrist start pose sliders use, so a number read off a plot goes straight
         back into the slider it came from.
         """
-        T = np.asarray(solved_wrist_pose(self.fk_solver.configs, res.frames[0]),
+        T = np.asarray(res.wrist_pose(0),
                        float)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
         lengths = [float(np.asarray(length, float)[self._drive_index()]) * 1e3

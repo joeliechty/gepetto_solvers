@@ -49,6 +49,11 @@ class StubHand:
     )
     motion = hands.MotionProfile(close_steps=3, lift_steps=2, lift_height_m=0.05)
 
+    #: A deliberately sparse feature set: this hand has tendons and a single
+    #: driven actuator per digit but nothing else, so a panel gated on
+    #: "calibration" or "pinch_table" must switch itself off for it.
+    features = frozenset({"tendons", "single_drive"})
+
     def __init__(self):
         # Borrowed geometry: the seam under test is the interface, not a second
         # mechanism. Renamed so nothing can match on the built-in digit names.
@@ -78,11 +83,22 @@ class StubHand:
         answer, and the one the pre-grasp centroid constraint must handle."""
         return None
 
+    def actuation_means(self, params):
+        """Passive background everywhere, the commanded value at BOTH driven
+        indices -- which is what a hand driving more than one actuator per digit
+        looks like, and what a caller assuming a single one gets wrong."""
+        means = []
+        for i in range(len(self.digit_names)):
+            mean = np.full(self.actuation.n, params.passive_tension)
+            self.actuation.set_drive(mean, params.flexor_tensions[i])
+            means.append(mean)
+        return means
+
     @property
     def opposing_index(self):
         return hands.opposing_index_of(self.digit_names, self.opposing_digit)
 
-    def build_spec(self, configs):
+    def build_spec(self, configs, params=None):
         return gepetto_solvers.make_tendon_hand_spec(
             configs, opposing_digit=self.opposing_index)
 

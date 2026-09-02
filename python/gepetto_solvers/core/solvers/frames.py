@@ -62,8 +62,16 @@ def solved_wrist_pose(configs, frame):
     bundle carries the wrist directly, so it needs no configs and no inversion.
     This exists for the callers that only have a frame."""
     name, cfg = configs[0]
+    offset = getattr(cfg, "hand_base_offset", None)
+    if offset is None:
+        raise TypeError(
+            f"solved_wrist_pose needs a config carrying hand_base_offset, and "
+            f"{type(cfg).__name__} has none. A hand whose mounting offsets live "
+            f"in its kinematics rather than its configs cannot be handled this "
+            f"way -- use HandResult.wrist_pose(k), which reads the wrist the "
+            f"solve actually reported.")
     T0 = np.asarray(frame[name].marginals.sites[0].pose.mean, float)
-    return T0 @ np.linalg.inv(np.asarray(cfg.hand_base_offset, float))
+    return T0 @ np.linalg.inv(np.asarray(offset, float))
 
 
 def disc_pose(frame, finger_name, disc):

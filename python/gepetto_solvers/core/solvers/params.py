@@ -32,9 +32,19 @@ def _default_digit_count():
 
     A caller posing a hand with a different digit count must set these two
     fields to match it -- there is no way to infer which digits they meant.
+
+    Cached: building a hand is not free (the tendon one parses a CAD geometry
+    table and announces it), and every HandSolveParams() would otherwise pay for
+    it -- including one built to pose a DIFFERENT hand entirely.
     """
-    from ..hands import get_hand
-    return len(get_hand().digit_names)
+    global _DEFAULT_DIGIT_COUNT
+    if _DEFAULT_DIGIT_COUNT is None:
+        from ..hands import get_hand
+        _DEFAULT_DIGIT_COUNT = len(get_hand().digit_names)
+    return _DEFAULT_DIGIT_COUNT
+
+
+_DEFAULT_DIGIT_COUNT: int | None = None
 
 
 @dataclass
@@ -56,6 +66,17 @@ class HandSolveParams:
     # exists so a hand choice can ride along in a params dataclass that is
     # serialized, preset, or driven from a GUI.
     hand: str = "tendon_5f"
+
+    # Commanded joint positions for a JOINT-SPACE hand: one vector per digit,
+    # one entry per joint of that digit. This is q_S, the mean of p(q).
+    #
+    # Separate from `flexor_tensions` because that is one SCALAR per digit and
+    # cannot say where four independent joints should go. Each hand reads
+    # whichever it needs through `Hand.actuation_means`, so a caller only fills
+    # the one its hand uses. None means the neutral configuration -- the open
+    # hand -- for a hand that reads this at all, and is ignored entirely by one
+    # that does not.
+    joint_targets: list | None = None
 
     # --- Scene / object ---
     # The Section 1.8 default scene: a 35 mm-radius analytic sphere, half-buried

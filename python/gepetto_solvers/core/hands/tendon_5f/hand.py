@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import gepetto_solvers
 
+from ...geometry.scene import GRASP_FLEXOR_TENSION
 from ..base import Actuation, HardwareMap, MotionProfile, opposing_index_of
 from .dimensions import (
     default_hand_tip_radii,
@@ -59,6 +62,13 @@ class TendonHand5F:
     #: The ramp is spaced off a probed slope rather than these numbers, but they
     #: are what set the step count and tolerance.
     motion = MotionProfile()
+
+    #: Everything in the vocabulary: this is the hand the whole workbench was
+    #: built around, so every panel applies to it.
+    features = frozenset({
+        "tendons", "single_drive", "displacement", "planar_bending",
+        "pinch_table", "calibration", "robot_plan", "close_ramp",
+    })
 
     #: How many discs from the base are on the rigidly co-mounted metacarpal.
     #: The metacarpal is the first bone in the 7-segment spec and spans discs 0
@@ -122,8 +132,32 @@ class TendonHand5F:
     def opposing_index(self) -> int:
         return opposing_index_of(self.digit_names, self.opposing_digit)
 
-    def build_spec(self, configs):
+    def default_pose(self):
+        """The measured hover: 75 mm up the support normal, pitched -1.22 rad so
+        the palm (which lies along the base frame's -x) faces down over the
+        object. See ``solvers.frames`` for the numbers and why."""
+        from ...solvers.frames import default_wrist_pose
+
+        means = [np.full(self.actuation.n, 0.5) for _ in self.digit_names]
+        for m in means:
+            self.actuation.set_drive(m, GRASP_FLEXOR_TENSION)
+        return default_wrist_pose(), means
+
+    def actuation_means(self, params):
+        """Per-digit tendon tensions: the passive background hold everywhere,
+        with that digit's commanded value at the driven index."""
+        means = []
+        for i in range(len(self.digit_names)):
+            mean = np.full(self.actuation.n, params.passive_tension)
+            self.actuation.set_drive(mean, params.flexor_tensions[i])
+            means.append(mean)
+        return means
+
+    def build_spec(self, configs, params=None):
         """The C++ ``HandSpec`` for ``configs``.
+
+        ``params`` is ignored: this hand's kinematics payload is the rod and
+        tendon geometry, which does not depend on what is being commanded.
 
         ``configs`` is a :meth:`digit_configs` list that the solver has already
         attached its environment to; ``make_tendon_hand_spec`` splits each

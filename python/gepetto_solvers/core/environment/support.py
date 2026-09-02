@@ -15,8 +15,22 @@ from ..hands.tendon_5f import (
 )
 
 
+def _site(explicit, per_digit, i, cfg):
+    """Which site a constraint attaches to on digit ``i``.
+
+    Three sources, most specific first: an explicit override for every digit,
+    the hand's own per-digit list, or -- for a rod -- the tip derived from the
+    config. The last is the tendon-hand default and is what keeps every existing
+    caller, including the demo scripts, unchanged."""
+    if explicit is not None:
+        return explicit
+    if per_digit is not None:
+        return per_digit[i]
+    return tip_node_index(cfg)
+
+
 def attach_table(configs, plane_origin, plane_normal, *,
-                 avoidance=True, contact_node=None, radius=None,
+                 avoidance=True, contact_node=None, contact_nodes=None, radius=None,
                  tip_radii=None, dims=None, contact_fingers=None):
     """Attach a Section 1.6 world-fixed analytic support plane ("table") to every
     finger of a hand config list, in place. Returns ``configs`` for chaining.
@@ -74,8 +88,7 @@ def attach_table(configs, plane_origin, plane_normal, *,
             # the env already carried a contact node from an earlier attach.
             env.table_contact_node = None
         else:
-            env.table_contact_node = (contact_node if contact_node is not None
-                                      else tip_node_index(cfg))
+            env.table_contact_node = _site(contact_node, contact_nodes, i, cfg)
             if radius is not None:
                 env.table_contact_radius = radius
             elif tip_radii is not None:
@@ -152,7 +165,7 @@ def opposition_directions(configs, *, thumb_index=-1, axis=None):
 
 
 def attach_half_space(configs, split_point, directions, *, contact_fingers=None,
-                      margin=0.0, contact_node=None):
+                      margin=0.0, contact_node=None, contact_nodes=None):
     """Attach the Eq 2.16-2.17 (Eq 1.92) opposition half-space to every masked-in
     finger's env, in place. Returns ``configs`` for chaining.
 
@@ -202,8 +215,7 @@ def attach_half_space(configs, split_point, directions, *, contact_fingers=None,
             env.half_space_split_point = p_split
             env.half_space_normal = m / np.linalg.norm(m)
             if hasattr(env, "half_space_node"):
-                env.half_space_node = (contact_node if contact_node is not None
-                                       else tip_node_index(cfg))
+                env.half_space_node = _site(contact_node, contact_nodes, i, cfg)
             if margin != 0.0 and not hasattr(env, "half_space_margin"):
                 raise AttributeError(
                     "this gepetto_solvers build has no "

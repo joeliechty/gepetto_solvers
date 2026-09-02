@@ -11,7 +11,6 @@ import gepetto_solvers
 
 from .base import HandSolverBase
 from .capabilities import _set_if
-from .frames import solved_wrist_pose
 from .params import HandSolveParams
 from .result import HandResult, _make_frame, _tip_points
 
@@ -161,11 +160,15 @@ class HandFKSolver(HandSolverBase):
                 break
         return frame, sol
 
+    #: Isotropic actuation-prior sigma for a contact-free solve.
+    #:
+    #: A tight-passive/loose-driven prior is underdetermined with nothing to
+    #: trade against, and GTSAM raises IndeterminantLinearSystem on the actuation
+    #: variable (see fk_5f_sweep.py). Uniform avoids that for any hand.
+    _FK_ACTUATION_SIGMA = 1e-2
+
     def _solve_once(self):
-        # Uniform prior on every actuator: a tight-passive/loose-driven prior is
-        # underdetermined without contact (IndeterminantLinearSystem on the
-        # actuation variable) -- see fk_5f_sweep.py.
-        cov = self.hand.actuation.uniform_cov(1e-2)
+        cov = self.hand.actuation.uniform_cov(self._FK_ACTUATION_SIGMA)
         sol = self._solver.solve(self._tension_priors(cov), self._tip_wrenches())
         frame = _make_frame(self.finger_names, sol.marginals, sol.meta)
         return frame, sol
@@ -192,8 +195,12 @@ class HandFKSolver(HandSolverBase):
         for last_attempt in (False, True):
             try:
                 frame, sol = self._solve_once()
-                offset = float(np.linalg.norm(
-                    solved_wrist_pose(self.configs, frame)[:3, 3] - T[:3, 3]))
+                # Off the state bundle rather than by inverting a mounting
+                # offset: each kinematics answers where its wrist ended up, so
+                # this works for a hand that owns its wrist variable outright as
+                # well as for one that reparameterizes it away.
+                solved = np.asarray(sol.marginals.wrist_pose, float)
+                offset = float(np.linalg.norm(solved[:3, 3] - T[:3, 3]))
                 if offset <= self._WRIST_TRACKING_TOL_M:
                     if seeded:
                         frame, sol = self._settle(frame)

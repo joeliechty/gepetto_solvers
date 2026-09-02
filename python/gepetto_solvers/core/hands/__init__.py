@@ -10,7 +10,9 @@ some ``kinematics`` name, and a :class:`Hand` here that names it. See
 ``docs/adding_a_hand.md``.
 """
 
+from .allegro import AllegroHand
 from .base import (
+    FEATURES,
     Actuation,
     Hand,
     HardwareMap,
@@ -21,9 +23,12 @@ from .registry import DEFAULT_HAND, get_hand, register_hand, registered_hands
 from .tendon_5f import TendonHand5F
 
 register_hand(TendonHand5F.name, TendonHand5F)
+register_hand(AllegroHand.name, AllegroHand)
 
 __all__ = [
+    "FEATURES",
     "Actuation",
+    "AllegroHand",
     "DEFAULT_HAND",
     "Hand",
     "HardwareMap",
