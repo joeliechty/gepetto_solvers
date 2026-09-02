@@ -41,6 +41,7 @@ class ViserHandScene(
                  show_discs=False, show_disc_frames=False,
                  show_contact_spheres=True,
                  show_collision_spheres=True, show_gap_lines=True,
+                 show_link_meshes=True,
                  show_finger_planes=False, show_planar_gap=False):
         self.server = server
         self.scene = server.scene
@@ -50,6 +51,9 @@ class ViserHandScene(
         self.show_disc_frames = show_disc_frames
         self.show_contact_spheres = show_contact_spheres
         self.show_collision_spheres = show_collision_spheres
+        # On by default: a hand that HAS meshes looks like itself with
+        # them, and the overlays are drawn over the top.
+        self.show_link_meshes = show_link_meshes
         self.show_gap_lines = show_gap_lines
         # Off by default: five translucent sheets through the middle of the
         # grasp hide the fingertips and the object surface behind them, so this
@@ -90,9 +94,18 @@ class ViserHandScene(
     def update(self, frame, *, tip_radii=None, collision_radius=0.003,
                collision=False, gaps=None, table_gaps=None,
                half_space_gaps=None, center_gap=None, axis_align=None,
-               centroid_gap=None, finger_planes=None, planar_gaps=None):
+               centroid_gap=None, finger_planes=None, planar_gaps=None,
+               link_meshes=None, wrist_pose=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
-        an object exposing ``.marginals`` (a ``TendonFingerMarginals``).
+        an object exposing ``.marginals`` (a ``DigitState``).
+
+        ``link_meshes`` is the hand's optional visual geometry, as
+        ``[(attach, path)]`` from ``Hand.visual_meshes`` -- ``attach`` is None
+        for a mesh riding on the wrist (``wrist_pose``) or ``(digit, site)`` for
+        one riding on a site. PURELY COSMETIC: collision in this repository is
+        the sphere set the solve carries, never a mesh, so these are drawn and
+        nothing else. Omit them and the hand is drawn as a skeleton, which is a
+        complete drawing in its own right.
 
         ``gaps`` is the optional fingertip-to-object overlay: a
         ``{finger: (sphere_pt, surface_pt, gap_m)}`` map as returned by
@@ -253,6 +266,9 @@ class ViserHandScene(
         # The point the finger planes fan about -- one marker for all of them.
         if self.show_finger_planes and finger_planes:
             keep |= self._update_pinch_point(next(iter(finger_planes.values()))[2])
+
+        if self.show_link_meshes:
+            keep |= self._update_link_meshes(link_meshes, frame, wrist_pose)
 
         self._prune(keep)
 

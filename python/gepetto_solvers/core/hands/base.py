@@ -163,6 +163,19 @@ class Hand(Protocol):
     works against it (``runtime_checkable``), which is what the interface test
     uses; note that only checks the NAMES are present, so the test also exercises
     a stub hand end to end.
+
+    Members declared HERE are required. Several more are optional and read only
+    where they are relevant, so a hand supplies them if it has them:
+
+    ``hardware``       a :class:`HardwareMap`, for a hand with a robot to drive
+    ``motion``         a :class:`MotionProfile`, for the open-loop ramps
+    ``joint_limits()`` per-digit ``[(lo, hi)]``, to bound the GUI's sliders
+    ``visual_meshes()``  ``[(attach, path)]`` link geometry for the renderer;
+                       ``attach`` is None for a mesh riding on the wrist, or
+                       ``(digit, site)`` for one riding on a site. PURELY
+                       COSMETIC -- the solve never reads it, collision is the
+                       sphere set, and a hand without meshes draws as a skeleton
+    ``default_contact_digits``  which digits a grasp starts with
     """
 
     #: Registry key this hand is fetched by (e.g. ``"tendon_5f"``).

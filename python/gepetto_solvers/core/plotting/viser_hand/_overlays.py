@@ -21,6 +21,12 @@ from .palette import (
     GAP_GREEN_MAX_M,
 )
 
+#: Link-mesh shading. Light and translucent on purpose: the meshes are scenery,
+#: and the contact spheres, gap lines and frames drawn over them are the things
+#: a reader is actually measuring by.
+_LINK_MESH_RGB = (170, 178, 189)
+_LINK_MESH_ALPHA = 140
+
 
 class OverlayMixin:
     def _update_tendons(self, name, fm, poses):
@@ -383,5 +389,68 @@ class OverlayMixin:
                 axes_radius=float(length) * 0.04,
                 wxyz=_wxyz_from_R(T[:3, :3]),
                 position=tuple(T[:3, 3]))
+            keep.add(n)
+        return keep
+
+
+    # -- link meshes -------------------------------------------------------
+    #
+    # VISUAL ONLY. Collision in this repository is the sphere set the solve
+    # carries (DigitState.collision_sites), and the graph never sees a mesh --
+    # so nothing here can affect a solve, and a checkout without the mesh files
+    # loses the skin and nothing else.
+
+    def _link_mesh(self, path):
+        """One loaded mesh, cached for the life of the scene.
+
+        Loading is the expensive part and the geometry never changes -- only the
+        transform it is drawn at does -- so the file is read once and reused
+        every frame. A file that fails to load is cached as None so a broken
+        mesh is not re-read once per frame forever.
+        """
+        cache = self.__dict__.setdefault("_mesh_cache", {})
+        key = str(path)
+        if key not in cache:
+            try:
+                import trimesh
+
+                cache[key] = trimesh.load(path, force="mesh")
+            except Exception:
+                cache[key] = None
+        return cache[key]
+
+    def _update_link_meshes(self, link_meshes, frame, wrist_pose):
+        """Draw each link mesh at the pose the solve already put its site at.
+
+        No second kinematic pass: every visual origin on the hands that carry
+        meshes is the identity, so a mesh rides directly on its site's frame.
+        """
+        keep = set()
+        if not link_meshes:
+            return keep
+
+        for i, (attach, path) in enumerate(link_meshes):
+            mesh = self._link_mesh(path)
+            if mesh is None:
+                continue
+            if attach is None:
+                if wrist_pose is None:
+                    continue
+                T = np.asarray(wrist_pose, float)
+            else:
+                digit, site = attach
+                if digit >= len(self.finger_names):
+                    continue
+                fs = frame.get(self.finger_names[digit])
+                if fs is None or site >= len(fs.marginals.sites):
+                    continue
+                T = np.asarray(fs.marginals.sites[site].pose.mean, float)
+
+            placed = mesh.copy()
+            placed.apply_transform(T)
+            placed.visual.vertex_colors = np.array(
+                [*_LINK_MESH_RGB, _LINK_MESH_ALPHA], dtype=np.uint8)
+            n = f"/hand/mesh/{i}"
+            self._dynamic[n] = self.scene.add_mesh_trimesh(n, placed)
             keep.add(n)
         return keep

@@ -7,6 +7,7 @@ import numpy as np
 import gepetto_solvers
 
 from ..base import Actuation, opposing_index_of
+from . import meshes as allegro_meshes
 from . import spec as allegro
 
 
@@ -134,6 +135,16 @@ class AllegroHand:
         means[self.digit_names.index("thumb")] = np.array(self.DEFAULT_THUMB_Q,
                                                           float)
         return wrist, means
+
+    def visual_meshes(self):
+        """``[(attach, path)]`` for the hand's link meshes, or ``[]``.
+
+        ``attach`` is None for the palm (which rides on the wrist) or
+        ``(digit, site)`` for a link. Visual only -- the solve uses its own
+        sphere set -- so an empty list costs the picture its skin and nothing
+        else, and the renderer falls back to the skeleton.
+        """
+        return allegro_meshes.visual_meshes()
 
     def joint_limits(self):
         """Per-digit ``[(lo, hi)]`` from the URDF, one pair per joint.

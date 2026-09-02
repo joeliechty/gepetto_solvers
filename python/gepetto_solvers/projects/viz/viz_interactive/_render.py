@@ -198,6 +198,13 @@ class SceneRenderMixin:
                           center_gap=center_gap,
                           axis_align=axis_align,
                           centroid_gap=centroid_gap,
+                          # Visual only. Collision is the sphere set above; the
+                          # graph never sees a mesh, so this cannot change a
+                          # solve -- and a hand without meshes just draws as a
+                          # skeleton.
+                          link_meshes=(self._link_meshes()
+                                       if self.g_show_meshes.value else None),
+                          wrist_pose=res.wrist_pose(0),
                           finger_planes=planes,
                           planar_gaps=planar)
         # Last: the plots describe the state just drawn, and they are the one

@@ -18,16 +18,22 @@ Non-physical inertias diverge a dynamics solve. Nothing here runs dynamics today
 — the kinematics likelihood needs only the joint tree — but taking the corrected
 file costs nothing now and removes a trap from whoever adds dynamics later.
 
-## Meshes are deliberately absent
+## The meshes are vendored, and are VISUAL ONLY
 
-The URDF references `package://drake_models/.../meshes/*.gltf` for visual and
-collision geometry. **Those files are not vendored and are not needed**:
-`pinocchio::urdf::buildModel` reads only the kinematic tree, so every solve here
-works without them. Only `buildGeom` — mesh-based collision, and the workbench's
-link rendering — would want them, and that fetches them separately.
+`meshes/` holds the 11 `.gltf` files the URDF's `<visual>` blocks name, with
+their `.bin` buffers — 22 files, about 850 KB. Small enough to commit, which is
+why there is no fetch script: the workbench draws the hand on a fresh clone with
+no network.
 
-So a missing mesh is never a solver failure. If rendering ever reports one, it is
-a rendering problem.
+**Nothing in a solve reads them.** Collision in this repository is the sphere set
+carried on each digit's sites (`DigitState.collision_sites`), and the factor
+graph never sees a mesh. `pinocchio::urdf::buildModel` reads only the kinematic
+tree. Deleting `meshes/` costs the picture its skin and changes no number —
+`tests/core/test_allegro_hand.py` asserts exactly that, by solving with and
+without them and comparing.
+
+Note the URDF's own `<collision>` blocks are boxes and spheres, not meshes, so
+even a mesh-based collision pipeline would not need these files.
 
 ## What this repo depends on in it
 

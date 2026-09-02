@@ -298,3 +298,66 @@ def test_the_drawn_segments_are_the_real_link_lengths(hand, params):
     # construction: a link's frame sits at its own joint's origin.
     assert segments[0] == pytest.approx(0.0, abs=1e-6)
     np.testing.assert_allclose(segments[1:], [16.4, 54.0, 38.4, 26.7], atol=0.2)
+
+
+# ---------------------------------------------------------------------------
+# Visual meshes are visual only.
+# ---------------------------------------------------------------------------
+
+def test_the_link_meshes_are_present_and_placed(hand):
+    """One per link plus the palm, resolved to files that actually exist."""
+    meshes = hand.visual_meshes()
+    assert len(meshes) == 1 + len(hand.digit_names) * (
+        allegro_spec.SITES_PER_DIGIT - 1)
+    assert sum(1 for attach, _ in meshes if attach is None) == 1, "one palm"
+    for attach, path in meshes:
+        assert path.exists(), path
+        if attach is not None:
+            digit, site = attach
+            assert 0 <= digit < len(hand.digit_names)
+            assert 1 <= site < allegro_spec.SITES_PER_DIGIT
+
+
+def test_collision_is_spheres_and_never_the_meshes(hand, params):
+    """THE SEPARATION.
+
+    The hand's shape is drawn from its URDF link meshes; what the SOLVE reasons
+    about is the sphere set on its sites. Those must stay disjoint -- a mesh
+    must never reach the factor graph.
+
+    Checked at the boundary the graph is actually built from: the HandSpec's
+    per-digit EnvironmentConfig carries site indices and sphere radii, and
+    nothing that could name a mesh.
+    """
+    solver = solvers.HandIKSolver(params, hand)
+    solver._attach_environment()
+    spec = solver._hand_spec()
+
+    sites, _ = hand.collision_sites(0)
+    for env in spec.env:
+        assert env is not None
+        assert list(env.collision_node_indices) == sites
+        assert len(env.collision_node_radii) == len(sites)
+        # Every collision radius is a real sphere, not a placeholder.
+        assert all(r > 0 for r in env.collision_node_radii)
+
+    # The kinematics payload names joints and frames -- never a mesh file.
+    text = " ".join(
+        j for d in spec.kinematics_config.digits
+        for j in list(d.joints) + list(d.site_frames))
+    assert ".gltf" not in text and ".stl" not in text and ".obj" not in text
+
+
+def test_a_solve_is_identical_without_the_meshes(hand, params, monkeypatch):
+    """The strongest form of the same claim: delete the meshes and the numbers
+    do not move. If a mesh ever leaked into the graph, this is what would
+    catch it."""
+    with_meshes = solvers.HandIKSolver(params, hand).solve()
+
+    monkeypatch.setattr(type(hand), "visual_meshes", lambda self: [])
+    without = solvers.HandIKSolver(params, hand).solve()
+
+    for a, b in zip(with_meshes.state(0).digits, without.state(0).digits):
+        np.testing.assert_allclose(a.actuation.mean, b.actuation.mean, atol=1e-12)
+        np.testing.assert_allclose(a.sites[-1].pose.mean, b.sites[-1].pose.mean,
+                                   atol=1e-12)

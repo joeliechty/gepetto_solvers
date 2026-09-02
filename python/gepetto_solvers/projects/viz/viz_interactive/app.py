@@ -36,6 +36,18 @@ class HandVizApp(
     CalibrationMixin,
     GuiMixin,
 ):
+    def _link_meshes(self):
+        """The hand's visual link geometry, loaded once and remembered.
+
+        VISUAL ONLY -- collision is the sphere set the solve carries, and the
+        factor graph never sees a mesh. A hand that supplies none draws as a
+        skeleton, which is a complete drawing in its own right.
+        """
+        if self._link_mesh_cache is None:
+            supplier = getattr(self.hand, "visual_meshes", None)
+            self._link_mesh_cache = supplier() if supplier is not None else []
+        return self._link_mesh_cache
+
     def has(self, feature):
         """Whether the hand being posed supports ``feature``.
 
@@ -64,6 +76,7 @@ class HandVizApp(
         # selects a different mechanism without a control here changing.
         self.hand = hand if hand is not None else get_hand()
         self.digit_names = list(self.hand.digit_names)
+        self._link_mesh_cache = None
         # ROS mode adds the Robot folder -- play a solve on the hardware, read the
         # hardware back -- and extends the e-stop to the servo publishers. Off by
         # default so the standalone app is byte-for-byte the app it was; the

@@ -118,7 +118,7 @@ class GuiMixin:
                    self.g_cal_roll, self.g_cal_pitch, self.g_cal_yaw,
                    self.g_cal_show,
                    self.g_al_mu, self.g_al_rate, self.g_al_iters,
-                   self.g_show_true_mesh,
+                   self.g_show_meshes, self.g_show_true_mesh,
                    self.g_show_contact, self.g_show_collision,
                    self.g_show_discs, self.g_show_disc_frames,
                    self.g_show_world, self.g_show_obj_frame,
@@ -818,6 +818,17 @@ class GuiMixin:
             self.g_al_iters = gui.add_slider("max iters", 5, 100, 5, 40)
 
         with gui.add_folder("Display"):
+            # Only offered for a hand that HAS link meshes; a checkbox that
+            # could never draw anything is worse than no checkbox.
+            self.g_show_meshes = gui.add_checkbox(
+                "hand meshes", True,
+                disabled=not self._link_meshes(),
+                hint="Draw the hand's own link geometry from its URDF, at the "
+                     "poses the solve put each link at. VISUAL ONLY -- collision "
+                     "is the sphere set the solve carries, never a mesh, so this "
+                     "changes the picture and nothing else. Turn it off to see "
+                     "the bare skeleton and the collision spheres, which is what "
+                     "the graph actually reasons about.")
             self.g_show_true_mesh = gui.add_checkbox(
                 "true object mesh", True,
                 hint="Overlay the object's real geometry behind the analytic "
@@ -998,7 +1009,7 @@ class GuiMixin:
 
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
-                  self.g_show_disc_frames,
+                  self.g_show_disc_frames, self.g_show_meshes,
                   self.g_show_gaps, self.g_show_mount, self.g_show_finger_planes,
                   self.g_show_planar_gap):
             h.on_update(lambda _: (self._sync_params(), self._render_frame()))

@@ -207,7 +207,15 @@ The protocol in full:
 | `opposing_index` | index of `opposing_digit`, or `-1` |
 
 Optional, read where they are relevant: `hardware` (a `HardwareMap`), `motion`
-(a `MotionProfile`), `default_contact_digits`, `joint_limits()`.
+(a `MotionProfile`), `default_contact_digits`, `joint_limits()`, and
+`visual_meshes()`.
+
+`visual_meshes()` is worth its own note: it returns `[(attach, path)]` link
+geometry for the renderer, where `attach` is `None` for a mesh riding on the
+wrist or `(digit, site)` for one riding on a site. It is **purely cosmetic**.
+Collision is the sphere set on the digit's sites and the factor graph never sees
+a mesh, so a hand without meshes is drawn as a skeleton — a complete drawing in
+its own right — and deleting a hand's meshes changes no solved number.
 
 Three of those are worth a sentence each, because they are what stop the
 workbench and the solvers assuming your hand is the tendon one:
