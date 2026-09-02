@@ -33,7 +33,7 @@ Two hands ship:
 | `--hand` | mechanism |
 |---|---|
 | `tendon_5f` | four fingers and a thumb, each a Cosserat rod driven by six tendons (the default) |
-| `allegro` | 16 revolute joints in four chains, posed from a URDF by Pinocchio |
+| `allegro` | Allegro Hand **V5**, right, type B: 16 revolute joints in four chains, posed from the manufacturer's URDF by Pinocchio |
 
 ```bash
 python scripts/viz_interactive.py                 # tendon_5f

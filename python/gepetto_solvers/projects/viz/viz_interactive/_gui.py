@@ -372,24 +372,49 @@ class GuiMixin:
             # `hand.default_pose()`.
             x0, y0, z0 = self.params.wrist_pose[:3, 3]
             r0, p0, yw0 = R_to_euler(self.params.wrist_pose[:3, :3])
-            self.g_tx = gui.add_slider("x (m)", -0.1, 0.1, 0.001, x0)
-            self.g_ty = gui.add_slider("y (m)", -0.1, 0.1, 0.001, y0)
-            self.g_tz = gui.add_slider("z (m)", -0.1, 0.1, 0.001, z0)
+            # The range FOLLOWS the poses this hand actually needs to reach:
+            # its opening hover AND its measured robot mount. A fixed +-100 mm
+            # broke both ways -- viser refuses an out-of-range initial value, so
+            # a hand whose default hover fell outside would not open the
+            # workbench at all; and "Pose at measured robot mount" drives these
+            # same sliders, so the tendon hand's mount at z = 134.7 mm was
+            # unreachable on a +-100 mm slider and the button raised.
+            # Rounded out to the next 50 mm, and shared by all three axes so
+            # they stay comparable.
+            mount = getattr(self.hand, "mount_pose", None)
+            reach = max(abs(x0), abs(y0), abs(z0))
+            if mount is not None:
+                reach = max(reach, float(np.abs(mount()[:3, 3]).max()))
+            span = max(0.1, np.ceil(reach / 0.05) * 0.05)
+            self.g_tx = gui.add_slider("x (m)", -span, span, 0.001, x0)
+            self.g_ty = gui.add_slider("y (m)", -span, span, 0.001, y0)
+            self.g_tz = gui.add_slider("z (m)", -span, span, 0.001, z0)
             self.g_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, r0)
             self.g_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, p0)
             self.g_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, yw0)
             self.g_sig_pos = gui.add_slider("log10 sigma_pos", -6, 2, 0.5, -2)
             self.g_sig_rot = gui.add_slider("log10 sigma_rot", -6, 2, 0.5, -2)
-            # The sliders above are a demo pose. This is the measured one: put the
-            # wrist here and the viser world origin becomes the robot flange, so
-            # the hand hangs exactly as it does in the CAD assembly.
+            # The sliders above are a demo pose. This is the measured one: put
+            # the wrist here and the viser world origin becomes the robot
+            # flange, so the hand hangs exactly as it does on the arm.
+            #
+            # Read off the HAND (see _mount_pose), not from one shared constant:
+            # the tendon hand's mount is a fit against its Onshape assembly, the
+            # Allegro hand's is a tf2_echo off the running robot, and they are
+            # different transforms. A hand with no measured mount gets the
+            # button greyed out rather than a neighbour's numbers.
+            has_mount = getattr(self.hand, "mount_pose", None) is not None
             self.g_mount = gui.add_button(
                 "Pose at measured robot mount",
-                hint="Set the six sliders to mount.MOUNT_WRIST_XYZ/RPY -- the "
-                     "wrist pose measured from the Onshape assembly. The world "
-                     "origin then IS the flange, and 'mount frames' below draws "
-                     "both frames so you can check the hand sits on the arm the "
-                     "way it does in CAD.")
+                disabled=not has_mount,
+                hint="Set the six sliders to this hand's measured "
+                     "T_flange<-wrist. The world origin then IS the robot "
+                     "flange, and 'mount frames' below draws both frames so you "
+                     "can check the hand sits on the arm the way it really does."
+                     if has_mount else
+                     f"{self.hand.name} has no measured mount transform, so "
+                     f"there is nowhere to pose it. A hand supplies one as "
+                     f"mount_pose().")
 
         # What the hand is COMMANDED with. Two shapes, because the two hands
         # are commanded differently: one scalar pull per digit on a tendon hand,
@@ -886,10 +911,11 @@ class GuiMixin:
                      f"against the same intersection in the room.")
             self.g_show_mount = gui.add_checkbox(
                 "mount frames", True,
-                hint="Draw the wrist frame and, offset from it by the measured "
-                     "mount transform, the robot flange frame the hand bolts to. "
-                     "Use with 'Pose at measured robot mount' to check the "
-                     "measurement against the CAD assembly by eye.")
+                hint="Draw the wrist frame and, offset from it by this hand's "
+                     "measured mount transform, the robot flange frame it bolts "
+                     "to. Use with 'Pose at measured robot mount' to check the "
+                     "measurement by eye. Draws nothing for a hand that has no "
+                     "measured mount.")
             self.g_show_gaps = gui.add_checkbox(
                 "contact distance", True,
                 hint="Fingertip-to-surface gap/margin overlays in mm: object "

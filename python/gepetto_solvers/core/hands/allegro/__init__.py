@@ -8,7 +8,7 @@ tendon hand.
 ===================  ===================================================
 :mod:`hand`          :class:`AllegroHand`, the Hand implementation
 :mod:`spec`          digits, joints, sites, and the kinematics config
-``urdf/``            the vendored Drake-corrected URDF; see its NOTICE.md
+``urdf/``            the vendored Wonik V5 right-B URDF; see its NOTICE.md
 ===================  ===================================================
 """
 

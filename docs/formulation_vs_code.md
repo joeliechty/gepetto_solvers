@@ -29,7 +29,7 @@ code *does*. This file only covers where it differs and why.
 | [8](#8-contact-is-witness-free-where-the-surface-allows-it) | Contact is witness-free where the surface allows it | representation |
 | [9](#9-the-support-plane-uses-one-residual-not-five) | The support plane uses one residual, not five | representation |
 | [10](#10-plane-avoidance-is-off-during-the-contact-phases) | Plane avoidance is off during the contact phases | scheduling |
-| [11](#11-a-urdfs-visual-meshes-need-two-corrections-nothing-states) | A URDF's visual meshes need two corrections nothing states | asset convention |
+| [11](#11-a-urdfs-visual-meshes-need-corrections-nothing-states) | A URDF's visual meshes need corrections nothing states | asset convention |
 
 ---
 
@@ -267,34 +267,52 @@ inherits fingers still resting on it, so re-arming avoidance would start that
 phase already in violation. The plane itself stays configured, and
 object/finger–finger collision are untouched.
 
-## 11. A URDF's visual meshes need two corrections nothing states
+## 11. A URDF's visual meshes need corrections nothing states
 
-Not a departure from the maths — the meshes never touch the graph — but two
-traps that cost real time on the Allegro hand and will cost it again on the next
-URDF one, because in both cases *nothing in the data says the correction is
-needed*.
+Not a departure from the maths — the meshes never touch the graph — but a family
+of traps that has now cost real time on two different Allegro descriptions, and
+will cost it again on the next URDF hand, because in every case *nothing in the
+data says the correction is needed*. The specific corrections are **per
+description**, which is the point: what the V4 file needed and what the V5 file
+needs have nothing in common.
 
-**glTF is Y-up; URDF and ROS are Z-up.** The conversion is implicit in the
-format. These files carry an identity node transform, so a loader that just
-reads vertices produces a hand lying on its side, and no tool reports anything
-wrong. Drake applies the rotation internally; we apply `GLTF_TO_URDF`, an
-`R_x(+90°)`, in
-[`hands/allegro/meshes.py`](../python/gepetto_solvers/core/hands/allegro/meshes.py).
+**The mesh is not authored where you think.** Wonik authors every V5 mesh in one
+shared assembly frame, in millimetres, and each link's `<visual>` block carries
+the `<origin>` that brings its own part back to its joint and the `scale` that
+puts it in metres. Both are large — the palm's origin is
+`xyz="0.02 0 -0.1" rpy="0 3.14 1.57"`. A renderer that assumes an identity
+visual origin, which is what a hand with per-link meshes lets you get away with,
+draws twenty-one parts scattered across a 200 mm cube; one that ignores the
+scale draws a 70 m finger. `_visual_placement` in
+[`hands/allegro/meshes.py`](../python/gepetto_solvers/core/hands/allegro/meshes.py)
+composes the two, in that order.
+
+**glTF is Y-up; URDF and ROS are Z-up** — the V4 trap, kept here because it is
+the same *kind* of fact and the next hand may ship glTF. The conversion is
+implicit in the format: those files carry an identity node transform, so a
+loader that just reads vertices produces a hand lying on its side and no tool
+reports anything wrong. V5 ships STL, which is already Z-up, so this correction
+is *absent* from the current code — do not reintroduce it by analogy.
 
 **A mesh belongs to its LINK, not to the frame you attach it to.** The palm mesh
-rides on the wrist, but it is authored in `palm_link`, which the URDF places
-95 mm up the root's +Z through the fixed `root_to_base` joint. Drawn at the
-wrist it lands a whole palm-height low, hanging below the finger bases. The
-link's own fixed placement composes in ahead of the axis correction.
+rides on the wrist, but it is authored in `palm_link`. On V4 the URDF put that
+95 mm up the root's +Z through a fixed joint, and the palm drawn at the wrist
+landed a whole palm-height low, hanging below the finger bases. On V5 the two
+frames coincide, so the composition is the identity — which makes it *more*
+important to keep, not less: nothing about the current file would complain if it
+were dropped, and the next variant to move the palm would come back silently
+wrong.
 
-**Both were found the same way, and both are guarded that way**: against the
-URDF's own `<collision>` boxes and origins, which are written in the link frame
-and so are independent ground truth. Extents alone cannot pin a rotation — they
-are symmetric under ±90° — so the mesh CENTRES are what fix the sign: the right
-rotation puts them a mean 3.2 mm from the collision origins, the wrong one
-36.8 mm. `tests/core/test_allegro_hand.py` checks the axis, the sign and the
-palm's placement separately, and each was verified to fail on its own bug.
+**How they are guarded.** The V4 checks used the URDF's own `<collision>` boxes
+as independent ground truth; V5 gives the same mesh as both visual and collision,
+so that ground truth is gone and the tests use the KINEMATIC TREE instead — which
+is better, because it is what the solve actually poses. Each link's placed mesh
+must contain its own frame origin and be the size of a hand part; the parts, put
+at the site poses the solve computed, must touch their neighbours and assemble
+inside a hand-sized box. Every one of those was verified to fail on the bug it
+names.
 
 The transform is carried **per mesh**, as the third element of
 `Hand.visual_meshes()`, rather than assumed by the renderer: it is a property of
-the asset, so a hand shipping Z-up STL or OBJ returns the identity.
+the asset and of what the URDF says about it, so a hand whose meshes are authored
+per link at metre scale returns the identity.

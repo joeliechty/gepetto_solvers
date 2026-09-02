@@ -1,4 +1,14 @@
-"""Where the solver's wrist frame sits on the *physical* hand.
+"""Where the solver's wrist frame sits on the *physical* TENDON hand.
+
+THIS MODULE IS ONE HAND'S MEASUREMENT. Callers should not import
+:data:`MOUNT_WRIST_XYZ` or :func:`measured_mount_pose` to mean "the mount" --
+ask the hand, via ``Hand.mount_pose()``. Where a hand bolts to the arm is a fact
+about that hand and is measured differently for each: this one is a fit against
+an Onshape assembly, derived below and scored by ``mount_onshape_fit.py``, while
+the Allegro hand's is read straight off the running robot's TF tree and is a
+plain 130 mm offset with no rotation to get wrong. ``TendonHand5F.mount_pose()``
+is the one caller of this module's constant, and the workbench reaches it
+through that.
 
 The solver hangs every digit off one floating wrist variable, but nothing in the
 repo says where that wrist is on the printed part -- ``DEFAULT_WRIST_XYZ/RPY`` in

@@ -39,10 +39,13 @@ dependencies = [
     "scipy>=1.16.3; python_version >= '3.11'",
 ]
 
-# `viz`  the PyVista render windows every demo script opens
-# `web`  the viser interactive workbench and its hand renderer
-# `ycb`  fetching and fitting YCB scans (scripts/objects/ycb_browser.py)
-# `dev`  the test suite and the linters
+# `viz`     the PyVista render windows every demo script opens
+# `web`     the viser interactive workbench and its hand renderer
+# `ycb`     fetching and fitting YCB scans (scripts/objects/ycb_browser.py)
+# `vendor`  re-vendoring a robot description from upstream
+#           (scripts/vendor_allegro_v5_meshes.py) -- run by hand when upstream
+#           changes, never at runtime, since its output is committed
+# `dev`     the test suite and the linters
 #
 # 1.1.0 is the latest viser that still ships py3.10-compatible dependencies.
 [project.optional-dependencies]
@@ -50,6 +53,7 @@ viz = ["pyvista==0.46.4", "vtk==9.5.2", "matplotlib==3.10.7", "pillow"]
 web = ["viser==1.1.0", "trimesh"]
 ycb = ["trimesh", "scikit-learn", "coacd", "requests", "pillow"]
 onshape = ["requests"]
+vendor = ["trimesh", "fast-simplification"]
 dev = ["pytest", "ruff", "mypy"]
 
 

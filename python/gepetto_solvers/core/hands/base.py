@@ -176,6 +176,13 @@ class Hand(Protocol):
                        COSMETIC -- the solve never reads it, collision is the
                        sphere set, and a hand without meshes draws as a skeleton
     ``default_contact_digits``  which digits a grasp starts with
+    ``mount_pose()``   ``T_flange<-wrist`` as a 4x4 -- where this hand bolts to
+                       the robot arm. MEASURED, and measured differently per
+                       hand (a CAD fit for one, a live ``tf2_echo`` for
+                       another), so it belongs to the hand rather than to a
+                       shared constant. Omit it and the workbench greys out its
+                       "pose at measured robot mount" button instead of using
+                       another hand's numbers
     """
 
     #: Registry key this hand is fetched by (e.g. ``"tendon_5f"``).

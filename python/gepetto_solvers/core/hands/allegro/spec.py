@@ -17,13 +17,23 @@ from pathlib import Path
 
 import gepetto_solvers
 
-#: The vendored Drake-corrected URDF. Kinematics only -- the meshes it names are
-#: deliberately not vendored, and ``buildModel`` does not read them.
-URDF_PATH = Path(__file__).parent / "urdf" / "allegro_hand_right.urdf"
+#: The vendored description: Wonik Robotics' Allegro Hand **V5**, right hand,
+#: **type B**. Verbatim from the manufacturer's ROS 2 package; see
+#: ``urdf/NOTICE.md`` for provenance and for what type B means.
+#:
+#: Kinematics only -- ``buildModel`` reads the joint tree and never opens the
+#: meshes the URDF names.
+URDF_PATH = Path(__file__).parent / "urdf" / "allegro_hand_v5_right_B.urdf"
 
 #: Digit order. The thumb is LAST, matching the convention every per-digit list
 #: in the solvers uses (and what ``tendon_5f`` does), so an index into one list
 #: means the same digit in all of them.
+#:
+#: Wonik's own documentation calls the third finger the PINKY (the V5 hand has
+#: four digits, not five, so there is no separate ring). It is called ``ring``
+#: here because that is what the rest of this repository calls the digit in that
+#: position, and a hand-specific rename would break every caller that indexes
+#: digits by name.
 DIGIT_NAMES = ["index", "middle", "ring", "thumb"]
 
 #: The opposing digit, for the pre-grasp constraints.
@@ -40,6 +50,26 @@ _JOINT_NUMBERS = {
     "thumb": [12, 13, 14, 15],
 }
 
+#: The trailing index on every V5 joint and link name (``joint_0_0``,
+#: ``link_3_0_tip``). It is the HAND number in Wonik's multi-hand ROS setup, not
+#: a digit or a link index -- one workspace running two hands publishes
+#: ``allegroHand_0`` and ``allegroHand_1``, and the description is generated per
+#: hand. It is a constant for us because we describe one hand, but it is written
+#: out here rather than inlined so that the V4 names (``joint_0``, ``link_3_tip``)
+#: and these differ in one visible place.
+_HAND_INDEX = 0
+
+
+def _joint(number: int) -> str:
+    """The URDF's name for joint ``number``."""
+    return f"joint_{number}_{_HAND_INDEX}"
+
+
+def _link(number: int, tip: bool = False) -> str:
+    """The URDF's name for the link driven by joint ``number``."""
+    return f"link_{number}_{_HAND_INDEX}" + ("_tip" if tip else "")
+
+
 #: Frames for sites 1..N of each digit, base to tip.
 #:
 #: Site 0 is NOT here: it is the digit's fixed mount on the palm, which the
@@ -47,19 +77,17 @@ _JOINT_NUMBERS = {
 #:
 #: EVERY MOVING LINK IS LISTED, then the fingertip. All four are needed, and
 #: leaving one out is not merely a coarser picture -- it silently merges two
-#: joints. Omitting `link_3` (the distal link) made joint_2 and joint_3 each
-#: move exactly one drawn point, the tip, so the two sliders looked like they
-#: drove the same thing; and it drew the last segment as one 65 mm bar where the
-#: hand really has 38 mm + 27 mm about a joint between them.
+#: joints. Omitting the distal link made joint_2 and joint_3 each move exactly
+#: one drawn point, the tip, so the two sliders looked like they drove the same
+#: thing; and it drew the last segment as one bar where the hand really has two
+#: links about a joint between them.
 #:
 #: The last entry is the fingertip, and is what `contact_node` addresses. Allegro
 #: names those `link_*_tip` -- fixed frames past the distal joint, which is where
 #: a fingertip contact sphere belongs.
 _SITE_FRAMES = {
-    "index": ["link_0", "link_1", "link_2", "link_3", "link_3_tip"],
-    "middle": ["link_4", "link_5", "link_6", "link_7", "link_7_tip"],
-    "ring": ["link_8", "link_9", "link_10", "link_11", "link_11_tip"],
-    "thumb": ["link_12", "link_13", "link_14", "link_15", "link_15_tip"],
+    name: [_link(n) for n in numbers] + [_link(numbers[-1], tip=True)]
+    for name, numbers in _JOINT_NUMBERS.items()
 }
 
 #: Joints per digit, and therefore the dimension of each digit's actuation
@@ -82,7 +110,7 @@ def digit_specs():
     for name in DIGIT_NAMES:
         spec = gepetto_solvers.RigidDigitSpec()
         spec.name = name
-        spec.joints = [f"joint_{n}" for n in _JOINT_NUMBERS[name]]
+        spec.joints = [_joint(n) for n in _JOINT_NUMBERS[name]]
         spec.site_frames = list(_SITE_FRAMES[name])
         specs.append(spec)
     return specs

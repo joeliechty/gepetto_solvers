@@ -192,6 +192,62 @@ def test_the_finger_sol_accessors_work_on_a_rigid_hand(hand, params):
 
 
 # ---------------------------------------------------------------------------
+# Where it bolts to the arm.
+# ---------------------------------------------------------------------------
+
+def test_the_mount_is_the_measured_flange_transform(hand):
+    """130 mm straight out the flange's +z, axes aligned.
+
+    Measured on the robot with the hand's own driver up::
+
+        ros2 run tf2_ros tf2_echo lbr_link_ee palm_link
+        - Translation: [0.000, 0.000, 0.130]
+        - Rotation: in Quaternion (xyzw) [0.000, 0.000, 0.000, 1.000]
+    """
+    T = hand.mount_pose()
+    assert T.shape == (4, 4)
+    np.testing.assert_allclose(T[:3, :3], np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(T[:3, 3], [0.0, 0.0, 0.130], atol=1e-12)
+
+
+def test_the_mount_is_fresh_every_call(hand):
+    """Callers assign it into ``params.wrist_pose`` and mutate poses in place."""
+    a, b = hand.mount_pose(), hand.mount_pose()
+    assert a is not b
+    a[2, 3] = 99.0
+    assert hand.mount_pose()[2, 3] == pytest.approx(0.130)
+
+
+def test_the_mount_measurement_is_against_the_frame_the_solver_uses(hand):
+    """THE ASSUMPTION UNDER THE MEASUREMENT.
+
+    The tf was measured flange-to-`palm_link`, but the solver's wrist variable
+    is the model ROOT -- the rigid kinematics resolves every digit's mount
+    against it. Storing the tf verbatim as ``T_flange<-wrist`` is only correct
+    while those two frames coincide, which on this description they do: a bare
+    `world` link joined to `palm_link` at the origin.
+
+    V4's did NOT -- it put `palm_link` 95 mm up the root's +z -- so a variant
+    swap could reintroduce exactly that offset and mount the hand 95 mm off the
+    arm with nothing on screen to say so. This is the check that would catch it.
+    """
+    from gepetto_solvers.core.hands.allegro import meshes as m
+
+    np.testing.assert_allclose(m._fixed_placement("palm_link"), np.eye(4),
+                               atol=1e-12)
+
+
+def test_the_two_hands_mount_differently():
+    """They bolt to the arm differently and the transforms were measured
+    differently -- a CAD fit against an Onshape assembly for one, a `tf2_echo`
+    off the running robot for the other. One shared constant would mount
+    whichever hand it was not measured on badly wrong."""
+    a = hands.get_hand("allegro").mount_pose()
+    t = hands.get_hand("tendon_5f").mount_pose()
+    assert not np.allclose(a, t)
+
+
+# ---------------------------------------------------------------------------
 # Both hands, side by side.
 # ---------------------------------------------------------------------------
 
@@ -221,8 +277,8 @@ def test_every_moving_link_has_a_site(hand):
     Leaving a link out does not merely coarsen the picture -- it MERGES two
     joints. Omitting the distal link made joint_2 and joint_3 each move exactly
     one drawn point (the tip), so the two sliders appeared to drive the same
-    thing, and the last segment was drawn as one 65 mm bar where the hand has
-    38 mm and 27 mm about a joint between them.
+    thing, and the last segment was drawn as one 78 mm bar where the hand has
+    38 mm and 40 mm about a joint between them.
     """
     assert allegro_spec.SITES_PER_DIGIT == allegro_spec.DOF_PER_DIGIT + 2
     for name in hand.digit_names:
@@ -286,8 +342,15 @@ def test_each_joint_moves_a_distinct_part_of_the_chain(hand, params):
 def test_the_drawn_segments_are_the_real_link_lengths(hand, params):
     """The finger a viewer sees must be the finger the URDF describes.
 
-    Allegro's index is 54 mm proximal, 38 mm medial, 27 mm distal-to-tip. A
-    missing site shows up here as one long bar instead of two.
+    The V5 type-B index is 17 mm base, 43.1 mm proximal, 38 mm medial and 40 mm
+    to the fingertip frame. A missing site shows up here as one long bar instead
+    of two.
+
+    These numbers are also what separates the vendored description from its
+    neighbours: type A's chain is 21 / 51 / 38.4 / 26.7 mm, and V4's was
+    16.4 / 54 / 38.4 / 26.7. Swap the URDF for another variant and this fails,
+    which is the point -- the calibrated default posture below it is measured
+    against THESE lengths.
     """
     from gepetto_solvers.core.solvers import HandFKSolver
 
@@ -298,7 +361,7 @@ def test_the_drawn_segments_are_the_real_link_lengths(hand, params):
     # The first is the mount-to-first-link bar, which is degenerate by
     # construction: a link's frame sits at its own joint's origin.
     assert segments[0] == pytest.approx(0.0, abs=1e-6)
-    np.testing.assert_allclose(segments[1:], [16.4, 54.0, 38.4, 26.7], atol=0.2)
+    np.testing.assert_allclose(segments[1:], [17.0, 43.1, 38.0, 40.0], atol=0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +369,16 @@ def test_the_drawn_segments_are_the_real_link_lengths(hand, params):
 # ---------------------------------------------------------------------------
 
 def test_the_link_meshes_are_present_and_placed(hand):
-    """One per link plus the palm, resolved to files that actually exist."""
+    """One per link plus the palm, resolved to files that actually exist.
+
+    The URDF is vendored VERBATIM, so the names it gives are upstream's STLs
+    while the directory holds the decimated glTF we converted them to. That
+    suffix swap is the one place the two can drift apart, and a checkout where
+    it went wrong degrades silently to a skeleton rather than raising.
+    """
+    assert allegro_meshes.available()
     meshes = hand.visual_meshes()
+    assert all(path.suffix == ".glb" for _, path, _ in meshes)
     assert len(meshes) == 1 + len(hand.digit_names) * (
         allegro_spec.SITES_PER_DIGIT - 1)
     assert sum(1 for attach, _, _ in meshes if attach is None) == 1, "one palm"
@@ -347,7 +418,8 @@ def test_collision_is_spheres_and_never_the_meshes(hand, params):
     text = " ".join(
         j for d in spec.kinematics_config.digits
         for j in list(d.joints) + list(d.site_frames))
-    assert ".gltf" not in text and ".stl" not in text and ".obj" not in text
+    for suffix in (".glb", ".gltf", ".stl", ".obj"):
+        assert suffix not in text, suffix
 
 
 def test_a_solve_is_identical_without_the_meshes(hand, params, monkeypatch):
@@ -365,76 +437,134 @@ def test_a_solve_is_identical_without_the_meshes(hand, params, monkeypatch):
                                    atol=1e-12)
 
 
-def test_the_meshes_are_rotated_out_of_gltf_s_y_up(hand):
-    """THE SIDEWAYS-MESHES BUG.
+def test_the_meshes_carry_the_urdf_s_own_visual_placement(hand):
+    """THE SCATTERED-PARTS BUG, and the thousand-times-too-big one.
 
-    glTF is Y-up; URDF and ROS are Z-up. The conversion is IMPLICIT in the
-    format -- these files carry an identity node transform, so nothing in the
-    data says which way is up and a loader that just reads vertices gets a hand
-    lying on its side.
+    Wonik authors every V5 mesh in one shared assembly frame, in MILLIMETRES,
+    and each link's ``<visual>`` block carries the ``<origin>`` that brings its
+    own part back to its joint plus the ``scale`` that puts it in metres. Both
+    are large: the palm's origin is ``xyz="0.02 0 -0.1" rpy="0 3.14 1.57"``.
 
-    Checked against the URDF's own collision boxes, which are written in the link
-    frame and so are independent ground truth: after the correction every link's
-    longest axis must agree with its box's longest axis, and the mesh centres
-    must sit near the collision origins. Both the AXIS and the SIGN matter --
-    extents alone are symmetric under ±90°, so the centres are what pin the
-    direction.
+    A renderer that assumes an identity visual origin -- which is what a hand
+    whose meshes are authored per link gets away with, and what this repository
+    assumed when its only URDF hand was V4 -- draws twenty-one parts scattered
+    across a 200 mm cube. One that ignores the scale draws a 70 m finger.
+
+    Checked against the KINEMATIC TREE, which is independent of the visual
+    blocks: a link's mesh is the part bolted to that link, so it must contain
+    the link's own frame origin and be the size of a hand part.
     """
-    import xml.etree.ElementTree as ET
-
     trimesh = pytest.importorskip("trimesh")
 
-    root = ET.parse(allegro_spec.URDF_PATH).getroot()
-    by_link = {}
-    for link in root.findall("link"):
-        box = link.find("collision/geometry/box")
-        mesh = link.find("visual/geometry/mesh")
-        origin = link.find("collision/origin")
-        if box is None or mesh is None:
-            continue
-        by_link[mesh.get("filename").rsplit("/", 1)[-1]] = (
-            np.array([float(v) for v in box.get("size").split()]),
-            np.array([float(v) for v in (origin.get("xyz", "0 0 0").split()
-                                         if origin is not None else "0 0 0".split())]),
-        )
-
-    # The pure ASSET correction, not each entry's full T_local: the palm's also
-    # carries its link's placement in the root frame, which would move its mesh
-    # out of the frame these collision boxes are written in. Where the palm ends
-    # up is test_the_palm_mesh_meets_the_finger_mounts' business; this one is
-    # only about which way is up.
-    correction = allegro_meshes.GLTF_TO_URDF
-
     checked = 0
-    for _, path, _ in hand.visual_meshes():
-        entry = by_link.get(path.name)
-        if entry is None:
-            continue          # a link whose collision shape is not a box
-        box, box_origin = entry
-        m = trimesh.load(path, force="mesh")
-        m.apply_transform(np.asarray(correction, float))
+    for _, path, T_local in hand.visual_meshes():
+        mesh = trimesh.load(path, force="mesh")
+        mesh.apply_transform(np.asarray(T_local, float))
+        lo, hi = mesh.bounds
 
-        assert int(np.argmax(m.extents)) == int(np.argmax(box)), (
-            f"{path.name}: long axis {m.extents.round(4)} disagrees with the "
-            f"collision box {box.round(4)} -- the mesh is rotated wrongly")
+        # Its own frame origin is inside it (4 mm of slack for the fingertip,
+        # whose frame sits just proximal of the moulded pad).
+        assert np.all(lo <= 4e-3) and np.all(hi >= -4e-3), (
+            f"{path.name}: placed at {(lo * 1e3).round(1)}..{(hi * 1e3).round(1)} mm, "
+            f"which does not contain the frame it hangs on -- its <visual> "
+            f"<origin> was probably dropped")
 
-        centre = (m.bounds[0] + m.bounds[1]) / 2
-        assert np.linalg.norm(centre - box_origin) < 0.012, (
-            f"{path.name}: mesh centre {centre.round(4)} is far from the "
-            f"collision origin {box_origin.round(4)} -- the rotation sign is "
-            f"probably flipped")
+        # And it is a hand part, not a metre-scale one: the palm is the biggest
+        # thing here at 128 mm.
+        assert mesh.extents.max() < 0.15, (
+            f"{path.name}: {(mesh.extents * 1e3).round(1)} mm -- the mesh scale "
+            f"was probably not applied")
         checked += 1
 
-    assert checked >= 15, f"expected to check most links, checked {checked}"
+    assert checked == 21, f"expected every link mesh, checked {checked}"
+
+
+def test_the_placed_meshes_assemble_into_a_hand(hand):
+    """The parts, put where the SOLVE says their sites are, are one solid.
+
+    The per-link check above cannot see a mesh attached to the wrong site: each
+    part would still sit correctly in its own frame. This one composes each
+    ``T_local`` with the site pose the renderer actually draws it at, and asks
+    for what a hand looks like -- consecutive links touching, and the whole
+    thing inside a hand-sized box rather than scattered.
+    """
+    trimesh = pytest.importorskip("trimesh")
+
+    p = solvers.HandSolveParams()
+    p.wrist_pose = np.eye(4)
+    p.joint_targets = [[0.0] * hand.actuation.n for _ in hand.digit_names]
+    frame = solvers.HandFKSolver(p, hand).solve().frames[0]
+
+    placed = {}
+    for attach, path, T_local in hand.visual_meshes():
+        if attach is None:
+            world = np.eye(4)                      # the palm rides on the wrist
+        else:
+            digit, site = attach
+            world = np.asarray(
+                frame[hand.digit_names[digit]].marginals.sites[site].pose.mean,
+                float)
+        mesh = trimesh.load(path, force="mesh")
+        mesh.apply_transform(world @ np.asarray(T_local, float))
+        placed[attach] = mesh.bounds
+
+    # Consecutive links of a digit overlap -- a finger is not a string of beads.
+    for d, name in enumerate(hand.digit_names):
+        for site in range(1, allegro_spec.SITES_PER_DIGIT - 1):
+            a, b = placed[(d, site)], placed[(d, site + 1)]
+            separation = np.maximum(np.maximum(a[0], b[0]) - np.minimum(a[1], b[1]),
+                                    0.0)
+            assert np.all(separation < 2e-3), (
+                f"{name} site {site} and {site + 1} are "
+                f"{(separation * 1e3).round(1)} mm apart -- the chain is broken")
+
+    # ...and the assembled hand is hand-sized. A dropped visual origin scatters
+    # the parts over a box several times this.
+    bounds = np.array(list(placed.values()))
+    span = bounds[:, 1].max(axis=0) - bounds[:, 0].min(axis=0)
+    assert np.all(span < 0.30), f"assembled hand spans {(span * 1e3).round(1)} mm"
+
+
+def test_the_fingertip_radius_is_the_measured_pad(hand):
+    """The contact sphere is a claim about the real fingertip, so measure it.
+
+    ``tip_radii`` is what the contact constraint drives onto a surface, centred
+    on the ``link_*_tip`` frame. That frame sits INSIDE the moulded fingertip,
+    so the radius has to come off the mesh rather than off a drawing -- and it
+    changed by 8 mm between V4 and V5, which is enough to seat a whole default
+    posture inside the object.
+    """
+    trimesh = pytest.importorskip("trimesh")
+
+    tips = [e for e in hand.visual_meshes()
+            if e[0] is not None and e[0][1] == allegro_spec.SITES_PER_DIGIT - 1]
+    assert len(tips) == len(hand.digit_names)
+
+    for (digit, _), path, T_local in tips:
+        mesh = trimesh.load(path, force="mesh")
+        mesh.apply_transform(np.asarray(T_local, float))
+        v = mesh.vertices
+        # The pad: the surface on the flexion side (+x), which is what closes
+        # onto an object. Taken along a narrow ray so the collar behind the
+        # fingertip cannot stand in for it.
+        pad = v[np.linalg.norm(v[:, 1:], axis=1) < 3e-3][:, 0].max()
+        assert hand.tip_radii[digit] == pytest.approx(pad, abs=1e-3), (
+            f"{path.name}: pad is {pad * 1e3:.1f} mm but tip_radii says "
+            f"{hand.tip_radii[digit] * 1e3:.1f} mm")
 
 
 def test_the_palm_mesh_meets_the_finger_mounts(hand):
     """THE DISPLACED-PALM BUG: the palm mesh was attached to the wrong frame.
 
-    It rides on the WRIST, but the mesh belongs to `palm_link`, which the URDF
-    puts 95 mm up the root's +Z through the fixed `root_to_base` joint. Drawn at
-    the wrist it landed a whole palm-height low, hanging below the finger bases
-    with a ~93 mm gap instead of meeting them.
+    It rides on the WRIST, but the mesh belongs to `palm_link` -- and on V4 the
+    URDF put that 95 mm up the root's +Z through a fixed joint, so a palm drawn
+    at the wrist landed a whole palm-height low, hanging below the finger bases
+    with a ~93 mm gap instead of meeting them. On the V5 description the two
+    frames coincide (a bare `world` link joined to `palm_link` at the origin),
+    which makes that particular offset the identity -- and makes this check
+    matter MORE, not less: nothing about the current file would complain if the
+    composition were dropped, and the next variant to move the palm would come
+    back silently wrong.
 
     The check is that the palm's top face reaches the digits' mounts -- which is
     a statement about the assembled hand, not about one transform, so it stays

@@ -143,6 +143,23 @@ class TendonHand5F:
             self.actuation.set_drive(m, GRASP_FLEXOR_TENSION)
         return default_wrist_pose(), means
 
+    def mount_pose(self):
+        """``T_flange<-wrist``: where this hand bolts to the robot.
+
+        The Onshape measurement, which lives in
+        :mod:`gepetto_solvers.projects.robot_mount.mount` along with the
+        convention derivation and the fitting script that produced it. Held
+        there rather than inlined here because it is a fit against a CAD
+        assembly that has to be RE-RUN when the assembly or the morphology
+        changes, and the module says so.
+
+        Imported inside the method: ``robot_mount.mount`` reads this package's
+        dimension tables, so a module-level import would close a cycle.
+        """
+        from ....projects.robot_mount.mount import measured_mount_pose
+
+        return measured_mount_pose()
+
     def actuation_means(self, params):
         """Per-digit tendon tensions: the passive background hold everywhere,
         with that digit's commanded value at the driven index."""

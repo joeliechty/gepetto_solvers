@@ -67,6 +67,33 @@ def test_it_opens_on_the_hand_s_own_start_pose(app):
 _OPENING_POSE_TOL_M = 0.08
 
 
+def test_the_mount_button_poses_the_hand_at_its_own_mount(app):
+    """THE SHARED-CONSTANT TRAP, the mount-transform version of the one above.
+
+    "Pose at measured robot mount" used to drive the sliders from one global
+    constant -- the tendon hand's Onshape fit -- whatever hand was loaded, so
+    with ``--hand allegro`` it hung the Allegro hand off the arm at another
+    robot's transform. Like the FK-solver trap, nothing raised: it drew a
+    perfectly good picture of the wrong mounting.
+
+    Also guards the reachability half. The button drives the same wrist sliders
+    the opening pose seeds, and the tendon hand's mount sits at z = 134.7 mm --
+    outside the +-100 mm those sliders used to be fixed at, so pressing it
+    raised rather than posing anything.
+    """
+    expected = app.hand.mount_pose()
+    app._pose_at_mount()
+
+    np.testing.assert_allclose(
+        [app.g_tx.value, app.g_ty.value, app.g_tz.value], expected[:3, 3],
+        atol=1e-3)                              # sliders quantize to 1 mm
+    np.testing.assert_allclose(app.params.wrist_pose[:3, 3], expected[:3, 3],
+                               atol=1e-3)
+    np.testing.assert_allclose(app.params.wrist_pose[:3, :3], expected[:3, :3],
+                               atol=1e-2)       # ...and to 0.01 rad
+    assert app.g_show_mount.value
+
+
 def test_the_grasp_digits_start_near_the_object(app):
     """Not a solve, just a sane opening pose."""
     gaps = app.result.surface_gaps(0)
