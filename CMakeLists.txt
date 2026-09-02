@@ -79,6 +79,7 @@ set(GEPETTO_SOLVERS_SOURCES
 
     # One translation unit per hand kinematics. Each self-registers at static
     # init, so listing it here is what makes it loadable by name.
+    src/hand/kinematics/rigid/RigidHandKinematics.cpp
     src/hand/kinematics/tendon/TendonHandKinematics.cpp
 
     src/utils/SolverBase.cpp

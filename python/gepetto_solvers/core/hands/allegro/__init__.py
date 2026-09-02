@@ -1,0 +1,16 @@
+"""The Allegro hand: 16 revolute joints, four 4-DOF chains off a common palm.
+
+The mechanism comes from a URDF and is posed by the ``"rigid_urdf"`` kinematics,
+which is generic -- this package is only the description of one particular hand
+built on it, the way :mod:`gepetto_solvers.core.hands.tendon_5f` is for the
+tendon hand.
+
+===================  ===================================================
+:mod:`spec`          digits, joints, sites, and the kinematics config
+``urdf/``            the vendored Drake-corrected URDF; see its NOTICE.md
+===================  ===================================================
+"""
+
+from . import spec
+
+__all__ = ["spec"]

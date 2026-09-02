@@ -97,6 +97,31 @@ std::pair<int, int> RigidChainModel::joint_indices(const std::string& name) cons
 }
 
 
+gtsam::Matrix4 RigidChainModel::fixed_placement_of_joint(
+    const std::string& name) const
+{
+    if (!model_->existJointName(name))
+        throw std::invalid_argument(
+            "RigidChainModel: no joint named \"" + name + "\" in this model.");
+    const auto jid = model_->getJointId(name);
+
+    // Walk to the root, accumulating the constant joint placements. Any movable
+    // joint on the way means this joint's base is not fixed relative to the
+    // model root, and the result would depend on q.
+    pinocchio::SE3 placement = pinocchio::SE3::Identity();
+    for (auto j = jid; j > 0; j = model_->parents[j]) {
+        if (j != jid && model_->joints[j].nv() > 0)
+            throw std::invalid_argument(
+                "RigidChainModel: joint \"" + name + "\" sits below the movable "
+                "joint \"" + model_->names[j] + "\", so its base placement is not "
+                "fixed relative to the model root. A digit must hang directly "
+                "off the palm for its mount offset to be a constant.");
+        placement = model_->jointPlacements[j] * placement;
+    }
+    return placement.toHomogeneousMatrix();
+}
+
+
 int RigidChainModel::nq() const { return model_->nq; }
 int RigidChainModel::nv() const { return model_->nv; }
 

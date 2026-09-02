@@ -7,6 +7,7 @@
 #include "gepetto_solvers/hand/HandSolver.h"
 #include "gepetto_solvers/hand/HandSpec.h"
 #include "gepetto_solvers/hand/HandTrajectoryPlanner.h"
+#include "gepetto_solvers/hand/kinematics/rigid/RigidHandKinematics.h"
 #include "gepetto_solvers/hand/kinematics/tendon/TendonHandKinematics.h"  // TendonDigitExtras
 
 namespace py = pybind11;
@@ -33,6 +34,42 @@ void bind_hand(py::module& m) {
         .def(py::init<>())
         .def_readwrite("fingers", &gepetto_solvers::TendonHandKinematicsConfig::fingers,
                        "One TendonFingerSolverConfig per digit, in digit order.");
+
+    py::class_<gepetto_solvers::RigidDigitSpec>(
+        m, "RigidDigitSpec",
+        "One digit of a URDF-described hand: its 1-DOF joints base to tip, and "
+        "the frame names of sites 1..N. Site 0 is NOT listed -- it is the "
+        "digit's fixed mount on the palm, which is the wrist variable itself.")
+        .def(py::init<>())
+        .def_readwrite("name", &gepetto_solvers::RigidDigitSpec::name)
+        .def_readwrite("joints", &gepetto_solvers::RigidDigitSpec::joints)
+        .def_readwrite("site_frames", &gepetto_solvers::RigidDigitSpec::site_frames);
+
+    py::class_<gepetto_solvers::RigidHandKinematicsConfig,
+               gepetto_solvers::HandKinematicsConfig,
+               std::shared_ptr<gepetto_solvers::RigidHandKinematicsConfig>>(
+        m, "RigidHandKinematicsConfig")
+        .def(py::init<>())
+        .def_readwrite("urdf_xml",
+                       &gepetto_solvers::RigidHandKinematicsConfig::urdf_xml)
+        .def_readwrite("urdf_path",
+                       &gepetto_solvers::RigidHandKinematicsConfig::urdf_path)
+        .def_readwrite("digits",
+                       &gepetto_solvers::RigidHandKinematicsConfig::digits)
+        .def_readwrite("sigma_fk",
+                       &gepetto_solvers::RigidHandKinematicsConfig::sigma_fk,
+                       "Diagonal of the kinematic relaxation covariance "
+                       "Sigma_fk, [rot(3), pos(3)]. As it tightens, the "
+                       "kinematics likelihood approaches a hard constraint.")
+        .def_readwrite("site_sigma_fk",
+                       &gepetto_solvers::RigidHandKinematicsConfig::site_sigma_fk,
+                       "Per-site override of sigma_fk, [digit][site-1]. Empty "
+                       "uses sigma_fk everywhere. Present because the "
+                       "formulation defines Sigma_fk,i per FRAME.")
+        .def_readwrite("q_init",
+                       &gepetto_solvers::RigidHandKinematicsConfig::q_init,
+                       "Seed configuration per digit; an empty entry seeds "
+                       "that digit at zero.");
 
     py::class_<gepetto_solvers::HandSpec>(m, "HandSpec")
         .def(py::init<>())

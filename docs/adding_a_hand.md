@@ -50,6 +50,39 @@ straight onto the graph. `tests/core/test_constraint_tags.py` guards this.
 
 ---
 
+## 0. First: does your hand need C++ at all?
+
+Two kinematics are registered:
+
+| name | mechanism |
+|---|---|
+| `tendon` | Cosserat-rod digits driven by tendons |
+| `rigid_urdf` | serial 1-DOF chains from a URDF, posed by Pinocchio FK |
+
+**`rigid_urdf` is generic.** Any hand that is a set of serial 1-DOF chains
+hanging off a common palm — which is most articulated hands — is a *config* for
+it, not new C++. The Allegro hand is exactly that: about 100 lines of table in
+[core/hands/allegro/spec.py](../python/gepetto_solvers/core/hands/allegro/spec.py)
+naming which joints and frames make up each digit, plus its URDF.
+
+So for a URDF hand, skip to step 2 and write a `Hand` whose `kinematics` is
+`"rigid_urdf"` and whose `build_spec` fills a `RigidHandKinematicsConfig`. Step 1
+is only for a mechanism neither of the two describes.
+
+What `rigid_urdf` will refuse, loudly rather than silently:
+
+* a joint that is not 1-DOF (a `continuous` URDF joint is nq=2 — give it limits
+  to make it `revolute`);
+* a digit whose first joint sits below another movable joint, because then its
+  mount is not a constant and the `T_0 = T_wrist ∘ offset` invariant breaks;
+* a frame or joint name that is not in the URDF.
+
+It also does **not enforce joint limits** yet. They are read from the URDF and
+exposed, but nothing constrains against them, so IK can hyperextend. See the note
+on `RigidHandKinematics`.
+
+---
+
 ## 1. The C++ kinematics
 
 Implement [`HandKinematics`](../include/gepetto_solvers/hand/HandKinematics.h).

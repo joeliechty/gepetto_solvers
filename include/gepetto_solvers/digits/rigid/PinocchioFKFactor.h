@@ -60,6 +60,15 @@ public:
     int nq() const;
     int nv() const;
 
+    // The CONSTANT placement of a joint's frame relative to the model root, as
+    // a 4x4 -- where a digit hangs off the palm.
+    //
+    // Only constant if no other joint lies between the root and this one, so
+    // that is checked rather than assumed: a digit mounted on a moving wrist
+    // sub-chain would otherwise get a "fixed" mount that silently moves with q,
+    // and every caller that recovers the wrist by inverting it would be wrong.
+    gtsam::Matrix4 fixed_placement_of_joint(const std::string& name) const;
+
     // Position limits from the URDF, one entry per configuration coordinate.
     // Nothing enforces them yet -- see the note in AllegroKinematics -- but a
     // caller seeding or clamping a configuration reads them from here.
