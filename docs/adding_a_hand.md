@@ -152,15 +152,23 @@ Either way that choice lives inside the kinematics — see
 `TendonHandKinematics::insert_from_state`, which has to invert the offset to
 recover a wrist no digit carries.
 
-### The one thing that is not yet general
+### The state you fill
 
-`HandState` ([HandState.h](../include/gepetto_solvers/hand/HandState.h)) still
-holds `std::vector<TendonFingerMarginals>`. It is the transport for a finished
-solve, produced and consumed entirely behind `HandKinematics::extract` /
-`insert_from_state`, and the graph builder never touches it — but a mechanism
-whose state is not rod-and-tendon shaped will need a variant payload there, and
-a matching split in the Python readers of `state.digits[i].rod`. That
-generalization was left for the second real payload rather than guessed at now.
+`HandState` ([HandState.h](../include/gepetto_solvers/hand/HandState.h)) is the
+transport for a finished solve, and it is mechanism-neutral: per digit, a list of
+`SiteState` (pose, plus continuum stress and wrench that a rigid hand leaves
+zero), the `actuation` vector, an optional `displacement` readout, the
+`collision_sites` indices, and `extras`.
+
+`extras` is where anything only YOUR mechanism has goes — a
+`DigitExtras` subclass, the same pattern as `HandKinematicsConfig` on the input
+side. `TendonDigitExtras` carries the tendon routing, the per-disc external
+wrenches and the tension Jacobian; `RigidHandKinematics` leaves it null. A
+reader that needs it checks for null first, which is how the viser overlays draw
+tendon routes on one hand and nothing on the other.
+
+`HandState` also carries `wrist_pose`, so each kinematics answers "where did the
+wrist end up" for itself rather than callers inverting a mounting offset.
 
 ---
 
@@ -192,11 +200,28 @@ The protocol in full:
 | `contact_node(digit)` | the site task constraints contact with |
 | `collision_sites(digit)` | `(node indices, is_proximal flags)` |
 | `pinch_pose(mask)` | measured pinch geometry, or `None` |
-| `build_spec(configs)` | the C++ `HandSpec` |
+| `features` | a `frozenset` from `hands.FEATURES` — what this hand supports |
+| `default_pose()` | `(wrist 4x4, actuation means)` — where this hand starts |
+| `actuation_means(params)` | one mean vector per digit: q_S, or the tensions |
+| `build_spec(configs, params)` | the C++ `HandSpec` |
 | `opposing_index` | index of `opposing_digit`, or `-1` |
 
 Optional, read where they are relevant: `hardware` (a `HardwareMap`), `motion`
-(a `MotionProfile`), `default_contact_digits`.
+(a `MotionProfile`), `default_contact_digits`, `joint_limits()`.
+
+Three of those are worth a sentence each, because they are what stop the
+workbench and the solvers assuming your hand is the tendon one:
+
+* **`features`** gates whole GUI panels. Declare only what you have; a control
+  for something you lack is made ABSENT, not greyed out. `AllegroHand.features`
+  is empty.
+* **`default_pose()`** is where your hand starts. There is no shared default that
+  is right for two hands — the tendon hand's measured hover aims Allegro nowhere
+  near the object, because their fingers extend along different axes.
+* **`actuation_means(params)`** turns the params into the vector your actuation
+  variable takes. `params.flexor_tensions` is one *scalar* per digit and cannot
+  command four independent joints; a joint-space hand reads
+  `params.joint_targets` instead.
 
 Register in [core/hands/\_\_init\_\_.py](../python/gepetto_solvers/core/hands/__init__.py):
 
@@ -237,15 +262,34 @@ choice has to ride along in a serialized or preset params object.
 
 ```bash
 pytest tests/core/test_hand_interface.py    # the seam itself
+pytest tests/projects/test_viz_hands.py     # the workbench, per registered hand
 pytest -m "not slow"
 pytest -m slow                              # golden sums must NOT move
 python scripts/viz_interactive.py --hand <name>
 ```
 
-`tests/core/test_hand_interface.py` registers a two-digit stub hand with four
-actuators and no opposing digit, and drives the solver stack with it. Adding a
-case there for your hand is the cheapest way to prove the solvers size
-themselves to it rather than to the built-in one.
+Three suites are worth knowing about:
+
+* `tests/core/test_hand_interface.py` registers a two-digit stub hand with four
+  actuators and no opposing digit, and drives the solver stack with it. Adding a
+  case there is the cheapest way to prove the solvers size themselves to your
+  hand rather than to the built-in one.
+* `tests/projects/test_viz_hands.py` builds the workbench for **every registered
+  hand**, so your hand is covered by it the moment you register. It also asserts
+  `app.fk_solver.hand is app.hand` — the app once built its solvers without
+  passing its hand and silently posed the default one, rendering a perfectly
+  good picture of the wrong robot.
+* `tests/core/test_allegro_hand.py` is the worked example of testing a hand end
+  to end, including the chain-integrity checks (§below) that catch a mis-listed
+  site.
+
+**Check your site list against the mechanism.** Leaving a link out does not
+merely coarsen the picture — it merges two joints. On Allegro, omitting the
+distal link made two sliders appear to drive the same thing and drew one 65 mm
+bar where the hand has 38 mm and 27 mm about a joint. Assert that the number of
+sites matches the DOF count, that each joint moves a strictly smaller set of
+sites than the one above it, and that the drawn segments match the URDF's link
+lengths.
 
 If the golden sums in `tests/test_golden_solves.py` move, something changed the
 graph for the *existing* hand — that is a bug, not a rebaseline.
