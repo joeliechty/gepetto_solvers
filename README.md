@@ -47,7 +47,10 @@ sliders where a tendon hand gets one pull per digit.
 **[docs/hand_solvers.md](docs/hand_solvers.md) is the real documentation** — what each
 solver builds, which section of *Underactuated Object Manipulation* it implements,
 and how everything wires up. Start there. This file only gets you running.
-[docs/adding_a_hand.md](docs/adding_a_hand.md) is the how-to for a second hand.
+[docs/adding_a_hand.md](docs/adding_a_hand.md) is the how-to for a second hand,
+and [docs/formulation_vs_code.md](docs/formulation_vs_code.md) records every
+place the code deliberately departs from the written maths — read that one if the
+equations in front of you disagree with what the source does.
 
 ## Layout
 

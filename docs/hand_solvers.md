@@ -28,6 +28,11 @@ only *how many copies of the state exist* and *which constraints are switched on
 | Know what you can delete | §8, the dependency graph | — |
 | Know why the tree is shaped this way | [refactor-2026-08.md](refactor-2026-08.md) | — |
 
+**Where the code departs from the paper**, and why, is collected in
+[formulation_vs_code.md](formulation_vs_code.md) — the ternary FK factor, the
+witness-free contact forms, the single-residual support plane, the unenforced
+joint limits, and the rest. Read it if the equations disagree with the source.
+
 **A note on paper numbering.** Most of the code cites the chapter-1 numbering
 (`§1.1`–`§1.8`, `Eq 1.x`) this README uses throughout. The newest pre-grasp work
 cites a chapter-2 renumbering of the same material (`Eq 2.8-2.9` collision,

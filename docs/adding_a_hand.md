@@ -78,8 +78,10 @@ What `rigid_urdf` will refuse, loudly rather than silently:
 * a frame or joint name that is not in the URDF.
 
 It also does **not enforce joint limits** yet. They are read from the URDF and
-exposed, but nothing constrains against them, so IK can hyperextend. See the note
-on `RigidHandKinematics`.
+exposed, but nothing constrains against them, so IK can hyperextend — see
+[formulation_vs_code.md §6](formulation_vs_code.md#6-joint-limits-are-read-but-not-enforced),
+which records that gap along with every other place the code departs from the
+written maths.
 
 ---
 
