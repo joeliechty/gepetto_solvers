@@ -63,6 +63,10 @@ set(GEPETTO_SOLVERS_SOURCES
     src/digits/tendon/TendonFingerModel.cpp
     src/digits/tendon/TendonLengthFactor.cpp
 
+    # The only translation unit that includes Pinocchio -- see the note at the
+    # top of the file for why that is deliberate.
+    src/digits/rigid/PinocchioFKFactor.cpp
+
     # The kinematics-agnostic hand: the graph builder, its constraint tagger and
     # the registry the kinematics is loaded from.
     src/hand/ConstraintTagger.cpp
@@ -83,6 +87,7 @@ set(GEPETTO_SOLVERS_SOURCES
     # The pybind11 layer, all of it in one place.
     src/bindings/bind_cosserat_dynamics.cpp
     src/bindings/bind_cosserat_rod.cpp
+    src/bindings/bind_digits_rigid.cpp
     src/bindings/bind_digits_tendon.cpp
     src/bindings/bind_hand.cpp
     src/bindings/module.cpp

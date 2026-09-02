@@ -140,6 +140,7 @@ PYBIND11_MODULE(_gepetto_solvers, m) {
     bind_cosserat_rod(m);
     bind_cosserat_dynamics(m);
     bind_digits_tendon(m);
+    bind_digits_rigid(m);
     bind_hand(m);
     bind_utils(m);
 
