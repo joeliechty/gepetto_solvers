@@ -172,7 +172,7 @@ class StepperMixin:
             else:
                 self.params.initial_state = None
                 self.params.initial_duals = None
-            self.stepper = HandIKStepper(self.params)
+            self.stepper = HandIKStepper(self.params, self.hand)
         return self.stepper
 
 

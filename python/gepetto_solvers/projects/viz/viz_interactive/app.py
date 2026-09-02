@@ -36,6 +36,18 @@ class HandVizApp(
     CalibrationMixin,
     GuiMixin,
 ):
+    def has(self, feature):
+        """Whether the hand being posed supports ``feature``.
+
+        The panel-level counterpart of ``self.caps``, and the two answer
+        different questions: caps says what the compiled binding can do, this
+        says what this ROBOT can do. A control for something the hand does not
+        have is not greyed out here -- the whole folder is absent, because a
+        tendon-length readout on a hand with no tendons is not a disabled
+        feature, it is a category error.
+        """
+        return feature in self.hand.features
+
     def _drive_index(self):
         """Index of the actuated actuator in a digit's tendon-length/tension
         vector, from the hand being posed. Every displacement and commanded

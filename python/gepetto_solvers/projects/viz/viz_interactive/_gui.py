@@ -16,10 +16,9 @@ from gepetto_solvers.core.geometry.scene import (
     TABLE_SPAN,
 )
 from gepetto_solvers.core.solvers import (
-    DEFAULT_WRIST_RPY,
-    DEFAULT_WRIST_XYZ,
     PHASE_PRESETS,
     HandSolveParams,
+    R_to_euler,
 )
 
 from .constants import (
@@ -33,10 +32,64 @@ from .constants import (
 
 
 class GuiMixin:
+    def _build_joint_sliders(self, gui):
+        """The commanded posture for a JOINT-SPACE hand: one slider per joint.
+
+        A tendon hand is commanded with one number per digit -- the pull on its
+        actuated tendon -- so a single slider per digit says everything. A hand
+        that drives every joint has no such summary, so it gets a slider each,
+        grouped by digit, and their limits come from the URDF rather than from a
+        guess: driving a joint past its stop produces a posture the real hand
+        cannot reach, and nothing downstream would flag it (see the note on
+        RigidHandKinematics about limits not being enforced in the solve).
+
+        Writes ``params.joint_targets``, which is q_S -- the mean of p(q).
+        """
+        wrist, means = self.hand.default_pose()
+        limits = self._joint_limits()
+        self.g_joints = []
+        for d, name in enumerate(self.digit_names):
+            with gui.add_folder(name, expand_by_default=(d == 0)):
+                row = []
+                for j, label in enumerate(self.hand.actuation.names):
+                    lo, hi = limits[d][j]
+                    row.append(gui.add_slider(
+                        label, float(lo), float(hi), 0.01,
+                        float(np.clip(means[d][j], lo, hi)),
+                        hint=f"{name} {label}, radians. Limits are the URDF's. "
+                             f"This is q_S: the joint prior pulls the solve "
+                             f"toward it, and the kinematics seeds there so a "
+                             f"solve starts at zero FK residual."))
+                self.g_joints.append(row)
+        self.g_joint_sigma = gui.add_slider(
+            "log10 joint sigma", -6.0, 1.0, 0.1, -2.0,
+            hint="How loose p(q) is -- how far contact may pull the joints away "
+                 "from the commanded posture above. Read live, so a drag takes "
+                 "effect on the next solve with no rebuild.")
+        self.g_actuation_report = gui.add_markdown(
+            "_solve to see the joint states_")
+
+    def _joint_limits(self):
+        """Per-digit, per-joint ``(lo, hi)``, from the hand.
+
+        The hand knows: the mapping from a digit's joints to its model's
+        configuration indices is not arithmetic (see AllegroHand.joint_limits),
+        so deriving it here would be re-deriving something already got right.
+        Falls back to a generous symmetric range for a hand that cannot say, so
+        the sliders still work rather than not existing."""
+        limits = getattr(self.hand, "joint_limits", None)
+        if limits is None:
+            n = self.hand.actuation.n
+            return [[(-np.pi, np.pi)] * n for _ in self.digit_names]
+        return limits()
+
     def _input_handles(self):
         """Every value-carrying control, in build order. Buttons and markdown are
-        deliberately absent -- Reset restores values, not widgets."""
-        return ([self.g_object, self.g_contact_shells,
+        deliberately absent -- Reset restores values, not widgets.
+
+        Nones are stripped at the end: a control for something this hand does
+        not have was never built, and Reset should skip it rather than crash."""
+        handles = ([self.g_object, self.g_contact_shells,
                  self.g_ik_max, self.g_ik_settle, self.g_carry_duals,
                  self.g_obj_dx, self.g_obj_dy, self.g_obj_dz,
                  self.g_obj_roll, self.g_obj_pitch, self.g_obj_yaw,
@@ -72,7 +125,9 @@ class GuiMixin:
                    self.g_show_table_frame, self.g_show_grid,
                    self.g_show_gaps, self.g_show_mount,
                    self.g_show_finger_planes, self.g_show_planar_gap,
-                   self.g_show_traj])
+                   self.g_show_traj]
+                + [h for row in self.g_joints for h in row])
+        return [h for h in handles if h is not None]
 
 
     def _build_gui(self):
@@ -125,61 +180,68 @@ class GuiMixin:
                 hint=step_hint or (
                     "Keep stepping until the solve converges, stalls or hits "
                     "the cap, redrawing after every iteration."))
-            # Phase 4's runner. Sits with Step/Auto rather than in the Presets
-            # folder because what it IS is a third way of moving the hand -- and
-            # because it must sit above the E-STOP that stops it.
-            self.g_close = gui.add_button(
-                "Close", icon=self.viser.Icon.HAND_GRAB,
-                hint="Phase 4: shut every ticked contact finger TOGETHER, and "
-                     "record the whole ramp. Starts from the solve on screen "
-                     "while Warm start is on -- its wrist pose and flexor "
-                     "tensions are adopted onto the sliders and its posture "
-                     "seeds the FK solver -- so a close follows a phase-2 "
-                     "approach instead of jumping back to whatever the sliders "
-                     "were last commanded to. Not a solve -- no constraint is "
-                     "enforced and nothing converges, so the CONTACT does not "
-                     "carry over: the fingers settle wherever their tensions "
-                     "put them before the ramp starts. Each finger is commanded "
-                     "along the same fraction of its own remaining tendon "
-                     "travel, so they start together, arrive together, and none "
-                     "races ahead or stalls on its stop; the status line reports "
-                     "the worst gap between them that the poses actually came "
-                     "back with. Every pose is kept, so the Solve steps scrubber "
-                     "replays the close and the Robot folder plays it as "
-                     "waypoints.")
-            self.g_close_frac = gui.add_slider(
-                "close depth (fraction)", 0.1, 1.0, 0.05, self.hand.motion.close_fraction,
-                hint="How far into the tendon travel each finger HAS LEFT the "
-                     "close goes. 1.0 drives every digit onto its hardware stop, "
-                     "where finger_servo_node saturates and the last waypoints "
-                     "command a position the motors cannot reach; the default "
-                     "stops short of it. Fractions of REMAINING travel, so a "
-                     "finger already half shut moves half as far as an open one "
-                     "and both still finish at the same moment.")
-            # Phase 5's runner, next to phase 4's for the same two reasons, and
-            # in the order the two phases run.
-            self.g_lift = gui.add_button(
-                "Lift", icon=self.viser.Icon.ARROW_UP,
-                hint="Phase 5: raise the wrist straight up in the WORLD frame "
-                     "from wherever it is, and record the whole ramp. The mirror "
-                     "of Close -- that one moves the tendons and leaves the "
-                     "wrist alone, this one moves the wrist and leaves the "
-                     "tendons alone, so the hand goes up holding exactly the "
-                     "grasp it closed on. Carries the state on screen the way "
-                     "Close does, so it can also be pressed straight off a "
-                     "solve. Not a solve: no constraint is "
-                     "enforced, and NOTHING IN THE MODEL HOLDS THE OBJECT, so "
-                     "the hand rises and the object stays on the table. Every "
-                     "pose is kept, so the Solve steps scrubber replays the lift "
-                     "and the Robot folder plays it as waypoints.")
-            self.g_lift_height = gui.add_slider(
-                "lift height (m)", 0.0, 0.3, 0.01, self.hand.motion.lift_height_m,
-                hint=f"How far up the wrist goes, along world +Z. Split into "
-                     f"{self.hand.motion.lift_steps} equal steps whatever the height, so the "
-                     f"taller the lift the bigger each step -- past ~50 mm a "
-                     f"step the FK warm start stops carrying the hand and every "
-                     f"pose rebuilds from cold (slower, still correct; the "
-                     f"status line says when it happens).")
+            # Phases 4 and 5 are open-loop RAMPS along measured travel, so
+            # they exist only for a hand that has those measurements. A hand
+            # without them gets no buttons rather than buttons that cannot run.
+            self.g_close = self.g_close_frac = None
+            self.g_lift = self.g_lift_height = None
+            if self.has("close_ramp"):
+                # Phase 4's runner. Sits with Step/Auto rather than in the Presets
+                # folder because what it IS is a third way of moving the hand -- and
+                # because it must sit above the E-STOP that stops it.
+                self.g_close = gui.add_button(
+                    "Close", icon=self.viser.Icon.HAND_GRAB,
+                    hint="Phase 4: shut every ticked contact finger TOGETHER, and "
+                         "record the whole ramp. Starts from the solve on screen "
+                         "while Warm start is on -- its wrist pose and flexor "
+                         "tensions are adopted onto the sliders and its posture "
+                         "seeds the FK solver -- so a close follows a phase-2 "
+                         "approach instead of jumping back to whatever the sliders "
+                         "were last commanded to. Not a solve -- no constraint is "
+                         "enforced and nothing converges, so the CONTACT does not "
+                         "carry over: the fingers settle wherever their tensions "
+                         "put them before the ramp starts. Each finger is commanded "
+                         "along the same fraction of its own remaining tendon "
+                         "travel, so they start together, arrive together, and none "
+                         "races ahead or stalls on its stop; the status line reports "
+                         "the worst gap between them that the poses actually came "
+                         "back with. Every pose is kept, so the Solve steps scrubber "
+                         "replays the close and the Robot folder plays it as "
+                         "waypoints.")
+                self.g_close_frac = gui.add_slider(
+                    "close depth (fraction)", 0.1, 1.0, 0.05, self.hand.motion.close_fraction,
+                    hint="How far into the tendon travel each finger HAS LEFT the "
+                         "close goes. 1.0 drives every digit onto its hardware stop, "
+                         "where finger_servo_node saturates and the last waypoints "
+                         "command a position the motors cannot reach; the default "
+                         "stops short of it. Fractions of REMAINING travel, so a "
+                         "finger already half shut moves half as far as an open one "
+                         "and both still finish at the same moment.")
+                # Phase 5's runner, next to phase 4's for the same two reasons, and
+                # in the order the two phases run.
+                self.g_lift = gui.add_button(
+                    "Lift", icon=self.viser.Icon.ARROW_UP,
+                    hint="Phase 5: raise the wrist straight up in the WORLD frame "
+                         "from wherever it is, and record the whole ramp. The mirror "
+                         "of Close -- that one moves the tendons and leaves the "
+                         "wrist alone, this one moves the wrist and leaves the "
+                         "tendons alone, so the hand goes up holding exactly the "
+                         "grasp it closed on. Carries the state on screen the way "
+                         "Close does, so it can also be pressed straight off a "
+                         "solve. Not a solve: no constraint is "
+                         "enforced, and NOTHING IN THE MODEL HOLDS THE OBJECT, so "
+                         "the hand rises and the object stays on the table. Every "
+                         "pose is kept, so the Solve steps scrubber replays the lift "
+                         "and the Robot folder plays it as waypoints.")
+                self.g_lift_height = gui.add_slider(
+                    "lift height (m)", 0.0, 0.3, 0.01, self.hand.motion.lift_height_m,
+                    hint=f"How far up the wrist goes, along world +Z. Split into "
+                         f"{self.hand.motion.lift_steps} equal steps whatever the height, so the "
+                         f"taller the lift the bigger each step -- past ~50 mm a "
+                         f"step the FK warm start stops carrying the hand and every "
+                         f"pose rebuilds from cold (slower, still correct; the "
+                         f"status line says when it happens).")
+
             # NEVER disabled -- not while solving, not while idle, not on a
             # binding missing every other capability. A stop button that can be
             # greyed out is not a stop button; this one is always available and
@@ -302,11 +364,14 @@ class GuiMixin:
                 "constraint set, so it restarts the IK loop._")
 
         with gui.add_folder("Wrist start pose", expand_by_default=False):
-            # Seeded from the shared default (solvers.DEFAULT_WRIST_*) so the
-            # pose the GUI opens on IS HandSolveParams' default -- a headless
-            # repro of what is on screen needs no numbers copied across.
-            x0, y0, z0 = DEFAULT_WRIST_XYZ
-            r0, p0, yw0 = DEFAULT_WRIST_RPY
+            # Seeded from the HAND's own start pose (via _fresh_params, so the
+            # sliders and params cannot disagree). Not the shared
+            # solvers.DEFAULT_WRIST_* constants: those are the tendon hand's
+            # measured hover and point a differently-built hand nowhere near the
+            # object. A headless repro of what is on screen is
+            # `hand.default_pose()`.
+            x0, y0, z0 = self.params.wrist_pose[:3, 3]
+            r0, p0, yw0 = R_to_euler(self.params.wrist_pose[:3, :3])
             self.g_tx = gui.add_slider("x (m)", -0.1, 0.1, 0.001, x0)
             self.g_ty = gui.add_slider("y (m)", -0.1, 0.1, 0.001, y0)
             self.g_tz = gui.add_slider("z (m)", -0.1, 0.1, 0.001, z0)
@@ -326,53 +391,70 @@ class GuiMixin:
                      "both frames so you can check the hand sits on the arm the "
                      "way it does in CAD.")
 
-        with gui.add_folder("Tensions (N)"):
-            # Opens on the CALIBRATED OPEN HAND -- HandConfig's
-            # zero_bend_passive_tension / zero_bend_flexor_tensions, read through
-            # robot_plan.open_pose_tensions so the numbers live in exactly one
-            # place and the GUI cannot drift from the calibration. That pose is
-            # the zero robot_plan.open_tendon_lengths measures every commanded
-            # displacement from, so the app starts at zero displacement and the
-            # length readout below opens on +0.00 mm rather than on an offset
-            # nobody asked for. (Same trick as the wrist sliders, one level out:
-            # the headless repro of what is on screen is open_pose_tensions(),
-            # not a HandSolveParams default -- ITS flexor default is still
-            # GRASP_FLEXOR_TENSION, which is scene geometry, the tension the big
-            # grasp sphere was sized at, and not a statement about this hand's
-            # open pose.) The step is 0.01 N because the calibrated pull is
-            # per-finger and does not land on a 0.05 grid.
-            open_passive, open_flexors = robot_plan.open_pose_tensions()
-            self.g_passive = gui.add_slider("passive", 0.0, 3.0, 0.05,
-                                            open_passive)
-            self.g_flexors = [
-                gui.add_slider(lbl, 0.0, 3.0, 0.01,
-                               open_flexors.get(lbl, GRASP_FLEXOR_TENSION))
-                for lbl in self.digit_names]
-            # What the solve gives BACK for the tensions above: the sliders
-            # command a pull, this says how much actuated tendon that pull
-            # actually took in. Rewritten on every render, so it follows the
-            # live re-solve and the convergence scrubber both -- see
-            # _report_tendon_lengths.
-            self.g_tendon_lengths = gui.add_markdown(self.TENDON_IDLE)
-            self.g_flexor_sigma = gui.add_slider(
-                "log10 flexor tension sigma", -6.0, 6.0, 0.1,
-                math.log10(HandSolveParams().flexor_tension_sigma),
-                hint="How loose the ACTUATED (flexor) tendon's tension prior "
-                     "is once contact is expected to move it away from its "
-                     "commanded value above. Read live every IK step, so a "
-                     "drag takes effect on the next Step/Auto solve with no "
-                     "rebuild. Has no effect on FK.")
-            self.g_passive_sigma = gui.add_slider(
-                "log10 passive tension sigma", -6.0, 1.0, 0.1,
-                math.log10(HandSolveParams().passive_tension_sigma),
-                hint="How loose the five PASSIVE tendons' tension prior is -- "
-                     "normally left tight (their physics is a spring holding "
-                     "roughly constant tension), unlike the actuated flexor "
-                     "above. Below ~1e-3 (variance ~1e-6) risks an "
-                     "IndeterminantLinearSystem against the flexor's much "
-                     "looser scale. Read live every IK step, so a drag takes "
-                     "effect on the next Step/Auto solve with no rebuild. "
-                     "Has no effect on FK.")
+        # What the hand is COMMANDED with. Two shapes, because the two hands
+        # are commanded differently: one scalar pull per digit on a tendon hand,
+        # a full joint vector per digit on a joint-space one. Both write the
+        # per-digit means that become q_S / the tension prior.
+        self.g_passive = None
+        self.g_flexors = []
+        self.g_joints = []
+        self.g_tendon_lengths = None
+        self.g_flexor_sigma = self.g_passive_sigma = None
+        # The joint-space counterparts. Both shapes are declared here whichever
+        # branch runs, so every `self.g_*` a mixin references resolves on either
+        # hand -- which tests/projects/test_mixin_surface.py checks.
+        self.g_joint_sigma = None
+        self.g_actuation_report = None
+        if self.has("single_drive"):
+            with gui.add_folder("Tensions (N)"):
+                # Opens on the CALIBRATED OPEN HAND -- HandConfig's
+                # zero_bend_passive_tension / zero_bend_flexor_tensions, read through
+                # robot_plan.open_pose_tensions so the numbers live in exactly one
+                # place and the GUI cannot drift from the calibration. That pose is
+                # the zero robot_plan.open_tendon_lengths measures every commanded
+                # displacement from, so the app starts at zero displacement and the
+                # length readout below opens on +0.00 mm rather than on an offset
+                # nobody asked for. (Same trick as the wrist sliders, one level out:
+                # the headless repro of what is on screen is open_pose_tensions(),
+                # not a HandSolveParams default -- ITS flexor default is still
+                # GRASP_FLEXOR_TENSION, which is scene geometry, the tension the big
+                # grasp sphere was sized at, and not a statement about this hand's
+                # open pose.) The step is 0.01 N because the calibrated pull is
+                # per-finger and does not land on a 0.05 grid.
+                open_passive, open_flexors = robot_plan.open_pose_tensions()
+                self.g_passive = gui.add_slider("passive", 0.0, 3.0, 0.05,
+                                                open_passive)
+                self.g_flexors = [
+                    gui.add_slider(lbl, 0.0, 3.0, 0.01,
+                                   open_flexors.get(lbl, GRASP_FLEXOR_TENSION))
+                    for lbl in self.digit_names]
+                # What the solve gives BACK for the tensions above: the sliders
+                # command a pull, this says how much actuated tendon that pull
+                # actually took in. Rewritten on every render, so it follows the
+                # live re-solve and the convergence scrubber both -- see
+                # _report_tendon_lengths.
+                self.g_tendon_lengths = gui.add_markdown(self.TENDON_IDLE)
+                self.g_flexor_sigma = gui.add_slider(
+                    "log10 flexor tension sigma", -6.0, 6.0, 0.1,
+                    math.log10(HandSolveParams().flexor_tension_sigma),
+                    hint="How loose the ACTUATED (flexor) tendon's tension prior "
+                         "is once contact is expected to move it away from its "
+                         "commanded value above. Read live every IK step, so a "
+                         "drag takes effect on the next Step/Auto solve with no "
+                         "rebuild. Has no effect on FK.")
+                self.g_passive_sigma = gui.add_slider(
+                    "log10 passive tension sigma", -6.0, 1.0, 0.1,
+                    math.log10(HandSolveParams().passive_tension_sigma),
+                    hint="How loose the five PASSIVE tendons' tension prior is -- "
+                         "normally left tight (their physics is a spring holding "
+                         "roughly constant tension), unlike the actuated flexor "
+                         "above. Below ~1e-3 (variance ~1e-6) risks an "
+                         "IndeterminantLinearSystem against the flexor's much "
+                         "looser scale. Read live every IK step, so a drag takes "
+                         "effect on the next Step/Auto solve with no rebuild. "
+                         "Has no effect on FK.")
+        else:
+            self._build_joint_sliders(gui)
 
         # One-click constraint-set presets, backed by solvers.PHASE_PRESETS so
         # the same data is usable headlessly. Checking a box writes its whole
@@ -876,15 +958,22 @@ class GuiMixin:
         self.g_phase2.on_update(lambda _: self._on_phase_toggle("phase2"))
         self.g_phase4.on_update(lambda _: self._on_phase_toggle("phase4"))
         self.g_phase5.on_update(lambda _: self._on_phase_toggle("phase5"))
-        self.g_close.on_click(self._close_hand)
-        self.g_lift.on_click(self._lift_hand)
+        if self.g_close is not None:
+            self.g_close.on_click(self._close_hand)
+        if self.g_lift is not None:
+            self.g_lift.on_click(self._lift_hand)
 
         self.g_object.on_update(self._on_object_selected)
 
-        # Live FK re-solve on the pose / tension sliders (fast, warm-started).
+        # Live FK re-solve on the pose and actuation sliders (fast,
+        # warm-started). Whichever actuation panel this hand got -- the tension
+        # sliders or the per-joint ones -- drives the same re-solve.
         for h in ([self.g_tx, self.g_ty, self.g_tz, self.g_roll, self.g_pitch,
-                   self.g_yaw, self.g_passive] + self.g_flexors):
-            h.on_update(self._live_fk)
+                   self.g_yaw, self.g_passive]
+                  + self.g_flexors
+                  + [j for row in self.g_joints for j in row]):
+            if h is not None:
+                h.on_update(self._live_fk)
 
         # Object pose: re-places the object and restarts the IK loop (see
         # _object_pose_changed for why it cannot just re-render).

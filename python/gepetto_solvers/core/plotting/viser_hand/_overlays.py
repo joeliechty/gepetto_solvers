@@ -24,8 +24,16 @@ from .palette import (
 
 class OverlayMixin:
     def _update_tendons(self, name, fm, poses):
+        """Tendon routes, for a digit that has any.
+
+        A hand with no tendons carries no routing to draw, and says so by
+        leaving ``extras`` unset -- so this returns nothing rather than the
+        caller having to know which kind of hand it is holding."""
         keep = set()
-        tc = fm.extras.tendon_config
+        extras = getattr(fm, "extras", None)
+        if extras is None:
+            return keep
+        tc = extras.tendon_config
         for ti in range(tc.num_tendons):
             pts = []
             for di in range(tc.num_discs):
@@ -320,7 +328,10 @@ class OverlayMixin:
 
     def _update_discs(self, name, fm, poses):
         keep = set()
-        tc = fm.extras.tendon_config
+        extras = getattr(fm, "extras", None)
+        if extras is None:
+            return keep   # no routing discs on this hand
+        tc = extras.tendon_config
         r = 1.3 * tc.routing_radius
         h = 0.3 * tc.routing_radius
         for di, node_idx in enumerate(tc.disc_pose_idx):
@@ -354,8 +365,11 @@ class OverlayMixin:
         hide the frame most worth seeing, and would silently shift the numbering
         of every triad on screen relative to ``disc_pose_idx``.
         """
+        extras = getattr(fm, "extras", None)
+        if extras is None:
+            return set()   # no routing discs on this hand
         keep = set()
-        tc = fm.extras.tendon_config
+        tc = extras.tendon_config
         # Sized off the disc rather than fixed: the axes have to read against the
         # disc they sit on (drawn at 1.3 * routing_radius) at any finger scale,
         # and just past its rim is where they are legible without swamping the

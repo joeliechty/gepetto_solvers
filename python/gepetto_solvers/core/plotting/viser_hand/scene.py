@@ -158,11 +158,22 @@ class ViserHandScene(
             poses = [np.asarray(st.pose.mean) for st in states]
             positions = np.array([T[:3, 3] for T in poses])
 
-            # Backbone.
+            # The digit itself. A continuum rod really is a smooth curve
+            # through its nodes, so it gets a spline; a rigid linkage is
+            # straight segments between joint frames, and drawing a spline
+            # through those would show a bend where the hardware has none.
+            #
+            # Told apart by whether the digit carries continuum state, which is
+            # the honest question -- not by the hand's name.
             n = f"/hand/{name}/rod"
-            self._dynamic[n] = self.scene.add_spline_catmull_rom(
-                n, positions, curve_type="catmullrom",
-                line_width=self.backbone_width, color=_ROD_RGB)
+            if getattr(fm, "extras", None) is not None:
+                self._dynamic[n] = self.scene.add_spline_catmull_rom(
+                    n, positions, curve_type="catmullrom",
+                    line_width=self.backbone_width, color=_ROD_RGB)
+            else:
+                segs = np.stack([positions[:-1], positions[1:]], axis=1)
+                self._dynamic[n] = self.scene.add_line_segments(
+                    n, segs, colors=_ROD_RGB, line_width=self.backbone_width)
             keep.add(n)
 
             # Tendons.
@@ -189,7 +200,9 @@ class ViserHandScene(
 
             # Collision spheres on the disc nodes.
             if collision and self.show_collision_spheres:
-                for di, node_idx in enumerate(fm.extras.tendon_config.disc_pose_idx):
+                # Off the STATE's own site list, so this marks exactly the
+                # spheres the solve carried -- on any hand.
+                for di, node_idx in enumerate(fm.collision_sites):
                     kn = f"/hand/{name}/collision/{di}"
                     self._dynamic[kn] = self.scene.add_icosphere(
                         kn, radius=float(collision_radius), color=_COLLISION_RGB,

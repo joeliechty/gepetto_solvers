@@ -140,7 +140,7 @@ class SceneRenderMixin:
         if self.result is None:
             # Nothing solved yet, so the commanded wrist pose is all there is.
             self._render_mount()
-            self._report_tendon_lengths(None)
+            self._report_actuation(None)
             self._update_traj()
             return
         # Render whichever solve snapshot the convergence scrubber selects; with
@@ -149,7 +149,7 @@ class SceneRenderMixin:
         # Every result here is a single state, so there is only ever frame 0.
         res = self._iter_view(live)
         self._render_mount(res)
-        self._report_tendon_lengths(res)
+        self._report_actuation(res)
         # Only the fingers this solve drove onto a surface get a gap line for it;
         # a distance readout on a finger nothing asked to touch is just noise.
         # The two sets are independent, so a finger can carry both lines, one, or

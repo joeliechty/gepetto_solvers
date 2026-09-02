@@ -17,6 +17,12 @@ from .constants import (
 class PhaseMixin:
     # -- phase presets --
 
+    @staticmethod
+    def _set(handle, value):
+        """Assign to a GUI handle if it exists. See _apply_phase_preset."""
+        if handle is not None:
+            handle.value = value
+
     def _preset_widget(self, field):
         """The GUI handle a ``PHASE_PRESETS`` override field writes onto, for
         the plain 1:1 cases (everything except the two object-contact form
@@ -102,15 +108,21 @@ class PhaseMixin:
                     self.g_obj_contact.value = (
                         not on and bool(overrides.get("object_contact", False)))
                 elif field == "passive_tension_sigma":
-                    self.g_passive_sigma.value = math.log10(value)
+                    self._set(self.g_passive_sigma, math.log10(value))
                 elif field == "sigma_wrist_pos":
                     self.g_sig_pos.value = math.log10(value)
                 elif field == "sigma_wrist_rot":
                     self.g_sig_rot.value = math.log10(value)
                 elif field == "flexor_tension_sigma":
-                    self.g_flexor_sigma.value = math.log10(value)
+                    self._set(self.g_flexor_sigma, math.log10(value))
                 else:
-                    self._preset_widget(field).value = value
+                    # A preset may name a control this hand does not have -- the
+                    # phase presets were written for the tendon hand, and a
+                    # joint-space one has no tension sigmas or rod bending. Skip
+                    # rather than fail: the rest of the phase still applies, and
+                    # the missing control is missing BECAUSE it would not mean
+                    # anything here.
+                    self._set(self._preset_widget(field), value)
         finally:
             self._restoring = False
         # The batch ran with every per-handle callback suppressed, so the

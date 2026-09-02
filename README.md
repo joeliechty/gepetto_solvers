@@ -26,13 +26,23 @@ against whichever task constraints are switched on. Three solvers build that gra
 None of the three knows what KIND of hand it is posing. A hand supplies its own
 **kinematics** — the factors internal to the mechanism — through the
 `HandKinematics` interface, and the graph builder adds contact, collision,
-support-plane and pre-grasp constraints around it without ever asking. The hand
-shipped here is `tendon_5f`: four fingers and a thumb, each a Cosserat rod driven
-by six tendons.
+support-plane and pre-grasp constraints around it without ever asking.
+
+Two hands ship:
+
+| `--hand` | mechanism |
+|---|---|
+| `tendon_5f` | four fingers and a thumb, each a Cosserat rod driven by six tendons (the default) |
+| `allegro` | 16 revolute joints in four chains, posed from a URDF by Pinocchio |
 
 ```bash
-python scripts/viz_interactive.py --hand tendon_5f   # the default
+python scripts/viz_interactive.py                 # tendon_5f
+python scripts/viz_interactive.py --hand allegro
 ```
+
+The workbench builds itself around whichever it is given: the panels a hand has
+no use for are absent rather than dead, and a joint-space hand gets per-joint
+sliders where a tendon hand gets one pull per digit.
 
 **[docs/hand_solvers.md](docs/hand_solvers.md) is the real documentation** — what each
 solver builds, which section of *Underactuated Object Manipulation* it implements,

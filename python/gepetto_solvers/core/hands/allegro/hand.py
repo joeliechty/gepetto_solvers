@@ -135,6 +135,24 @@ class AllegroHand:
                                                           float)
         return wrist, means
 
+    def joint_limits(self):
+        """Per-digit ``[(lo, hi)]`` from the URDF, one pair per joint.
+
+        Read through the joint NAMES, never by arithmetic on the digit index:
+        Pinocchio orders Allegro's configuration index, thumb, middle, ring --
+        not the digit order -- so ``digit * 4 + joint`` silently returns another
+        digit's limits. The solver has always looked these up by name; this is
+        here so the workbench does too.
+        """
+        chain = gepetto_solvers.RigidChainModel.from_urdf_file(
+            str(allegro.URDF_PATH))
+        lo, hi = chain.lower_position_limits, chain.upper_position_limits
+        out = []
+        for spec in allegro.digit_specs():
+            out.append([(lo[chain.joint_indices(j)[0]],
+                         hi[chain.joint_indices(j)[0]]) for j in spec.joints])
+        return out
+
     # -- actuation ---------------------------------------------------------
 
     def actuation_means(self, params):
