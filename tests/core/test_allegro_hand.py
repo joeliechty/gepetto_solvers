@@ -22,6 +22,7 @@ pytest.importorskip(
     "pinocchio",
     reason="pinocchio is a conda C++ dependency; see conda_setup_*.sh")
 
+from gepetto_solvers.core.hands.allegro import meshes as allegro_meshes  # noqa: E402
 from gepetto_solvers.core.hands.allegro import spec as allegro_spec  # noqa: E402
 
 
@@ -309,9 +310,10 @@ def test_the_link_meshes_are_present_and_placed(hand):
     meshes = hand.visual_meshes()
     assert len(meshes) == 1 + len(hand.digit_names) * (
         allegro_spec.SITES_PER_DIGIT - 1)
-    assert sum(1 for attach, _ in meshes if attach is None) == 1, "one palm"
-    for attach, path in meshes:
+    assert sum(1 for attach, _, _ in meshes if attach is None) == 1, "one palm"
+    for attach, path, T_local in meshes:
         assert path.exists(), path
+        assert np.asarray(T_local).shape == (4, 4)
         if attach is not None:
             digit, site = attach
             assert 0 <= digit < len(hand.digit_names)
@@ -361,3 +363,101 @@ def test_a_solve_is_identical_without_the_meshes(hand, params, monkeypatch):
         np.testing.assert_allclose(a.actuation.mean, b.actuation.mean, atol=1e-12)
         np.testing.assert_allclose(a.sites[-1].pose.mean, b.sites[-1].pose.mean,
                                    atol=1e-12)
+
+
+def test_the_meshes_are_rotated_out_of_gltf_s_y_up(hand):
+    """THE SIDEWAYS-MESHES BUG.
+
+    glTF is Y-up; URDF and ROS are Z-up. The conversion is IMPLICIT in the
+    format -- these files carry an identity node transform, so nothing in the
+    data says which way is up and a loader that just reads vertices gets a hand
+    lying on its side.
+
+    Checked against the URDF's own collision boxes, which are written in the link
+    frame and so are independent ground truth: after the correction every link's
+    longest axis must agree with its box's longest axis, and the mesh centres
+    must sit near the collision origins. Both the AXIS and the SIGN matter --
+    extents alone are symmetric under ±90°, so the centres are what pin the
+    direction.
+    """
+    import xml.etree.ElementTree as ET
+
+    trimesh = pytest.importorskip("trimesh")
+
+    root = ET.parse(allegro_spec.URDF_PATH).getroot()
+    by_link = {}
+    for link in root.findall("link"):
+        box = link.find("collision/geometry/box")
+        mesh = link.find("visual/geometry/mesh")
+        origin = link.find("collision/origin")
+        if box is None or mesh is None:
+            continue
+        by_link[mesh.get("filename").rsplit("/", 1)[-1]] = (
+            np.array([float(v) for v in box.get("size").split()]),
+            np.array([float(v) for v in (origin.get("xyz", "0 0 0").split()
+                                         if origin is not None else "0 0 0".split())]),
+        )
+
+    # The pure ASSET correction, not each entry's full T_local: the palm's also
+    # carries its link's placement in the root frame, which would move its mesh
+    # out of the frame these collision boxes are written in. Where the palm ends
+    # up is test_the_palm_mesh_meets_the_finger_mounts' business; this one is
+    # only about which way is up.
+    correction = allegro_meshes.GLTF_TO_URDF
+
+    checked = 0
+    for _, path, _ in hand.visual_meshes():
+        entry = by_link.get(path.name)
+        if entry is None:
+            continue          # a link whose collision shape is not a box
+        box, box_origin = entry
+        m = trimesh.load(path, force="mesh")
+        m.apply_transform(np.asarray(correction, float))
+
+        assert int(np.argmax(m.extents)) == int(np.argmax(box)), (
+            f"{path.name}: long axis {m.extents.round(4)} disagrees with the "
+            f"collision box {box.round(4)} -- the mesh is rotated wrongly")
+
+        centre = (m.bounds[0] + m.bounds[1]) / 2
+        assert np.linalg.norm(centre - box_origin) < 0.012, (
+            f"{path.name}: mesh centre {centre.round(4)} is far from the "
+            f"collision origin {box_origin.round(4)} -- the rotation sign is "
+            f"probably flipped")
+        checked += 1
+
+    assert checked >= 15, f"expected to check most links, checked {checked}"
+
+
+def test_the_palm_mesh_meets_the_finger_mounts(hand):
+    """THE DISPLACED-PALM BUG: the palm mesh was attached to the wrong frame.
+
+    It rides on the WRIST, but the mesh belongs to `palm_link`, which the URDF
+    puts 95 mm up the root's +Z through the fixed `root_to_base` joint. Drawn at
+    the wrist it landed a whole palm-height low, hanging below the finger bases
+    with a ~93 mm gap instead of meeting them.
+
+    The check is that the palm's top face reaches the digits' mounts -- which is
+    a statement about the assembled hand, not about one transform, so it stays
+    true however the placement is arrived at.
+    """
+    trimesh = pytest.importorskip("trimesh")
+
+    p = solvers.HandSolveParams()
+    p.wrist_pose = np.eye(4)
+    p.joint_targets = [[0.0] * hand.actuation.n for _ in hand.digit_names]
+    frame = solvers.HandFKSolver(p, hand).solve().frames[0]
+
+    palm = next(e for e in hand.visual_meshes() if e[0] is None)
+    mesh = trimesh.load(palm[1], force="mesh")
+    mesh.apply_transform(np.asarray(palm[2], float))
+    palm_top = mesh.bounds[1][2]
+
+    mounts = [frame[n].site_point(0)[2] for n in hand.digit_names]
+    # Every digit hangs off the palm, so no mount may sit above its top face by
+    # more than a millimetre or float outside it below.
+    assert max(mounts) <= palm_top + 1e-3, (
+        f"finger mounts reach {max(mounts):.4f} but the palm stops at "
+        f"{palm_top:.4f} -- the palm is too low")
+    assert palm_top - max(mounts) < 0.01, (
+        f"palm top {palm_top:.4f} floats {palm_top - max(mounts):.4f} m above "
+        f"the highest mount -- the palm is too high")

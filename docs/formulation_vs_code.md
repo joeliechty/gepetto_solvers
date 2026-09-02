@@ -29,6 +29,7 @@ code *does*. This file only covers where it differs and why.
 | [8](#8-contact-is-witness-free-where-the-surface-allows-it) | Contact is witness-free where the surface allows it | representation |
 | [9](#9-the-support-plane-uses-one-residual-not-five) | The support plane uses one residual, not five | representation |
 | [10](#10-plane-avoidance-is-off-during-the-contact-phases) | Plane avoidance is off during the contact phases | scheduling |
+| [11](#11-a-urdfs-visual-meshes-need-two-corrections-nothing-states) | A URDF's visual meshes need two corrections nothing states | asset convention |
 
 ---
 
@@ -265,3 +266,35 @@ half-space would be fighting the contact that phase exists to make; phase 2
 inherits fingers still resting on it, so re-arming avoidance would start that
 phase already in violation. The plane itself stays configured, and
 object/finger–finger collision are untouched.
+
+## 11. A URDF's visual meshes need two corrections nothing states
+
+Not a departure from the maths — the meshes never touch the graph — but two
+traps that cost real time on the Allegro hand and will cost it again on the next
+URDF one, because in both cases *nothing in the data says the correction is
+needed*.
+
+**glTF is Y-up; URDF and ROS are Z-up.** The conversion is implicit in the
+format. These files carry an identity node transform, so a loader that just
+reads vertices produces a hand lying on its side, and no tool reports anything
+wrong. Drake applies the rotation internally; we apply `GLTF_TO_URDF`, an
+`R_x(+90°)`, in
+[`hands/allegro/meshes.py`](../python/gepetto_solvers/core/hands/allegro/meshes.py).
+
+**A mesh belongs to its LINK, not to the frame you attach it to.** The palm mesh
+rides on the wrist, but it is authored in `palm_link`, which the URDF places
+95 mm up the root's +Z through the fixed `root_to_base` joint. Drawn at the
+wrist it lands a whole palm-height low, hanging below the finger bases. The
+link's own fixed placement composes in ahead of the axis correction.
+
+**Both were found the same way, and both are guarded that way**: against the
+URDF's own `<collision>` boxes and origins, which are written in the link frame
+and so are independent ground truth. Extents alone cannot pin a rotation — they
+are symmetric under ±90° — so the mesh CENTRES are what fix the sign: the right
+rotation puts them a mean 3.2 mm from the collision origins, the wrong one
+36.8 mm. `tests/core/test_allegro_hand.py` checks the axis, the sign and the
+palm's placement separately, and each was verified to fail on its own bug.
+
+The transform is carried **per mesh**, as the third element of
+`Hand.visual_meshes()`, rather than assumed by the renderer: it is a property of
+the asset, so a hand shipping Z-up STL or OBJ returns the identity.

@@ -429,7 +429,8 @@ class OverlayMixin:
         if not link_meshes:
             return keep
 
-        for i, (attach, path) in enumerate(link_meshes):
+        for i, entry in enumerate(link_meshes):
+            attach, path, T_local = entry
             mesh = self._link_mesh(path)
             if mesh is None:
                 continue
@@ -446,8 +447,11 @@ class OverlayMixin:
                     continue
                 T = np.asarray(fs.marginals.sites[site].pose.mean, float)
 
+            # T_local first: it takes the mesh out of its own coordinates and
+            # into the frame it attaches to (for glTF, the Y-up to Z-up
+            # correction). Then the site pose puts that frame in the world.
             placed = mesh.copy()
-            placed.apply_transform(T)
+            placed.apply_transform(np.asarray(T) @ np.asarray(T_local, float))
             placed.visual.vertex_colors = np.array(
                 [*_LINK_MESH_RGB, _LINK_MESH_ALPHA], dtype=np.uint8)
             n = f"/hand/mesh/{i}"

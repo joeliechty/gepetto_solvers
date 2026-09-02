@@ -210,12 +210,29 @@ Optional, read where they are relevant: `hardware` (a `HardwareMap`), `motion`
 (a `MotionProfile`), `default_contact_digits`, `joint_limits()`, and
 `visual_meshes()`.
 
-`visual_meshes()` is worth its own note: it returns `[(attach, path)]` link
-geometry for the renderer, where `attach` is `None` for a mesh riding on the
-wrist or `(digit, site)` for one riding on a site. It is **purely cosmetic**.
-Collision is the sphere set on the digit's sites and the factor graph never sees
-a mesh, so a hand without meshes is drawn as a skeleton — a complete drawing in
-its own right — and deleting a hand's meshes changes no solved number.
+`visual_meshes()` is worth its own note: it returns `[(attach, path, T_local)]`
+link geometry for the renderer, where `attach` is `None` for a mesh riding on the
+wrist or `(digit, site)` for one riding on a site, and `T_local` takes the mesh
+out of its own coordinates into that frame. It is **purely cosmetic**: collision
+is the sphere set on the digit's sites and the factor graph never sees a mesh, so
+a hand without meshes is drawn as a skeleton — a complete drawing in its own
+right — and deleting a hand's meshes changes no solved number.
+
+**`T_local` is where mesh bugs live**, and both of the ones the Allegro hand hit
+are invisible in the data:
+
+* **glTF is Y-up, URDF is Z-up**, and the files say nothing about it — an
+  identity node transform, and a hand that renders lying on its side. STL and
+  OBJ in a URDF are already Z-up, so this is glTF-specific.
+* **A mesh belongs to its LINK.** If you attach it to a frame that is not that
+  link — the palm mesh rides on the wrist, but is authored in `palm_link`,
+  95 mm up a fixed joint — the link's own placement composes in first.
+
+Check both against the URDF's `<collision>` origins and box sizes: they are
+written in the link frame, so they are ground truth independent of your
+rendering. Note extents alone cannot pin a rotation (they are symmetric under
+±90°) — compare mesh CENTRES against collision origins to fix the sign. See
+[formulation_vs_code.md §11](formulation_vs_code.md#11-a-urdfs-visual-meshes-need-two-corrections-nothing-states).
 
 Three of those are worth a sentence each, because they are what stop the
 workbench and the solvers assuming your hand is the tendon one:

@@ -100,9 +100,11 @@ class ViserHandScene(
         an object exposing ``.marginals`` (a ``DigitState``).
 
         ``link_meshes`` is the hand's optional visual geometry, as
-        ``[(attach, path)]`` from ``Hand.visual_meshes`` -- ``attach`` is None
-        for a mesh riding on the wrist (``wrist_pose``) or ``(digit, site)`` for
-        one riding on a site. PURELY COSMETIC: collision in this repository is
+        ``[(attach, path, T_local)]`` from ``Hand.visual_meshes`` -- ``attach``
+        is None for a mesh riding on the wrist (``wrist_pose``) or
+        ``(digit, site)`` for one riding on a site, and ``T_local`` takes the
+        mesh out of its own coordinates into that frame (glTF is Y-up where
+        URDF is Z-up, and the file itself does not say so). PURELY COSMETIC: collision in this repository is
         the sphere set the solve carries, never a mesh, so these are drawn and
         nothing else. Omit them and the hand is drawn as a skeleton, which is a
         complete drawing in its own right.
