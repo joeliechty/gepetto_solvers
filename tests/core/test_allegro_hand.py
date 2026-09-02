@@ -22,6 +22,8 @@ pytest.importorskip(
     "pinocchio",
     reason="pinocchio is a conda C++ dependency; see conda_setup_*.sh")
 
+from gepetto_solvers.core.hands.allegro import spec as allegro_spec  # noqa: E402
+
 
 @pytest.fixture(scope="module")
 def hand():
@@ -171,7 +173,8 @@ def test_the_solved_state_has_the_neutral_shape(hand, params):
     for d in state.digits:
         assert d.extras is None            # no tendon payload
         assert list(d.displacement) == []  # actuation IS position
-        assert len(d.sites) == 5           # mount + four links
+        # mount + every moving link + the fingertip
+        assert len(d.sites) == allegro_spec.SITES_PER_DIGIT
 
 
 def test_the_finger_sol_accessors_work_on_a_rigid_hand(hand, params):
@@ -179,8 +182,9 @@ def test_the_finger_sol_accessors_work_on_a_rigid_hand(hand, params):
     returning None is how one that cannot finds out."""
     result = solvers.HandFKSolver(params, hand).solve()
     fs = result.frames[0]["index"]
-    assert fs.num_sites() == 5
-    assert fs.sphere_sites() == [1, 2, 3, 4]
+    assert fs.num_sites() == allegro_spec.SITES_PER_DIGIT
+    # Every site but the fixed mount carries a collision sphere.
+    assert fs.sphere_sites() == list(range(1, allegro_spec.SITES_PER_DIGIT))
     assert fs.tendon() is None
     assert fs.tip_pose().shape == (4, 4)
     np.testing.assert_allclose(fs.tip_point(), fs.tip_pose()[:3, 3])
@@ -204,3 +208,93 @@ def test_both_hands_satisfy_the_protocol():
         assert hand.features <= hands.FEATURES, name
         assert hand.opposing_index in range(len(hand.digit_names)) or \
             hand.opposing_index == -1, name
+
+
+# ---------------------------------------------------------------------------
+# The chain is the whole chain.
+# ---------------------------------------------------------------------------
+
+def test_every_moving_link_has_a_site(hand):
+    """One site per movable joint, plus the fingertip, plus the fixed mount.
+
+    Leaving a link out does not merely coarsen the picture -- it MERGES two
+    joints. Omitting the distal link made joint_2 and joint_3 each move exactly
+    one drawn point (the tip), so the two sliders appeared to drive the same
+    thing, and the last segment was drawn as one 65 mm bar where the hand has
+    38 mm and 27 mm about a joint between them.
+    """
+    assert allegro_spec.SITES_PER_DIGIT == allegro_spec.DOF_PER_DIGIT + 2
+    for name in hand.digit_names:
+        assert len(allegro_spec._SITE_FRAMES[name]) == allegro_spec.DOF_PER_DIGIT + 1
+
+
+def test_each_joint_moves_a_distinct_part_of_the_chain(hand, params):
+    """THE SLIDER BUG, as a measurement.
+
+    In a serial chain joint j moves every site below it and nothing above, so
+    the moved sets are NESTED. That alone is not enough to tell the sliders
+    apart, though: the two base joints -- abduction and flexion -- move the same
+    set and differ only in direction. What has to hold is that no two joints
+    produce the same MOTION, which is what the bug broke: with the distal link
+    missing, joint_2 and joint_3 each moved exactly one drawn point, the tip,
+    along nearly the same arc.
+    """
+    from gepetto_solvers.core.solvers import HandFKSolver
+
+    def chain(targets):
+        p = solvers.HandSolveParams()
+        p.wrist_pose = params.wrist_pose
+        p.joint_targets = targets
+        fs = HandFKSolver(p, hand).solve().frames[0]["index"]
+        return np.array([fs.site_point(i) for i in range(fs.num_sites())])
+
+    base_targets = [list(q) for q in params.joint_targets]
+    base = chain(base_targets)
+
+    moved_sets, fields = [], []
+    for j in range(hand.actuation.n):
+        targets = [list(q) for q in base_targets]
+        targets[0][j] += 0.3
+        delta = chain(targets) - base
+        moved_sets.append({i for i, d in enumerate(np.linalg.norm(delta, axis=1))
+                           if d > 1e-4})
+        fields.append(delta.ravel() / np.linalg.norm(delta))
+
+    # Nested: a deeper joint never moves a site a shallower one leaves alone.
+    for a, b in zip(moved_sets, moved_sets[1:]):
+        assert b <= a, (a, b)
+
+    # And STRICTLY nested past the base pair: each joint down the chain has one
+    # fewer link below it, so it moves strictly fewer sites. This is the
+    # assertion the bug trips -- with the distal link missing, joint_2 and
+    # joint_3 moved the identical set {tip}.
+    #
+    # The base pair is excluded because abduction and flexion legitimately move
+    # the same set: the link between them lies on the abduction axis, so it does
+    # not translate. They differ in DIRECTION, which the check below covers.
+    for a, b in zip(moved_sets[1:], moved_sets[2:]):
+        assert b < a, (a, b)
+
+    # ...and no two joints move the hand the same way.
+    for i in range(len(fields)):
+        for k in range(i + 1, len(fields)):
+            assert abs(float(fields[i] @ fields[k])) < 0.99, (
+                f"j{i} and j{k} move the chain almost identically")
+
+
+def test_the_drawn_segments_are_the_real_link_lengths(hand, params):
+    """The finger a viewer sees must be the finger the URDF describes.
+
+    Allegro's index is 54 mm proximal, 38 mm medial, 27 mm distal-to-tip. A
+    missing site shows up here as one long bar instead of two.
+    """
+    from gepetto_solvers.core.solvers import HandFKSolver
+
+    fs = HandFKSolver(params, hand).solve().frames[0]["index"]
+    pts = np.array([fs.site_point(i) for i in range(fs.num_sites())])
+    segments = np.linalg.norm(np.diff(pts, axis=0), axis=1) * 1e3
+
+    # The first is the mount-to-first-link bar, which is degenerate by
+    # construction: a link's frame sits at its own joint's origin.
+    assert segments[0] == pytest.approx(0.0, abs=1e-6)
+    np.testing.assert_allclose(segments[1:], [16.4, 54.0, 38.4, 26.7], atol=0.2)

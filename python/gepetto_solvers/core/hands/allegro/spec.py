@@ -45,14 +45,21 @@ _JOINT_NUMBERS = {
 #: Site 0 is NOT here: it is the digit's fixed mount on the palm, which the
 #: rigid kinematics resolves to the wrist variable itself rather than a frame.
 #:
+#: EVERY MOVING LINK IS LISTED, then the fingertip. All four are needed, and
+#: leaving one out is not merely a coarser picture -- it silently merges two
+#: joints. Omitting `link_3` (the distal link) made joint_2 and joint_3 each
+#: move exactly one drawn point, the tip, so the two sliders looked like they
+#: drove the same thing; and it drew the last segment as one 65 mm bar where the
+#: hand really has 38 mm + 27 mm about a joint between them.
+#:
 #: The last entry is the fingertip, and is what `contact_node` addresses. Allegro
 #: names those `link_*_tip` -- fixed frames past the distal joint, which is where
 #: a fingertip contact sphere belongs.
 _SITE_FRAMES = {
-    "index": ["link_0", "link_1", "link_2", "link_3_tip"],
-    "middle": ["link_4", "link_5", "link_6", "link_7_tip"],
-    "ring": ["link_8", "link_9", "link_10", "link_11_tip"],
-    "thumb": ["link_12", "link_13", "link_14", "link_15_tip"],
+    "index": ["link_0", "link_1", "link_2", "link_3", "link_3_tip"],
+    "middle": ["link_4", "link_5", "link_6", "link_7", "link_7_tip"],
+    "ring": ["link_8", "link_9", "link_10", "link_11", "link_11_tip"],
+    "thumb": ["link_12", "link_13", "link_14", "link_15", "link_15_tip"],
 }
 
 #: Joints per digit, and therefore the dimension of each digit's actuation

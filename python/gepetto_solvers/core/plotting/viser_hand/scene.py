@@ -170,11 +170,20 @@ class ViserHandScene(
                 self._dynamic[n] = self.scene.add_spline_catmull_rom(
                     n, positions, curve_type="catmullrom",
                     line_width=self.backbone_width, color=_ROD_RGB)
+                keep.add(n)
             else:
+                # Degenerate segments are dropped. A link's frame sits at its
+                # own joint's origin, so a digit's FIRST link is coincident with
+                # that digit's mount and the bar between them has zero length.
+                # It is a real frame -- it is what the base joint rotates -- so
+                # it keeps its site; it just has nothing to draw.
                 segs = np.stack([positions[:-1], positions[1:]], axis=1)
-                self._dynamic[n] = self.scene.add_line_segments(
-                    n, segs, colors=_ROD_RGB, line_width=self.backbone_width)
-            keep.add(n)
+                segs = segs[np.linalg.norm(segs[:, 1] - segs[:, 0], axis=1) > 1e-9]
+                if len(segs):
+                    self._dynamic[n] = self.scene.add_line_segments(
+                        n, segs, colors=_ROD_RGB,
+                        line_width=self.backbone_width)
+                    keep.add(n)
 
             # Tendons.
             keep |= self._update_tendons(name, fm, poses)
