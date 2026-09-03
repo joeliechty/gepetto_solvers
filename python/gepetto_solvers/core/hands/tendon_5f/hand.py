@@ -68,6 +68,7 @@ class TendonHand5F:
     features = frozenset({
         "tendons", "single_drive", "displacement", "planar_bending",
         "pinch_table", "calibration", "robot_plan", "close_ramp",
+        "pregrasp", "normal_row_choice",
     })
 
     #: How many discs from the base are on the rigidly co-mounted metacarpal.

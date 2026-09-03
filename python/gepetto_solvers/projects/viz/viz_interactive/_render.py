@@ -189,13 +189,16 @@ class SceneRenderMixin:
         # constraint being switched on -- the plane is worth looking at exactly
         # when nothing is enforcing anything about it.
         planes = (finger_plane_witness(res, 0)
-                  if self.g_show_finger_planes.value else None)
+                  if (self.g_show_finger_planes is not None
+                      and self.g_show_finger_planes.value) else None)
         # Same gating, one step further: the in-plane distance also needs a
         # binding that can evaluate the factor and an object with an analytic
         # ellipsoid form. planar_gap_witness returns None on either, so the
         # overlay simply does not appear rather than the render failing.
         planar = (planar_gap_witness(self.params, res, 0)
-                  if (self.g_show_planar_gap.value and self.caps["planar_gap"])
+                  if (self.g_show_planar_gap is not None
+                      and self.g_show_planar_gap.value
+                      and self.caps["planar_gap"])
                   else None)
         self._report_iterate(live)
         self.scene.update(res.frames[0],

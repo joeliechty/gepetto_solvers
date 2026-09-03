@@ -393,6 +393,68 @@ class OverlayMixin:
         return keep
 
 
+    def _update_link_frames(self, name, fm, poses):
+        """A triad on every site of a digit -- the RIGID LINK frames.
+
+        The joint-space counterpart of :meth:`_update_disc_frames`. A rigid
+        digit's sites are its link frames: each one is the frame its own joint
+        rotates, and it is what the URDF's visual origin, the collision sphere
+        centre and the contact site are all written against. Drawing them is how
+        a mesh that rides on the wrong axis, or a joint whose zero is rotated
+        from the manufacturer's, becomes visible -- the link geometry alone
+        cannot show it.
+
+        Every site is drawn, the digit's first included. That one is coincident
+        with the digit's mount and so has no bar to draw (see the segment filter
+        in ``ViserHandScene.update``), but it is a real frame and skipping it
+        would shift every triad's index relative to the state's site list.
+        """
+        keep = set()
+        # Fixed length rather than sized off the geometry: unlike a routing disc
+        # (whose radius the disc triads scale with) a link has no single
+        # characteristic radius to read against. 15 mm reads on an Allegro
+        # phalanx without swamping the neighbouring joint.
+        length = 0.015
+        for si in range(len(poses)):
+            T = poses[si]
+            n = f"/hand/{name}/link_frame/{si}"
+            self._dynamic[n] = self.scene.add_frame(
+                n, show_axes=True, axes_length=length,
+                axes_radius=length * 0.04,
+                wxyz=_wxyz_from_R(T[:3, :3]),
+                position=tuple(T[:3, 3]))
+            keep.add(n)
+        return keep
+
+
+    def _update_palm_frame(self, wrist_pose):
+        """The palm's own link frame, drawn with the digits' under the same
+        switch.
+
+        Hangs off the wrist rather than off a digit because that IS the palm
+        link: the hand's base frame, the one every digit mount is written
+        relative to. Drawn a little larger than the digit triads for the same
+        reason the table frame is drawn larger than the object's -- it is the
+        reference the others are read against.
+
+        Distinct from the 'mount frames' overlay, which draws this same wrist
+        frame next to the ROBOT FLANGE to check a mount measurement. Here it is
+        the first link of the kinematic chain, and it belongs with the rest of
+        the chain.
+        """
+        if wrist_pose is None:
+            return set()
+        T = np.asarray(wrist_pose, float)
+        length = 0.025
+        n = "/hand/link_frame/palm"
+        self._dynamic[n] = self.scene.add_frame(
+            n, show_axes=True, axes_length=length,
+            axes_radius=length * 0.04,
+            wxyz=_wxyz_from_R(T[:3, :3]),
+            position=tuple(T[:3, 3]))
+        return {n}
+
+
     # -- link meshes -------------------------------------------------------
     #
     # VISUAL ONLY. Collision in this repository is the sphere set the solve
