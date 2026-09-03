@@ -69,8 +69,19 @@ echo "Installing C++ build dependencies via conda..."
 #
 # If you bump this, check `conda search -c conda-forge libpinocchio --info` for
 # the eigen-abi pin and keep it on whatever major.minor GTSAM was built with.
-# (Linux builds carry a different hash; pin the eigen-abi 3.4 build for this platform.)
-conda install -c conda-forge --override-channels pip cmake eigen pybind11 boost libgomp openvdb tbb-devel suitesparse zlib "pinocchio=4.0.0" gcc_linux-64=13 gxx_linux-64=13 openssh git -y
+# The build hash is platform-specific: h2844b27_0 is the linux-64 eigen-abi-3.4
+# build; the mac script pins h9a60d09_0 for the same 4.0.0 version.
+#
+# `libboost-devel`, NOT `boost`: conda-forge froze the old `boost` metapackage at
+# 1.85.0, and it hard-pins libboost-python-devel ==1.85.0. libpinocchio 4.0.0
+# needs libboost >=1.88, so asking for `boost` makes the solve unsatisfiable
+# ("nothing provides _python_rc ... pin on python=3.10 is not installable").
+# libboost-devel is the current split-package name and tracks 1.88+.
+#
+# `eigen=3.4` is explicit because conda-forge now ships eigen 5.0.x by default;
+# an unpinned `eigen` would either pull 5.0 (breaking the GTSAM config.h static
+# assert described above) or silently drag in the eigen-5 pinocchio build.
+conda install -c conda-forge --override-channels pip cmake "eigen=3.4" pybind11 libboost-devel libgomp openvdb tbb-devel suitesparse zlib "libpinocchio=4.0.0=h2844b27_0" "pinocchio=4.0.0" gcc_linux-64=13 gxx_linux-64=13 openssh git -y
 
 # Build/Install GTSAM (into conda prefix so it stays isolated from system)
 echo "Cloning and building GTSAM..."

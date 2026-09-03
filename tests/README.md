@@ -19,6 +19,7 @@ before the package is renamed and installed, and stays inert afterwards.
 | `core/test_hand.py` | the tendon hand's morphology — bone/joint spec, digit set, disc indexing, pinch table |
 | `core/test_hand_interface.py` | the `Hand` seam, driven by a STUB hand that is not the built-in one |
 | `core/test_solver_helpers.py` | `solvers.py` — pose conventions, residual readouts, opposition sign, `capabilities()` |
+| `core/test_build_env.py` | the built conda envs — linkage, ABI, Boost/Eigen pins (`slow`) |
 | `test_golden_solves.py` | FK / IK / planner forward passes (`slow`) |
 | `projects/test_viz_smoke.py` | the visualizer's five `--smoke` routines (`slow`) |
 
@@ -26,6 +27,37 @@ before the package is renamed and installed, and stays inert afterwards.
 package move changes that one file and no test. Its `config` is the five-digit tendon
 hand's morphology package — one hand among (eventually) several, so a test asserting a
 measured number there is asserting something about THAT hand.
+
+## `core/test_build_env.py` checks every env, not the active one
+
+The three `conda_setup_py*.sh` scripts build `gepetto_py10` / `gepetto_py11` /
+`gepetto_py12`, and they do **not** pin identically — py10 and py12 pin the linux-64
+`libpinocchio` build `h2844b27_0` where the mac script pins `h9a60d09_0`, and py12
+resolves OpenVDB 13.0 against py10's 12.1. A linkage regression that only bites one
+interpreter is exactly what a suite run from whichever env happens to be active would
+miss, so that file discovers every declared env and probes each in a subprocess.
+
+Env names *and* their python versions are parsed out of the `conda create` lines in
+the scripts themselves, so a fourth script needs no edit here. An env that is absent,
+or present but not yet `pip install`ed into, is skipped with a reason naming it — the
+file must stay runnable on a machine that set up only one.
+
+What it guards, all of it a pin whose failure is silent rather than loud:
+
+- **One Boost per prefix.** conda-forge froze the `boost` metapackage at 1.85.0 with a
+  hard `libboost-python-devel ==1.85.0` pin while libpinocchio 4.0.0 needs ≥1.88, so
+  `boost` and `libboost-devel` together are either an unsatisfiable solve or two Boosts
+  on the loader path. GTSAM links Boost by unversioned soname, so the second case runs
+  and corrupts memory across the serialization boundary.
+- **Eigen 3.4 everywhere.** GTSAM static-asserts `GTSAM_EIGEN_VERSION_*`; that is a
+  compile-time error and unreadable from Python, so the test asserts the consequence
+  instead — Pinocchio and the extension loaded in one process, both still working.
+- **Nothing from outside the prefix.** `CMakeLists.txt` finds GTSAM and OpenVDB through
+  the interpreter prefix, so a system `libboost_serialization.so` on the loader path is
+  an ABI mismatch the loader performs happily.
+
+It needs `pytest` in the env, which `conda_setup_*.sh` does not install — the scripts
+install `.[viz,web]`, not `.[dev]`. Add it with `pip install ".[dev]"`.
 
 ## Two constraints worth knowing before adding a test
 
