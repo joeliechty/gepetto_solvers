@@ -176,6 +176,11 @@ class Hand(Protocol):
                        COSMETIC -- the solve never reads it, collision is the
                        sphere set, and a hand without meshes draws as a skeleton
     ``default_contact_digits``  which digits a grasp starts with
+    ``DEFAULT_LOG10_JOINT_SIGMA``  log10 of the joint-prior sigma the workbench
+                       opens its "log10 joint sigma" slider on, for a
+                       joint-space hand whose default posture implies one (an
+                       open pre-grasp needs a loose prior, a seated one does
+                       not). Omit it and the workbench uses its own default
     ``mount_pose()``   ``T_flange<-wrist`` as a 4x4 -- where this hand bolts to
                        the robot arm. MEASURED, and measured differently per
                        hand (a CAD fit for one, a live ``tf2_echo`` for

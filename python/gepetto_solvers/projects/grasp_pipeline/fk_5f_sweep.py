@@ -6,7 +6,7 @@ and (b) the shared wrist base-pose prior, so you can see where all the fingers
 are and how they move relative to each other as the wrist moves.
 
 Finger morphology (bone lengths, palm origins/angles) comes from the
-``gepetto_core`` default hand configuration when that package is installed, and
+``epfl_hand_core`` default hand configuration when that package is installed, and
 falls back to hard-coded ``DEFAULT_HAND_DIMENSIONS`` otherwise, so this runs
 standalone. No contact is attached -> a pure-kinematics solve driven by tensions.
 

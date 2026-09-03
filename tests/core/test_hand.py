@@ -2,7 +2,7 @@
 measured pinch table.
 
 All hermetic: every test that touches hand dimensions goes through the ``pinned_dims``
-fixture, so nothing here depends on whether ``gepetto_core`` happens to be installed.
+fixture, so nothing here depends on whether ``epfl_hand_core`` happens to be installed.
 See the fixture's docstring for why that matters (the two sources disagree).
 """
 

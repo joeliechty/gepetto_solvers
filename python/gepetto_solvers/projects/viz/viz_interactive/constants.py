@@ -10,15 +10,12 @@ from gepetto_solvers.core.solvers import euler_to_R
 
 
 def _max_tendon_speed():
-    """HandConfig's tendon speed cap, or the documented value if gepetto_core is
+    """HandConfig's tendon speed cap, or the documented value if epfl_hand_core is
     not installed (this app runs on machines that have never seen the hardware).
     finger_servo_node enforces its own copy regardless, so this only sets what the
     slider means."""
     try:
-        try:
-            from gepetto_core.config import HandConfig
-        except ImportError:
-            from gepetto.config import HandConfig
+        from epfl_hand_core.config import HandConfig
         return float(HandConfig().max_tendon_speed)
     except Exception:
         return 0.065

@@ -1,6 +1,6 @@
 """Physical hand morphology: where the numbers come from, and the bone/joint spec.
 
-:func:`load_hand_dimensions` prefers ``gepetto_core``'s CAD-derived geometry and
+:func:`load_hand_dimensions` prefers ``epfl_hand_core``'s CAD-derived geometry and
 falls back to :data:`DEFAULT_HAND_DIMENSIONS` so this repo runs standalone. THE
 TWO ARE NOT THE SAME HAND -- the middle finger's first joint diameter is 9.8 mm
 from the CAD and 14.0 mm in the fallback -- so anything asserting a number should
@@ -9,13 +9,13 @@ pin one source rather than take whichever is installed.
 
 
 # ---------------------------------------------------------------------------
-# Anthropomorphic hand from physical (gepetto_core) dimensions
+# Anthropomorphic hand from physical (epfl_hand_core) dimensions
 # ---------------------------------------------------------------------------
 #
 # The four fingers + opposable thumb above are laid out around a grasp object
 # purely for a contact demo. The helpers below instead build a hand from the
 # *physical morphology* of a printed hand: per-digit bone lengths, palm origins,
-# and base angles. These come from ``gepetto_core``'s default hand configuration
+# and base angles. These come from ``epfl_hand_core``'s default hand configuration
 # (parsed from its bundled ``parameters.scad``) when that package is installed,
 # and fall back to the hard-coded ``DEFAULT_HAND_DIMENSIONS`` below so crest-sparse
 # still runs standalone.
@@ -28,8 +28,8 @@ pin one source rather than take whichever is installed.
 _STANDARD_JOINT_LENGTHS = [0.010, 0.006, 0.004]  # MCP / PIP / DIP
 
 
-# # Fallback copy of the gepetto_core default hand (bundled parameters.scad),
-# # used when gepetto_core is not importable. Fingers: index, middle, ring, pinky.
+# # Fallback copy of the epfl_hand_core default hand (bundled parameters.scad),
+# # used when epfl_hand_core is not importable. Fingers: index, middle, ring, pinky.
 # # Only the first thumb is used (n_thumbs = 1). Lengths/origins in mm, angles in deg.
 # DEFAULT_HAND_DIMENSIONS = {
 #     "bl_finger": [[80, 38, 20, 20],
@@ -53,17 +53,17 @@ _STANDARD_JOINT_LENGTHS = [0.010, 0.006, 0.004]  # MCP / PIP / DIP
 
 
 # def load_hand_dimensions():
-#     """Return the hand morphology dict, preferring ``gepetto_core``.
+#     """Return the hand morphology dict, preferring ``epfl_hand_core``.
 
-#     Tries ``gepetto_core.geometry.HandGeometry.default()`` and reads the
+#     Tries ``epfl_hand_core.geometry.HandGeometry.default()`` and reads the
 #     per-digit bone lengths / origins / angles from it. Any import failure
-#     (notably ``dynamixel_sdk`` missing, which ``gepetto_core.__init__`` imports)
+#     (notably ``dynamixel_sdk`` missing, which ``epfl_hand_core.__init__`` imports)
 #     falls back to :data:`DEFAULT_HAND_DIMENSIONS` so this works standalone.
 
 #     Returns a dict with the same keys as :data:`DEFAULT_HAND_DIMENSIONS`.
 #     """
 #     try:
-#         from gepetto_core.geometry import HandGeometry
+#         from epfl_hand_core.geometry import HandGeometry
 #         g = HandGeometry.default()
 #         dims = {
 #             "bl_finger": g.bl_finger,
@@ -73,16 +73,16 @@ _STANDARD_JOINT_LENGTHS = [0.010, 0.006, 0.004]  # MCP / PIP / DIP
 #             "o_thumb": g.o_thumb[:1],
 #             "a_thumb": g.a_thumb[:1],
 #         }
-#         print("[hand dims] loaded from gepetto_core HandGeometry.default()")
+#         print("[hand dims] loaded from epfl_hand_core HandGeometry.default()")
 #         return dims
 #     except Exception as exc:  # noqa: BLE001 - any import/parse failure -> fallback
-#         print(f"[hand dims] gepetto_core unavailable ({exc.__class__.__name__}: "
+#         print(f"[hand dims] epfl_hand_core unavailable ({exc.__class__.__name__}: "
 #               f"{exc}); using DEFAULT_HAND_DIMENSIONS")
 #         return DEFAULT_HAND_DIMENSIONS
 
 
-# Fallback copy of the gepetto_core default hand (bundled parameters.scad),
-# used when gepetto_core is not importable. Fingers: index, middle, ring, pinky.
+# Fallback copy of the epfl_hand_core default hand (bundled parameters.scad),
+# used when epfl_hand_core is not importable. Fingers: index, middle, ring, pinky.
 # Only the first thumb is used (n_thumbs = 1). Lengths/origins in mm, angles in deg.
 DEFAULT_HAND_DIMENSIONS = {
     "bl_finger": [[80, 38, 20, 20],
@@ -111,17 +111,17 @@ FINGER_NAMES = ["index", "middle", "ring", "pinky"]
 
 
 def load_hand_dimensions():
-    """Return the hand morphology dict, preferring ``gepetto_core``.
+    """Return the hand morphology dict, preferring ``epfl_hand_core``.
 
-    Tries ``gepetto_core.geometry.HandGeometry.default()`` and reads the
+    Tries ``epfl_hand_core.geometry.HandGeometry.default()`` and reads the
     per-digit bone lengths / origins / angles from it. Any import failure
-    (notably ``dynamixel_sdk`` missing, which ``gepetto_core.__init__`` imports)
+    (notably ``dynamixel_sdk`` missing, which ``epfl_hand_core.__init__`` imports)
     falls back to :data:`DEFAULT_HAND_DIMENSIONS` so this works standalone.
 
     Returns a dict with the same keys as :data:`DEFAULT_HAND_DIMENSIONS`.
     """
     try:
-        from gepetto_core.geometry import HandGeometry
+        from epfl_hand_core.geometry import HandGeometry
         g = HandGeometry.default()
         dims = {
             "bl_finger": g.bl_finger,
@@ -135,10 +135,10 @@ def load_hand_dimensions():
             "jd_thumb": g.jd_thumb[:1],
             "w_thumb": g.w_thumb[:1],
         }
-        print("[hand dims] loaded from gepetto_core HandGeometry.default()")
+        print("[hand dims] loaded from epfl_hand_core HandGeometry.default()")
         return dims
     except Exception as exc:  # noqa: BLE001 - any import/parse failure -> fallback
-        print(f"[hand dims] gepetto_core unavailable ({exc.__class__.__name__}: "
+        print(f"[hand dims] epfl_hand_core unavailable ({exc.__class__.__name__}: "
               f"{exc}); using DEFAULT_HAND_DIMENSIONS")
         return DEFAULT_HAND_DIMENSIONS
 
@@ -184,7 +184,7 @@ def bone_joint_spec_from_bones(bone_lengths_mm, joint_lengths_mm=None):
 #     """SE(3) ``hand_base_offset`` placing a digit on the palm.
 
 #     ``o_mm`` is the digit's (x, y, z) base origin in mm and ``a_deg`` is its
-#     (rx, ry, rz) base rotation in degrees, in the gepetto_core /
+#     (rx, ry, rz) base rotation in degrees, in the epfl_hand_core /
 #     ``parameters.scad`` palm convention (``o_finger`` / ``a_finger``). In that
 #     CAD frame a finger grows along +X, the knuckle row is spread along Z (the
 #     ``o_finger`` z entries 0, -12, -24, -34) and ``a_finger``'s ``ry`` is the
@@ -224,7 +224,7 @@ def bone_joint_spec_from_bones(bone_lengths_mm, joint_lengths_mm=None):
 
 #     Each digit is a standard 6-tendon finger sized from its physical bone lengths
 #     and placed via ``hand_base_offset`` from its palm origin/angle. ``dims`` defaults
-#     to :func:`load_hand_dimensions` (gepetto_core, else fallback). No contact is
+#     to :func:`load_hand_dimensions` (epfl_hand_core, else fallback). No contact is
 #     attached, so the caller gets a pure-kinematics hand.
 #     """
 #     if dims is None:

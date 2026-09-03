@@ -30,7 +30,7 @@ FLEXOR_INDEX = 5
 class TendonHand5F:
     """Four fingers and a thumb, each a Cosserat rod driven by six tendons.
 
-    The digits are built from a CAD dimension table (``gepetto_core`` when it is
+    The digits are built from a CAD dimension table (``epfl_hand_core`` when it is
     importable, a pinned fallback otherwise -- see :func:`load_hand_dimensions`),
     and the thumb is appended LAST. That order is load-bearing everywhere a
     per-digit list is indexed, so it is fixed here and read from

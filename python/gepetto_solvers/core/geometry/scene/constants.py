@@ -21,7 +21,7 @@ ELLIPSOID_SET_BETA = 1000.0
 
 # Object center, shared by all primitives: the p2p goal position used in the
 # single-finger planner, mirrored across x=0 (X negated). The 6-tendon routing
-# was rotated 180 deg about the finger axis to match the gepetto_core CAD
+# was rotated 180 deg about the finger axis to match the epfl_hand_core CAD
 # convention, which flips the flexor curl from world +X to -X; the object moves
 # with it. The SDF lives at the VDB local origin (see the _objects/make_*.py
 # generators); we place it in the world by translating the object pose to this center.

@@ -26,7 +26,7 @@ from .discs import _resolve_contact_mask
 #
 # THESE NUMBERS BELONG TO THIS MORPHOLOGY. They are a property of the bone
 # lengths, palm origins and base angles in DEFAULT_HAND_DIMENSIONS /
-# gepetto_core, and of finger_base_offset()'s mounting convention -- change any
+# epfl_hand_core, and of finger_base_offset()'s mounting convention -- change any
 # of those and every entry here is silently wrong, because nothing in the code
 # can detect the mismatch. That is exactly why they live in this module, next
 # to the dimensions they were derived from, rather than in a solver or a demo

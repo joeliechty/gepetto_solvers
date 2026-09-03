@@ -71,12 +71,12 @@ guards this.
 SDF-path coverage lives in `scripts/capture_baseline.py` instead, which runs against a
 developer's working tree where the grids exist.
 
-**Pin the hand.** `load_hand_dimensions()` prefers `gepetto_core`'s CAD-derived
+**Pin the hand.** `load_hand_dimensions()` prefers `epfl_hand_core`'s CAD-derived
 geometry and silently falls back to the bundled `DEFAULT_HAND_DIMENSIONS`. The two are
 *not* the same hand — the middle finger's first joint diameter is 9.8 mm from the CAD
 and 14.0 mm in the fallback — so any test asserting a number must take the
 `pinned_hand` fixture and pass it to the solver (`HandFKSolver(params, pinned_hand)`).
-Otherwise the test passes or fails depending on whether `gepetto_core` happens to be
+Otherwise the test passes or fails depending on whether `epfl_hand_core` happens to be
 installed. `pinned_dims` is the dimension table itself, for tests that assert on it
 directly.
 

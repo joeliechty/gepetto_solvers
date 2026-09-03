@@ -23,7 +23,7 @@ from _pkg import solvers
 @pytest.fixture(scope="module")
 def hand():
     """The tendon hand on its BUNDLED dimensions, so these assertions do not
-    depend on whether gepetto_core is installed (see tests/README.md)."""
+    depend on whether epfl_hand_core is installed (see tests/README.md)."""
     from gepetto_solvers.core.hands.tendon_5f import (
         DEFAULT_HAND_DIMENSIONS,
         TendonHand5F,

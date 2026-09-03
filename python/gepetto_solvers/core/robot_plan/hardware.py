@@ -103,7 +103,7 @@ def open_tendon_lengths(params=None, solver=None, hand=None):
 def open_pose_tensions(hand=None):
     """``(passive, {solver digit: flexor tension})`` for the calibrated open hand.
 
-    From ``HandConfig`` when gepetto_core is importable, else the fallback copy
+    From ``HandConfig`` when epfl_hand_core is importable, else the fallback copy
     below -- same degrade-to-a-note rule as :func:`_hardware_open_lengths`, except
     that this one is load-bearing rather than a cross-check, so the fallback is a
     real copy of the numbers rather than a None.
@@ -205,16 +205,13 @@ def check_open_lengths(open_lengths, params=None, hand=None):
 
 
 def _hand_config():
-    """A ``HandConfig``, or None where gepetto_core is not installed.
+    """A ``HandConfig``, or None where epfl_hand_core is not installed.
 
-    Optional on purpose: the visualizer runs on machines with no gepetto_core
+    Optional on purpose: the visualizer runs on machines with no epfl_hand_core
     install, and a missing hardware config must degrade to a note (or to the
     fallback tensions above) rather than stop a plan being built."""
     try:
-        try:
-            from gepetto_core.config import HandConfig
-        except ImportError:      # older installs expose the same package as `gepetto`
-            from gepetto.config import HandConfig
+        from epfl_hand_core.config import HandConfig
     except ImportError:
         return None
     return HandConfig()
@@ -235,7 +232,7 @@ def _hardware_open_lengths(hand=None):
 
 def hardware_travel_limits(hand=None):
     """Per solver digit, the usable flexion travel ``(0.0, max_m)`` from
-    ``HandConfig``, or None when gepetto_core is not installed.
+    ``HandConfig``, or None when epfl_hand_core is not installed.
 
     ``zero_bend - fully_flexed``: about 17.8 mm on index. A solve can easily ask
     for more than that -- the model has no motor -- so whoever publishes the plan

@@ -8,7 +8,7 @@ Every test here runs the real C++ solver, so they are all marked ``slow``::
 baked ``.vdb`` SDF grid: the grids are 54 MB, gitignored, and regenerating them needs
 conda-only ``pyopenvdb``, so a solve test built on one would be unrunnable on a fresh
 checkout. The ``pinned_dims`` fixture additionally forces the bundled hand dimensions,
-so the numbers do not depend on whether ``gepetto_core`` is installed.
+so the numbers do not depend on whether ``epfl_hand_core`` is installed.
 
 **What the committed numbers mean.** They characterize what these solvers do *today*;
 they are not targets. In particular the single-shot IK scenario does NOT close its

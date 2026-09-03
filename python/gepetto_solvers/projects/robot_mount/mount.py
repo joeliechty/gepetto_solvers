@@ -83,7 +83,7 @@ R_WRIST_FROM_STL = R_WRIST_FROM_HAND @ R_STL_FROM_HAND.T
 # The measurement itself.
 # ---------------------------------------------------------------------------
 #
-# Measured 2026-08-18 by mount_onshape_fit.py against the "gepetto_hand /
+# Measured 2026-08-18 by mount_onshape_fit.py against the "epfl_hand /
 # Assembly 1" Onshape assembly (document f0ca0f8f..., element e0d176c1...), whose
 # origin is the KUKA attach point. Source of truth is the "hand <1>" instance's
 # occurrence transform; the convention used was the derived Rz(+90)@Rx(180), which

@@ -183,7 +183,7 @@ mypy
 
 See [tests/README.md](tests/README.md) for the two constraints that shape the suite:
 no committed test may need a `.vdb` grid, and any test asserting a number must take
-the `pinned_hand` fixture (`load_hand_dimensions()` silently prefers `gepetto_core`'s
+the `pinned_hand` fixture (`load_hand_dimensions()` silently prefers `epfl_hand_core`'s
 CAD geometry over the bundled fallback, and the two are not the same hand).
 
 `scripts/capture_baseline.py` captures solver behavior to JSON and diffs two

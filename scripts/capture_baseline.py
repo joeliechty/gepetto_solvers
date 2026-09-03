@@ -164,15 +164,15 @@ def _record(result, params) -> dict:
 
 def capture(only: list[str] | None, skip_vdb: bool) -> dict:
     # Which hand morphology these numbers were produced with. load_hand_dimensions()
-    # prefers gepetto_core's CAD-derived HandGeometry and silently falls back to the
+    # prefers epfl_hand_core's CAD-derived HandGeometry and silently falls back to the
     # bundled DEFAULT_HAND_DIMENSIONS, and the two do NOT agree (the middle finger's
     # first joint diameter is 9.8 mm from CAD, 14.0 mm in the fallback). Comparing a
     # capture taken with one source against a capture taken with the other is
     # meaningless, so the source is recorded and the diff refuses to cross it.
     try:
-        import gepetto_core.geometry  # noqa: F401
+        import epfl_hand_core.geometry  # noqa: F401
 
-        dims_source = "gepetto_core"
+        dims_source = "epfl_hand_core"
     except Exception:
         dims_source = "DEFAULT_HAND_DIMENSIONS"
 

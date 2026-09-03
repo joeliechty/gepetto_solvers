@@ -87,7 +87,7 @@ class MotionMixin:
         # The motors' travel, not the model's: a close planned against what the
         # rod can bend would spend its last waypoints past the hardware stop,
         # which the plan export clamps and the servo node saturates. None (no
-        # gepetto_core) is passed straight through -- synchronized_close falls
+        # epfl_hand_core) is passed straight through -- synchronized_close falls
         # back to the model's reach and says in its notes that it did.
         limits = robot_plan.hardware_travel_limits()
         travel = None if limits is None else {name: hi
@@ -263,7 +263,7 @@ class MotionMixin:
         to look at a solve should not pay for hardware it may never talk to. The
         cache is never invalidated because it cannot go stale -- the open pose is
         the hand's morphology posed at the calibrated open-hand tensions
-        (``HandConfig.zero_bend_flexor_tensions``), both loaded from gepetto_core
+        (``HandConfig.zero_bend_flexor_tensions``), both loaded from epfl_hand_core
         and neither of them a control on this page. In particular it does NOT
         follow the tension sliders: those say how hard THIS solve is pulling, and
         the zero every displacement is measured from has to stay put while they

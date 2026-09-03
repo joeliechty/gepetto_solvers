@@ -498,7 +498,7 @@ below are those packages.
 Turns physical morphology into `TendonFingerSolverConfig`s and attaches
 environments.
 
-* `load_hand_dimensions()` — prefers `gepetto_core.geometry.HandGeometry.default()`
+* `load_hand_dimensions()` — prefers `epfl_hand_core.geometry.HandGeometry.default()`
   (parsed from `parameters.scad`); falls back to `DEFAULT_HAND_DIMENSIONS` so
   gepetto_solvers runs standalone. Bone lengths, palm origins, base angles, joint
   diameters, tip widths.

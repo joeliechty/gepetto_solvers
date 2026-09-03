@@ -66,22 +66,32 @@ class AllegroHand:
     #: leaving a control present and dead.
     features: frozenset[str] = frozenset()
 
-    #: The posture the workbench opens on: fingers flexed, thumb rotated across
-    #: the palm to oppose them.
+    #: The posture the workbench opens on: an OPEN pre-grasp -- the fingers
+    #: barely flexed, the thumb swung across the palm to oppose them, and the
+    #: hand held around the object rather than already touching it.
     #:
-    #: CALIBRATED against the default scene, and round numbers on purpose. The
-    #: three grasp fingertips ring a circle of radius 49.6 mm about a point
-    #: 114 mm out in front of the palm; a 35 mm object plus a 14 mm fingertip
-    #: wants 49 mm, so seating that circle's centre on the object (which is what
-    #: DEFAULT_WRIST_XYZ does) leaves every grasp digit about 0.6 mm off the
-    #: surface, and the uncommanded ring finger 34 mm clear of it.
+    #: A PRE-GRASP, not a seated grasp, and that is the change from the earlier
+    #: default (finger j1 = 0.6, thumb (1.2, 0.3, 0.6, 0.4)): the three grasp
+    #: fingertips now ring a circle of radius 84 mm about a point 103 mm out in
+    #: front of the palm, so against the workbench's own default object (the
+    #: 70 mm megaminx, see viz_interactive.constants.DEFAULT_OBJECT_PRIMITIVE)
+    #: every grasp digit opens about 26-28 mm clear of the surface, with the
+    #: uncommanded ring finger 50 mm clear. The old posture rang a 49.6 mm
+    #: circle, which seated exactly on the smaller ``mid_sphere_ellipsoid`` that
+    #: HandSolveParams defaults to but sat 8.5 mm INSIDE the object the app
+    #: actually opens on -- a start the phase-0 pre-grasp cannot be run from,
+    #: because there is nothing left to approach.
+    #:
+    #: Round numbers, and on the sliders' own grids (0.01 rad), so the workbench
+    #: opens on a value the user can land on again by hand.
     #:
     #: The V5 thumb reaches its opposition from joint_12, whose range is
     #: 0..1.78 rad -- a whole quadrant, where V4 gave it only +-0.47 and could
-    #: not truly oppose. 1.2 rad brings it across the palm with room either way,
-    #: rather than parking the default on a joint stop where a solve cannot move.
-    DEFAULT_FINGER_Q = (0.0, 0.6, 0.6, 0.4)
-    DEFAULT_THUMB_Q = (1.2, 0.3, 0.6, 0.4)
+    #: not truly oppose. 0.99 rad brings it across the palm with room either
+    #: way, rather than parking the default on a joint stop where a solve cannot
+    #: move.
+    DEFAULT_FINGER_Q = (0.0, 0.13, 0.6, 0.4)
+    DEFAULT_THUMB_Q = (0.99, 0.38, 0.49, 0.4)
 
     #: Palm-down hover over the default object.
     #:
@@ -89,11 +99,24 @@ class AllegroHand:
     #: +x, where the tendon hand's palm lies along -x -- so the two hands need
     #: different poses to face the same object, and the tendon hand's constants
     #: in `solvers.frames` aim this one nowhere near it. A quarter turn about +y
-    #: puts the palm's normal down the world -z, so the hand hovers over the
-    #: object with the fingers reaching along +x; the translation then puts the
-    #: centre of the grasp digits' circle on the object at the posture above.
-    DEFAULT_WRIST_RPY = (0.0, np.pi / 2, 0.0)
-    DEFAULT_WRIST_XYZ = (-0.0437, 0.0673, 0.1004)
+    #: would put the palm's normal straight down the world -z; the extra
+    #: 0.33 rad of pitch tips the palm back off vertical so the opened fingers
+    #: above reach DOWN AND ACROSS the object rather than past it, and the
+    #: translation then holds the centre of their circle on the object.
+    #:
+    #: Paired with the posture above -- the two were calibrated together in the
+    #: workbench, so changing one without the other loses the pre-grasp.
+    DEFAULT_WRIST_RPY = (0.0, 1.8984, 0.0)
+    DEFAULT_WRIST_XYZ = (-0.017, 0.0673, 0.1004)
+
+    #: log10 of the joint-prior sigma the workbench's "log10 joint sigma" slider
+    #: opens on, and returns to on Reset. Optional per hand (the workbench falls
+    #: back to its own -2 for a hand that does not say), and 0 here -- a 1 rad
+    #: sigma, i.e. a posture that is a suggestion -- because the pre-grasp above
+    #: is deliberately OPEN: the joints have to be free to travel most of the
+    #: way closed under contact, and a tight prior would hold them open against
+    #: it.
+    DEFAULT_LOG10_JOINT_SIGMA = 0.0
 
     #: ``T_flange<-palm_link``: where this hand bolts to the robot arm.
     #:

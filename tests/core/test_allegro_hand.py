@@ -140,24 +140,46 @@ def test_fk_reports_the_commanded_wrist(hand, params):
     np.testing.assert_allclose(result.wrist_pose(0), params.wrist_pose, atol=1e-6)
 
 
-def test_the_default_pose_puts_the_grasp_digits_on_the_object(hand, params):
+def test_the_default_pose_opens_a_pre_grasp_around_the_object(hand, params):
     """A default that aims the hand nowhere is worse than none. The tendon
     hand's measured wrist pose points THIS hand away from the object -- its
     fingers extend +z where the tendon palm lies along -x -- so Allegro carries
-    its own."""
+    its own.
+
+    AROUND the object, not ON it: the default is an open pre-grasp (see
+    ``DEFAULT_FINGER_Q``), so what is asserted is that every grasp digit is
+    outside the surface and within closing distance of it, and that the digit
+    the grasp does NOT command is further out than all of them. An earlier
+    default seated the tips on this particular object to 0.6 mm, which read as a
+    tighter test than it was: it was a grasp already made, and it sat inside the
+    object the workbench actually opens on.
+    """
     result = solvers.HandFKSolver(params, hand).solve()
     gaps = result.surface_gaps(0)
     for name in hand.default_contact_digits:
-        assert abs(gaps[name]) < 0.02, (name, gaps[name])
+        assert 0.0 < gaps[name] < 0.05, (name, gaps[name])
+    assert gaps["ring"] > max(gaps[n] for n in hand.default_contact_digits)
 
 
 def test_ik_drives_the_grasp_digits_onto_the_object(hand, params):
     """The whole point: the same contact constraint the tendon hand uses,
-    applied to a mechanism that is not a rod."""
+    applied to a mechanism that is not a rod.
+
+    From the open pre-grasp the default now starts at, one IK solve closes
+    ~37 mm of gap to under 3 mm and stops there -- not for want of iterations
+    (it converges in 19 of the 40 it may take), but because the last of the
+    approach is a WRIST translation, and ``sigma_wrist_pos`` defaults to 1e-4:
+    the wrist prior holds it. That is why the residual is asserted EQUAL across
+    the three digits as well as small -- a common offset is the signature of a
+    held wrist, where a finger that failed to reach would miss on its own. The
+    workbench's phase pipeline loosens the wrist for exactly this stage.
+    """
     result = solvers.HandIKSolver(params, hand).solve()
     gaps = result.surface_gaps(0)
     for name in hand.default_contact_digits:
-        assert abs(gaps[name]) < 2e-3, (name, gaps[name])
+        assert abs(gaps[name]) < 5e-3, (name, gaps[name])
+    grasped = [gaps[n] for n in hand.default_contact_digits]
+    assert max(grasped) - min(grasped) < 1e-4, grasped
 
 
 def test_ik_leaves_the_uncommanded_digit_alone(hand, params):

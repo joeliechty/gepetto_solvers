@@ -61,8 +61,14 @@ class GuiMixin:
                              f"toward it, and the kinematics seeds there so a "
                              f"solve starts at zero FK residual."))
                 self.g_joints.append(row)
+        # Opened at the HAND's own default where it states one: how loose the
+        # posture above is meant to be is a property of that posture, not of the
+        # panel -- a hand whose default is an open pre-grasp needs the joints
+        # free to close, where one that opens already seated does not. -2 for a
+        # hand that says nothing, which is what this slider has always built at.
         self.g_joint_sigma = gui.add_slider(
-            "log10 joint sigma", -6.0, 1.0, 0.1, -2.0,
+            "log10 joint sigma", -6.0, 1.0, 0.1,
+            float(getattr(self.hand, "DEFAULT_LOG10_JOINT_SIGMA", -2.0)),
             hint="How loose p(q) is -- how far contact may pull the joints away "
                  "from the commanded posture above. Read live, so a drag takes "
                  "effect on the next solve with no rebuild.")
@@ -858,7 +864,7 @@ class GuiMixin:
                     for lbl in self.digit_names]
 
         with gui.add_folder("Collision", expand_by_default=False):
-            self.g_coll_radius = gui.add_slider("sphere radius (m)", 0.001, 0.01, 0.0005, 0.003)
+            self.g_coll_radius = gui.add_slider("sphere radius (m)", 0.001, 0.02, 0.0005, 0.0145)
             self.g_coll_sigma = gui.add_slider("log10 sigma", -6, 0, 0.5, -4)
             self.g_cull = gui.add_slider("cull margin (m, 0 off)", 0.0, 0.1, 0.005, 0.0)
             self.g_set_beta = gui.add_slider(
@@ -882,7 +888,7 @@ class GuiMixin:
             # the two planes open coincident -- the geometry every headless script
             # solves.
             self.g_constraint_height = gui.add_slider(
-                "constraint plane height (m)", -0.1, 0.1, 0.002, -0.005,
+                "constraint plane height (m)", -0.1, 0.1, 0.002, 0,
                 hint="Raise or lower the plane the SOLVER constrains against -- "
                      "where the support equality seats fingertips and where the "
                      "avoidance half-space starts -- relative to the table's top "

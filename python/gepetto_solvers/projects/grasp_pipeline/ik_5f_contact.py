@@ -9,7 +9,7 @@ onto the shared SDF object surface by its own hard SDF contact constraint.
 
 The hand is the *anatomical* hand used by ``fk_5f_sweep.py`` —
 ``config.get_default_hand_configs()`` — whose per-digit bone/joint lengths, palm
-origins and base angles come from ``gepetto_core``'s ``parameters.scad`` (with a
+origins and base angles come from ``epfl_hand_core``'s ``parameters.scad`` (with a
 hard-coded fallback). Each finger's contact sphere uses that digit's
 CAD-derived ``cfg.tip_radius`` (from the distal tip width), not a single
 hard-coded radius.
@@ -104,7 +104,7 @@ def main():
     objects_dir = OBJECTS_DIR
 
     # --- Five fingers (four + opposable thumb) on the shared wrist ---
-    # Anatomical hand from gepetto_core / parameters.scad (same builder as
+    # Anatomical hand from epfl_hand_core / parameters.scad (same builder as
     # kinematics_test.py); tip_radii holds each digit's CAD-derived contact radius
     # (same digit order as configs). Load dims once so both agree and we don't
     # re-parse the SCAD.

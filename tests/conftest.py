@@ -28,13 +28,13 @@ if str(Path(__file__).parent) not in sys.path:
 
 @pytest.fixture
 def pinned_dims(monkeypatch):
-    """Force the bundled ``DEFAULT_HAND_DIMENSIONS``, ignoring ``gepetto_core``.
+    """Force the bundled ``DEFAULT_HAND_DIMENSIONS``, ignoring ``epfl_hand_core``.
 
-    ``config.load_hand_dimensions()`` prefers ``gepetto_core.geometry.HandGeometry``
+    ``config.load_hand_dimensions()`` prefers ``epfl_hand_core.geometry.HandGeometry``
     and silently falls back to the bundled constant when that import fails. The two
     are NOT the same hand: the middle finger's first joint diameter is 9.8 mm from
     the CAD and 14.0 mm in the fallback. Any test asserting a committed number would
-    therefore pass or fail depending on whether ``gepetto_core`` happens to be
+    therefore pass or fail depending on whether ``epfl_hand_core`` happens to be
     installed, which is exactly the hermeticity CLAUDE.md section 7 rules out.
 
     Pinning the fallback is the right direction: it is the copy that ships with this
@@ -56,7 +56,7 @@ def pinned_hand(pinned_dims):
 
     The hand to hand a solver in any test that asserts a measured number. Pass
     it as ``HandFKSolver(params, pinned_hand)``; without it the solver builds the
-    DEFAULT hand, whose dimensions come from ``gepetto_core`` when that is
+    DEFAULT hand, whose dimensions come from ``epfl_hand_core`` when that is
     installed and from the bundled table when it is not -- two different hands,
     so the assertion would pass or fail depending on the machine.
     """

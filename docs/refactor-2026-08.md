@@ -90,7 +90,7 @@ Three measurements from this phase shaped everything after it:
    ~1e-14 m from threaded linear algebra. So `rtol=1e-6` has enormous margin and a
    baseline diff is a trustworthy gate.
 2. **`load_hand_dimensions()` silently switches hands.** It prefers
-   `gepetto_core`'s CAD geometry and falls back to the bundled
+   `epfl_hand_core`'s CAD geometry and falls back to the bundled
    `DEFAULT_HAND_DIMENSIONS` — and they disagree (middle finger first joint
    diameter: 9.8 mm vs 14.0 mm). Every test asserting a number pins the bundled
    copy, or it would pass or fail depending on what happens to be installed.
