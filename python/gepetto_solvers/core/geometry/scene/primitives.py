@@ -1,9 +1,24 @@
 """The primitive registry: what objects the scripts can be pointed at.
 
-Baked-SDF primitives (``sphere``, ``big_sphere``, ``cylinder``, ``capsule``,
-``cube``) name a ``.vdb`` grid; the analytic ones (``coin``, ``credit_card``,
-``pen``, ``*_sphere_ellipsoid``, ``megaminx``) carry their geometry inline and
-need no grid at all -- which is what lets the test suite run without them.
+**Every object carries two representations**, and a spec describes both:
+
+* an ELLIPSOID form -- inline geometry (``semi_axes``, ``radius``,
+  ``half_extents``) or a fitted ``members`` list -- which the collision
+  inequalities read, and which is what the approach phases plan against;
+* an EXACT form, the ``.vdb`` level set of the true geometry, which the phases
+  that servo on the surface contact.
+
+They are genuinely different objects for some primitives and coincide for
+others: ``megaminx``'s ellipsoid form is the circumsphere of a dodecahedron,
+a ``ycb:`` object's is a handful of shells bounding a scan, while for
+``mid_sphere_ellipsoid`` the approximation happens to be exact. The distinction
+lives in the spec either way, so nothing downstream has to special-case it.
+
+Every spec NAMES its ``vdb``; whether that file exists is a question about the
+machine, not the object, and ``objects.has_exact_form`` is the one place that
+asks it. The grids are gitignored build output -- ``scripts/objects/
+setup_objects.py`` bakes them -- so a fresh checkout has none, which is what
+lets the test suite run against the analytic forms alone.
 """
 
 import functools
@@ -12,6 +27,7 @@ import os
 
 import numpy as np
 
+from ...objects.ycb import ellipsoids as ye
 from .constants import ELLIPSOID_SET_BETA, YCB_FITS_DIR
 from .polyhedra import (
     MEGAMINX_FACE_TO_FACE,
@@ -71,15 +87,15 @@ def ycb_primitive_specs():
             if not raw:
                 continue
 
-            # Bounding box of the union, from each member's own world AABB --
-            # the same half-extent formula as ycb.ellipsoids.Ellipsoid.aabb().
-            centers = np.array([m["center"] for m in raw], dtype=float)
-            radii = np.array([m["radii"] for m in raw], dtype=float)
-            rotations = np.array([m["rotation"] for m in raw], dtype=float)
-            half = np.sqrt(np.sum((rotations * radii[:, None, :]) ** 2, axis=2))
-            lo = (centers - half).min(axis=0)
-            hi = (centers + half).max(axis=0)
-            recenter = 0.5 * (lo + hi)
+            # Bounding box of the union, and the shift into the object frame.
+            # Both come from ycb.ellipsoids rather than being computed here,
+            # because the SDF baker needs the SAME shift to put the mesh in the
+            # same frame as these shells -- see fit_recenter on what a
+            # disagreement between the two looks like (it does not error; the
+            # object's exact geometry simply sits a couple of centimetres from
+            # its approximation).
+            lo, hi = ye.fit_bounds(raw)
+            recenter = ye.fit_recenter(raw)
 
             members = [
                 {"semi_axes": np.asarray(m["radii"], dtype=float),
@@ -108,6 +124,13 @@ def ycb_primitive_specs():
                 "members": members,
                 "extents": hi - lo,
                 "recenter": recenter,
+                # The EXACT half of this object, when it has been baked. Named
+                # unconditionally -- whether the file is actually there is a
+                # question about this machine, not about the object, and the one
+                # place that answers it is `has_exact_form` below. Naming it only
+                # when present would make an un-baked checkout look like a
+                # registry of objects that inherently have no exact geometry.
+                "vdb": f"ycb/{name}.vdb",
                 **({"grasp_subset": subset} if subset else {}),
                 **({"hull_vertices": hull - recenter} if len(hull) else {}),
                 "metrics": blob.get("metrics", {}),
@@ -205,6 +228,7 @@ def _builtin_primitive_specs():
         "coin": {
             # Oblate spheroid (r >> h): a = b = r, c = h.
             "type": "ellipsoid",
+            "vdb": "coin.vdb",
             "semi_axes": (0.0121, 0.0121, 0.0009),
             "plot": lambda c: {"type": "ellipsoid", "center": c,
                                "semi_axes": (0.0121, 0.0121, 0.0009)},
@@ -212,6 +236,7 @@ def _builtin_primitive_specs():
         "credit_card": {
             # Scalene ellipsoid (l > w >> h): a = l, b = w, c = h.
             "type": "ellipsoid",
+            "vdb": "credit_card.vdb",
             "semi_axes": (0.0428, 0.0270, 0.0004),
             "plot": lambda c: {"type": "ellipsoid", "center": c,
                                "semi_axes": (0.0428, 0.0270, 0.0004)},
@@ -219,6 +244,7 @@ def _builtin_primitive_specs():
         "pen": {
             # Prolate spheroid (l >> r): a = l, b = c = r (long axis is local X).
             "type": "ellipsoid",
+            "vdb": "pen.vdb",
             "semi_axes": (0.0700, 0.0040, 0.0040),
             "plot": lambda c: {"type": "ellipsoid", "center": c,
                                "semi_axes": (0.0700, 0.0040, 0.0040)},
@@ -230,18 +256,21 @@ def _builtin_primitive_specs():
         # the small sphere (0.025 -> 0.02), and one splits the difference (0.035).
         "big_sphere_ellipsoid": {
             "type": "ellipsoid",
+            "vdb": "big_sphere_ellipsoid.vdb",
             "semi_axes": (0.05, 0.05, 0.05),
             "plot": lambda c: {"type": "ellipsoid", "center": c,
                                "semi_axes": (0.05, 0.05, 0.05)},
         },
         "mid_sphere_ellipsoid": {
             "type": "ellipsoid",
+            "vdb": "mid_sphere_ellipsoid.vdb",
             "semi_axes": (0.035, 0.035, 0.035),
             "plot": lambda c: {"type": "ellipsoid", "center": c,
                                "semi_axes": (0.035, 0.035, 0.035)},
         },
         "small_sphere_ellipsoid": {
             "type": "ellipsoid",
+            "vdb": "small_sphere_ellipsoid.vdb",
             "semi_axes": (0.02, 0.02, 0.02),
             "plot": lambda c: {"type": "ellipsoid", "center": c,
                                "semi_axes": (0.02, 0.02, 0.02)},

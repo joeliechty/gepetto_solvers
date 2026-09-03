@@ -108,8 +108,27 @@ class ParamsSyncMixin:
         # hand with no pinch table has only the 3D box, and only the 3D form.
         in_plane = (self.g_obj_contact_plane is not None
                     and self.g_obj_contact_plane.value)
-        p.object_contact = self.g_obj_contact.value or in_plane
-        p.object_contact_in_plane = in_plane
+        # ...and the third form: the witness contact against the object's baked
+        # SDF. Unlike the in-plane box this one does not ride on object_contact
+        # -- it names a different SURFACE, not a different metric -- so it turns
+        # the other two off rather than qualifying them.
+        exact = (self.g_obj_contact_exact is not None
+                 and self.g_obj_contact_exact.value)
+        p.object_contact = (self.g_obj_contact.value or in_plane) and not exact
+        p.object_contact_in_plane = in_plane and not exact
+        p.object_contact_exact = exact
+        # Both representations on every env whenever the exact form is in play,
+        # so the collision inequalities keep reading E_obj while the contact
+        # reads the grid. Also written when the exact form is OFF but the
+        # object has a grid, so switching the box mid-session does not need a
+        # scene rebuild -- attaching an unused surface costs nothing, since
+        # which one each family reads is decided per family.
+        p.object_proxy_and_exact = exact
+        p.grasp_alignment = (self.g_grasp_align is not None
+                             and self.g_grasp_align.value)
+        if self.g_grasp_sigma_force is not None:
+            p.sigma_grasp_force = 10.0 ** self.g_grasp_sigma_force.value
+            p.sigma_grasp_torque = 10.0 ** self.g_grasp_sigma_torque.value
         p.table_contact = self.g_tbl_contact.value
         # No box means no CHOICE, not a default: the 4-row [c_R, c_O, c_T1,
         # c_T2] witness form is what the formulation defines for sphere-only
@@ -220,7 +239,8 @@ class ParamsSyncMixin:
         # The restore above re-ticked DEFAULT_PHASE's box but, running under
         # _restoring, could not fire the callback that gives the tick meaning.
         self._apply_default_phase()
-        self._refresh_planar_contact_gate()   # restored object may not support it
+        self._refresh_planar_contact_gate()
+        self._refresh_exact_contact_gate()   # restored object may not support it
         self._sync_params()
         self._rebuild_fk()          # also drops the stepper
         self._refresh_object()

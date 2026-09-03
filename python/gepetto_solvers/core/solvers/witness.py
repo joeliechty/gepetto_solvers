@@ -521,3 +521,79 @@ def planar_gap_witness(params, result, k=0):
         sphere_pt = tip + (radius * direction / norm) if norm > 1e-12 else tip
         out[name] = PlanarGap(sphere_pt, foot, gap, fallback, sections)
     return out
+
+
+class GraspWrench(NamedTuple):
+    """The h_grasp residual, recomputed from a solve's own contact points.
+
+    ``force`` and ``torque`` are the two halves of the 6-vector; ``norm`` is the
+    length of the whole thing, and ``digits`` names what went into it.
+
+    ``force`` is a sum of UNIT vectors, so its magnitude is bounded by the number
+    of contacts and is directly readable: 0 is balanced, and |C| means every
+    contact pushes the same way. That interpretability is the point of reporting
+    the raw residual rather than the solver's number.
+    """
+    force: np.ndarray       # sum of -n_i                (dimensionless)
+    torque: np.ndarray      # sum of -(p_i - t_obj) x n_i (metres)
+    norm: float
+    digits: list
+
+
+def grasp_wrench_witness(result, k=0, names=None):
+    """The net virtual wrench of the contacts at frame ``k`` -- h_grasp, measured
+    rather than read off the solver.
+
+    Uses :meth:`HandResult.contact_witness`, so the surface point and its normal
+    come from the ANALYTIC surface, where the constraint the solver built reads
+    the baked grid. The two agree to within the grid's fillet, and for the
+    phases this constraint runs in that is the right trade: the whole reason for
+    an independent readout is that it cannot inherit the solver's own error, and
+    sampling the same grid through the same interpolation would forfeit exactly
+    that.
+
+    WHY THE RAW RESIDUAL. The violation the AL reports is WHITENED, so it scales
+    as ``1 / sigma_grasp_*`` -- loosening those sigmas divides the reported
+    number without moving a single fingertip. Measured on the Allegro hand
+    reaching for the 35 mm sphere, sweeping ``sigma_grasp_force`` alone:
+
+        sigma_force |    1    |   10    |   100   |  1000   |  1e4
+        AL violation| 1.1e+0  | 1.3e-1  | 1.4e-2  | 1.7e-3  | 1.9e-4
+        raw |wrench| |   1.1   |   1.3   |   1.4   |   1.7   |  1.9
+
+    The reported violation falls by four orders of magnitude while the grasp gets
+    no better at all. This function is what says so.
+    """
+    # The CONTACT digits, not every digit. h_grasp is built over exactly the
+    # witness points the graph created, so summing an uncommanded finger's
+    # nearest-surface direction into the total would report a wrench the
+    # constraint never saw -- and it is not a small effect: including the
+    # Allegro's idle ring finger adds a whole unit vector to a residual whose
+    # satisfied value is zero.
+    names = names if names is not None else result.contact_names()
+    witness = result.contact_witness(k)
+    t_obj = np.asarray(result.object_center, float)
+
+    force = np.zeros(3)
+    torque = np.zeros(3)
+    used = []
+    for name in names:
+        if name not in witness:
+            continue
+        sphere_pt, surface_pt, _gap = witness[name]
+        # The outward surface normal at the contact, from the segment the witness
+        # already measured: it runs from the sphere's surface to the object's, so
+        # its direction IS the inward normal.
+        direction = np.asarray(surface_pt, float) - np.asarray(sphere_pt, float)
+        norm = float(np.linalg.norm(direction))
+        if norm < 1e-12:
+            continue        # coincident points: no direction to credit
+        n_hat = -direction / norm          # outward, matching the factor's n_i
+        p_i = np.asarray(surface_pt, float)
+        force += -n_hat
+        torque += -np.cross(p_i - t_obj, n_hat)
+        used.append(name)
+
+    return GraspWrench(force, torque,
+                       float(np.linalg.norm(np.concatenate([force, torque]))),
+                       used)

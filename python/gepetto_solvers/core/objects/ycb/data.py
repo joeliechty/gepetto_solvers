@@ -128,6 +128,17 @@ class YcbCache:
     def _extract_dir(self, name: str, source: str) -> Path:
         return self.root / source / name
 
+    def is_cached(self, name: str, source: str) -> bool:
+        """Is this object's mesh already extracted locally?
+
+        The same test :meth:`ensure` uses to decide whether to download, exposed
+        so a caller can ask WITHOUT triggering one. The SDF setup script is the
+        reason: it distinguishes objects it can bake right now from objects that
+        would first cost a download, and a user who has not asked for ~0.6 GB of
+        scans should not get them from a status query."""
+        target = self._extract_dir(name, source)
+        return target.exists() and any(target.rglob("textured.obj"))
+
     def _download(self, url: str, dest: Path, progress: ProgressFn) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")
@@ -151,7 +162,7 @@ class YcbCache:
     def ensure(self, name: str, source: str, progress: ProgressFn = _noop) -> Path:
         """Return the extracted directory for an object, fetching it if needed."""
         target = self._extract_dir(name, source)
-        if target.exists() and any(target.rglob("textured.obj")):
+        if self.is_cached(name, source):
             progress(1.0, "Using cached download.")
             return target
 

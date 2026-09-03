@@ -74,9 +74,20 @@ from .motion import (
     lift_wrist,
     synchronized_close,
 )
-from .params import HandSolveParams
+from .params import (
+    OBJECT_CONTACT_FORMS,
+    HandSolveParams,
+    object_contact_form,
+)
 from .planner import HandPlannerSolver
-from .presets import PHASE_PRESETS, PhasePreset, apply_phase_preset
+from .presets import (
+    ALLEGRO_PHASE_PRESETS,
+    HAND_PHASE_PRESETS,
+    PHASE_PRESETS,
+    PhasePreset,
+    apply_phase_preset,
+    phase_presets,
+)
 from .result import HandResult
 from .scene_resolve import (
     auto_table_origin,
@@ -89,9 +100,11 @@ from .scene_resolve import (
 )
 from .stepper import HandIKStepper, StepStatus
 from .witness import (
+    GraspWrench,
     PlanarGap,
     finger_plane_witness,
     free_sphere_plane_witness,
+    grasp_wrench_witness,
     half_space_witness,
     planar_gap_witness,
     plane_witness,
@@ -119,10 +132,15 @@ __all__ = [
     "StepStatus",
     # params / result / presets
     "HandSolveParams",
+    "OBJECT_CONTACT_FORMS",
+    "object_contact_form",
     "HandResult",
+    "ALLEGRO_PHASE_PRESETS",
+    "HAND_PHASE_PRESETS",
     "PHASE_PRESETS",
     "PhasePreset",
     "apply_phase_preset",
+    "phase_presets",
     # capabilities
     "capabilities",
     # frames
@@ -147,9 +165,11 @@ __all__ = [
     "resolve_scene",
     "resolve_table_origin",
     # witnesses
+    "GraspWrench",
     "PlanarGap",
     "finger_plane_witness",
     "free_sphere_plane_witness",
+    "grasp_wrench_witness",
     "half_space_witness",
     "planar_gap_witness",
     "plane_witness",

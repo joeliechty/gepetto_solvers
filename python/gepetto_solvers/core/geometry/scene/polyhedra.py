@@ -97,6 +97,14 @@ def _megaminx_spec(face_to_face):
         "semi_axes": semi_axes,
         "hull_vertices": hull,
         "face_to_face": face_to_face,
+        # The megaminx is the one built-in whose two representations are really
+        # different objects: the ellipsoid form is its CIRCUMSPHERE (which is why
+        # the shell dips below a table the solid rests flat on, above), while its
+        # exact form is the dodecahedron itself. The baker takes the latter from
+        # `hull_vertices` rather than voxelizing the analytic distance, so the
+        # phases that contact the exact geometry meet flat faces here -- which is
+        # the whole point of having the two forms.
+        "vdb": "megaminx.vdb",
         "plot": lambda c: {"type": "ellipsoid", "center": c,
                            "semi_axes": semi_axes, "hull_vertices": hull},
     }

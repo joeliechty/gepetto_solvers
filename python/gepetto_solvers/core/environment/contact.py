@@ -20,7 +20,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
                    tip_radii=None, radius=None, contact_fingers=None,
                    object_pose_cov=None, proxy_and_exact=False,
                    drop_normal_row=False, ellipsoid_set_beta=None,
-                   in_plane=False, pinch_centroid=None, contact_subset=None):
+                   in_plane=False, pinch_centroid=None, contact_subset=None,
+                   object_contact_exact=False):
     """Attach the shared object surface + a terminal tip contact to every finger
     of a hand config list, in place. Returns ``configs`` for chaining.
 
@@ -42,11 +43,24 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     ``tip_radii[i]`` is used. The radius is written even for a masked-off finger
     (it is inert without a contact node, and keeps the env self-describing).
 
-    ``proxy_and_exact`` (Section 1.8 controller) attaches the bounding-ellipsoid
-    proxy *and* the baked SDF, so the controller can swap from the proxy it
-    slides against in phase 2 to the exact geometry it servos on in phase 3.
-    Default False keeps the single-surface behavior every existing caller relies
-    on.
+    ``proxy_and_exact`` attaches the bounding-ellipsoid proxy *and* the baked SDF,
+    so a solve can slide against the proxy in phase 2 and servo on the exact
+    geometry in phase 3. Default False keeps the single-surface behavior every
+    existing caller relies on.
+
+    ``object_contact_exact`` is the other half of that pair, and the two are
+    normally set together: it points the CONTACT equality at the baked SDF while
+    leaving the collision inequalities on the proxy attached alongside it. That
+    split is the phase-3/4 formulation -- h_rad/h_sdf/h_tan on the true surface,
+    h_pen on E_obj -- and it is the one place in this module where the two
+    families deliberately read different geometry. Nothing else changes: the
+    finger mask, the radius and ``drop_normal_row`` all apply exactly as they do
+    to any other witness contact.
+
+    Written for every finger regardless of the mask, like ``drop_normal_row``,
+    because it names the contact FORM rather than who is contacting. The C++
+    layer raises for it without a grid, or alongside ``in_plane`` (a different
+    form on a different surface) -- see ``HandModel::uses_center_direct_contact``.
 
     ``ellipsoid_set_beta`` overrides the LogSumExp sharpness for an
     ``ellipsoid_set`` object (None = the spec's own value). Only the smooth-min
@@ -101,6 +115,26 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
 
     mask = _resolve_contact_mask(configs, contact_fingers)
     centroid = None
+    if object_contact_exact:
+        probe = gepetto_solvers.EnvironmentConfig()
+        if not hasattr(probe, "object_contact_exact"):
+            raise AttributeError(
+                "this gepetto_solvers build has no EnvironmentConfig."
+                "object_contact_exact, so the contact cannot be pointed at the "
+                "baked SDF while the proxy stays on collision -- rebuild it "
+                "(pip install . from the repo root)")
+        if "vdb" not in spec:
+            raise ValueError(
+                f"exact object contact needs a baked SDF, but the "
+                f"{spec['type']!r} object {primitive!r} names no grid -- bake "
+                f"one (python scripts/objects/setup_objects.py), or contact the "
+                f"ellipsoid proxy instead")
+        if not proxy_and_exact:
+            raise ValueError(
+                "exact object contact reads the baked SDF while the collision "
+                "inequalities read the ellipsoid proxy, so BOTH surfaces have to "
+                "be attached -- pass proxy_and_exact=True. Without it only one "
+                "surface is configured and there is no proxy left for h_pen")
     if in_plane:
         probe = gepetto_solvers.EnvironmentConfig()
         if not hasattr(probe, "object_contact_in_plane"):
@@ -139,6 +173,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
         elif tip_radii is not None:
             env.contact_node_radius = tip_radii[i]
         env.contact_drop_normal_row = drop_normal_row
+        if object_contact_exact:
+            env.object_contact_exact = True
         if centroid is not None:
             env.object_contact_in_plane = True
             env.contact_plane_centroid = centroid

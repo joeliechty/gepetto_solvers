@@ -162,6 +162,7 @@ class HandVizApp(
         # contact form, so the box is never offered live for a scene the solve
         # would refuse.
         self._refresh_planar_contact_gate()
+        self._refresh_exact_contact_gate()
         # Same for the contact-shells choice, whose hint counts the opening
         # object's shells and so cannot be written at build time.
         self._refresh_grasp_subset_gate()

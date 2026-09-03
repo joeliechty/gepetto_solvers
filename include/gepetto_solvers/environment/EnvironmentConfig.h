@@ -319,6 +319,70 @@ struct EnvironmentConfig {
     // is unset.
     bool object_contact_center_direct = false;
 
+    // Contact the baked SDF even though an ellipsoid proxy is also attached
+    // (phases 3-4 of the staged pipeline). The one field on this struct that
+    // separates the surface CONTACT uses from the surface COLLISION uses:
+    //
+    //   h_rad/h_sdf/h_tan  ->  sdf_grid          (the exact geometry)
+    //   h_pen              ->  ellipsoid_set / ellipsoid_semi_axes  (E_obj)
+    //
+    // Everything else in this header shares one surface, resolved by the
+    // precedence documented on ellipsoid_set (set > single ellipsoid > SDF).
+    // That precedence is what the collision blocks keep using, untouched: they
+    // read the proxy whenever one is attached, which is exactly the phase-3/4
+    // formulation. Only the CONTACT block consults this flag, and only to look
+    // past the proxy it would otherwise have picked.
+    //
+    // Why the split is wanted rather than just clearing the proxy: the approach
+    // slid along E_obj and the free spheres are still steered by it, so dropping
+    // it would swap a smooth everywhere-differentiable bound for a baked grid in
+    // the middle of a solve -- and a baked grid is exactly what §1.7 introduced
+    // the proxy to avoid for the parts of the hand that are NOT servoing on the
+    // surface.
+    //
+    // Requires sdf_grid. Selects the WITNESS contact form by construction (the
+    // grid has no closed-form distance to constrain a center against), so it is
+    // rejected alongside object_contact_in_plane -- see
+    // HandModel::uses_center_direct_contact, which raises rather than silently
+    // contacting something other than what was asked for.
+    bool object_contact_exact = false;
+
+    // --- Geometric grasp alignment (h_grasp) -----------------------------
+    // Net virtual-wrench equilibrium over this solve's witness points:
+    //
+    //   h_grasp({p_i}, T_obj) = sum_i [ -n_i ; -(p_i - t_obj) x n_i ] = 0
+    //
+    // A HAND-LEVEL constraint spanning every contacting digit at once, like the
+    // three pregrasp_* families below, so build_graph() collects it in a pass of
+    // its own after the per-digit loop rather than building one factor per digit
+    // here. A digit opts in by setting this flag alongside its target_contact_node;
+    // the remaining fields are shared constants duplicated across every
+    // participating digit's env (first one found wins), the same convention
+    // pregrasp_clearance_* uses.
+    //
+    // Needs WITNESS POINTS to key off, so it composes only with the witness
+    // contact form (object_contact_exact, or a baked SDF) -- a center-direct
+    // contact has no p_i at all. It also needs sdf_grid, since n_i is the
+    // object's own surface normal at p_i. Both are rejected loudly rather than
+    // skipped.
+    //
+    // TWO sigmas, where every sibling constraint here takes one: the residual is
+    // dimensionless in its top three rows (a sum of unit normals) and has units
+    // of length in its bottom three (a moment arm), so a shared isotropic model
+    // would weight them by whatever the object's size happens to be. See the
+    // factor's own header for the sizing note.
+    //
+    // The two finite-difference steps default (0.0) to half the grid voxel, which
+    // is the measured sweet spot -- a sub-voxel stencil resolves the trilinear
+    // interpolant rather than the geometry. Raise them on a noisy grid; the cost
+    // is a smoothed normal, which for a constraint Jacobian is the safe direction
+    // to err in.
+    bool   grasp_alignment_enabled        = false;
+    double grasp_alignment_sigma_force    = 1.0;
+    double grasp_alignment_sigma_torque   = 1.0;
+    double grasp_alignment_curvature_step = 0.0;
+    double grasp_alignment_gradient_step  = 0.0;
+
     // Controller phase 3 (Eq 1.107-1.110): drop the normal-alignment row c_N from
     // the witness contact factor, leaving [c_R, c_O, c_T1, c_T2]. Justified in
     // §1.8: with collision geometry modeled exclusively as spheres, the tangential

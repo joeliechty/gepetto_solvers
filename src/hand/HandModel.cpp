@@ -94,6 +94,30 @@ bool HandModel::uses_center_direct_contact(
     // Collision-only env: no object contact of any kind to choose a form for.
     if (!env.target_contact_node.has_value()) return false;
 
+    // Contact the EXACT geometry (phases 3-4), leaving the proxy to the collision
+    // blocks. Decided first, ahead of every surface test below, because that is
+    // precisely what it means: the caller has said which surface the contact
+    // reads, so the precedence that would otherwise pick one for it does not run.
+    //
+    // A grid can only be contacted through a witness point -- it has no
+    // closed-form distance to constrain a center against -- so this is always the
+    // witness form, and its two incompatibilities are rejected rather than
+    // ignored, on the same reasoning as the ellipsoid_set case below.
+    if (env.object_contact_exact) {
+        if (!env.sdf_grid)
+            throw std::invalid_argument(
+                "HandModel: object_contact_exact contacts the baked SDF, but no "
+                "sdf_grid is attached -- bake one for this object "
+                "(scripts/objects/setup_objects.py), or clear the flag to "
+                "contact the ellipsoid proxy instead.");
+        if (env.object_contact_in_plane)
+            throw std::invalid_argument(
+                "HandModel: object_contact_exact and object_contact_in_plane are "
+                "two different contact FORMS on two different surfaces (the baked "
+                "SDF vs. the ellipsoid proxy's cross-section). Set at most one.");
+        return false;
+    }
+
     // In-plane contact (Eq 13) is a center-direct form -- it constrains the tip
     // sphere's CENTER, with no witness variable -- so it is decided here with the
     // others. Its two incompatibilities are rejected rather than ignored, on the

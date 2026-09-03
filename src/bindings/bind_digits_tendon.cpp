@@ -187,6 +187,20 @@ void bind_digits_tendon(py::module& m) {
                        &gepetto_solvers::EnvironmentConfig::pregrasp_centroid_clearance)
         .def_readwrite("pregrasp_centroid_normal",
                        &gepetto_solvers::EnvironmentConfig::pregrasp_centroid_normal)
+        // --- Exact (SDF) object contact alongside the ellipsoid proxy ---
+        .def_readwrite("object_contact_exact",
+                       &gepetto_solvers::EnvironmentConfig::object_contact_exact)
+        // --- Geometric grasp alignment (h_grasp) ---
+        .def_readwrite("grasp_alignment_enabled",
+                       &gepetto_solvers::EnvironmentConfig::grasp_alignment_enabled)
+        .def_readwrite("grasp_alignment_sigma_force",
+                       &gepetto_solvers::EnvironmentConfig::grasp_alignment_sigma_force)
+        .def_readwrite("grasp_alignment_sigma_torque",
+                       &gepetto_solvers::EnvironmentConfig::grasp_alignment_sigma_torque)
+        .def_readwrite("grasp_alignment_curvature_step",
+                       &gepetto_solvers::EnvironmentConfig::grasp_alignment_curvature_step)
+        .def_readwrite("grasp_alignment_gradient_step",
+                       &gepetto_solvers::EnvironmentConfig::grasp_alignment_gradient_step)
         .def("load_sdf", [](gepetto_solvers::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);

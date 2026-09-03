@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from _pkg import hands
+from gepetto_solvers.core.solvers import phase_presets
 
 viser = pytest.importorskip("viser", reason="the workbench needs the web extra")
 
@@ -182,7 +183,13 @@ def test_every_overlay_draws(app):
         ("normal_row_choice", ("g_drop_normal_row",)),
         ("pinch_table", ("g_obj_contact_plane", "g_show_finger_planes",
                          "g_show_planar_gap")),
-        ("close_ramp", ("g_phase4", "g_phase5")),
+        # The close and lift RUNNERS -- not the phase boxes that used to be
+        # listed here. `phase4` names the tendon hand's commanded close, which
+        # needs this feature, and the Allegro hand's grasp-wrench alignment,
+        # which is an ordinary solve and needs nothing; keying the box to the
+        # feature would have hidden a phase the hand can perfectly well run.
+        # Which phases each hand offers is its own question, asserted below.
+        ("close_ramp", ("g_close", "g_lift", "g_close_frac", "g_lift_height")),
         ("tendons", ("g_show_discs", "g_show_disc_frames")),
     ],
 )
@@ -192,6 +199,29 @@ def test_a_panel_is_present_exactly_when_its_feature_is(app, feature, handles):
         assert (getattr(app, name) is not None) == want, (
             f"{name} should be {'built' if want else 'absent'} on "
             f"{app.hand.name}, which {'has' if want else 'lacks'} {feature!r}")
+
+
+def test_the_phase_boxes_are_this_hands_own_phases(app):
+    """The Presets folder offers exactly the phases this hand's preset set names
+    -- minus any whose runner it cannot walk.
+
+    The panel is built by looping that set, so this is really a check that the
+    hand-scoped presets reach the GUI: a hand with five phases gets five boxes,
+    and a phase numbered 4 on both hands can be a commanded ramp on one and a
+    solved constraint on the other without either panel mislabelling it."""
+    expected = {name for name, preset in phase_presets(app.hand.name).items()
+                if not preset.requires_feature or app.has(preset.requires_feature)}
+    assert set(app.g_phases) == expected
+
+    for name in expected:
+        box = app.g_phases[name]
+        assert box is not None
+        # The label and help come off the preset, so the panel cannot describe
+        # a phase differently from what applying it does.
+        assert box.label == phase_presets(app.hand.name)[name].label
+        # ...and the named alias still resolves, which Reset and the mixin
+        # surface both rely on.
+        assert getattr(app, f"g_{name}") is box
 
 
 def test_absent_constraints_are_held_off(app):

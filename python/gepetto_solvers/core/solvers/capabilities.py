@@ -111,6 +111,20 @@ def capabilities():
         # physics, like sigma_twist_rot, not a hand-level environment setting.
         "planar_bending": hasattr(fc, "planar_bending"),
         "drop_normal_row": hasattr(env, "contact_drop_normal_row"),
+        # The EXACT object contact form: point the contact equality at the baked
+        # SDF while the collision inequalities keep the ellipsoid proxy attached
+        # alongside it. The one field that splits the two families onto different
+        # geometry; without it a solve can have one surface or the other but not
+        # both at once, so the staged pipeline's later phases cannot be built.
+        "contact_exact": hasattr(env, "object_contact_exact"),
+        # h_grasp, the net virtual-wrench equilibrium over the witness points.
+        # Gated apart from "contact_exact" even though the two are always used
+        # together: they are separate fields and a binding can carry one without
+        # the other. A ticked box here with no constraint behind it would claim a
+        # grasp is being ARRANGED when the fingers are only being placed, which
+        # is invisible in the resulting pose -- exactly the failure this whole
+        # capability table exists to prevent.
+        "grasp_alignment": hasattr(env, "grasp_alignment_enabled"),
         # Pre-grasp short-axis alignment (companion to Eq 2.16-2.17). Needs a
         # rebuilt binding with EnvironmentConfig.pregrasp_align_node.
         "pregrasp_axis_align": hasattr(env, "pregrasp_align_node"),

@@ -236,17 +236,33 @@ def configure_object_surface(env, spec, objects_dir, primitive_name,
 
 def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name,
                                      contact_subset=None):
-    """Section 1.8 controller variant of :func:`configure_object_surface`: attach
-    BOTH the bounding-ellipsoid proxy (phase 2's sliding target) and, when the
-    primitive has one, the baked SDF of the exact geometry (phase 3's servoing
-    target).
+    """Staged-pipeline variant of :func:`configure_object_surface`: attach BOTH of
+    the object's representations at once -- the ellipsoid form ``E_obj``, and the
+    baked SDF of the exact geometry when the spec names one.
 
-    The controller's C++ ``phase_env`` switches between them: phases 1-2 use the
-    ellipsoid, and phase 3 zeroes ``ellipsoid_semi_axes`` so the factors fall
-    through to ``sdf_grid``. An analytic-only primitive (coin, card, pen) has no
-    exact geometry to switch to, so it keeps the ellipsoid in phase 3 and only
-    the witness form changes — which is correct, since for those the ellipsoid
-    *is* the object.
+    Both, simultaneously, is the point. The two families then read DIFFERENT
+    geometry, which is what phases 3-4 of the formulation ask for:
+
+      * COLLISION (h_pen) reads the ellipsoid form, always. The C++ collision
+        blocks resolve their surface by the documented precedence (set > single
+        ellipsoid > SDF), so attaching a proxy is all it takes to keep every free
+        sphere steered by a smooth, everywhere-differentiable bound rather than
+        by a baked grid.
+      * CONTACT reads whichever the caller asked for: the proxy by default, or
+        the grid under ``EnvironmentConfig.object_contact_exact``
+        (``attach_contact(..., object_contact_exact=True)``), which is the one
+        flag that looks past that precedence.
+
+    This is why nothing here CLEARS anything. An earlier design switched phases
+    by zeroing ``ellipsoid_semi_axes`` so the factors fell through to the grid,
+    which moved collision onto the grid too -- exactly what the proxy exists to
+    avoid for the parts of the hand that are not servoing on the surface.
+
+    Every spec is expected to carry both forms (see
+    ``scripts/objects/setup_objects.py``, which bakes the grids the repository
+    does not ship). A spec with no ``vdb`` still configures cleanly with the
+    ellipsoid alone -- it simply cannot be used for the exact-contact phases, and
+    ``attach_contact`` says so if one is asked for.
 
     ``contact_subset`` is accepted and forwarded so this stays a drop-in for
     :func:`configure_object_surface` (``config.attach_contact`` picks between the
@@ -255,19 +271,24 @@ def configure_object_proxy_and_exact(env, spec, objects_dir, primitive_name,
     approach that slid along a proxy shrunk to the grip would clip the parts of
     the object it is meant to steer around.
     """
-    env.ellipsoid_semi_axes = proxy_semi_axes(spec)
-    if spec["type"] == "ellipsoid":
-        return
+    # The ellipsoid form, richest first. A set describes the object far better
+    # than one bounding ellipsoid does -- and because the C++ precedence puts the
+    # set ahead of ellipsoid_semi_axes, writing both would leave the latter inert
+    # and misleading, so exactly one is set.
     if spec["type"] == "ellipsoid_set":
-        # The set IS the exact geometry here -- there is no baked SDF to servo on
-        # in phase 3 -- so attach it alongside the proxy. Note the C++ precedence
-        # (set beats ellipsoid_semi_axes) means the set wins wherever both are
-        # set, so the proxy above only takes effect in a phase that clears it.
         attach_ellipsoid_set(env, spec, contact_subset=contact_subset)
+    else:
+        env.ellipsoid_semi_axes = proxy_semi_axes(spec)
+
+    # ...and the exact geometry alongside it, when this object has been baked.
+    # Absent is not an error here: it costs the exact-contact phases and nothing
+    # else, and the caller that needs them raises with the baker's name.
+    if "vdb" not in spec:
         return
     vdb_path = os.path.normpath(os.path.join(objects_dir, spec["vdb"]))
     if not os.path.exists(vdb_path):
         raise FileNotFoundError(
-            f"{vdb_path} not found. Generate it with "
-            f"python scripts/objects/make_{primitive_name}.py")
+            f"{vdb_path} not found. The baked SDF grids are not in version "
+            f"control -- generate them with "
+            f"python scripts/objects/setup_objects.py")
     env.load_sdf(vdb_path)

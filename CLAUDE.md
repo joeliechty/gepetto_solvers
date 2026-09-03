@@ -24,6 +24,7 @@ You are an expert AI software engineer assisting with a robotics and machine lea
 *   **Aggressive Introspection:** When debugging, print verbose diagnostic information. Do not just print errors; explicitly print tensor shapes, data types, min/max bounds, and intermediate states (especially when debugging Riemannian manifold operations, coordinate frame shifts, or flow matching decoders).
 *   **Visual Debugging:** Always default to visual validation for robotics and ML data. Generate plots to verify 3D trajectories, optimization loss curves, bounding boxes, or distribution matches before assuming the underlying math is correct.
 *   **Human-Centric Interfaces:** Ensure every API, logging output, and configuration interface is easily human-readable and writable. Avoid opaque serialized objects when a clear, structured text representation will suffice.
+*   **Plan Debugging Steps:** For human programmers poor debugging wastes time. For agents poor debugging wastes tokens. In both cases it leads to messier code. Make small plans for how to isolate bugs and fix them rather than blindly running tests in an effor to uncover the bugs. Think carefully about what information would be useful for isolating the problem in the code.
 
 ### 5. Dependency Management & Configuration
 *   **Single Source of Truth:** Use a PEP-compliant `pyproject.toml` file. Do not use `setup.py` or `setup.cfg`.
@@ -40,3 +41,6 @@ You are an expert AI software engineer assisting with a robotics and machine lea
 *   **Hermetic Testing:** Tests must be completely self-contained using localized dummy data.
 *   **Golden Tests for Math:** Implement fixed-seed forward pass tests for trajectory optimization or ML algorithms to assert exact tensor shapes and sums.
 *   **Hardware Agnosticism:** Ensure dynamic device placement whenever possible. Code must ideally run locally on macOS and scale seamlessly to Ubuntu-based Slurm clusters. **Exemption:** Modules with hard CUDA dependencies (e.g., specific PyTorch3D extensions or custom CUDA kernels) are exempt if cross-platform compatibility is not technically feasible.
+
+### 8. Agent Specific Instructions
+*   **Context Length:** To avoid letting the context getting too big and wasting tokens, compact when the context size reaches 33% of the max.

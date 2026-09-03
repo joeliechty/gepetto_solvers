@@ -7,7 +7,7 @@ that class's ``__init__`` sets up.
 
 import math
 
-from gepetto_solvers.core.solvers import PHASE_PRESETS
+from gepetto_solvers.core.solvers import phase_presets
 
 from .constants import (
     DEFAULT_PHASE,
@@ -46,6 +46,17 @@ class PhaseMixin:
             # Registered so a future preset CAN name it, though none should:
             # planarity is a property of the hand, not of a phase.
             "planar_bending": self.g_planar_bend,
+            # The exact-SDF contact form and h_grasp. Plain 1:1 cases: unlike
+            # the two ellipsoid forms below, `object_contact_exact` is its own
+            # box and needs no exclusivity dance here -- _apply_phase_preset
+            # writes every form field a preset names, and the presets never name
+            # two at once.
+            "object_contact_exact": self.g_obj_contact_exact,
+            "grasp_alignment": self.g_grasp_align,
+            # Attaching BOTH object representations is not a control the panel
+            # offers: it is implied by the contact form (see _sync_params), so a
+            # preset naming it writes nothing and _sync_params derives it.
+            "object_proxy_and_exact": None,
         }[field]
 
 
@@ -58,7 +69,7 @@ class PhaseMixin:
 
         The one field no preset writes here is ``contact_fingers``: the finger
         mask carries across phases untouched, see the branch below."""
-        overrides = PHASE_PRESETS[name].overrides
+        overrides = phase_presets(self.hand.name)[name].overrides
         self._restoring = True   # batch write; no live-FK/other side effects
         try:
             for field, value in overrides.items():
@@ -138,6 +149,7 @@ class PhaseMixin:
         # mask (it needs a measured thumb pinch pose) -- has to be re-run by
         # hand against whichever object and digits are currently selected.
         self._refresh_planar_contact_gate()
+        self._refresh_exact_contact_gate()
         # ...and that gate may have just cleared an in-plane box the preset asked
         # for (SDF object, or a digit set with no measured pinch pose). Falling
         # back to the 3D metric is right HERE, unlike when the user ticks the box
@@ -169,17 +181,15 @@ class PhaseMixin:
 
 
     def _phase_checkboxes(self):
-        """Every phase-preset checkbox, name -> handle. Small and built on
-        demand rather than cached, so a future phase3 checkbox only needs
-        adding here (and to ``_build_gui``/``_input_handles``)."""
-        boxes = {"phase0": self.g_phase0, "phase1": self.g_phase1,
-                 "phase2": self.g_phase2, "phase4": self.g_phase4,
-                 "phase5": self.g_phase5}
-        # Phases whose box this hand does not have are dropped rather than
-        # carried as None: every caller here either reads .value off one or
-        # writes it, and a phase with no box is a phase this hand cannot be put
-        # into by the panel.
-        return {name: box for name, box in boxes.items() if box is not None}
+        """Every phase-preset checkbox, name -> handle.
+
+        Just the dict ``_build_gui`` filled, which is already exactly the phases
+        this hand HAS a box for -- a phase the hand's own preset set does not
+        name, or one whose runner it cannot walk, never got one. Returned rather
+        than rebuilt so the wiring cannot drift from the build; every caller here
+        either reads ``.value`` off a handle or writes it, so a None would be a
+        crash rather than a skip."""
+        return dict(self.g_phases)
 
 
     def _on_phase_toggle(self, name, _=None):
