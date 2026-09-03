@@ -168,7 +168,7 @@ class StepperMixin:
                 # values hauls the hand straight back. Adopt where the solve
                 # actually ended up -- and show it on the sliders.
                 self._adopt_solved_wrist()
-                self._adopt_solved_tensions()
+                self._adopt_solved_actuation()
             else:
                 self.params.initial_state = None
                 self.params.initial_duals = None
@@ -211,6 +211,73 @@ class StepperMixin:
         # Exact, not the round trip through the sliders (they hold the same
         # numbers; viser does not snap a programmatic write to the step grid).
         self.params.wrist_pose = np.asarray(T, float)
+
+
+    def _adopt_solved_actuation(self):
+        """Move the actuation panel to where the last solve actually ended up,
+        in whichever shape this hand has one.
+
+        The need is identical either way and is what makes the warm start work:
+        the actuation prior is soft by design so contact can drive it, so a
+        grasp ends far from what the panel commands -- and a rebuilt solver
+        re-imposes that prior at the panel's values, hauling the hand back to a
+        posture the last solve had already moved off. Adopt where it went, and
+        show it.
+
+        Two shapes because the two hands are commanded differently -- one pull
+        per digit, or a full joint vector per digit -- and the dispatch is on
+        which panel :meth:`GuiMixin._build_gui` actually built, not on the hand's
+        name. A hand with neither (nothing commands it) adopts nothing rather
+        than reaching into an empty list, which is what
+        ``self.g_flexors[0]`` did.
+        """
+        if self.g_flexors:
+            self._adopt_solved_tensions()
+        elif self.g_joints:
+            self._adopt_solved_joints()
+
+
+    def _adopt_solved_joints(self):
+        """Move the joint sliders to the angles the last solve reached.
+
+        The joint-space counterpart of :meth:`_adopt_solved_tensions`. q_S is
+        the mean of p(q) and the sliders are its only input -- ``_sync_params``
+        reads ``joint_targets`` straight off them every step -- so leaving them
+        on the commanded posture would undo this on the very next step.
+
+        Clamped to each slider's own URDF limits, and said out loud when that
+        bites: the solve does NOT enforce joint limits (see the note on
+        RigidHandKinematics), so a contact solve can legitimately arrive past a
+        stop, and adopting that unclamped would command a prior at a posture the
+        real hand cannot reach.
+        """
+        res = self._iter_view()
+        if res is None:
+            return
+        solved = [[h.value for h in row] for row in self.g_joints]
+        clamped = False
+        for d, name in enumerate(self.digit_names):
+            if name not in res.frames[0]:
+                continue        # not solved this time; leave its sliders alone
+            q = np.asarray(res.frames[0][name].actuation(), float)
+            for j, handle in enumerate(self.g_joints[d]):
+                if j >= len(q):
+                    break
+                clamped = clamped or not (handle.min <= q[j] <= handle.max)
+                solved[d][j] = float(min(max(q[j], handle.min), handle.max))
+        self._restoring = True
+        try:
+            for row, values in zip(self.g_joints, solved):
+                for handle, q in zip(row, values):
+                    handle.value = q
+        finally:
+            self._restoring = False
+        self.params.joint_targets = solved
+        if clamped:
+            self._set_status(
+                "**warm start:** a solved joint fell outside its URDF limits "
+                "and was clamped -- the solve does not enforce limits, so the "
+                "prior is now commanded at the stop rather than past it.")
 
 
     def _adopt_solved_tensions(self):
@@ -287,7 +354,7 @@ class StepperMixin:
         # Both adopt from the SCRUBBED iterate, like every other warm start
         # here, so a ramp branches from whichever step of the solve is showing.
         self._adopt_solved_wrist()
-        self._adopt_solved_tensions()
+        self._adopt_solved_actuation()
         self.fk_solver.seed_posture(self._seed_state())
         return ("*carried the solve on screen into the ramp: its wrist pose and "
                 "flexor tensions are now on the sliders and the FK solver starts "

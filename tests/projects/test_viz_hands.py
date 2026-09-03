@@ -262,6 +262,49 @@ def test_the_digit_is_drawn_the_way_it_is_built(app):
         assert "LineSegments" in kind, kind
 
 
+def test_a_rebuilt_stepper_adopts_the_solve(app):
+    """A rebuild re-imposes the actuation prior at whatever the panel commands,
+    so it has to move the panel onto the solve first -- otherwise the next step
+    hauls the hand back to a posture the last solve had already left.
+
+    The regression: this reached straight into ``g_flexors[0]`` for the slider
+    range, and a joint-space hand has no flexor sliders. Auto solve raised
+    IndexError before taking a single step.
+    """
+    if not app.caps["ik_stepping"]:
+        pytest.skip("this binding cannot step")
+    app._fk_solve()
+    app._invalidate_stepper()
+    app._ensure_stepper()
+
+    solved = {name: np.asarray(app.result.frames[0][name].actuation(), float)
+              for name in app.digit_names}
+    if app.g_joints:
+        adopted = [[h.value for h in row] for row in app.g_joints]
+        assert app.params.joint_targets == adopted
+        for name, row in zip(app.digit_names, adopted):
+            assert row == pytest.approx(list(solved[name]))
+    else:
+        assert app.params.flexor_tensions == [h.value for h in app.g_flexors]
+        for name, handle in zip(app.digit_names, app.g_flexors):
+            assert handle.value == pytest.approx(
+                solved[name][app._drive_index()])
+
+
+def test_the_adopted_posture_stays_inside_the_sliders(app):
+    """The solve does NOT enforce joint limits, so an adopted value has to be
+    clamped to the URDF range the sliders carry -- a prior commanded past a
+    stop asks for a posture the real hand cannot reach."""
+    if not app.caps["ik_stepping"] or not app.g_joints:
+        pytest.skip("this hand has no joint sliders")
+    app._fk_solve()
+    app._invalidate_stepper()
+    app._ensure_stepper()
+    for row in app.g_joints:
+        for handle in row:
+            assert handle.min <= handle.value <= handle.max
+
+
 def test_the_commanded_state_is_reported(app):
     """The joint states and the wrist, or the tendon pulls and lengths --
     whichever this hand is commanded in."""

@@ -122,12 +122,12 @@ class MotionMixin:
         # stepper is holding describe a hand that no longer exists.
         self._invalidate_stepper()
         self._rebuild_iter_slider()
-        # Move the sliders onto the tensions the close ended at, for the reason
-        # _adopt_solved_tensions exists: after it they no longer describe where
+        # Move the sliders onto the actuation the close ended at, for the reason
+        # _adopt_solved_actuation exists: after it they no longer describe where
         # the hand is, and the next FK solve would haul the fingers back open.
         # After the scrubber rebuild, so it reads the LAST pose rather than
         # whichever index the previous solve's slider was parked on.
-        self._adopt_solved_tensions()
+        self._adopt_solved_actuation()
         self._render_frame()
         # Where to go from here. Both halves are non-obvious: the mode change
         # above quietly turns the live re-solve off, which is what keeps the
