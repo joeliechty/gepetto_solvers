@@ -17,7 +17,12 @@ from gepetto_solvers.core.geometry.scene import (
 from gepetto_solvers.core.hands.tendon_5f import (
     pinch_pose,
 )
-from gepetto_solvers.core.solvers import half_space_witness, resolve_scene
+from gepetto_solvers.core.objects import has_exact_form, names_exact_form
+from gepetto_solvers.core.solvers import (
+    half_space_witness,
+    phase_presets,
+    resolve_scene,
+)
 
 
 class NotesMixin:
@@ -105,32 +110,48 @@ class NotesMixin:
         return []
 
 
-    def _enforce_object_contact(self, source):
-        """Keep the two object-contact FORMS mutually exclusive.
+    def _object_contact_boxes(self):
+        """Every object-contact FORM box this hand has, 3D first.
 
-        3D and in-plane are two metrics for one constraint -- one factor per
-        contact finger either way -- so "both" is not a state the graph has.
-        Rather than silently preferring one at build time, the box you just
-        touched wins and the other clears, which is the same rule stated in the
-        hints and visible the moment you click.
+        The list, not a pair: there are three forms now (3D and in-plane against
+        the ellipsoid, witness against the baked SDF) and a hand may have two or
+        three of them, so every rule about "the other one" has to be written
+        against whatever is actually present."""
+        return [h for h in (self.g_obj_contact, self.g_obj_contact_plane,
+                            self.g_obj_contact_exact) if h is not None]
+
+    def _enforce_object_contact(self, source):
+        """Keep the object-contact FORMS mutually exclusive.
+
+        3D, in-plane and exact-SDF are three ways of stating ONE constraint --
+        one factor per contact finger whichever is chosen -- so "two at once" is
+        not a state the graph has. Rather than silently preferring one at build
+        time, the box you just touched wins and the rest clear, which is the same
+        rule stated in the hints and visible the moment you click.
+
+        The first two differ only in the METRIC and both measure against the
+        ellipsoid; the third changes the SURFACE to the baked grid. That
+        distinction matters everywhere else -- it is why ``object_contact_exact``
+        does not ride on ``object_contact`` in the params -- but not here: from
+        the panel's point of view they are three radio buttons.
 
         ``source`` is the handle that changed. Re-entrant by construction (it
-        writes the OTHER handle, whose own callback lands right back here), so
+        writes the OTHER handles, whose own callbacks land right back here), so
         it is latched; it also sits out :attr:`_restoring`, since Reset and the
-        phase presets write both boxes as one batch and settle it themselves at
+        phase presets write every box as one batch and settle it themselves at
         the end.
         """
         if self._restoring or self._contact_guard:
             return
-        if self.g_obj_contact_plane is None:
-            return             # one form only: nothing to be exclusive with
-        other = (self.g_obj_contact_plane if source is self.g_obj_contact
-                 else self.g_obj_contact)
-        if not (source.value and other.value):
+        if not source.value:
+            return             # clearing a box never conflicts with anything
+        others = [h for h in self._object_contact_boxes() if h is not source]
+        if not any(h.value for h in others):
             return
         self._contact_guard = True
         try:
-            other.value = False
+            for handle in others:
+                handle.value = False
         finally:
             self._contact_guard = False
 
@@ -185,6 +206,69 @@ class NotesMixin:
                 self.g_obj_contact_plane.value = False
             finally:
                 self._contact_guard = False
+
+
+    def _exact_contact_available(self):
+        """``(ok, reason)`` for whether the exact-SDF contact form can be built
+        for the object currently selected.
+
+        The sibling of :meth:`_planar_contact_available`, and the same argument
+        for existing: the GUI knows the answer while the box is still being
+        offered, and greying a control says "not for this object" better than an
+        exception after Auto solve does.
+
+        The distinction the reason has to carry is between an object that has no
+        exact form and a MACHINE that has not baked one. Every object has an
+        exact form; almost no fresh checkout has any of them on disk, because the
+        grids are build output. Reporting the second as the first would tell the
+        user their object cannot be grasped precisely when what it actually needs
+        is one command."""
+        if not self.caps["contact_exact"]:
+            return False, ("this binding cannot build it (no "
+                           "EnvironmentConfig.object_contact_exact)")
+        spec = resolve_scene(self.params)[0]
+        if not names_exact_form(spec):
+            return False, (f"a `{spec['type']}` object carries no exact "
+                           f"geometry to contact")
+        if not has_exact_form(spec):
+            return False, (f"`{self.params.primitive}` has not been baked on "
+                           f"this machine -- run "
+                           f"`python scripts/objects/setup_objects.py`")
+        return True, ""
+
+
+    def _refresh_exact_contact_gate(self):
+        """Grey the exact-contact box, the grasp-alignment box and the phases
+        that need them -- clearing any that were on -- whenever the selected
+        object has no baked grid.
+
+        Grasp alignment goes with it because it is built on the witness points
+        the exact form creates; a phase box goes with it because checking one
+        would write a constraint set the next solve refuses. Clearing rather than
+        leaving them ticked-but-disabled is the rule
+        :meth:`_refresh_planar_contact_gate` already follows: a ticked box the
+        solve would reject is a lie about what is in the graph."""
+        if self.g_obj_contact_exact is None:
+            return
+        ok, _reason = self._exact_contact_available()
+        boxes = [self.g_obj_contact_exact, self.g_grasp_align]
+        # The phases whose preset asks for the exact form -- read off the
+        # presets rather than by phase NUMBER, since the number means different
+        # things on different hands.
+        for name, box in self._phase_checkboxes().items():
+            preset = phase_presets(self.hand.name)[name]
+            if preset.overrides.get("object_contact_exact"):
+                boxes.append(box)
+        self._contact_guard = True
+        try:
+            for box in boxes:
+                if box is None:
+                    continue
+                box.disabled = not ok
+                if not ok and box.value:
+                    box.value = False
+        finally:
+            self._contact_guard = False
 
 
     def _grasp_subset_note(self):

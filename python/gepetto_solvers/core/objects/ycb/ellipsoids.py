@@ -331,6 +331,47 @@ def _sphere_directions(subdivisions: int) -> np.ndarray:
     return np.vstack([ico, np.eye(3), -np.eye(3)])
 
 
+def fit_bounds(members) -> tuple[np.ndarray, np.ndarray]:
+    """``(lo, hi)`` of the axis-aligned box bounding a fit's ellipsoid union, in
+    the frame the fit was written in.
+
+    Each member contributes its own world AABB, whose half-extent along an axis
+    is the support function ``||diag(a) R^T e||`` -- a norm rather than the L1
+    sum, because the members of a real fit sit at arbitrary angles and L1
+    over-estimates a rotated ellipsoid's reach by up to ``sqrt(3)``.
+
+    ``members`` are the raw dicts from a fit file (``center``/``radii``/
+    ``rotation``), not :class:`Ellipsoid` objects, because both callers -- the
+    spec loader and the SDF baker -- read the JSON directly.
+    """
+    centers = np.asarray([m["center"] for m in members], dtype=float)
+    radii = np.asarray([m["radii"] for m in members], dtype=float)
+    rotations = np.asarray([m["rotation"] for m in members], dtype=float)
+    half = np.sqrt(np.sum((rotations * radii[:, None, :]) ** 2, axis=2))
+    return (centers - half).min(axis=0), (centers + half).max(axis=0)
+
+
+def fit_recenter(members) -> np.ndarray:
+    """The shift from a fit's own frame into the OBJECT frame: the centre of
+    :func:`fit_bounds`.
+
+    THE one definition of where a YCB object's origin is, and it has to be, since
+    two independent things are placed by it -- the ellipsoid form the spec builds
+    from these members, and the baked SDF of the mesh they were fitted to. Those
+    are attached to a single ``EnvironmentConfig`` and composed with a single
+    optimized object pose, so if the two disagree about the origin nothing errors:
+    the object simply has an approximation sitting a centimetre or two from its
+    exact geometry, and a solve that hands off from one to the other appears to
+    make the object jump.
+
+    A fit's own frame is the mesh centred in XY with its lowest point on ``z=0``
+    (``data.ground_and_center``); this recentres that on the union's bounding box
+    so the object's origin is in the middle of it rather than under its foot.
+    """
+    lo, hi = fit_bounds(members)
+    return 0.5 * (lo + hi)
+
+
 def support_hull(
     mesh: trimesh.Trimesh, tolerance: float = SUPPORT_HULL_TOLERANCE
 ) -> np.ndarray:

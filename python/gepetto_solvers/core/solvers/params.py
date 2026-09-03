@@ -47,6 +47,47 @@ def _default_digit_count():
 _DEFAULT_DIGIT_COUNT: int | None = None
 
 
+#: The object contact FORMS, in the order a pipeline reaches for them: no object
+#: contact, the 3D distance to the ellipsoid ``E_obj``, that distance measured
+#: inside a tendon's pulling plane, and the witness contact against the baked SDF.
+#:
+#: Exactly one is in force at a time -- see :func:`object_contact_form`.
+OBJECT_CONTACT_FORMS = ("none", "proxy", "proxy_in_plane", "exact")
+
+
+def object_contact_form(params) -> str:
+    """Which of :data:`OBJECT_CONTACT_FORMS` ``params`` selects.
+
+    THE one definition of that question, because the three forms are not spelled
+    symmetrically and never can be. ``object_contact_in_plane`` is a different
+    METRIC on the same surface, so it rides on ``object_contact`` as a modifier;
+    ``object_contact_exact`` is a different SURFACE, so it stands alone and turns
+    ``object_contact`` off. Reading the fields directly, three call sites will
+    eventually disagree about what "contacting the object" means -- which is the
+    kind of disagreement that shows up as a solve quietly enforcing a different
+    constraint than the panel claims.
+
+    Raises on a combination that names two forms at once. There is only ever one
+    contact; a caller asking for two has not asked for something exotic, it has
+    made a mistake, and the C++ layer would reject the same combination further
+    down where the message is about fields rather than about intent.
+    """
+    exact = bool(getattr(params, "object_contact_exact", False))
+    plain = bool(params.object_contact)
+    in_plane = bool(params.object_contact_in_plane)
+    if exact and (plain or in_plane):
+        raise ValueError(
+            "object_contact_exact contacts the baked SDF and object_contact"
+            f"{'_in_plane' if in_plane else ''} contacts the ellipsoid proxy: "
+            "these are two FORMS of the one object contact, not two contacts. "
+            "Set at most one.")
+    if exact:
+        return "exact"
+    if not plain:
+        return "none"
+    return "proxy_in_plane" if in_plane else "proxy"
+
+
 @dataclass
 class HandSolveParams:
     """Every knob the three solvers expose, with the demo-script defaults.
@@ -204,6 +245,71 @@ class HandSolveParams:
     # Needs an ellipsoid-form object and a measured pinch pose for the checked
     # digits; attach_contact RAISES rather than falling back if either is missing.
     object_contact_in_plane: bool = False
+    # Attach BOTH object representations to every env: the ellipsoid form E_obj
+    # AND the baked SDF. The two constraint families then read different
+    # geometry, which is what the staged pipeline's later phases ask for --
+    # collision resolves its surface by the C++ precedence and so always takes
+    # the ellipsoid, while contact takes whichever `object_contact_exact` below
+    # selects.
+    #
+    # False (the default) keeps the single-surface behavior every existing caller
+    # relies on: one representation, shared by contact and collision alike.
+    object_proxy_and_exact: bool = False
+    # The THIRD object contact form, alongside the 3D and in-plane ones above:
+    # the witness-point contact against the baked SDF -- the exact geometry
+    # rather than the approximation the approach slid along. This is the phase
+    # 3-4 form, and it pairs with contact_drop_normal_row for the 4-row
+    # [c_R, c_O, c_T1, c_T2] residual.
+    #
+    # The three are ONE contact in one of three forms, never two contacts, so at
+    # most one is set at a time -- the visualizer enforces that with its
+    # checkboxes and the C++ layer raises on the combination. Unlike the in-plane
+    # form, this one does not ride on `object_contact`: it names a different
+    # SURFACE, not just a different metric, so it stands on its own field and
+    # `_object_contact_mask` reads the pair.
+    #
+    # Needs `object_proxy_and_exact` (the collision inequalities still want the
+    # proxy) and an object with a baked grid; attach_contact RAISES rather than
+    # falling back if either is missing.
+    object_contact_exact: bool = False
+    # h_grasp: the contacts must SURROUND the object, not merely touch it. One
+    # Vector6 equality over every contacting digit's witness point, driving the
+    # net virtual wrench -- unit inward forces along the surface normals, plus
+    # their torques about the object origin -- to zero.
+    #
+    # Needs a WITNESS-point contact to key off, so it goes with
+    # object_contact_exact; a center-direct contact has no witness variable and
+    # the C++ layer raises rather than skipping. Needs two or more contact
+    # digits: one unit force cannot cancel.
+    grasp_alignment: bool = False
+    # The two halves of h_grasp's residual, scaled separately because they do not
+    # share units: the force rows are a sum of unit normals (DIMENSIONLESS), the
+    # torque rows a sum of moment arms (METRES).
+    #
+    # The defaults put both on the same whitened scale as everything else in the
+    # graph. Every other constraint row here is a distance in metres whitened at
+    # sigma 1, i.e. ~1e-2 whitened; a force row is O(1) raw, so it wants ~1e2, and
+    # a torque row is O(object radius) raw, so it wants ~1e1. Left at 1.0 the
+    # force rows carry ~100x every other constraint in the problem and the inner
+    # LM spends its whole budget on them -- the same graph-scaling failure the
+    # ctrl_al_iters note below describes, and it shows up the same way: the AL
+    # stalls after two outer iterations with nothing having moved.
+    #
+    # WHAT THESE CANNOT DO is make a grasp better, and the reported violation
+    # will lie to you about that. It is WHITENED, so it falls as 1/sigma whether
+    # or not a fingertip moves. Measured on the Allegro hand reaching for the
+    # 35 mm sphere (index/middle/thumb), sweeping sigma_grasp_force alone and
+    # reading the raw residual back with solvers.grasp_wrench_witness:
+    #
+    #   sigma_force  |   1    |   10   |   100  |  1000  |  1e4
+    #   AL violation | 7.3e-1 | 1.3e-1 | 1.4e-2 | 1.7e-3 | 1.9e-4
+    #   raw |wrench| |  2.33  |  2.14  |  1.11  |  1.67  |  1.75
+    #
+    # Four orders of magnitude off the reported number; none off the grasp. 100
+    # is where the raw residual is actually lowest, which is the same place the
+    # scaling argument above puts it. Judge this constraint with the witness.
+    sigma_grasp_force: float = 100.0
+    sigma_grasp_torque: float = 10.0
     # Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, c_T2] SDF witness contact
     # form (c_N dropped) instead of the default 5-row form. Only affects a
     # non-ellipsoid (SDF) object's witness contact -- inert for the analytic

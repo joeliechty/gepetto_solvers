@@ -14,6 +14,7 @@ import gepetto_solvers
 from ..environment import (
     attach_collision,
     attach_contact,
+    attach_grasp_alignment,
     attach_half_space,
     attach_pregrasp_axis_alignment,
     attach_pregrasp_center,
@@ -84,9 +85,14 @@ class HandSolverBase:
     # only" is a two-flag change rather than two masks to keep in sync.
 
     def _object_contact_mask(self):
-        """Fingers driven onto the OBJECT surface."""
-        return [bool(b) and self.params.object_contact
-                for b in self.params.contact_fingers]
+        """Fingers driven onto the OBJECT surface, in whichever FORM is selected.
+
+        Reads both fields because ``object_contact_exact`` names a different
+        SURFACE rather than a different metric, so it does not ride on
+        ``object_contact`` the way ``object_contact_in_plane`` does. They are
+        still one contact: at most one form is set at a time."""
+        on = self.params.object_contact or self.params.object_contact_exact
+        return [bool(b) and on for b in self.params.contact_fingers]
 
     def _table_contact_mask(self):
         """Fingers driven onto the SUPPORT PLANE. Empty without ``params.table``:
@@ -115,6 +121,7 @@ class HandSolverBase:
         can report gaps against the shells the graph actually targeted."""
         mask = self._object_contact_mask()
         in_plane = self.params.object_contact and self.params.object_contact_in_plane
+        exact = self.params.object_contact_exact
         pinch = self.hand.pinch_pose(mask) if in_plane else None
         self.contact_subset = grasp_subset_indices(
             self.spec, self.params.use_grasp_subset)
@@ -127,7 +134,15 @@ class HandSolverBase:
                        ellipsoid_set_beta=self.params.ellipsoid_set_beta,
                        in_plane=in_plane,
                        pinch_centroid=(pinch.centroid if pinch is not None else None),
-                       contact_subset=self.contact_subset)
+                       contact_subset=self.contact_subset,
+                       # The exact form needs both surfaces present, so it
+                       # implies the pairing rather than making the caller
+                       # remember to ask for both -- attach_contact raises for
+                       # the exact form without it, and that would be a message
+                       # about an internal detail rather than about the request.
+                       proxy_and_exact=(self.params.object_proxy_and_exact
+                                        or exact),
+                       object_contact_exact=exact)
 
     def _hand_spec(self):
         """The C++ ``HandSpec`` for this solve, built from the configs AFTER the
@@ -300,6 +315,21 @@ class HandSolverBase:
                                  clearance_normal=self.params.plane_normal)
         return pose
 
+    def _attach_grasp_alignment(self):
+        """Attach the h_grasp wrench-equilibrium constraint over the CONTACT
+        digits, so the fingers are arranged to hold the object rather than merely
+        to touch it in |C| independent places.
+
+        Masked by ``_object_contact_mask()`` rather than the raw finger
+        selection, unlike the pre-grasp family above: this constraint is built on
+        the witness POINTS, which only exist for a digit that is actually being
+        contacted. Feeding it the raw mask would name a witness key the graph
+        never created."""
+        attach_grasp_alignment(self.configs,
+                               contact_fingers=self._object_contact_mask(),
+                               sigma_force=self.params.sigma_grasp_force,
+                               sigma_torque=self.params.sigma_grasp_torque)
+
     def _attach_environment(self):
         """The whole constraint environment for one solve, per the independent
         toggles (object contact, table contact, object collision, table
@@ -328,6 +358,12 @@ class HandSolverBase:
             self._attach_pregrasp_axis_alignment()
         if self.params.pregrasp_centroid:
             self._attach_pregrasp_centroid()
+        # Last, matching the C++ emission order it has to agree with: h_grasp is
+        # appended after every other constraint in build_graph, because the AL
+        # indexes multipliers by graph position and inserting it earlier would
+        # re-seat the carried multipliers of every solve that predates it.
+        if self.params.grasp_alignment:
+            self._attach_grasp_alignment()
 
     # -- prior builders --
 

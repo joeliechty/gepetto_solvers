@@ -160,7 +160,18 @@ NonlinearFactorGraph HandModel::build_graph(
             const bool drop_n = env.contact_drop_normal_row;
             const int  n_rows = drop_n ? 4 : 5;
             gtsam::NoiseModelFactor::shared_ptr contact;
-            if (env.ellipsoid_semi_axes.norm() > 0.0) {
+            // object_contact_exact is tested FIRST, ahead of the surface
+            // precedence: it exists precisely to contact the grid while a proxy
+            // ellipsoid stays attached for the collision blocks, so the
+            // precedence -- which would pick that proxy -- must not run here.
+            // uses_center_direct_contact() has already rejected the flag without
+            // a grid, so sdf_grid is known good.
+            if (env.object_contact_exact) {
+                contact = std::make_shared<gepetto_solvers::SdfWitnessContactFactor>(
+                    tip_key, object_key(), witness_key(i),
+                    env.contact_node_radius, env.sdf_grid,
+                    noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n);
+            } else if (env.ellipsoid_semi_axes.norm() > 0.0) {
                 // Analytic hyper-ellipsoid surface (Section 1.6.3).
                 contact = std::make_shared<gepetto_solvers::EllipsoidWitnessContactFactor>(
                     tip_key, object_key(), witness_key(i),
@@ -566,6 +577,85 @@ NonlinearFactorGraph HandModel::build_graph(
                 wrist_key(step_), object_key(), gtsam::Point3(*centroid),
                 h_clear, n_hat, noiseModel::Isotropic::Sigma(3, 1.0));
             tagger_.add_eq(graph, pinch, "pregrasp.centroid");
+        }
+    }
+
+    // --- Geometric grasp alignment (h_grasp) -----------------------------
+    // The contacts must SURROUND the object, not merely touch it. One Vector6
+    // equality over every contacting digit's witness point at once:
+    //
+    //   sum_i [ -n_i ; -(p_i - t_obj) x n_i ] = 0
+    //
+    // Hand-level, so it is collected here in a pass of its own like the three
+    // pre-grasp blocks above rather than built inside the per-digit body. It is
+    // the piece the per-contact witness factors cannot express, because each of
+    // those sees exactly one contact.
+    //
+    // LAST in the emission order, and it must stay last: the AL indexes
+    // multipliers by graph position, so inserting this anywhere but the end would
+    // re-seat every carried multiplier of every solve that predates it. See the
+    // header note at the top of this file.
+    {
+        std::vector<Key> point_keys;
+        openvdb::FloatGrid::Ptr grid;
+        double sigma_f = 1.0, sigma_t = 1.0, curv_step = 0.0, grad_step = 0.0;
+        for (int i = 0; i < n_digits; ++i) {
+            if (!env_[i]) continue;
+            const auto& env = *env_[i];
+            if (!env.grasp_alignment_enabled) continue;
+            if (!env.target_contact_node.has_value()) continue;  // collision-only
+            // A witness point is the variable this factor keys off, so a digit on
+            // a center-direct form has nothing to contribute -- and cannot be
+            // quietly dropped, because the caller asked for a wrench balance over
+            // a contact set that would then be missing a member. Same reasoning
+            // as uses_center_direct_contact's own throws.
+            if (uses_center_direct_contact(env))
+                throw std::invalid_argument(
+                    "HandModel: grasp_alignment_enabled needs a WITNESS-point "
+                    "contact to key off, but digit " + std::to_string(i) +
+                    " is on the center-direct form. Set object_contact_exact (or "
+                    "contact a baked SDF) on every participating digit.");
+            if (!env.sdf_grid)
+                throw std::invalid_argument(
+                    "HandModel: grasp_alignment_enabled reads the object's own "
+                    "surface normal at each witness point, which needs sdf_grid; "
+                    "digit " + std::to_string(i) + " has none. Bake one "
+                    "(scripts/objects/setup_objects.py).");
+            point_keys.push_back(witness_key(i));
+            grid      = env.sdf_grid;
+            sigma_f   = env.grasp_alignment_sigma_force;
+            sigma_t   = env.grasp_alignment_sigma_torque;
+            curv_step = env.grasp_alignment_curvature_step;
+            grad_step = env.grasp_alignment_gradient_step;
+            // This factor reads the object pose, so it needs an anchor if no
+            // block above supplied one -- same reasoning as the hand-centering
+            // block. In practice a contacting digit has always anchored it by
+            // now (this constraint requires one), but the guard is free and the
+            // alternative is an indeterminate system.
+            if (!object_anchored) {
+                graph.add(PriorFactor<Pose3>(
+                    object_key(), Pose3(env.object_pose_mean),
+                    noiseModel::Gaussian::Covariance(env.object_pose_cov)));
+                object_anchored = true;
+            }
+        }
+        // Fewer than two contacts is skipped rather than thrown: a single unit
+        // force cannot sum to zero against anything, so the constraint is not
+        // merely hard but unsatisfiable -- and WHICH digits contact is the
+        // caller's standing selection (contact_fingers), not a mis-request about
+        // this constraint. Throwing would make unchecking a finger blow up a
+        // solve that is otherwise perfectly well posed.
+        if (point_keys.size() >= 2) {
+            // Two sigmas, not one: the top three rows are a sum of unit normals
+            // (dimensionless) and the bottom three a sum of moment arms (metres),
+            // so an isotropic model would weight the halves by whatever the
+            // object's size happens to be. See GraspAlignmentFactor's header.
+            Vector6 sigmas;
+            sigmas << sigma_f, sigma_f, sigma_f, sigma_t, sigma_t, sigma_t;
+            auto grasp = std::make_shared<gepetto_solvers::GraspAlignmentFactor>(
+                point_keys, object_key(), grid,
+                noiseModel::Diagonal::Sigmas(sigmas), curv_step, grad_step);
+            tagger_.add_eq(graph, grasp, "grasp.align");
         }
     }
 

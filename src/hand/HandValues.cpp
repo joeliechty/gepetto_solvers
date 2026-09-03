@@ -65,9 +65,18 @@ Values HandModel::get_initial_values(const Values* warm) const {
             } else if (env.witness_point_seed) {
                 // Caller-provided seed (object-local frame); skip the march.
                 seed_local = *env.witness_point_seed;
-            } else if (env.ellipsoid_semi_axes.norm() > 0.0) {
+            } else if (env.ellipsoid_semi_axes.norm() > 0.0
+                       && !env.object_contact_exact) {
                 // Analytic ellipsoid (Section 1.6.3): project the tip radially
                 // onto the surface x^T M x = 1. seed = tip_local / sqrt(tip^T M tip).
+                //
+                // NOT taken when the contact reads the grid instead (phases 3-4):
+                // the proxy is still attached there for the collision blocks, so
+                // this branch would otherwise fire and seed the witness on the
+                // BOUND rather than on the object -- up to sqrt(3)-1 ~ 73% of a
+                // half-extent away on the box family, which is the whole gap
+                // phase 3 exists to close. Falls through to the ray-march below,
+                // in lockstep with build_graph's own object_contact_exact test.
                 Point3 tip_world = values.at<Pose3>(
                     kin_->site_pose_key({i, *env.target_contact_node})).translation();
                 Point3 tip_local = obj_mean.transformTo(tip_world);

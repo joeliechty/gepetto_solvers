@@ -241,7 +241,14 @@ def test_cube_extent_along_each_axis_is_its_half_extent():
 
 def test_analytic_primitives_need_no_vdb_grid():
     """The committed suite depends on this: these specs must carry their geometry
-    inline, so a checkout with no baked .vdb grids can still run solve tests."""
+    inline, so a checkout with no baked .vdb grids can still run solve tests.
+
+    Every spec NAMES a grid now, since every object has an exact form as well as
+    an approximate one -- so what has to be checked is that the analytic ones can
+    still be configured without that file being present, not that they decline to
+    mention it. The two questions were the same before objects carried both forms
+    and are not the same now: the first is about this machine, the second about
+    the object."""
     specs = scene.get_primitive_specs()
     analytic = [
         "coin",
@@ -256,7 +263,17 @@ def test_analytic_primitives_need_no_vdb_grid():
         assert name in specs, f"{name} missing from the registry"
         spec = specs[name]
         assert spec["type"] in ("ellipsoid", "ellipsoid_set"), name
-        assert "vdb" not in spec, f"{name} unexpectedly needs a baked grid"
+        # The geometry is inline: available with no file read at all.
+        assert scene.ellipsoid_members(spec) is not None, name
+        # ...and configuring one takes the analytic branch, so it works whether
+        # or not this checkout has ever run the SDF baker. Pointed at a directory
+        # that is definitely empty, so a grid sitting in OBJECTS_DIR cannot mask
+        # a regression here.
+        import gepetto_solvers
+
+        env = gepetto_solvers.EnvironmentConfig()
+        scene.configure_object_surface(env, spec, "/nonexistent", name)
+        assert env.ellipsoid_semi_axes.any() or env.ellipsoid_set, name
 
 
 def test_every_registry_spec_has_a_type():

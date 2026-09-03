@@ -66,10 +66,34 @@ YCB_FITS_DIR: str = os.path.join(OBJECTS_DIR, "ycb", "fits")
 def vdb_path(spec: dict) -> str:
     """Absolute path to the baked grid a primitive spec names.
 
-    Raises ``KeyError`` for an analytic spec, which carries no ``vdb`` key -- callers
-    that support both should check ``"vdb" in spec`` first.
+    Raises ``KeyError`` for a spec with no ``vdb`` key -- callers that support
+    both should check :func:`names_exact_form` first.
     """
     return os.path.normpath(os.path.join(OBJECTS_DIR, spec["vdb"]))
 
 
-__all__ = ["OBJECTS_DIR", "YCB_FITS_DIR", "vdb_path"]
+def names_exact_form(spec: dict) -> bool:
+    """Does this object HAVE an exact (SDF) form at all, baked or not?
+
+    A property of the object, and separate from :func:`has_exact_form` on
+    purpose. Every object in the registry should answer True here; whether the
+    file is actually on this machine is a different question with a different
+    remedy, and conflating the two turns "you have not run the setup script" into
+    "this object cannot be grasped precisely".
+    """
+    return "vdb" in spec
+
+
+def has_exact_form(spec: dict) -> bool:
+    """Is this object's baked grid present ON THIS MACHINE?
+
+    The grids are gitignored build output, so a fresh checkout answers False for
+    everything and ``scripts/objects/setup_objects.py`` is what changes that. The
+    pipeline phases that contact the exact geometry gate on this, and say so by
+    name rather than failing when a grid turns out to be missing.
+    """
+    return names_exact_form(spec) and os.path.exists(vdb_path(spec))
+
+
+__all__ = ["OBJECTS_DIR", "YCB_FITS_DIR", "has_exact_form", "names_exact_form",
+           "vdb_path"]

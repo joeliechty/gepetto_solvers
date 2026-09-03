@@ -10,6 +10,7 @@ this package is where a solve's *problem* is defined, as distinct from
 :mod:`collision` the sphere set, and the inequalities built on it
 :mod:`support`   the support plane and the opposition half-space
 :mod:`pregrasp`  position the wrist before anything closes
+:mod:`grasp`     make the contacts surround the object, not just touch it
 ===============  ====================================================
 
 Nothing here knows what KIND of hand it is attaching to. Each function writes
@@ -22,6 +23,7 @@ participate and which one opposes the rest, are passed in.
 
 from .collision import attach_collision
 from .contact import attach_contact
+from .grasp import attach_grasp_alignment
 from .pregrasp import (
     attach_pregrasp_axis_alignment,
     attach_pregrasp_center,
@@ -37,6 +39,7 @@ from .support import (
 __all__ = [
     "attach_collision",
     "attach_contact",
+    "attach_grasp_alignment",
     "attach_half_space",
     "attach_pregrasp_axis_alignment",
     "attach_pregrasp_center",

@@ -16,9 +16,9 @@ from gepetto_solvers.core.geometry.scene import (
     TABLE_SPAN,
 )
 from gepetto_solvers.core.solvers import (
-    PHASE_PRESETS,
     HandSolveParams,
     R_to_euler,
+    phase_presets,
 )
 
 from .constants import (
@@ -97,10 +97,15 @@ class GuiMixin:
                  self.g_roll, self.g_pitch, self.g_yaw,
                  self.g_sig_pos, self.g_sig_rot, self.g_passive]
                 + self.g_flexors
-                + [self.g_flexor_sigma, self.g_passive_sigma,
-                   self.g_phase0, self.g_phase1, self.g_phase2, self.g_phase4,
-                   self.g_phase5, self.g_close_frac, self.g_lift_height]
+                + [self.g_flexor_sigma, self.g_passive_sigma]
+                # Every phase box this hand actually built, so a hand with a
+                # phase 3 gets it restored by Reset without this list having to
+                # know which phases exist.
+                + list(self.g_phases.values())
+                + [self.g_close_frac, self.g_lift_height]
                 + [self.g_obj_contact, self.g_obj_contact_plane,
+                   self.g_obj_contact_exact, self.g_grasp_align,
+                   self.g_grasp_sigma_force, self.g_grasp_sigma_torque,
                    self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_half_sides, self.g_half_margin,
                    self.g_pregrasp_center, self.g_h_clear,
@@ -494,89 +499,34 @@ class GuiMixin:
         # _apply_default_phase writes the preset for real once the GUI exists --
         # and again after Reset, which restores this same tick.
         with gui.add_folder("Presets"):
-            self.g_phase0 = gui.add_checkbox(
-                PHASE_PRESETS["phase0"].label, DEFAULT_PHASE == "phase0",
-                hint="Apply the phase-0 preset: no object/table contact yet, "
-                     "collision avoidance on, pinch-centroid centering + "
-                     "short-axis alignment on (the opposition half-space and "
-                     "fingertip-midpoint centering stay OFF -- the pinch "
-                     "centroid already positions the hand and the other two "
-                     "fight it), and a loose wrist prior (this is a big "
-                     "repositioning move). Writes straight onto the "
-                     "Constraints/Wrist controls -- check this, then press "
-                     "Auto solve. Your finger selection is left alone, as it "
-                     "is by every preset. Unchecking is a no-op.")
-            self.g_phase1 = gui.add_checkbox(
-                PHASE_PRESETS["phase1"].label, DEFAULT_PHASE == "phase1",
-                hint="Apply the phase-1 preset: table contact ON (object "
-                     "contact stays off), table COLLISION avoidance OFF -- a "
-                     "deliberate departure from the paper, since this phase "
-                     "drives the fingers onto the plane the avoidance "
-                     "half-space would push them off (the table itself stays "
-                     "on; object/self collision are untouched) -- the three "
-                     "pre-grasp constraints (opposition half-space, "
-                     "centering, short-axis alignment) turned back OFF now "
-                     "that they've done their job, and a tighter wrist prior "
-                     "than phase 0 (held closer to where it ended up, not "
-                     "free to roam). Writes straight onto the "
-                     "Constraints/Wrist controls -- check this, then press "
-                     "Auto solve; whichever fingers phase 0 was solved with "
-                     "carry over untouched. Unchecking is a no-op.")
-            self.g_phase2 = gui.add_checkbox(
-                PHASE_PRESETS["phase2"].label, DEFAULT_PHASE == "phase2",
-                hint="Apply the phase-2 preset: object contact turned back ON "
-                     "and table contact turned OFF -- the fingers are handed "
-                     "off from the plane they settled on to the object "
-                     "itself, in the Eq 13 IN-PLANE form (measured inside "
-                     "each finger's pulling plane, so the solve is not asked "
-                     "for torsion the tendons cannot produce; falls back to "
-                     "the 3D form on a scene that cannot build it). Table "
-                     "collision avoidance still OFF as in phase 1 (the "
-                     "fingers arrive still lying on the plane, so the "
-                     "half-space would be violated from the first step; "
-                     "object and self collision stay on), pre-grasp "
-                     "constraints still off, and the wrist prior kept TIGHT "
-                     "at phase 1's level -- with nothing else holding the "
-                     "hand, a loose wrist rides the whole hand onto the "
-                     "object instead of closing the fingers around it. Tendon "
-                     "sigmas set to the standard "
-                     "loose-flexor/tight-passive pair. Writes straight onto "
-                     "the Constraints/Wrist/Tensions controls -- check this, "
-                     "then press Auto solve; the finger selection carries "
-                     "over from phase 1. Unchecking is a no-op.")
-            # Phases 4 and 5 are the CLOSE and LIFT ramps, and their runners
-            # -- the Close / Lift buttons up in Solver -- exist only for a hand
-            # carrying the measured travel to walk. A preset box for a ramp
-            # that cannot be run is a control that does nothing, so it goes
-            # absent on the same feature rather than sitting there inert.
-            self.g_phase4 = self.g_phase5 = None
-            if self.has("close_ramp"):
-                self.g_phase4 = gui.add_checkbox(
-                    PHASE_PRESETS["phase4"].label, DEFAULT_PHASE == "phase4",
-                    hint="Apply the phase-4 preset: every constraint OFF -- object "
-                         "and table contact, collision avoidance, the opposition "
-                         "half-space and all three pre-grasp terms -- because this "
-                         "phase does not SOLVE for anything. It shuts the grasping "
-                         "fingers on a commanded schedule and whatever they meet on "
-                         "the way, they meet. The runner is **Close**, up in the "
-                         "Solver folder, NOT Auto solve: check this, then press "
-                         "Close. The fingers it shuts are the ones checked below "
-                         "-- the same set phases 0-2 positioned, since no preset "
-                         "touches that mask -- and the wrist prior is left tight "
-                         "(the close does not move the wrist at all). Unchecking "
-                         "is a no-op.")
-                self.g_phase5 = gui.add_checkbox(
-                    PHASE_PRESETS["phase5"].label, DEFAULT_PHASE == "phase5",
-                    hint="Apply the phase-5 preset: every constraint OFF, for "
-                         "phase 4's reason -- this phase does not solve for "
-                         "anything either. It raises the wrist on a commanded ramp "
-                         "and the hand goes up holding whatever the close left it "
-                         "holding; nothing in the model holds the OBJECT, so the "
-                         "object stays where it is. The runner is **Lift**, up in "
-                         "the Solver folder, NOT Auto solve: check this, then press "
-                         "Lift. The finger checkboxes are left alone, as by every "
-                         "preset -- a lift follows a close, and the grasping set is "
-                         "whatever that close shut. Unchecking is a no-op.")
+            # One box per phase THIS HAND has, built by looping its own preset
+            # set rather than by five hardcoded blocks. The label and the help
+            # text come off the preset, so the panel cannot describe a phase
+            # differently from what applying it does -- and a hand whose
+            # pipeline has a different number of phases, or the same numbers
+            # meaning different things, needs no change here at all.
+            self.g_phases = {}
+            for _name, _preset in phase_presets(self.hand.name).items():
+                # Phases 4 and 5 of the TENDON set are the close and lift ramps,
+                # and their runners exist only for a hand carrying the measured
+                # travel to walk. A preset box for a ramp that cannot be run is a
+                # control that does nothing, so it goes absent on the same
+                # feature rather than sitting there inert. Keyed off the ramp
+                # fields the preset turns off, not off the phase NUMBER: on the
+                # Allegro hand phase 4 is the grasp alignment and is always
+                # available.
+                if _preset.requires_feature and \
+                        not self.has(_preset.requires_feature):
+                    continue
+                self.g_phases[_name] = gui.add_checkbox(
+                    _preset.label, DEFAULT_PHASE == _name, hint=_preset.hint)
+
+            # Named aliases for the boxes, so `self.g_phase3` still resolves and
+            # Reset/_input_handles/the mixin-surface test keep working. None for
+            # a phase this hand does not have -- which is the same convention
+            # every other optional control here uses.
+            for _n in range(6):
+                setattr(self, f"g_phase{_n}", self.g_phases.get(f"phase{_n}"))
 
         # Every constraint on/off toggle lives here (Chapter 2, Eq 2.8-2.19),
         # grouped by the paper's structure. Numeric tuning sliders that go with
@@ -697,6 +647,29 @@ class GuiMixin:
                              "or ycb: object and a digit set INCLUDING THE THUMB, "
                              "and greys out when the scene cannot support it. "
                              "Watch it with 'in-plane distance' under Display.")
+                # The THIRD contact form, and the only one that changes which
+                # SURFACE is read rather than how the distance to it is
+                # measured. Present for every hand -- unlike the in-plane box,
+                # nothing about it is tendon-specific -- but greyed out without
+                # a binding that can build it or an object that has been baked.
+                self.g_obj_contact_exact = gui.add_checkbox(
+                    "object contact (exact SDF)", False,
+                    disabled=not self.caps["contact_exact"],
+                    hint="Contact the object's EXACT geometry: a witness point "
+                         "per finger driven onto its baked signed-distance "
+                         "field, rather than onto the smooth ellipsoid the "
+                         "approach slid along. Collision does NOT follow it "
+                         "there -- the free spheres keep being kept out of the "
+                         "ellipsoid, which is the whole point of the split, and "
+                         "is why an approach never has to see a flat face or a "
+                         "sharp edge. Mutually exclusive with the two boxes "
+                         "above: all three are forms of the one object contact. "
+                         "Needs the object's exact form to have been baked "
+                         "(python scripts/objects/setup_objects.py); greys out "
+                         "when it has not."
+                    if self.caps["contact_exact"]
+                    else "requires a newer _gepetto_solvers build "
+                         "(object_contact_exact)")
                 self.g_tbl_contact = gui.add_checkbox(
                     "table contact", False,
                     hint="Drive the checked fingertips onto the SUPPORT "
@@ -721,6 +694,51 @@ class GuiMixin:
                              "c_T2] SDF witness contact form (c_N dropped) "
                              "instead of the default 5-row form. Only affects "
                              "non-ellipsoid (SDF) object contact.")
+
+                # h_grasp. Lives here rather than in the pre-grasp folder
+                # because it is not a pre-grasp constraint: it acts on the
+                # contacts themselves, once they are ON the object, and it is
+                # built on the very witness points the exact form above creates.
+                self.g_grasp_align = None
+                self.g_grasp_sigma_force = self.g_grasp_sigma_torque = None
+                if self.caps["grasp_alignment"]:
+                    self.g_grasp_align = gui.add_checkbox(
+                        "grasp wrench alignment", False,
+                        hint="Make the contacts SURROUND the object rather "
+                             "than merely touch it: one 6-row equality saying "
+                             "their virtual forces and torques cancel, so the "
+                             "normals geometrically oppose one another. Purely "
+                             "kinematic -- unit forces along the surface "
+                             "normals, no mass, no friction, no magnitudes -- "
+                             "so it is a statement about WHERE the contacts "
+                             "sit. Needs the exact SDF contact form above "
+                             "(it is built on those witness points) and at "
+                             "least two checked digits: one unit force cannot "
+                             "cancel against anything.")
+                    self.g_grasp_sigma_force = gui.add_slider(
+                        "log10 grasp force sigma", -1.0, 4.0, 0.5, 2.0,
+                        hint="Whitening for the three FORCE rows, which are a "
+                             "sum of unit normals and so dimensionless. The "
+                             "default (1e2) puts them on the same whitened "
+                             "scale as every other constraint here, which are "
+                             "distances in metres; at 1.0 they carry ~100x the "
+                             "rest of the problem and the solve stalls after "
+                             "two outer iterations with nothing having moved. "
+                             "NOTE the reported violation is whitened, so "
+                             "loosening this divides that number without "
+                             "moving a fingertip -- judge the grasp by the "
+                             "wrench readout in the status line instead.")
+                    self.g_grasp_sigma_torque = gui.add_slider(
+                        "log10 grasp torque sigma", -1.0, 4.0, 0.5, 1.0,
+                        hint="Whitening for the three TORQUE rows, a sum of "
+                             "moment arms and so in metres -- an order of "
+                             "magnitude smaller than the force rows at "
+                             "centimetre scale, which is why the default is an "
+                             "order of magnitude tighter. On a SPHERE these "
+                             "rows are identically zero whatever they are set "
+                             "to (the moment arm is parallel to the normal), "
+                             "so this only starts to matter on an object that "
+                             "is not round.")
 
             # The pre-grasp family (Eq 2.16-2.19) all describe the same move:
             # open the hand around an object before closing on it, with the
@@ -1136,16 +1154,21 @@ class GuiMixin:
         self.g_show_traj.on_update(
             lambda _: self.traj.set_visible(self.g_show_traj.value))
 
-        # The mutual exclusion and the in-plane gate both only exist where the
-        # in-plane box does; with one form there is nothing to settle.
-        if self.g_obj_contact_plane is not None:
-            for h in (self.g_obj_contact, self.g_obj_contact_plane):
+        # Mutual exclusion across whatever contact FORMS this hand has -- two or
+        # three of them. With only one there is nothing to settle.
+        _forms = self._object_contact_boxes()
+        if len(_forms) > 1:
+            for h in _forms:
                 h.on_update(lambda _, src=h: self._enforce_object_contact(src))
+        # The in-plane gate is keyed off the digit set, and only exists where
+        # that form does.
+        if self.g_obj_contact_plane is not None:
             for h in self.g_contacts:
                 h.on_update(lambda _: self._refresh_planar_contact_gate())
-        for h in (self.g_contacts
-                  + [self.g_obj_contact, self.g_obj_contact_plane,
-                     self.g_tbl_contact]):
+        # ...and the exact form's gate is keyed off the OBJECT, so it is
+        # re-checked wherever the object changes (see _refresh_object).
+        for h in (self.g_contacts + _forms
+                  + [self.g_grasp_align, self.g_tbl_contact]):
             if h is not None:
                 h.on_update(lambda _: (self._sync_params(),
                                        self._invalidate_stepper(),

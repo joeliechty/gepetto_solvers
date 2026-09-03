@@ -7,8 +7,6 @@ makes a stepped solve reproduce the one-shot one rather than restarting.
 
 from typing import NamedTuple
 
-import numpy as np
-
 import gepetto_solvers
 
 from .base import HandSolverBase
@@ -23,8 +21,13 @@ from .result import HandResult, _make_frame
 # drift into solving subtly different problems -- the whole point of the
 # stepper is that it advances *this* solve.
 
-# The same prior with the FLEXOR pinned as hard as the passives, used only to
-# settle a cold start (HandIKStepper.step, params.ik_settle_steps).
+# The settling prior -- the same actuation prior with the DRIVEN actuators pinned
+# as hard as the passives -- is built per hand by HandIKStepper._settle_cov(),
+# not written out here. It used to be a module constant, np.diag([1e-6] * 6),
+# which is the tendon hand's six tendons at its default passive sigma: correct
+# for that hand and a hard ValueError ("NoiseModel has dimension 6 instead of 4")
+# on the first step of any hand with a different actuator count. The note below
+# is about the tendon hand, where the behaviour was measured.
 #
 # The C++ initial values seed every tension at ZERO on a rod already at its rest
 # shape (TendonRobotModel::get_initial_values) -- a guess that looks right but is
@@ -46,7 +49,6 @@ from .result import HandResult, _make_frame
 # transient is absorbed by the passives alone: step 1 lands exactly on the FK
 # pose and the solve reaches the same converged grasp in the same number of steps
 # and less wall time.
-_IK_SETTLE_TENSION_COV = np.diag([1e-6] * 6)
 
 
 class StepStatus(NamedTuple):
@@ -75,8 +77,9 @@ class HandIKStepper(HandSolverBase):
     run internally. Holding the loop counter is the whole trick.
 
     The one deliberate departure is the leading ``params.ik_settle_steps`` steps,
-    which pin the flexor prior to settle the cold start before releasing it (see
-    ``_IK_SETTLE_TENSION_COV``). Without it the first steps are spent watching the
+    which pin the driven actuators as hard as the passives to settle the cold
+    start before releasing them (see :meth:`_settle_cov`). Without it the first
+    steps are spent watching the
     hand hyperextend and crawl back, which is a solver transient rather than
     anything the solve is being asked to do.
 
@@ -236,13 +239,29 @@ class HandIKStepper(HandSolverBase):
             return False
         return self._steps < max(int(self.params.ik_settle_steps), 0)
 
+    def _settle_cov(self):
+        """The settling step's actuation prior: every actuator pinned at the
+        PASSIVE sigma, driven ones included.
+
+        Built off the hand rather than written as a constant, so it is sized to
+        whatever this hand's actuation is. Expressing "pin the driven one too" as
+        ``prior_cov(passive, passive)`` also means it cannot drift from
+        :meth:`_flexor_tension_cov`, which is the same call with the driven entry
+        released -- the two differ in exactly the one number the settling step is
+        about.
+
+        Read live, like the released prior, so a mid-solve slider drag takes
+        effect on the next step with no stepper rebuild."""
+        sigma = self.params.passive_tension_sigma
+        return self.hand.actuation.prior_cov(sigma, sigma)
+
     def step(self) -> HandResult:
         """Advance the AL outer loop by exactly one iteration."""
         # Re-aimed every step so the wrist slider stays live mid-solve; the
         # tension priors are rebuilt from params for the same reason.
         self._solver.set_wrist_pose(self.params.wrist_pose)
         settling = self._settling()
-        cov = _IK_SETTLE_TENSION_COV if settling else self._flexor_tension_cov()
+        cov = self._settle_cov() if settling else self._flexor_tension_cov()
         sol = self._solver.solve(self._tension_priors(cov), self._tip_wrenches())
 
         if not self._history:

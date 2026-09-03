@@ -314,6 +314,7 @@ class ObjectPanelMixin:
         # object (it needs an ellipsoid cross-section), so re-decide it here
         # rather than leaving a live checkbox the next solve would refuse.
         self._refresh_planar_contact_gate()
+        self._refresh_exact_contact_gate()
         # Whether there is a grasp subset to choose is likewise a property of the
         # object, so re-gate it here too -- and before _refresh_object, which
         # greys the excluded shells off the answer.

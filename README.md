@@ -139,10 +139,37 @@ python scripts/viz_interactive.py --smoke             # its headless self-check
 `--no-viz` skips the render window. `scripts/experimental/` holds the diagnostics —
 AL traces, constraint sweeps — which answer one question each and are not examples.
 
-The baked SDF grids (`.vdb`, ~54 MB) are gitignored, so a fresh checkout has none.
-Rebuild them with `python scripts/objects/make_big_sphere.py` (needs conda-only
-`pyopenvdb`), or use the analytic primitives — `coin`, `pen`, `mid_sphere_ellipsoid`,
-`megaminx` — which need no grid at all.
+## Setting up object data on a new machine
+
+**Run this once per checkout.** Every object carries *two* representations, and a
+fresh clone ships neither of the bulky ones:
+
+| representation | what it is | in git? |
+|---|---|---|
+| ellipsoid form `E_obj` | a smooth analytic bound, or a fitted ellipsoid **set** | yes — derived, or `objects/ycb/fits/*.json` |
+| exact form | a baked OpenVDB signed-distance grid, `.vdb` | **no** — ~50 MB of build output |
+| YCB source meshes | the scans the grids and fits come from | **no** — ~0.6 GB download |
+
+```bash
+python scripts/objects/setup_objects.py          # bake everything, ~15 min
+python scripts/objects/setup_objects.py --check  # just report what is missing
+```
+
+It is idempotent, so re-running it costs a listing; `--force` re-bakes and
+`--objects NAME ...` narrows to a few. Its **exit status is the answer to "is this
+machine set up"** — it finishes by asserting that every object the registry offers
+has both forms.
+
+Needs conda-only `pyopenvdb` (from `conda_setup_py11_mac.sh`) plus the `ycb`
+extra; it checks for both up front rather than failing partway through the bake.
+
+Without it, the pipeline's later phases are simply unavailable: the approach
+phases plan against `E_obj` and work on a bare checkout, but the phases that
+contact the *exact* geometry have nothing to contact, and both the workbench and
+the solver say so by name rather than failing obscurely.
+
+Several checkouts can share one copy — point `GEPETTO_OBJECTS_DIR` at it and
+none of them will bake their own.
 
 ## Tests
 
