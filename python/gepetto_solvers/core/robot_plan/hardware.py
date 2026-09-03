@@ -14,7 +14,7 @@ def _solvers():
     """The solver module, imported on use rather than at import time.
 
     Everything in this file that BUILDS a plan needs the compiled `gepetto_solvers`
-    binding; nothing that TIMES one does. `gepetto_control`'s executor node
+    binding; nothing that TIMES one does. `epfl_hand_control`'s executor node
     imports this module for `plan_schedule` and `sample_at` alone, and it should
     not have to carry a factor-graph solver into a real-time control loop to get
     them -- the whole point of moving that loop out of the visualizer was to stop

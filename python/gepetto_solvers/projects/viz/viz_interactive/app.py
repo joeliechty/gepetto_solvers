@@ -81,7 +81,7 @@ class HandVizApp(
         # hardware back -- and extends the e-stop to the servo publishers. Off by
         # default so the standalone app is byte-for-byte the app it was; the
         # bridge is DUCK-TYPED (play / read_state / stop / status), so nothing in
-        # crest-sparse imports rclpy and the ROS side stays in gepetto_control.
+        # crest-sparse imports rclpy and the ROS side stays in epfl_hand_control.
         self.ros_mode = bool(ros_mode) and bridge is not None
         self.bridge = bridge if self.ros_mode else None
         # Cached hand-open tendon lengths, the zero every commanded displacement

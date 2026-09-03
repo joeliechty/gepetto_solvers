@@ -4,7 +4,7 @@ The visualizer solves in *tensions* and reports *states*; the hardware wants
 *tendon displacements* and a *pose stream*. This package is the conversion, and it
 is deliberately ROS-free and viser-free -- pure numpy in, pure numpy out -- so it
 can be exercised headlessly (``viz_interactive --smoke``) and so ``gepetto_solvers``
-never grows a dependency on rclpy. The ROS side (``gepetto_control``) imports
+never grows a dependency on rclpy. The ROS side (``epfl_hand_control``) imports
 this; nothing here imports the ROS side.
 
 Two stages, and they are separate on purpose:

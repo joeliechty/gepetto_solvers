@@ -6,39 +6,39 @@ set -euo pipefail
 
 exec > >(tee -i setup_log_py10.txt) 2>&1
 
-# get working directiry for where crest repo is located (assumes this script is run from the repo root)
-CREST_SPARSE_DIR=$(pwd)
-echo "Working directory: $CREST_SPARSE_DIR"
-# set root dir for git repos to be one level back from the crest repo
-GIT_REPOS_DIR="$CREST_SPARSE_DIR/.."
+# get working directiry for where gepetto repo is located (assumes this script is run from the repo root)
+GEPETTO_DIR=$(pwd)
+echo "Working directory: $GEPETTO_DIR"
+# set root dir for git repos to be one level back from the gepetto repo
+GIT_REPOS_DIR="$GEPETTO_DIR/.."
 echo "Git repos directory: $GIT_REPOS_DIR"
 
 # clean up old builds
-rm -rf "$CREST_SPARSE_DIR/build"
+rm -rf "$GEPETTO_DIR/build"
 rm -rf "$GIT_REPOS_DIR/gtsam"
 
 # Make `conda activate` available as a shell function before we use it
 source "$(conda info --base)/etc/profile.d/conda.sh"
 
 # Create and activate conda environment (used instead of venv for isolation)
-echo "Creating and activating conda environment 'crest'..."
+echo "Creating and activating conda environment 'gepetto'..."
 # check if the environment already exists
-if conda info --envs | grep -q "crest_py10"; then
-    echo "Conda environment 'crest_py10' already exists. Removing it..."
-    conda env remove -n crest_py10 -y
+if conda info --envs | grep -q "gepetto_py10"; then
+    echo "Conda environment 'gepetto_py10' already exists. Removing it..."
+    conda env remove -n gepetto_py10 -y
 fi
 
 # --override-channels keeps us off repo.anaconda.com/pkgs/{main,r}, which conda >=25
 # refuses to use non-interactively until their Terms of Service are accepted. It also
 # keeps the whole env on a single channel, avoiding conda-forge/defaults ABI mismatches.
-echo "Conda environment 'crest_py10' does not exist. Creating it..."
-conda create -n crest_py10 -c conda-forge --override-channels python=3.10 -y
-conda activate crest_py10
+echo "Conda environment 'gepetto_py10' does not exist. Creating it..."
+conda create -n gepetto_py10 -c conda-forge --override-channels python=3.10 -y
+conda activate gepetto_py10
 
-# Refuse to continue if we are not actually inside crest_py10 -- otherwise every
+# Refuse to continue if we are not actually inside gepetto_py10 -- otherwise every
 # $CONDA_PREFIX below silently points at the base env and pollutes it.
-if [ "$(basename "${CONDA_PREFIX:-}")" != "crest_py10" ]; then
-    echo "ERROR: expected to be in the 'crest_py10' env, but CONDA_PREFIX='${CONDA_PREFIX:-<unset>}'" >&2
+if [ "$(basename "${CONDA_PREFIX:-}")" != "gepetto_py10" ]; then
+    echo "ERROR: expected to be in the 'gepetto_py10' env, but CONDA_PREFIX='${CONDA_PREFIX:-<unset>}'" >&2
     exit 1
 fi
 echo "Active conda env: $CONDA_PREFIX"
@@ -96,16 +96,16 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 mkdir -p "$CONDA_PREFIX/etc/conda/activate.d"
 echo 'export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}' > "$CONDA_PREFIX/etc/conda/activate.d/env_vars.sh"
 
-# Build/Install CREST-sparse
-echo "Building and installing CREST-sparse..."
-cd "$CREST_SPARSE_DIR"
+# Build/Install gepetto_solvers
+echo "Building and installing gepetto_solvers..."
+cd "$GEPETTO_DIR"
 
 # CMakeLists.txt resolves GTSAM/OpenVDB relative to the Python interpreter's prefix,
 # so a stray system/base python here means find_package() looks in the wrong place.
 echo "Using python: $(command -v python)  ($(python --version 2>&1))"
 echo "Using cmake:  $(command -v cmake)"
 if [ "$(command -v python)" != "$CONDA_PREFIX/bin/python" ]; then
-    echo "ERROR: python is not the crest_py10 interpreter" >&2
+    echo "ERROR: python is not the gepetto_py10 interpreter" >&2
     exit 1
 fi
 

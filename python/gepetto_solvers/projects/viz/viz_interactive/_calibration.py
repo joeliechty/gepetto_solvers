@@ -83,7 +83,7 @@ class CalibrationMixin:
 
         The sliders are in the TABLE frame, which is the useful one: the
         registration against the robot is a pure translation (see
-        ``gepetto_control.frames``), so the viser world and
+        ``epfl_hand_control.frames``), so the viser world and
         ``lbr_workspace_table_link`` share axis directions and a table-frame
         coordinate is just a world coordinate minus the corner. That makes the x/y
         sliders read directly as positions on the grid drawn on the bench, with

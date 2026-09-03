@@ -3,29 +3,29 @@ set -e
 
 exec > >(tee -i setup_log_py11.txt) 2>&1
 
-# get working directiry for where crest repo is located (assumes this script is run from the repo root)
-CREST_SPARSE_DIR=$(pwd)
-echo "Working directory: $CREST_SPARSE_DIR"
-# set root dir for git repos to be one level back from the crest repo
-GIT_REPOS_DIR="$CREST_SPARSE_DIR/.."
+# get working directiry for where gepetto repo is located (assumes this script is run from the repo root)
+GEPETTO_DIR=$(pwd)
+echo "Working directory: $GEPETTO_DIR"
+# set root dir for git repos to be one level back from the gepetto repo
+GIT_REPOS_DIR="$GEPETTO_DIR/.."
 echo "Git repos directory: $GIT_REPOS_DIR"
 
 # clean up old builds
-rm -rf $CREST_SPARSE_DIR/build
+rm -rf $GEPETTO_DIR/build
 rm -rf $GIT_REPOS_DIR/gtsam
 
 # Create and activate conda environment (used instead of venv for isolation)
-echo "Creating and activating conda environment 'crest'..."
+echo "Creating and activating conda environment 'gepetto'..."
 # check if the environment already exists
-if conda info --envs | grep -q "crest_py11"; then
-    echo "Conda environment 'crest_py11' already exists. Removing it..."
-    conda env remove -n crest_py11 -y
+if conda info --envs | grep -q "gepetto_py11"; then
+    echo "Conda environment 'gepetto_py11' already exists. Removing it..."
+    conda env remove -n gepetto_py11 -y
 fi
 
-echo "Conda environment 'crest_py11' does not exist. Creating it..."
-conda create -n crest_py11 python=3.11 -y
+echo "Conda environment 'gepetto_py11' does not exist. Creating it..."
+conda create -n gepetto_py11 python=3.11 -y
 source $(conda info --base)/etc/profile.d/conda.sh
-conda activate crest_py11
+conda activate gepetto_py11
 
 # Install C++ build dependencies via conda
 echo "Installing C++ build dependencies via conda..."
@@ -68,9 +68,9 @@ export DYLD_LIBRARY_PATH=$CONDA_PREFIX/lib:$DYLD_LIBRARY_PATH
 mkdir -p $CONDA_PREFIX/etc/conda/activate.d
 echo 'export DYLD_LIBRARY_PATH=$CONDA_PREFIX/lib:$DYLD_LIBRARY_PATH' > $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
 
-# Build/Install CREST-sparse
-echo "Building and installing CREST-sparse..."
-cd $CREST_SPARSE_DIR
+# Build/Install gepetto_solvers
+echo "Building and installing gepetto_solvers..."
+cd $GEPETTO_DIR
 # Runtime dependencies are declared in pyproject.toml; installing the package
 # brings them in. [viz,web] adds the PyVista windows the demo scripts open and
 # the viser workbench.
