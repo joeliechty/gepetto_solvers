@@ -265,6 +265,16 @@ workbench and the solvers assuming your hand is the tendon one:
 * **`features`** gates whole GUI panels. Declare only what you have; a control
   for something you lack is made ABSENT, not greyed out. `AllegroHand.features`
   is empty.
+
+  A feature can also FIX a value rather than only hide a control. Where the
+  missing panel controlled a constraint, `_sync_params` writes the value that
+  hand's formulation pins it to — it does not fall back to a dataclass default.
+  `normal_row_choice` is the case to read: without it the SDF witness contact
+  is fixed at the 4-row `[c_R, c_O, c_T1, c_T2]` form, because with sphere-only
+  collision geometry the two tangential rows already force the sphere's radius
+  vector collinear with the surface normal, leaving `c_N` with nothing to
+  constrain. `pregrasp` and `planar_bending` are the ordinary case: no panel,
+  and the constraints they controlled stay off.
 * **`default_pose()`** is where your hand starts. There is no shared default that
   is right for two hands — the tendon hand's measured hover aims Allegro nowhere
   near the object, because their fingers extend along different axes.

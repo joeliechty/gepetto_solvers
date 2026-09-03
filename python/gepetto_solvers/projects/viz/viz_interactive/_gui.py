@@ -121,6 +121,7 @@ class GuiMixin:
                    self.g_show_meshes, self.g_show_true_mesh,
                    self.g_show_contact, self.g_show_collision,
                    self.g_show_discs, self.g_show_disc_frames,
+                   self.g_show_link_frames,
                    self.g_show_world, self.g_show_obj_frame,
                    self.g_show_table_frame, self.g_show_grid,
                    self.g_show_gaps, self.g_show_mount,
@@ -543,74 +544,90 @@ class GuiMixin:
                      "the Constraints/Wrist/Tensions controls -- check this, "
                      "then press Auto solve; the finger selection carries "
                      "over from phase 1. Unchecking is a no-op.")
-            self.g_phase4 = gui.add_checkbox(
-                PHASE_PRESETS["phase4"].label, DEFAULT_PHASE == "phase4",
-                hint="Apply the phase-4 preset: every constraint OFF -- object "
-                     "and table contact, collision avoidance, the opposition "
-                     "half-space and all three pre-grasp terms -- because this "
-                     "phase does not SOLVE for anything. It shuts the grasping "
-                     "fingers on a commanded schedule and whatever they meet on "
-                     "the way, they meet. The runner is **Close**, up in the "
-                     "Solver folder, NOT Auto solve: check this, then press "
-                     "Close. The fingers it shuts are the ones checked below "
-                     "-- the same set phases 0-2 positioned, since no preset "
-                     "touches that mask -- and the wrist prior is left tight "
-                     "(the close does not move the wrist at all). Unchecking "
-                     "is a no-op.")
-            self.g_phase5 = gui.add_checkbox(
-                PHASE_PRESETS["phase5"].label, DEFAULT_PHASE == "phase5",
-                hint="Apply the phase-5 preset: every constraint OFF, for "
-                     "phase 4's reason -- this phase does not solve for "
-                     "anything either. It raises the wrist on a commanded ramp "
-                     "and the hand goes up holding whatever the close left it "
-                     "holding; nothing in the model holds the OBJECT, so the "
-                     "object stays where it is. The runner is **Lift**, up in "
-                     "the Solver folder, NOT Auto solve: check this, then press "
-                     "Lift. The finger checkboxes are left alone, as by every "
-                     "preset -- a lift follows a close, and the grasping set is "
-                     "whatever that close shut. Unchecking is a no-op.")
+            # Phases 4 and 5 are the CLOSE and LIFT ramps, and their runners
+            # -- the Close / Lift buttons up in Solver -- exist only for a hand
+            # carrying the measured travel to walk. A preset box for a ramp
+            # that cannot be run is a control that does nothing, so it goes
+            # absent on the same feature rather than sitting there inert.
+            self.g_phase4 = self.g_phase5 = None
+            if self.has("close_ramp"):
+                self.g_phase4 = gui.add_checkbox(
+                    PHASE_PRESETS["phase4"].label, DEFAULT_PHASE == "phase4",
+                    hint="Apply the phase-4 preset: every constraint OFF -- object "
+                         "and table contact, collision avoidance, the opposition "
+                         "half-space and all three pre-grasp terms -- because this "
+                         "phase does not SOLVE for anything. It shuts the grasping "
+                         "fingers on a commanded schedule and whatever they meet on "
+                         "the way, they meet. The runner is **Close**, up in the "
+                         "Solver folder, NOT Auto solve: check this, then press "
+                         "Close. The fingers it shuts are the ones checked below "
+                         "-- the same set phases 0-2 positioned, since no preset "
+                         "touches that mask -- and the wrist prior is left tight "
+                         "(the close does not move the wrist at all). Unchecking "
+                         "is a no-op.")
+                self.g_phase5 = gui.add_checkbox(
+                    PHASE_PRESETS["phase5"].label, DEFAULT_PHASE == "phase5",
+                    hint="Apply the phase-5 preset: every constraint OFF, for "
+                         "phase 4's reason -- this phase does not solve for "
+                         "anything either. It raises the wrist on a commanded ramp "
+                         "and the hand goes up holding whatever the close left it "
+                         "holding; nothing in the model holds the OBJECT, so the "
+                         "object stays where it is. The runner is **Lift**, up in "
+                         "the Solver folder, NOT Auto solve: check this, then press "
+                         "Lift. The finger checkboxes are left alone, as by every "
+                         "preset -- a lift follows a close, and the grasping set is "
+                         "whatever that close shut. Unchecking is a no-op.")
 
         # Every constraint on/off toggle lives here (Chapter 2, Eq 2.8-2.19),
         # grouped by the paper's structure. Numeric tuning sliders that go with
         # a toggle (collision radius/sigma/cull margin, table height offset)
         # stay behind in Collision/Table below -- only the booleans move.
         with gui.add_folder("Constraints"):
-            with gui.add_folder("Rod (planar bending)", expand_by_default=False):
-                pb_hint = (
-                    "Keep each finger in its own flexion plane: one factor per "
-                    "rod segment penalising the out-of-plane and torsional "
-                    "components of Log(R_i^T R_j), leaving flexion free. The "
-                    "discs are keyed to the backbone, so the real hand cannot "
-                    "splay or twist -- the Cosserat rod can, and spends those "
-                    "DOFs on contact, collision and the passive tendons routed "
-                    "at +/-90 deg. On by default: it is hardware, not a tuning "
-                    "choice."
-                    if self.caps["planar_bending"]
-                    else "requires a rebuilt _gepetto_solvers with "
-                         "TendonFingerSolverConfig.planar_bending")
-                self.g_planar_bend = gui.add_checkbox(
-                    "planar bending", True,
-                    disabled=not self.caps["planar_bending"], hint=pb_hint)
-                # Curvatures (rad/m), so these read against sigma_twist_rot
-                # (1e-2). Defaults are asymmetric on purpose: twist is the cause,
-                # bend is the symptom -- see HandSolveParams.
-                self.g_planar_bend_sigma = gui.add_slider(
-                    "log10 sigma bend", -6, 0, 0.5, -2,
-                    disabled=not self.caps["planar_bending"],
-                    hint="Out-of-plane bending stiffness, as a curvature sigma "
-                         "in rad/m. Lower is stiffer. Left SOFT by default: "
-                         "this row fights reach without improving planarity, "
-                         "because it constrains the accumulated splay rather "
-                         "than what causes it. Kept only so a direct lateral "
-                         "load still meets resistance.")
-                self.g_planar_twist_sigma = gui.add_slider(
-                    "log10 sigma twist", -6, 0, 0.5, -4,
-                    disabled=not self.caps["planar_bending"],
-                    hint="Torsion stiffness, same units. This is the load-"
-                         "bearing one: the spiral-routed lateral tendons inject "
-                         "twist, twist rotates the material frame, and the next "
-                         "segment's flexion then lands out of plane. Tightening "
-                         "THIS collapses the splay at no cost in reach.")
+            # The rod planar-bending approximation is a statement about a
+            # CONTINUUM digit: it keeps a Cosserat rod in the flexion plane its
+            # discs mechanically hold it in. A rigid linkage has no out-of-plane
+            # DOF to spend in the first place -- its joints are the only motion
+            # it has -- so there is nothing here to approximate and the whole
+            # folder is absent rather than present and inert.
+            self.g_planar_bend = None
+            self.g_planar_bend_sigma = self.g_planar_twist_sigma = None
+            if self.has("planar_bending"):
+                with gui.add_folder("Rod (planar bending)", expand_by_default=False):
+                    pb_hint = (
+                        "Keep each finger in its own flexion plane: one factor per "
+                        "rod segment penalising the out-of-plane and torsional "
+                        "components of Log(R_i^T R_j), leaving flexion free. The "
+                        "discs are keyed to the backbone, so the real hand cannot "
+                        "splay or twist -- the Cosserat rod can, and spends those "
+                        "DOFs on contact, collision and the passive tendons routed "
+                        "at +/-90 deg. On by default: it is hardware, not a tuning "
+                        "choice."
+                        if self.caps["planar_bending"]
+                        else "requires a rebuilt _gepetto_solvers with "
+                             "TendonFingerSolverConfig.planar_bending")
+                    self.g_planar_bend = gui.add_checkbox(
+                        "planar bending", True,
+                        disabled=not self.caps["planar_bending"], hint=pb_hint)
+                    # Curvatures (rad/m), so these read against sigma_twist_rot
+                    # (1e-2). Defaults are asymmetric on purpose: twist is the cause,
+                    # bend is the symptom -- see HandSolveParams.
+                    self.g_planar_bend_sigma = gui.add_slider(
+                        "log10 sigma bend", -6, 0, 0.5, -2,
+                        disabled=not self.caps["planar_bending"],
+                        hint="Out-of-plane bending stiffness, as a curvature sigma "
+                             "in rad/m. Lower is stiffer. Left SOFT by default: "
+                             "this row fights reach without improving planarity, "
+                             "because it constrains the accumulated splay rather "
+                             "than what causes it. Kept only so a direct lateral "
+                             "load still meets resistance.")
+                    self.g_planar_twist_sigma = gui.add_slider(
+                        "log10 sigma twist", -6, 0, 0.5, -4,
+                        disabled=not self.caps["planar_bending"],
+                        hint="Torsion stiffness, same units. This is the load-"
+                             "bearing one: the spiral-routed lateral tendons inject "
+                             "twist, twist rotates the material frame, and the next "
+                             "segment's flexion then lands out of plane. Tightening "
+                             "THIS collapses the splay at no cost in reach.")
 
             with gui.add_folder("Collision (Eq 2.8-2.9)", expand_by_default=False):
                 self.g_collision = gui.add_checkbox(
@@ -658,20 +675,28 @@ class GuiMixin:
                          "own. Mutually exclusive with the in-plane form below: "
                          "they are two metrics for the SAME constraint, so "
                          "checking one clears the other.")
-                self.g_obj_contact_plane = gui.add_checkbox(
-                    "object contact (in-plane)", False,
-                    disabled=not self.caps["planar_contact"],
-                    hint="Eq 13: the same fingertip-onto-object equality, but "
-                         "with the distance measured inside each finger's "
-                         "pulling plane (Eq 11: metacarpal base, fingertip, "
-                         "pinch centroid) -- the plane a tendon can actually "
-                         "pull along, so the solve is not asked for "
-                         "out-of-plane torsion the hand cannot produce. Same "
-                         "factor count and the same zero set (distance = tip "
-                         "radius); only the metric differs. Needs an ellipsoid "
-                         "or ycb: object and a digit set INCLUDING THE THUMB, "
-                         "and greys out when the scene cannot support it. "
-                         "Watch it with 'in-plane distance' under Display.")
+                # Eq 13's pulling plane is spanned by the metacarpal base, the
+                # fingertip and the measured PINCH CENTROID, so a hand with no
+                # pinch table has no plane to measure the distance inside -- and
+                # the whole point of the in-plane metric is that a TENDON can
+                # only pull along it. Neither applies to a joint-space hand, so
+                # the box is absent and the 3D form is the only form.
+                self.g_obj_contact_plane = None
+                if self.has("pinch_table"):
+                    self.g_obj_contact_plane = gui.add_checkbox(
+                        "object contact (in-plane)", False,
+                        disabled=not self.caps["planar_contact"],
+                        hint="Eq 13: the same fingertip-onto-object equality, but "
+                             "with the distance measured inside each finger's "
+                             "pulling plane (Eq 11: metacarpal base, fingertip, "
+                             "pinch centroid) -- the plane a tendon can actually "
+                             "pull along, so the solve is not asked for "
+                             "out-of-plane torsion the hand cannot produce. Same "
+                             "factor count and the same zero set (distance = tip "
+                             "radius); only the metric differs. Needs an ellipsoid "
+                             "or ycb: object and a digit set INCLUDING THE THUMB, "
+                             "and greys out when the scene cannot support it. "
+                             "Watch it with 'in-plane distance' under Display.")
                 self.g_tbl_contact = gui.add_checkbox(
                     "table contact", False,
                     hint="Drive the checked fingertips onto the SUPPORT "
@@ -679,98 +704,119 @@ class GuiMixin:
                          "from its contact sphere to the plane). Needs "
                          "*table enabled*; combine with object contact to "
                          "solve for both at once.")
-                self.g_drop_normal_row = gui.add_checkbox(
-                    "drop contact normal row", False,
-                    disabled=not self.caps["drop_normal_row"],
-                    hint="Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, "
-                         "c_T2] SDF witness contact form (c_N dropped) "
-                         "instead of the default 5-row form. Only affects "
-                         "non-ellipsoid (SDF) object contact.")
+                # Offered only where the 5-row form is a real alternative.
+                # Without the feature the hand is FIXED at the 4-row [c_R, c_O,
+                # c_T1, c_T2] form -- see _sync_params, which writes True rather
+                # than reading a box. That is not a default, it is what the
+                # formulation says: with sphere-only collision geometry the two
+                # tangential rows already force the sphere's radius vector
+                # collinear with the object's surface normal, so c_N constrains
+                # nothing the other rows have left free.
+                self.g_drop_normal_row = None
+                if self.has("normal_row_choice"):
+                    self.g_drop_normal_row = gui.add_checkbox(
+                        "drop contact normal row", False,
+                        disabled=not self.caps["drop_normal_row"],
+                        hint="Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, "
+                             "c_T2] SDF witness contact form (c_N dropped) "
+                             "instead of the default 5-row form. Only affects "
+                             "non-ellipsoid (SDF) object contact.")
 
-            with gui.add_folder("Pre-grasp (Eq 2.16-2.19)", expand_by_default=False):
-                self.g_half_space = gui.add_checkbox(
-                    "opposition half-space", False,
-                    disabled=not self.caps["opposition"],
-                    hint="Eq 2.16-2.17: keep each checked finger on its "
-                         "designated side of the splitting plane, thumb "
-                         "opposite the rest. Independent of table contact and "
-                         "of the table itself -- it constrains a fingertip "
-                         "against a line, not against the plane.")
-                self.g_half_sides = gui.add_dropdown(
-                    "opposition sides", list(OPPOSITION_SIDES),
-                    initial_value="auto (match the hand)",
-                    hint="Which half of the split the THUMB is sent to. The "
-                         "object fixes the split LINE; its sign -- the side "
-                         "assignment -- is an arbitrary object-frame "
-                         "convention, and the wrong one asks the thumb and the "
-                         "fingers to TRADE sides, i.e. to roll the hand ~180 "
-                         "degrees about the object. That is infeasible from any "
-                         "normal start pose and the solve stalls immediately, "
-                         "at any standoff and any wrist sigma. *auto* orients "
-                         "it by where the digits already are (the nearer "
-                         "opposition); *flipped* deliberately asks for the "
-                         "other one; *as derived* is the old object-only "
-                         "behaviour, kept for comparison.")
-                self.g_half_margin = gui.add_slider(
-                    "half-space standoff (m)", 0.0, 0.05, 0.001, 0.0,
-                    disabled=not self.caps["half_space_margin"],
-                    hint="Minimum distance each contact finger must keep from "
-                         "the splitting plane, along its own side's direction: "
-                         "HalfSpaceGapFactor's d_min, making the constraint "
-                         "-(c - p_split).m_hat + standoff <= 0 rather than "
-                         "<= 0 alone. At 0 a fingertip sitting exactly ON the "
-                         "split is already legal, so opposition alone does not "
-                         "stop the thumb and the fingers closing onto each "
-                         "other; a positive standoff holds them 2x this far "
-                         "apart, which is what makes it a pre-grasp opening. "
-                         "Drawn as the two fainter planes either side of the "
-                         "split."
-                         if self.caps["half_space_margin"]
-                         else "requires a rebuilt _gepetto_solvers with "
-                              "EnvironmentConfig.half_space_margin")
-                self.g_pregrasp_center = gui.add_checkbox(
-                    "pre-grasp centering", False,
-                    disabled=not self.caps["pregrasp_center"],
-                    hint="Eq 2.18-2.19: center the midpoint of the thumb + "
-                         "opposing fingers' contact points over the object, "
-                         "raised by the clearance slider along the table "
-                         "normal. Needs the thumb AND at least one other "
-                         "finger checked below.")
-                self.g_h_clear = gui.add_slider(
-                    "clearance (m)", 0.0, 0.08, 0.002, 0.07,
-                    hint="Pre-grasp centering's height above the object "
-                         "centroid, along the table normal.")
-                self.g_pregrasp_centroid = gui.add_checkbox(
-                    "pinch-centroid centering", False,
-                    disabled=not self.caps["pregrasp_centroid"],
-                    hint="Drive the point where the CHECKED digits are "
-                         "measured to meet -- a constant in the hand frame, "
-                         "looked up from config.HAND_PINCH_POSES -- onto the "
-                         "object centroid, raised by the clearance slider "
-                         "above. Unlike pre-grasp centering (which averages "
-                         "where the fingertips actually are, so it only says "
-                         "something once they are nearly closed) this "
-                         "constrains the WRIST alone: it positions the hand "
-                         "so that closing those digits would close them ON "
-                         "the object, whatever the fingers are doing now. "
-                         "Only combinations INCLUDING THE THUMB were "
-                         "measured; any other selection leaves it inert and "
-                         "says so in the status line."
-                         if self.caps["pregrasp_centroid"]
-                         else "requires a rebuilt _gepetto_solvers with "
-                              "EnvironmentConfig.pregrasp_centroid_point")
-                self.g_axis_align = gui.add_checkbox(
-                    "short-axis alignment", False,
-                    disabled=not self.caps["pregrasp_axis_align"],
-                    hint="Align the thumb-vs-opposing-fingers connecting "
-                         "vector with the perpendicular to the opposition "
-                         "split plane (the same axis opposition half-space "
-                         "uses), direction-agnostic -- it doesn't matter "
-                         "which way it points, just that it's colinear. "
-                         "Needs the thumb AND at least one other finger "
-                         "checked below. Independent of opposition "
-                         "half-space and pre-grasp centering -- computes its "
-                         "own copy of the axis either way.")
+            # The pre-grasp family (Eq 2.16-2.19) all describe the same move:
+            # open the hand around an object before closing on it, with the
+            # thumb opposing the rest. Every one of them is written against a
+            # measured property of THIS hand -- the opposition split its digits
+            # straddle, the pinch centroid they meet at -- so a hand that
+            # declares no pre-grasp gets no folder, and _sync_params holds all
+            # four constraints off rather than reading boxes that do not exist.
+            self.g_half_space = self.g_half_sides = self.g_half_margin = None
+            self.g_pregrasp_center = self.g_h_clear = None
+            self.g_pregrasp_centroid = self.g_axis_align = None
+            if self.has("pregrasp"):
+                with gui.add_folder("Pre-grasp (Eq 2.16-2.19)", expand_by_default=False):
+                    self.g_half_space = gui.add_checkbox(
+                        "opposition half-space", False,
+                        disabled=not self.caps["opposition"],
+                        hint="Eq 2.16-2.17: keep each checked finger on its "
+                             "designated side of the splitting plane, thumb "
+                             "opposite the rest. Independent of table contact and "
+                             "of the table itself -- it constrains a fingertip "
+                             "against a line, not against the plane.")
+                    self.g_half_sides = gui.add_dropdown(
+                        "opposition sides", list(OPPOSITION_SIDES),
+                        initial_value="auto (match the hand)",
+                        hint="Which half of the split the THUMB is sent to. The "
+                             "object fixes the split LINE; its sign -- the side "
+                             "assignment -- is an arbitrary object-frame "
+                             "convention, and the wrong one asks the thumb and the "
+                             "fingers to TRADE sides, i.e. to roll the hand ~180 "
+                             "degrees about the object. That is infeasible from any "
+                             "normal start pose and the solve stalls immediately, "
+                             "at any standoff and any wrist sigma. *auto* orients "
+                             "it by where the digits already are (the nearer "
+                             "opposition); *flipped* deliberately asks for the "
+                             "other one; *as derived* is the old object-only "
+                             "behaviour, kept for comparison.")
+                    self.g_half_margin = gui.add_slider(
+                        "half-space standoff (m)", 0.0, 0.05, 0.001, 0.0,
+                        disabled=not self.caps["half_space_margin"],
+                        hint="Minimum distance each contact finger must keep from "
+                             "the splitting plane, along its own side's direction: "
+                             "HalfSpaceGapFactor's d_min, making the constraint "
+                             "-(c - p_split).m_hat + standoff <= 0 rather than "
+                             "<= 0 alone. At 0 a fingertip sitting exactly ON the "
+                             "split is already legal, so opposition alone does not "
+                             "stop the thumb and the fingers closing onto each "
+                             "other; a positive standoff holds them 2x this far "
+                             "apart, which is what makes it a pre-grasp opening. "
+                             "Drawn as the two fainter planes either side of the "
+                             "split."
+                             if self.caps["half_space_margin"]
+                             else "requires a rebuilt _gepetto_solvers with "
+                                  "EnvironmentConfig.half_space_margin")
+                    self.g_pregrasp_center = gui.add_checkbox(
+                        "pre-grasp centering", False,
+                        disabled=not self.caps["pregrasp_center"],
+                        hint="Eq 2.18-2.19: center the midpoint of the thumb + "
+                             "opposing fingers' contact points over the object, "
+                             "raised by the clearance slider along the table "
+                             "normal. Needs the thumb AND at least one other "
+                             "finger checked below.")
+                    self.g_h_clear = gui.add_slider(
+                        "clearance (m)", 0.0, 0.08, 0.002, 0.07,
+                        hint="Pre-grasp centering's height above the object "
+                             "centroid, along the table normal.")
+                    self.g_pregrasp_centroid = gui.add_checkbox(
+                        "pinch-centroid centering", False,
+                        disabled=not self.caps["pregrasp_centroid"],
+                        hint="Drive the point where the CHECKED digits are "
+                             "measured to meet -- a constant in the hand frame, "
+                             "looked up from config.HAND_PINCH_POSES -- onto the "
+                             "object centroid, raised by the clearance slider "
+                             "above. Unlike pre-grasp centering (which averages "
+                             "where the fingertips actually are, so it only says "
+                             "something once they are nearly closed) this "
+                             "constrains the WRIST alone: it positions the hand "
+                             "so that closing those digits would close them ON "
+                             "the object, whatever the fingers are doing now. "
+                             "Only combinations INCLUDING THE THUMB were "
+                             "measured; any other selection leaves it inert and "
+                             "says so in the status line."
+                             if self.caps["pregrasp_centroid"]
+                             else "requires a rebuilt _gepetto_solvers with "
+                                  "EnvironmentConfig.pregrasp_centroid_point")
+                    self.g_axis_align = gui.add_checkbox(
+                        "short-axis alignment", False,
+                        disabled=not self.caps["pregrasp_axis_align"],
+                        hint="Align the thumb-vs-opposing-fingers connecting "
+                             "vector with the perpendicular to the opposition "
+                             "split plane (the same axis opposition half-space "
+                             "uses), direction-agnostic -- it doesn't matter "
+                             "which way it points, just that it's colinear. "
+                             "Needs the thumb AND at least one other finger "
+                             "checked below. Independent of opposition "
+                             "half-space and pre-grasp centering -- computes its "
+                             "own copy of the axis either way.")
 
             with gui.add_folder("fingers"):
                 # Default to a 3-finger pinch (thumb, index, middle) rather
@@ -865,16 +911,38 @@ class GuiMixin:
                      "says how much object is actually there.")
             self.g_show_contact = gui.add_checkbox("contact spheres", True)
             self.g_show_collision = gui.add_checkbox("collision spheres", True)
-            self.g_show_discs = gui.add_checkbox("routing discs", False)
-            self.g_show_disc_frames = gui.add_checkbox(
-                "disc frames", False,
-                hint="A triad on every disc node of every finger, including the "
-                     "base disc -- the body frame the routing hole locations are "
-                     "expressed in, so the tendon path is those axes plus "
-                     "`R @ hole + t`. Off by default: five fingers' worth of "
-                     "triads is dense, so this is for checking routing "
-                     "orientation (a hole angle measured off the wrong axis is "
-                     "invisible on the rotationally symmetric disc cylinders).")
+            # What a digit is MADE OF decides what there is to draw frames on.
+            # A tendon hand's nodes are routing discs, and the discs are the
+            # thing worth seeing; a rigid hand's are links, and the discs do not
+            # exist to be drawn. One checkbox or the other, never both -- and
+            # "hand frames" is not a renamed "disc frames", it draws different
+            # geometry (see ViserHandScene._update_link_frames).
+            self.g_show_discs = self.g_show_disc_frames = None
+            self.g_show_link_frames = None
+            if self.has("tendons"):
+                self.g_show_discs = gui.add_checkbox("routing discs", False)
+                self.g_show_disc_frames = gui.add_checkbox(
+                    "disc frames", False,
+                    hint="A triad on every disc node of every finger, including the "
+                         "base disc -- the body frame the routing hole locations are "
+                         "expressed in, so the tendon path is those axes plus "
+                         "`R @ hole + t`. Off by default: five fingers' worth of "
+                         "triads is dense, so this is for checking routing "
+                         "orientation (a hole angle measured off the wrong axis is "
+                         "invisible on the rotationally symmetric disc cylinders).")
+            else:
+                self.g_show_link_frames = gui.add_checkbox(
+                    "hand frames", False,
+                    hint="A triad on every rigid link: the palm, then each "
+                         "digit's links out to the fingertip. These are the "
+                         "frames the whole model is written in -- a link's "
+                         "visual mesh, its collision sphere and its contact "
+                         "site all ride on the one drawn here, and each is what "
+                         "its own joint rotates. Off by default (a triad per "
+                         "link is dense); switch it on to check a mesh sitting "
+                         "on the wrong axis or a joint zeroed differently from "
+                         "the manufacturer's, neither of which the link "
+                         "geometry alone can show.")
             # The three frame toggles all default ON: which frame anything is
             # expressed in is the first question asked of this scene, and a
             # triad you have to go and switch on answers it too late.
@@ -923,36 +991,43 @@ class GuiMixin:
                      "opposition half-space (green = correct side, red = "
                      "violating), and pre-grasp centering (green under 15 mm "
                      "to target).")
-            self.g_show_finger_planes = gui.add_checkbox(
-                "finger pinch planes", False,
-                hint="Per finger, the plane through its metacarpal base, its "
-                     "fingertip and the pinch centroid the checked digits "
-                     "close on (config.HAND_PINCH_POSES, carried through the "
-                     "solved wrist). One colour per finger; the outlined "
-                     "triangle is the three defining points. Off by default -- "
-                     "five translucent sheets sit right where the grasp is. "
-                     "Nothing enforces these planes; they describe the posture "
-                     "on screen. Needs a measured pinch pose, so only digit "
-                     "sets INCLUDING THE THUMB draw anything.")
-            self.g_show_planar_gap = gui.add_checkbox(
-                # On by default, but only where the binding can actually
-                # measure it: a hard True would tick a DISABLED box on an
-                # older .so, and the readout would then permanently report
-                # "in-plane distance: UNAVAILABLE" with no way to turn it off.
-                "in-plane distance", self.caps["planar_gap"],
-                disabled=not self.caps["planar_gap"],
-                hint="Eq 11/13: the distance from each fingertip to the object "
-                     "measured INSIDE that finger's pulling plane, which is what "
-                     "a tendon can actually pull along. Draws the cross-section "
-                     "the plane cuts out of the object (exact) plus a line to the "
-                     "nearest point on it; the mm label is the C++ factor's own "
-                     "first-order value, so a visible mismatch between line and "
-                     "label IS the approximation error. '(3D)' means the plane "
-                     "missed the object entirely and the number has fallen back "
-                     "to the ordinary 3D distance. Spheres, ellipsoids and ycb: "
-                     "sets only -- cube/cylinder/capsule have no ellipsoid "
-                     "cross-section. On by default wherever the binding "
-                     "supports it. Measurement only: no solve uses this yet.")
+            # Both overlays are drawn about the measured PINCH CENTROID (Eq 11)
+            # -- the planes pass through it, and the in-plane distance is
+            # measured inside those planes -- so a hand with no pinch table has
+            # nothing for either to be anchored on. Absent rather than ticked
+            # and permanently empty.
+            self.g_show_finger_planes = self.g_show_planar_gap = None
+            if self.has("pinch_table"):
+                self.g_show_finger_planes = gui.add_checkbox(
+                    "finger pinch planes", False,
+                    hint="Per finger, the plane through its metacarpal base, its "
+                         "fingertip and the pinch centroid the checked digits "
+                         "close on (config.HAND_PINCH_POSES, carried through the "
+                         "solved wrist). One colour per finger; the outlined "
+                         "triangle is the three defining points. Off by default -- "
+                         "five translucent sheets sit right where the grasp is. "
+                         "Nothing enforces these planes; they describe the posture "
+                         "on screen. Needs a measured pinch pose, so only digit "
+                         "sets INCLUDING THE THUMB draw anything.")
+                self.g_show_planar_gap = gui.add_checkbox(
+                    # On by default, but only where the binding can actually
+                    # measure it: a hard True would tick a DISABLED box on an
+                    # older .so, and the readout would then permanently report
+                    # "in-plane distance: UNAVAILABLE" with no way to turn it off.
+                    "in-plane distance", self.caps["planar_gap"],
+                    disabled=not self.caps["planar_gap"],
+                    hint="Eq 11/13: the distance from each fingertip to the object "
+                         "measured INSIDE that finger's pulling plane, which is what "
+                         "a tendon can actually pull along. Draws the cross-section "
+                         "the plane cuts out of the object (exact) plus a line to the "
+                         "nearest point on it; the mm label is the C++ factor's own "
+                         "first-order value, so a visible mismatch between line and "
+                         "label IS the approximation error. '(3D)' means the plane "
+                         "missed the object entirely and the number has fallen back "
+                         "to the ordinary 3D distance. Spheres, ellipsoids and ycb: "
+                         "sets only -- cube/cylinder/capsule have no ellipsoid "
+                         "cross-section. On by default wherever the binding "
+                         "supports it. Measurement only: no solve uses this yet.")
             self.g_show_traj = gui.add_checkbox(
                 "trajectory plots", True,
                 hint="The window docked to the LEFT of the 3D view: the six "
@@ -993,8 +1068,11 @@ class GuiMixin:
         self.g_phase0.on_update(lambda _: self._on_phase_toggle("phase0"))
         self.g_phase1.on_update(lambda _: self._on_phase_toggle("phase1"))
         self.g_phase2.on_update(lambda _: self._on_phase_toggle("phase2"))
-        self.g_phase4.on_update(lambda _: self._on_phase_toggle("phase4"))
-        self.g_phase5.on_update(lambda _: self._on_phase_toggle("phase5"))
+        # Only the phases this hand HAS boxes for -- _phase_checkboxes is the
+        # single list of those, so the wiring cannot drift from the build.
+        for _name, _box in self._phase_checkboxes().items():
+            if _name in ("phase4", "phase5"):
+                _box.on_update(lambda _, n=_name: self._on_phase_toggle(n))
         if self.g_close is not None:
             self.g_close.on_click(self._close_hand)
         if self.g_lift is not None:
@@ -1035,10 +1113,12 @@ class GuiMixin:
 
         # Display toggles re-render the current frame without re-solving.
         for h in (self.g_show_contact, self.g_show_collision, self.g_show_discs,
-                  self.g_show_disc_frames, self.g_show_meshes,
+                  self.g_show_disc_frames, self.g_show_link_frames,
+                  self.g_show_meshes,
                   self.g_show_gaps, self.g_show_mount, self.g_show_finger_planes,
                   self.g_show_planar_gap):
-            h.on_update(lambda _: (self._sync_params(), self._render_frame()))
+            if h is not None:
+                h.on_update(lambda _: (self._sync_params(), self._render_frame()))
         # The contact checkboxes ride along only to keep self.params in sync;
         # like every other solver knob they take effect on the next solve, and
         # the gap lines keep describing the solve that is actually on screen
@@ -1056,16 +1136,20 @@ class GuiMixin:
         self.g_show_traj.on_update(
             lambda _: self.traj.set_visible(self.g_show_traj.value))
 
-        for h in (self.g_obj_contact, self.g_obj_contact_plane):
-            h.on_update(lambda _, src=h: self._enforce_object_contact(src))
-        for h in self.g_contacts:
-            h.on_update(lambda _: self._refresh_planar_contact_gate())
+        # The mutual exclusion and the in-plane gate both only exist where the
+        # in-plane box does; with one form there is nothing to settle.
+        if self.g_obj_contact_plane is not None:
+            for h in (self.g_obj_contact, self.g_obj_contact_plane):
+                h.on_update(lambda _, src=h: self._enforce_object_contact(src))
+            for h in self.g_contacts:
+                h.on_update(lambda _: self._refresh_planar_contact_gate())
         for h in (self.g_contacts
                   + [self.g_obj_contact, self.g_obj_contact_plane,
                      self.g_tbl_contact]):
-            h.on_update(lambda _: (self._sync_params(),
-                                   self._invalidate_stepper(),
-                                   self._render_frame()))
+            if h is not None:
+                h.on_update(lambda _: (self._sync_params(),
+                                       self._invalidate_stepper(),
+                                       self._render_frame()))
         # Which SHELLS may be touched is the same kind of change as which FINGERS
         # touch -- the contact equality is written against a different surface, so
         # a carried dual is meaningless -- but it also restyles the object, since
@@ -1083,8 +1167,10 @@ class GuiMixin:
         for h in (self.g_table, self.g_constraint_height,
                   self.g_show_constraint_plane, self.g_half_space,
                   self.g_half_margin, self.g_half_sides):
-            h.on_update(lambda _: (self._sync_params(), self._refresh_object(),
-                                   self._invalidate_stepper()))
+            if h is not None:
+                h.on_update(lambda _: (self._sync_params(),
+                                       self._refresh_object(),
+                                       self._invalidate_stepper()))
         # Collision knobs are part of the constraint set too. The sphere-drawing
         # flag follows the toggles, so these re-render as well as invalidate.
         for h in (self.g_collision, self.g_self_collision, self.g_coll_radius,
@@ -1096,8 +1182,9 @@ class GuiMixin:
         # stepper but draws nothing of its own.
         for h in (self.g_planar_bend, self.g_planar_bend_sigma,
                   self.g_planar_twist_sigma):
-            h.on_update(lambda _: (self._sync_params(),
-                                   self._invalidate_stepper()))
+            if h is not None:
+                h.on_update(lambda _: (self._sync_params(),
+                                       self._invalidate_stepper()))
         # drop-normal-row / pre-grasp centering / clearance: no static geometry
         # of their own (the centering line only appears once a solve has run,
         # via _render_frame), so just invalidate the stepper -- self.params is
@@ -1105,7 +1192,8 @@ class GuiMixin:
         # of which widget triggered it.
         for h in (self.g_drop_normal_row, self.g_pregrasp_center, self.g_h_clear,
                   self.g_axis_align, self.g_pregrasp_centroid):
-            h.on_update(lambda _: self._invalidate_stepper())
+            if h is not None:
+                h.on_update(lambda _: self._invalidate_stepper())
         # AL knobs are baked into the stepper's config at construction, unlike
         # the tensions it re-reads every step, so they need a rebuild too.
         # "settle steps" is read live, but it counts off steps ALREADY taken, so

@@ -92,6 +92,8 @@ class NotesMixin:
         that overlay is keyed off the same ``contact_names`` the result carries,
         so a contact box unticked since the last solve must not change this line
         while the hand it describes is still on screen."""
+        if self.g_show_finger_planes is None:
+            return []          # no pinch table on this hand: no overlay to explain
         if not self.g_show_finger_planes.value or self.result is None:
             return []
         names = self.result.contact_names()
@@ -120,6 +122,8 @@ class NotesMixin:
         """
         if self._restoring or self._contact_guard:
             return
+        if self.g_obj_contact_plane is None:
+            return             # one form only: nothing to be exclusive with
         other = (self.g_obj_contact_plane if source is self.g_obj_contact
                  else self.g_obj_contact)
         if not (source.value and other.value):
@@ -140,6 +144,9 @@ class NotesMixin:
         two live here as well because the GUI knows the answer while the box is
         still being offered, and greying a control is a better way to say "not
         for this object" than an exception after Auto solve."""
+        if self.g_obj_contact_plane is None:
+            return False, ("this hand has no measured pinch table, so Eq 11 has "
+                           "no centroid to span a pulling plane with")
         if not self.caps["planar_contact"]:
             return False, ("this binding cannot build it (no "
                            "EnvironmentConfig.object_contact_in_plane)")
@@ -164,6 +171,8 @@ class NotesMixin:
         Clearing rather than leaving it checked-but-disabled is deliberate: a
         ticked box that the next solve would refuse is a lie about what is in the
         graph. The status line says why (see :meth:`_planar_contact_note`)."""
+        if self.g_obj_contact_plane is None:
+            return             # the box was never built; nothing to grey
         ok, _reason = self._planar_contact_available()
         self.g_obj_contact_plane.disabled = not ok
         if not ok and self.g_obj_contact_plane.value:
@@ -227,6 +236,8 @@ class NotesMixin:
 
     def _planar_contact_note(self):
         """Say why the in-plane contact box is greyed, when it is."""
+        if self.g_obj_contact_plane is None:
+            return []          # no box, so nothing on screen to account for
         ok, reason = self._planar_contact_available()
         if ok:
             return []
@@ -241,6 +252,8 @@ class NotesMixin:
         (cube/cylinder/capsule -- the factor takes an ellipsoid set), or solved
         digits with no measured pinch pose, which leaves Eq 11 without its
         centroid and so without a plane."""
+        if self.g_show_planar_gap is None:
+            return []          # no pinch table on this hand: no overlay to explain
         if not self.g_show_planar_gap.value or self.result is None:
             return []
         if not self.caps["planar_gap"]:
@@ -372,6 +385,8 @@ class NotesMixin:
         the sides the wrong way up the solve stalls on iteration 3 with the hand
         visibly untouched, which reads as the solver giving up rather than as
         the constraint asking for a 180 degree roll."""
+        if self.g_half_sides is None:
+            return []          # no pre-grasp panel: the constraint cannot be on
         res = self._iter_view()
         opposing = self.hand.opposing_digit
         if res is None or opposing is None or opposing not in res.finger_names:

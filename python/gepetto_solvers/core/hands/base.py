@@ -295,8 +295,22 @@ FEATURES = frozenset({
     "displacement",
     # The rod planar-bending approximation.
     "planar_bending",
-    # A measured pinch table, so the pre-grasp centroid constraint has a target.
+    # A measured pinch table: the pre-grasp centroid constraint's target, and
+    # the centroid Eq 11's pulling plane is spanned with -- so the in-plane
+    # contact form, the pinch-plane overlay and the in-plane distance overlay
+    # all hang off this too.
     "pinch_table",
+    # The pre-grasp constraint family (Eq 2.16-2.19): opposition half-space,
+    # fingertip-midpoint centering, pinch-centroid centering, short-axis
+    # alignment. A hand that does not declare it gets no pre-grasp panel and
+    # every one of those constraints stays off.
+    "pregrasp",
+    # The 5-row vs 4-row SDF witness contact form is offered as a CHOICE. A hand
+    # without it is fixed at the 4-row form the formulation defines (c_N
+    # dropped): with sphere-only collision geometry the two tangential rows
+    # already force the sphere radius vector collinear with the surface normal,
+    # so the normal-alignment row is redundant rather than optional.
+    "normal_row_choice",
     # Disc-addressed calibration landmarks.
     "calibration",
     # A hardware bridge to play a plan on.

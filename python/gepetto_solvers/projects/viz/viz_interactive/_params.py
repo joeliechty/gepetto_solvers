@@ -101,27 +101,44 @@ class ParamsSyncMixin:
         p.ellipsoid_set_beta = float(self.g_set_beta.value)
         p.use_grasp_subset = CONTACT_SHELL_MODES[self.g_contact_shells.value]
         p.contact_fingers = [c.value for c in self.g_contacts]
-        p.object_contact = self.g_obj_contact.value or self.g_obj_contact_plane.value
         # Which FORM, once object contact is on at all. The two boxes are kept
         # mutually exclusive by _enforce_object_contact, so this cannot be read
         # as "both": object_contact says whether there is a contact,
-        # object_contact_in_plane says which distance it is measured with.
-        p.object_contact_in_plane = self.g_obj_contact_plane.value
+        # object_contact_in_plane says which distance it is measured with. A
+        # hand with no pinch table has only the 3D box, and only the 3D form.
+        in_plane = (self.g_obj_contact_plane is not None
+                    and self.g_obj_contact_plane.value)
+        p.object_contact = self.g_obj_contact.value or in_plane
+        p.object_contact_in_plane = in_plane
         p.table_contact = self.g_tbl_contact.value
-        p.contact_drop_normal_row = self.g_drop_normal_row.value
-        p.half_space = self.g_half_space.value
+        # No box means no CHOICE, not a default: the 4-row [c_R, c_O, c_T1,
+        # c_T2] witness form is what the formulation defines for sphere-only
+        # collision geometry, since the tangential rows already force the
+        # radius vector collinear with the surface normal. See the note beside
+        # the checkbox in _build_gui.
+        p.contact_drop_normal_row = (True if self.g_drop_normal_row is None
+                                     else self.g_drop_normal_row.value)
+        # The pre-grasp family, all four of them off for a hand that declares
+        # no pre-grasp -- the panel is absent, so there is nothing to read and
+        # nothing to attach.
+        p.half_space = self.g_half_space is not None and self.g_half_space.value
         p.half_space_split = None   # derive from object_center
         # Cleared every sync so the SIGN is re-resolved against the posture on
         # screen: _attach_opposition writes the oriented axis back here, and a
         # stale one would keep sending the thumb to the side it was on two
         # solves ago.
         p.half_space_axis = None
-        p.half_space_flip = OPPOSITION_SIDES[self.g_half_sides.value]
-        p.half_space_margin = self.g_half_margin.value
-        p.pregrasp_center = self.g_pregrasp_center.value
-        p.h_clear = self.g_h_clear.value
-        p.pregrasp_axis_align = self.g_axis_align.value
-        p.pregrasp_centroid = self.g_pregrasp_centroid.value
+        if self.g_half_sides is not None:
+            p.half_space_flip = OPPOSITION_SIDES[self.g_half_sides.value]
+            p.half_space_margin = self.g_half_margin.value
+        p.pregrasp_center = (self.g_pregrasp_center is not None
+                             and self.g_pregrasp_center.value)
+        if self.g_h_clear is not None:
+            p.h_clear = self.g_h_clear.value
+        p.pregrasp_axis_align = (self.g_axis_align is not None
+                                 and self.g_axis_align.value)
+        p.pregrasp_centroid = (self.g_pregrasp_centroid is not None
+                               and self.g_pregrasp_centroid.value)
         p.sigma_wrist_pos = 10.0 ** self.g_sig_pos.value
         p.sigma_wrist_rot = 10.0 ** self.g_sig_rot.value
         # AL
@@ -129,10 +146,15 @@ class ParamsSyncMixin:
         p.al_rate = self.g_al_rate.value
         p.al_iters = self.g_al_iters.value
         p.ik_settle_steps = int(self.g_ik_settle.value)
-        # rod physics
-        p.planar_bending = self.g_planar_bend.value and self.caps["planar_bending"]
-        p.sigma_planar_bend = 10.0 ** self.g_planar_bend_sigma.value
-        p.sigma_planar_twist = 10.0 ** self.g_planar_twist_sigma.value
+        # rod physics -- a rigid-linkage hand has no rod to keep planar, so the
+        # folder is absent and the approximation stays off. The sigmas keep
+        # their dataclass defaults; nothing reads them with the factor off.
+        p.planar_bending = (self.g_planar_bend is not None
+                            and self.g_planar_bend.value
+                            and self.caps["planar_bending"])
+        if self.g_planar_bend is not None:
+            p.sigma_planar_bend = 10.0 ** self.g_planar_bend_sigma.value
+            p.sigma_planar_twist = 10.0 ** self.g_planar_twist_sigma.value
         # collision
         p.collision = self.g_collision.value
         p.self_collision = self.g_self_collision.value
@@ -153,14 +175,19 @@ class ParamsSyncMixin:
         # cannot drift apart and the offset cannot compound across syncs.
         p.plane_origin = None
         p.constraint_plane_height = self.g_constraint_height.value
-        # display toggles
-        self.scene.show_discs = self.g_show_discs.value
-        self.scene.show_disc_frames = self.g_show_disc_frames.value
+        # display toggles. Each is read only where its checkbox was built; an
+        # overlay whose hand cannot draw it stays off for the life of the app.
+        def _shown(handle):
+            return handle is not None and handle.value
+
+        self.scene.show_discs = _shown(self.g_show_discs)
+        self.scene.show_disc_frames = _shown(self.g_show_disc_frames)
+        self.scene.show_link_frames = _shown(self.g_show_link_frames)
         self.scene.show_contact_spheres = self.g_show_contact.value
         self.scene.show_collision_spheres = self.g_show_collision.value
         self.scene.show_gap_lines = self.g_show_gaps.value
-        self.scene.show_finger_planes = self.g_show_finger_planes.value
-        self.scene.show_planar_gap = self.g_show_planar_gap.value
+        self.scene.show_finger_planes = _shown(self.g_show_finger_planes)
+        self.scene.show_planar_gap = _shown(self.g_show_planar_gap)
 
 
     def _reset_defaults(self, _=None):

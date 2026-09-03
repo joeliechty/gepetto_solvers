@@ -79,7 +79,15 @@ class PhaseMixin:
                     # mask -- solvers.apply_phase_preset writes the field, and
                     # a script has no standing selection to protect.
                     continue
-                if field == "object_contact":
+                if field in ("object_contact", "object_contact_in_plane") \
+                        and self.g_obj_contact_plane is None:
+                    # No in-plane box on this hand, so there is no FORM to
+                    # choose and no pair to keep exclusive: object_contact is
+                    # the whole statement, and a preset naming only the form is
+                    # a statement about a metric this hand does not offer.
+                    if field == "object_contact":
+                        self.g_obj_contact.value = bool(value)
+                elif field == "object_contact":
                     # A preset that names object_contact ALONE says only WHETHER
                     # the object is contacted, with no opinion on which metric,
                     # so the form the user picked survives it. Off clears both
@@ -138,7 +146,9 @@ class PhaseMixin:
         # rather than substitute a metric. The 3D box ticks visibly, so the panel
         # still says exactly what is in the graph.
         if (overrides.get("object_contact")
-                and not (self.g_obj_contact.value or self.g_obj_contact_plane.value)):
+                and not (self.g_obj_contact.value
+                         or (self.g_obj_contact_plane is not None
+                             and self.g_obj_contact_plane.value))):
             self.g_obj_contact.value = True
         self._sync_params()
         self._invalidate_stepper()
@@ -162,9 +172,14 @@ class PhaseMixin:
         """Every phase-preset checkbox, name -> handle. Small and built on
         demand rather than cached, so a future phase3 checkbox only needs
         adding here (and to ``_build_gui``/``_input_handles``)."""
-        return {"phase0": self.g_phase0, "phase1": self.g_phase1,
-                "phase2": self.g_phase2, "phase4": self.g_phase4,
-                "phase5": self.g_phase5}
+        boxes = {"phase0": self.g_phase0, "phase1": self.g_phase1,
+                 "phase2": self.g_phase2, "phase4": self.g_phase4,
+                 "phase5": self.g_phase5}
+        # Phases whose box this hand does not have are dropped rather than
+        # carried as None: every caller here either reads .value off one or
+        # writes it, and a phase with no box is a phase this hand cannot be put
+        # into by the panel.
+        return {name: box for name, box in boxes.items() if box is not None}
 
 
     def _on_phase_toggle(self, name, _=None):

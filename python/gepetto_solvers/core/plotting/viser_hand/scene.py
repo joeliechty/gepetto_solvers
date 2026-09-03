@@ -39,6 +39,7 @@ class ViserHandScene(
 
     def __init__(self, server, finger_names, *, backbone_width=4.0,
                  show_discs=False, show_disc_frames=False,
+                 show_link_frames=False,
                  show_contact_spheres=True,
                  show_collision_spheres=True, show_gap_lines=True,
                  show_link_meshes=True,
@@ -49,6 +50,11 @@ class ViserHandScene(
         self.backbone_width = backbone_width
         self.show_discs = show_discs
         self.show_disc_frames = show_disc_frames
+        # The joint-space counterpart of show_disc_frames: a triad on every
+        # rigid link. A hand has one or the other -- routing discs and rigid
+        # links are two different things to have frames ON -- so the workbench
+        # only ever builds one of the two checkboxes.
+        self.show_link_frames = show_link_frames
         self.show_contact_spheres = show_contact_spheres
         self.show_collision_spheres = show_collision_spheres
         # On by default: a hand that HAS meshes looks like itself with
@@ -242,6 +248,11 @@ class ViserHandScene(
             if self.show_disc_frames:
                 keep |= self._update_disc_frames(name, fm, poses)
 
+            # The rigid links' own frames, for a hand whose digits are a
+            # linkage rather than a rod.
+            if self.show_link_frames:
+                keep |= self._update_link_frames(name, fm, poses)
+
             # Pinch plane through base / tip / pinch centroid.
             if self.show_finger_planes and finger_planes and name in finger_planes:
                 keep |= self._update_finger_plane(name, *finger_planes[name],
@@ -268,6 +279,10 @@ class ViserHandScene(
         # The point the finger planes fan about -- one marker for all of them.
         if self.show_finger_planes and finger_planes:
             keep |= self._update_pinch_point(next(iter(finger_planes.values()))[2])
+
+        # The palm link's frame: hand-level, so drawn once rather than per digit.
+        if self.show_link_frames:
+            keep |= self._update_palm_frame(wrist_pose)
 
         if self.show_link_meshes:
             keep |= self._update_link_meshes(link_meshes, frame, wrist_pose)
