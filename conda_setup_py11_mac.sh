@@ -73,8 +73,11 @@ echo "Building and installing gepetto_solvers..."
 cd $GEPETTO_DIR
 # Runtime dependencies are declared in pyproject.toml; installing the package
 # brings them in. [viz,web] adds the PyVista windows the demo scripts open and
-# the viser workbench.
-pip install ".[viz,web]" -v
+# the viser workbench; [ycb] adds what `scripts/objects/setup_objects.py`
+# needs to fetch and bake the scanned objects, which is the next thing a fresh
+# checkout has to do. Leaving it out is how a setup completes green and then
+# fails 94 times in a row on the first bake.
+pip install ".[viz,web,ycb]" -v
 
 # pip's numpy/scipy wheels are built against macOS Accelerate which may lack newer
 # LAPACK symbols on this OS version. Replace them with conda versions (use openblas).

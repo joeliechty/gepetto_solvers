@@ -103,7 +103,7 @@ def _require_tools(need_ycb):
     require_openvdb()
     if not need_ycb:
         return
-    missing = [m for m in ("trimesh", "requests")
+    missing = [m for m in ("trimesh", "networkx", "requests")
                if not _importable(m)]
     if missing:
         raise ImportError(

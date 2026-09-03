@@ -51,7 +51,11 @@ dependencies = [
 [project.optional-dependencies]
 viz = ["pyvista==0.46.4", "vtk==9.5.2", "matplotlib==3.10.7", "pillow"]
 web = ["viser==1.1.0", "trimesh"]
-ycb = ["trimesh", "scikit-learn", "coacd", "requests", "pillow"]
+# networkx is a trimesh EXTRA, not a hard dependency of it, and the ycb bake
+# needs it: every scan has a hole the scanner could not see, so every object
+# reaches `mesh.fill_holes()`, and trimesh implements that with nx.cycle_basis.
+# Without it the import error surfaces once per object, mid-bake.
+ycb = ["trimesh", "networkx", "scikit-learn", "coacd", "requests", "pillow"]
 onshape = ["requests"]
 vendor = ["trimesh", "fast-simplification"]
 dev = ["pytest", "ruff", "mypy"]
