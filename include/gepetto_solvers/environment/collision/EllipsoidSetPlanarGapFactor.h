@@ -20,6 +20,7 @@
 #include <vector>
 #include "gepetto_solvers/environment/EnvironmentConfig.h"
 #include "gepetto_solvers/environment/ConstraintWrappers.h"
+#include "gepetto_solvers/environment/EllipsoidDistance.h"
 
 namespace gepetto_solvers {
 
@@ -55,9 +56,22 @@ namespace gepetto_solvers {
 //
 //   d_planar = (x^T M x - 1) / (2 || P M x ||),   P = I - n n^T
 //
-// so d_planar uses the identical algebraic approximation Eq 9 does (Taubin [8]),
-// not a second, different one. The query point needs no projection: the plane is
-// built THROUGH p_tip, so the tip lies in it by construction.
+// so d_planar is the Taubin ratio with the gradient projected into the plane. The
+// query point needs no projection: the plane is built THROUGH p_tip, so the tip
+// lies in it by construction.
+//
+// THE taubin FLAG REACHES d3 ONLY. The 3D distance goes through EllipsoidDistance
+// like every other ellipsoid factor -- exact orthogonal by default, Taubin under
+// taubin=true -- because the whole point of the flag is that all of them measure
+// with one metric, and because weight 0 here MUST still reduce exactly to
+// EllipsoidSetCollisionGapFactor. d_planar stays the projected Taubin ratio in
+// both modes: the exact orthogonal distance to the plane's CROSS-SECTION is a
+// second root-find on a 2D conic whose axes depend on the plane normal, so its
+// derivative w.r.t. n_pull -- which this factor carries live, not frozen -- is a
+// different derivation rather than a reuse of the 3D one. In exact mode the blend
+// therefore mixes a metre with a first-order metre; they agree to first order at
+// the surface, which is where the contact equality lives, and the blend already
+// mixes two different distances (3D and in-plane) in either mode.
 //
 // Since ||P grad f|| <= ||grad f||, d_planar >= d_geom always. That inequality is
 // exactly why Eq 12's COLLISION must keep the full 3D distance and is never
@@ -122,8 +136,7 @@ public:
 private:
     double radius_;
     double beta_;
-    std::vector<gtsam::Vector3> m_diag_;      // per-k (1/a^2, 1/b^2, 1/c^2)
-    std::vector<gtsam::Vector3> minv_diag_;   // per-k (a^2, b^2, c^2), for rho
+    std::vector<EllipsoidDistance> metric_;   // per-k signed distance field
     std::vector<gtsam::Matrix3> Rk_T_;        // per-k R_k^T, precomputed
     std::vector<gtsam::Vector3> tk_;          // per-k t_k
     gtsam::Point3 base_local_;                // p_base,     WRIST frame
@@ -142,7 +155,8 @@ public:
                                 const gtsam::Point3& centroid_local,
                                 const gtsam::SharedNoiseModel& noise_model,
                                 double rho_lo = 0.90, double rho_hi = 1.00,
-                                double gap_lo = 0.002, double gap_hi = 0.010)
+                                double gap_lo = 0.002, double gap_hi = 0.010,
+                                bool taubin = false)
         : NoiseModelFactorN(noise_model, node_pose_key, object_key, wrist_key),
           radius_(radius), beta_(beta),
           base_local_(base_local), centroid_local_(centroid_local),
@@ -171,8 +185,7 @@ public:
                 "EllipsoidSetPlanarGapFactor: base_local and centroid_local coincide, "
                 "so Eq 11 has no plane axis");
 
-        m_diag_.reserve(ellipsoids.size());
-        minv_diag_.reserve(ellipsoids.size());
+        metric_.reserve(ellipsoids.size());
         Rk_T_.reserve(ellipsoids.size());
         tk_.reserve(ellipsoids.size());
         for (size_t k = 0; k < ellipsoids.size(); ++k) {
@@ -181,10 +194,7 @@ public:
                 throw std::invalid_argument(
                     "EllipsoidSetPlanarGapFactor: ellipsoid " + std::to_string(k) +
                     " has a non-positive semi-axis");
-            m_diag_.emplace_back(1.0 / (a.x() * a.x()),
-                                 1.0 / (a.y() * a.y()),
-                                 1.0 / (a.z() * a.z()));
-            minv_diag_.emplace_back(a.x() * a.x(), a.y() * a.y(), a.z() * a.z());
+            metric_.emplace_back(a, taubin);
             Rk_T_.push_back(ellipsoids[k].local_pose.rotation().matrix().transpose());
             tk_.push_back(ellipsoids[k].local_pose.translation());
         }
@@ -243,7 +253,7 @@ public:
             need_jac ? &D_nobj_R    : nullptr,
             need_jac ? &D_nobj_nhat : nullptr);
 
-        const size_t K = m_diag_.size();
+        const size_t K = metric_.size();
         std::vector<double> d(K);
         std::vector<gtsam::Matrix13> dd_dpobj(need_jac ? K : 0);
         std::vector<gtsam::Matrix13> dd_dnobj(need_jac ? K : 0);
@@ -258,16 +268,21 @@ public:
 
         double d_min = std::numeric_limits<double>::infinity();
         for (size_t k = 0; k < K; ++k) {
+            const gtsam::Vector3& m_diag    = metric_[k].m_diag();
+            const gtsam::Vector3& minv_diag = metric_[k].minv_diag();
+
             const gtsam::Vector3 x  = Rk_T_[k] * (p_obj - tk_[k]);   // x_k
             const gtsam::Vector3 nk = Rk_T_[k] * n_obj;              // plane normal, member frame
-            const gtsam::Vector3 Mx = m_diag_[k].cwiseProduct(x);
+            const gtsam::Vector3 Mx = m_diag.cwiseProduct(x);
 
             const double f  = x.dot(Mx) - 1.0;
-            double g3 = Mx.norm();
-            if (g3 < 1e-9) g3 = 1e-9;
-            const double d3 = f / (2.0 * g3);                        // Eq 9, unchanged
 
-            // In-plane: the same ratio with the gradient projected into the plane.
+            // Eq 9, through the shared metric: exact orthogonal, or Taubin.
+            gtsam::Matrix13 dd3_dx;
+            const double d3 = metric_[k].signed_distance(
+                x, need_jac ? &dd3_dx : nullptr);
+
+            // In-plane: the Taubin ratio with the gradient projected into the plane.
             const double sn = nk.dot(Mx);
             const gtsam::Vector3 q = Mx - sn * nk;                   // P M x
             double gP = q.norm();
@@ -276,7 +291,7 @@ public:
 
             // Support test: does the plane reach this member at all?
             const double s = nk.dot(x);
-            const gtsam::Vector3 Minv_nk = minv_diag_[k].cwiseProduct(nk);
+            const gtsam::Vector3 Minv_nk = minv_diag.cwiseProduct(nk);
             double den = std::sqrt(nk.dot(Minv_nk));
             if (den < 1e-12) den = 1e-12;
             const double rho = std::abs(s) / den;
@@ -299,13 +314,10 @@ public:
             }
 
             if (need_jac) {
-                // d/dx of both distances. They share a form: replace ||M x|| by the
-                // projected ||q||, and M(Mx) by M q.
-                const gtsam::Vector3 mMx = m_diag_[k].cwiseProduct(Mx);
-                const gtsam::Vector3 mq  = m_diag_[k].cwiseProduct(q);
-                const gtsam::Matrix13 dd3_dx =
-                      (Mx.transpose() / g3)
-                    - (f / (2.0 * g3 * g3 * g3)) * mMx.transpose();
+                // d d_planar / dx. dd3_dx came back from the metric above; this is
+                // the same Taubin form with ||M x|| replaced by the projected ||q||
+                // and M(M x) by M q.
+                const gtsam::Vector3 mq = m_diag.cwiseProduct(q);
                 const gtsam::Matrix13 ddP_dx =
                       (Mx.transpose() / gP)
                     - (f / (2.0 * gP * gP * gP)) * mq.transpose();

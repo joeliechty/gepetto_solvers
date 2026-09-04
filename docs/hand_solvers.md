@@ -394,11 +394,11 @@ wrapped in a constraint class that hands it to the AL optimizer.
 | Factor | Residual | Variables | Paper |
 |---|---|---|---|
 | `SdfWitnessContactFactor` | `[c_R, c_O, c_N, c_T1, c_T2]` (or 4 without `c_N`) | `T`, `O`, `Y` | Eq 1.27–1.31 |
-| `EllipsoidWitnessContactFactor` | same, `c_O` = Taubin distance to `xᵀMx=1` | `T`, `O`, `Y` | Eq 1.89–1.90 |
+| `EllipsoidWitnessContactFactor` | same, `c_O` = signed distance to `xᵀMx=1` | `T`, `O`, `Y` | Eq 1.89–1.90 |
 | `PlaneWitnessContactFactor` | same, against a constant half-space | `T`, `U` | Eq 1.60–1.64 |
 | `SphereSphereContactFactor` / `SphereWitnessContactFactor` | analytic sphere–sphere (1- and 5-residual) | `T`, `O`(,`Y`) | §1.3 cross-check |
 | `SdfCollisionGapFactor` | `r − SDF(T_obj⁻¹ p)` | `T`, `O` | Eq 1.57 |
-| `EllipsoidCollisionGapFactor` | `r − Taubin(x)` | `T`, `O` | Eq 1.91 |
+| `EllipsoidCollisionGapFactor` | `r − d(x)` | `T`, `O` | Eq 1.91 |
 | `PlaneCollisionGapFactor` | `r − (p − p_table)·n̂` | `T` | Eq 1.59 |
 | `SphereSphereCollisionGapFactor` | `(r_i + r_j) − ‖p_i − p_j‖` | `T`, `T` | Eq 1.58 |
 | `HalfSpaceGapFactor` | `−(c − p_split)·m̂ + d_min`, **constant Jacobian** | `T` | Eq 1.99 |
@@ -423,12 +423,22 @@ Two implementation details you will trip over if you don't know them:
    and their derivative contribution is dropped — the standard
    locally-constant-gradient contact convention. Same for the surface normal in
    the `c_N` row.
-2. **The ellipsoid `c_O` row uses Taubin's first-order distance, not the raw
-   algebraic `xᵀMx − 1`.** Both have the identical zero set, but the raw form's
-   residual and gradient scale as ~1/min(semi_axis)² — ~40× the Euclidean
-   distance on a 5 cm sphere and ~10⁶× along a coin's thin axis. Under a shared
-   unit noise model the raw row swamps every other row and the AL inner solve
-   stagnates.
+2. **Every ellipsoid row measures with a real signed distance, not the raw
+   algebraic `xᵀMx − 1`.** All three forms have the identical zero set, but the
+   raw one's residual and gradient scale as ~1/min(semi_axis)² — ~40× the
+   Euclidean distance on a 5 cm sphere and ~10⁶× along a coin's thin axis. Under
+   a shared unit noise model that row swamps every other row and the AL inner
+   solve stagnates.
+
+   *Which* distance is
+   [`EllipsoidDistance`](../include/gepetto_solvers/environment/EllipsoidDistance.h),
+   switched by `EnvironmentConfig::ellipsoid_taubin`
+   (`HandSolveParams.ellipsoid_taubin`): **exact orthogonal by default**, whose
+   gradient is the unit surface normal at every eccentricity, or Taubin's
+   first-order approximation, whose gradient norm drifts (0.82 on a 150:1 coin,
+   0.56 at 200:1) and which reports a 45 mm penetration on a 50 mm ball as
+   247 mm. See [formulation_vs_code.md
+   §12](formulation_vs_code.md#12-the-ellipsoid-distance-is-orthogonal-not-algebraic).
 
 ### `EnvironmentConfig` — the routing table
 
@@ -439,6 +449,7 @@ exactly the pre-existing graph.
 | Field | Turns on | Paper |
 |---|---|---|
 | `sdf_grid` / `ellipsoid_semi_axes` | which object surface the factors evaluate | §1.3 / §1.6.3 |
+| `ellipsoid_taubin` | the ellipsoid **metric** — exact orthogonal distance (default) or Taubin's first-order one | Eq 1.91 |
 | `object_pose_mean` / `_cov` | the `O` prior (1e-8 = rigidly pinned) | — |
 | `object_pose_per_step` | one `O` per trajectory step instead of one shared | — |
 | `target_contact_node`, `contact_node_radius` | terminal contact equality (witness for an SDF, center-direct for an ellipsoid) | Eq 1.35–1.39 |

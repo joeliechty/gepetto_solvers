@@ -134,6 +134,7 @@ void bind_digits_tendon(py::module& m) {
         .def_readwrite("ellipsoid_semi_axes", &gepetto_solvers::EnvironmentConfig::ellipsoid_semi_axes)
         .def_readwrite("ellipsoid_set",       &gepetto_solvers::EnvironmentConfig::ellipsoid_set)
         .def_readwrite("ellipsoid_set_beta",  &gepetto_solvers::EnvironmentConfig::ellipsoid_set_beta)
+        .def_readwrite("ellipsoid_taubin",    &gepetto_solvers::EnvironmentConfig::ellipsoid_taubin)
         .def_readwrite("contact_ellipsoid_subset",
                        &gepetto_solvers::EnvironmentConfig::contact_ellipsoid_subset)
         // --- Tendon-aligned in-plane object contact (Eq 11 / Eq 13) ---
@@ -217,6 +218,32 @@ void bind_digits_tendon(py::module& m) {
             }
         }, py::arg("path"));
 
+    // The signed distance from a point to one ellipsoid, in the ellipsoid's own
+    // frame, plus its gradient -- the exact quantity every ellipsoid factor
+    // measures with, exposed on its own.
+    //
+    // Same reason ellipsoid_set_planar_gap is exposed: this is the single
+    // definition of the geometry, so a test or a plot that wants to check the
+    // metric asks the metric rather than re-deriving it in numpy and then
+    // arguing with the solver about which one is right.
+    m.def("ellipsoid_distance",
+        [](const gtsam::Vector3& point, const gtsam::Vector3& semi_axes,
+           bool taubin) {
+            const gepetto_solvers::EllipsoidDistance metric(semi_axes, taubin);
+            gtsam::Matrix13 H;
+            const double d = metric.signed_distance(point, &H);
+            py::dict out;
+            out["distance"] = d;                 // signed: negative inside
+            out["gradient"] = gtsam::Vector3(H.transpose());
+            return out;
+        },
+        py::arg("point"), py::arg("semi_axes"), py::arg("taubin") = false,
+        "Signed distance (negative inside) from `point` to the surface of the "
+        "ellipsoid with the given semi-axes, both in the ellipsoid's own frame, "
+        "and its analytic gradient. taubin=False is the exact orthogonal "
+        "distance, whose gradient is the unit surface normal; taubin=True is the "
+        "first-order algebraic approximation.");
+
     // Evaluate the tendon-aligned planar distance (Eq 11 / Eq 13) at one state.
     //
     // A free function rather than a bound factor class: gtsam::Pose3 and the factor
@@ -234,11 +261,12 @@ void bind_digits_tendon(py::module& m) {
            const std::vector<gepetto_solvers::EllipsoidPrimitive>& ellipsoids,
            double beta, const gtsam::Vector3& base_local,
            const gtsam::Vector3& centroid_local,
-           double rho_lo, double rho_hi, double gap_lo, double gap_hi) {
+           double rho_lo, double rho_hi, double gap_lo, double gap_hi,
+           bool taubin) {
             gepetto_solvers::EllipsoidSetPlanarGapFactor factor(
                 0, 1, 2, radius, ellipsoids, beta, base_local, centroid_local,
                 gtsam::noiseModel::Isotropic::Sigma(1, 1.0),
-                rho_lo, rho_hi, gap_lo, gap_hi);
+                rho_lo, rho_hi, gap_lo, gap_hi, taubin);
             const auto r = factor.report(gtsam::Pose3(tip_pose),
                                          gtsam::Pose3(object_pose),
                                          gtsam::Pose3(wrist_pose));
@@ -260,8 +288,10 @@ void bind_digits_tendon(py::module& m) {
         py::arg("base_local"), py::arg("centroid_local"),
         py::arg("rho_lo") = 0.90, py::arg("rho_hi") = 1.00,
         py::arg("gap_lo") = 0.002, py::arg("gap_hi") = 0.010,
+        py::arg("taubin") = false,
         "In-plane (Eq 11 pulling-plane) distance from a fingertip to an ellipsoid "
         "set, with the per-member breakdown. Falls back to the 3D distance where "
-        "the plane misses a member or is degenerate.");
+        "the plane misses a member or is degenerate. `taubin` must match the env's "
+        "ellipsoid_taubin, or the overlay draws a distance the solve never used.");
 
 }

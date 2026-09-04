@@ -133,6 +133,16 @@ class HandSolveParams:
     # constraint surface sits up to ln(K)/beta outside the true union. Inert for
     # every other primitive type.
     ellipsoid_set_beta: float | None = None
+    # Measure ellipsoid distance with Taubin's first-order algebraic
+    # approximation instead of the exact orthogonal distance to the surface.
+    # False (the default) is exact: its gradient is the unit surface normal, so
+    # the Jacobian rows are conditioned the same at every eccentricity, which is
+    # what lets a flat or coin-like object be resolved at the same AL step size
+    # as a sphere. True is what every result before this flag existed was
+    # produced with. Both share the same zero set exactly, so the surface the
+    # constraints pin to does not move -- only the field off it does. Inert for
+    # every non-ellipsoid surface. See ``EnvironmentConfig::ellipsoid_taubin``.
+    ellipsoid_taubin: bool = False
     # Send the fingertips only to the shells a `ycb:` fit names as grasp targets
     # (its `grasp_subset`), rather than to the nearest point of the whole union.
     # A decomposition is not all handles: on the power drill 5 of 6 shells are
