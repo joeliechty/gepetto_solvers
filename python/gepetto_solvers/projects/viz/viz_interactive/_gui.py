@@ -51,7 +51,8 @@ class GuiMixin:
         limits = self._joint_limits()
         self.g_joints = []
         for d, name in enumerate(self.digit_names):
-            with gui.add_folder(name, expand_by_default=(d == 0)):
+            with gui.add_folder(name, expand_by_default=False):
+            # with gui.add_folder(name, expand_by_default=(d == 0)):
                 row = []
                 for j, label in enumerate(self.hand.actuation.names):
                     lo, hi = limits[d][j]

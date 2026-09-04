@@ -16,6 +16,7 @@ from ..environment import (
 from ..geometry.scene import (
     GRASP_SPHERE_CENTER,
     OBJECT_CENTER,
+    TABLE_ANCHOR,
     get_primitive_specs,
     object_extent_along,
     object_principal_inplane_axis,
@@ -56,13 +57,25 @@ def auto_table_origin(params, spec, object_center):
     ``params.plane_normal`` at a burial fraction of ``params.table_burial``.
 
     ``table_burial`` is the fraction of the object's FULL along-normal extent
-    lying below the plane, so the origin is
+    lying below the plane, so the origin is, ALONG THE NORMAL,
 
-        c - (1 - 2 * burial) * half_extent * n_hat
+        n . c - (1 - 2 * burial) * half_extent
 
     which is tangent to the underside at 0.0 (the object rests on the table) and
     through the centroid at 0.5 (half-buried). See
     :attr:`HandSolveParams.table_burial` for why half-buried is the default.
+
+    ONLY the along-normal component is seated from the object. The in-plane
+    position comes from :data:`scene.TABLE_ANCHOR`, because a plane is defined by
+    its normal and its height and the rest of the origin is purely where the
+    RENDERED square is put -- and the square is a fixed physical landmark, the
+    bench that the slab, its corner frame, the calibration grid and the robot
+    registration (``lbr_workspace_table_link``) are all measured from. Taking the
+    whole object centre, as this used to, dragged that landmark sideways with
+    every x/y nudge of the object: sliding an object ACROSS a table is exactly
+    the motion that must leave the table alone. The solver is unaffected either
+    way -- its half-space is ``(p - origin) . n``, which the in-plane part of the
+    origin does not enter.
 
     Deliberately ignores ``params.plane_origin``. A GUI offering an ABSOLUTE
     plane height has to seed and re-seat its control from the scene's own answer;
@@ -81,7 +94,12 @@ def auto_table_origin(params, spec, object_center):
     rotation = (params.object_rotation if params.object_rotation is not None
                 else spec.get("rotation"))
     depth = (1.0 - 2.0 * burial) * object_extent_along(spec, n, rotation)
-    return np.asarray(object_center, float) - depth * n
+    center = np.asarray(object_center, float).reshape(3)
+    anchor = np.asarray(TABLE_ANCHOR, float).reshape(3)
+    # Height from the object, in-plane position from the anchor: drop the
+    # anchor's own along-normal component and add the seated one back.
+    height = float(n @ center) - depth
+    return anchor - float(n @ anchor) * n + height * n
 
 
 def resolve_table_origin(params, spec, object_center):

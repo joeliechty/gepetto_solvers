@@ -7,6 +7,8 @@ inside the table.
 
 import numpy as np
 
+from .constants import GRASP_SPHERE_CENTER
+
 # Default outward normal of the Section 1.6 support plane ("table"): world +Z.
 # The slide-and-grasp script places the plane tangent to the object's underside
 # (origin = object_center - radius * TABLE_NORMAL) so the object rests on it and
@@ -21,9 +23,23 @@ TABLE_NORMAL = [0.0, 0.0, 1.0]
 # length is a number to be measured against, so it has to be stated once, be the
 # same everywhere, and be reportable to the user.
 #
-# Constant regardless of what object is on it: the plane's POSITION is seated
-# from the object (see solvers.auto_table_origin), its size never is.
+# Constant regardless of what object is on it: the plane's HEIGHT is seated
+# from the object (see solvers.auto_table_origin), its size and its in-plane
+# position (TABLE_ANCHOR below) never are.
 TABLE_SPAN = 0.4          # m, edge of the square slab
+
+
+# Where the slab sits WITHIN its own plane. The table is a fixed physical
+# landmark -- the bench the robot, the URDF's workspace table and the calibration
+# grid are all registered against -- so only its height follows the object, which
+# is what makes an object rest ON it. Sliding an object across the table must
+# leave the table where it is; seating the in-plane position from the object too
+# (as this used to, by taking the whole object centre) drags the slab, its corner
+# frame, its grid and the robot registration along with every x/y nudge of the
+# object-pose sliders. Only the components perpendicular to the plane normal are
+# read, so the height here is ignored. Anchored on the grasp scene's nominal
+# object location so the square is centred under the objects posed on it.
+TABLE_ANCHOR = np.array(GRASP_SPHERE_CENTER, dtype=float)
 
 
 TABLE_THICKNESS = 0.005   # m, thickness along the plane normal

@@ -62,6 +62,7 @@ from .polyhedra import (
 from .primitives import get_primitive_specs, ycb_primitive_specs
 from .surface import primitive_surface_gap, primitive_surface_witness
 from .table import (
+    TABLE_ANCHOR,
     TABLE_NORMAL,
     TABLE_SPAN,
     TABLE_THICKNESS,
@@ -107,6 +108,7 @@ __all__ = [
     "subset_spec",
     # table
     "TABLE_NORMAL",
+    "TABLE_ANCHOR",
     "TABLE_SPAN",
     "TABLE_THICKNESS",
     "table_corner",
