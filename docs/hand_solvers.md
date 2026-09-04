@@ -650,13 +650,46 @@ takes to warm-start a solve from a real posture instead of a straight hand.
 
 **Independent readouts.** Every constraint family has a module-level function
 that recomputes its residual from the *solved poses* rather than reading the
-solver's own number, which is what makes a stall diagnosable: `plane_witness()`
-and `free_sphere_plane_witness()` (table), `half_space_witness()`,
-`pregrasp_center_witness()`, `pregrasp_centroid_witness()`,
-`pregrasp_axis_witness()`, and `tip_gap_matrix()` (all-pairs fingertip
-separation). `orient_opposition_axis()` is the one that is *not* a readout — see
+solver's own number, which is what makes a stall diagnosable:
+
+| readout | constraint | measures |
+| --- | --- | --- |
+| `HandResult.contact_witness()` | `h_contact` | fingertip → object surface |
+| `plane_witness()` | `h_contact` (plane) | fingertip → support plane |
+| `object_collision_witness()` | `h_pen` | every *free* sphere → object surface |
+| `free_sphere_plane_witness()` | `h_pen` (plane) | every free sphere → support plane |
+| `self_collision_witness()` | finger–finger `h_pen` | cross-digit sphere pairs, windowed to those near touching |
+| `half_space_witness()` | `c_half` | signed margin from the opposition split |
+| `pregrasp_center_witness()` / `pregrasp_centroid_witness()` / `pregrasp_axis_witness()` | pre-grasp | achieved vs. target point, and the short-axis angle |
+| `planar_gap_witness()` | Eq 11/13 | in-plane distance, straight from the C++ factor |
+| `ellipsoid_metric_witness()` | — | the exact **and** Taubin ellipsoid distances side by side |
+| `grasp_wrench_witness()` | `h_grasp` | the net virtual wrench, **and** the per-contact `p_i` / `n_i` it sums |
+| `tip_gap_matrix()` | — | all-pairs fingertip separation |
+
+`ellipsoid_metric_witness()` is the one with no constraint of its own: it exists
+because `ellipsoid_taubin` is a metric *choice*, and the two metrics agree near
+the surface and diverge in the far field, so the only way to see what the flag
+costs is to read both at once. On the flat `credit_card` (0.4 mm semi-axis) a
+true **+33.7 mm** gap reads **−3.8 mm** under Taubin — the approximation puts
+the fingertip *inside* an object it is 34 mm away from, which is the
+ill-conditioning the exact (Eberly) metric was adopted to fix.
+
+`grasp_wrench_witness()` returns the terms as well as the sum for the same
+reason a residual alone cannot be drawn: a balanced grasp and a grasp nobody
+measured both report zero. And it reports the **raw** wrench, not the AL
+violation, which is whitened and so divides by `1/sigma_grasp_*` without a
+fingertip moving.
+
+`orient_opposition_axis()` is the one that is *not* a readout — see
 the opposition-sign note under `core.hand.config` above; every caller of
 `default_half_space_axis()` must pass its result through it.
+
+**These are what the workbench's *Display → Constraint distances* folder draws**,
+one checkbox per family. Every one of those boxes is independent of whether the
+constraint it measures is in the graph, deliberately: the number a collision
+inequality would report is most worth reading while collision is *off*, since
+that is what says what switching it on would cost. `Display → distance overlays`
+is the master switch over the whole group.
 
 **Phase presets.** `PhasePreset` / `PHASE_PRESETS` / `apply_phase_preset(params,
 name)` are the named `HandSolveParams` override groups for the staged pipeline:

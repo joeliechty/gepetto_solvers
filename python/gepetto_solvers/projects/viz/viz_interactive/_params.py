@@ -256,6 +256,18 @@ class ParamsSyncMixin:
         self.scene.show_gap_lines = self.g_show_gaps.value
         self.scene.show_finger_planes = _shown(self.g_show_finger_planes)
         self.scene.show_planar_gap = _shown(self.g_show_planar_gap)
+        # The per-family distance switches, copied across by the field name the
+        # box was built under. Keyed rather than listed so adding a family is one
+        # box in _build_distance_folder and one field on DistanceOverlays, with
+        # nothing to keep in sync here.
+        #
+        # DELIBERATELY NOT touched by anything above: every constraint switch in
+        # this method writes `p.<constraint>`, and none of them writes a display
+        # flag. That separation is the whole point -- an overlay must stay
+        # readable with its constraint off, which is when the number it reports
+        # is most worth having.
+        for field, handle in self.g_distances.items():
+            setattr(self.scene.distances, field, bool(handle.value))
 
 
     def _reset_defaults(self, _=None):

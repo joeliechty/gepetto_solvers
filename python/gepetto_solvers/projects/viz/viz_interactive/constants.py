@@ -215,3 +215,14 @@ _CAL_RIGID_TOL_MM = 0.1
 
 
 _CAL_ARTICULATED_MIN_MM = 1.0
+
+
+# How near two collision spheres on DIFFERENT digits have to be for the
+# finger-finger clearance overlay to draw their pair.
+#
+# A display window, not a constraint: the pair count is quadratic (five digits of
+# four spheres is 160 pairs), and a line drawn between two spheres a hand-width
+# apart says nothing about whether they are about to collide. 20 mm is a few tip
+# radii -- wide enough that a pair closing on each other appears before it
+# matters, narrow enough that an open hand draws almost nothing.
+SELF_PAIR_WINDOW_M = 0.02

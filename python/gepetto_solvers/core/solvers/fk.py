@@ -174,6 +174,14 @@ class HandFKSolver(HandSolverBase):
         return frame, sol
 
     def solve(self) -> HandResult:
+        # The object can have MOVED since this solver was built -- the workbench
+        # keeps one FK solver alive across object-pose edits so drags warm-start
+        # -- and every readout taken off the result measures against the pose
+        # stamped on it. Nothing here is built against the object (FK is pure
+        # kinematics, no contact), so re-reading it costs nothing and is the
+        # difference between a gap line that follows the object and one that
+        # keeps measuring to where it used to be.
+        self.refresh_scene()
         T = np.asarray(self.params.wrist_pose, float)
         if self._warm_start_holds(T):
             self._solver.set_wrist_pose(T)   # re-aim the prior; keep the posture

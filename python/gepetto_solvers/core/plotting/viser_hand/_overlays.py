@@ -11,14 +11,21 @@ import trimesh
 from ._geometry import _recenter, _wxyz_from_R
 from .palette import (
     _CENTER_TARGET_RGB,
+    _CLEAR_RGB,
     _DISC_RGB,
     _GAP_FAR_RGB,
     _GAP_NEAR_RGB,
     _MARGIN_OK_RGB,
     _MARGIN_VIOLATED_RGB,
+    _PENETRATING_RGB,
+    _SELF_PAIR_RGB,
+    _TAUBIN_RGB,
     _TENDON_RGB,
+    _WRENCH_ARM_RGB,
+    _WRENCH_FORCE_RGB,
     ANGLE_GREEN_MAX_DEG,
     GAP_GREEN_MAX_M,
+    GRASP_WRENCH_GREEN_MAX,
 )
 
 #: Link-mesh shading. Light and translucent on purpose: the meshes are scenery,
@@ -519,4 +526,220 @@ class OverlayMixin:
             n = f"/hand/mesh/{i}"
             self._dynamic[n] = self.scene.add_mesh_trimesh(n, placed)
             keep.add(n)
+        return keep
+
+
+    # -- constraint distances ---------------------------------------------
+    #
+    # One method per constraint FAMILY, each drawn under its own scene path and
+    # switched on its own flag (see toggles.DistanceOverlays). None of them
+    # consult whether the constraint is in the factor graph: the number a
+    # collision inequality WOULD see is exactly what you want while collision is
+    # off, and gating the picture on the solve makes that impossible to look at.
+
+    def _update_clearance(self, key, sphere_pt, surface_pt, gap, kind):
+        """One collision sphere's clearance from a surface: a line to the nearest
+        point on it and the signed gap in mm.
+
+        Coloured by SIGN, like the half-space overlay and unlike the contact gap
+        lines: ``h_pen`` is satisfied exactly while ``gap >= 0``, so 1 mm of
+        clearance and 1 mm of penetration are opposite verdicts. Colouring them
+        both "near", as ``GAP_GREEN_MAX_M`` would, hides the only thing this
+        overlay exists to show.
+
+        ``key`` is ``"{finger}/{node}"`` from the witness, which nests straight
+        into the scene path so a sphere's line lives under its own finger.
+        ``kind`` namespaces the surface, so the same sphere's object clearance
+        and table clearance are two overlays rather than one overwriting the
+        other.
+        """
+        p0 = np.asarray(sphere_pt, float).reshape(3)
+        p1 = np.asarray(surface_pt, float).reshape(3)
+        rgb = _CLEAR_RGB if gap >= 0.0 else _PENETRATING_RGB
+
+        ln = f"/clearance/{kind}/{key}/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb, line_width=2.0)
+
+        lb = f"/clearance/{kind}/{key}/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, f"{gap * 1000.0:+.1f} mm", position=tuple(0.5 * (p0 + p1)),
+            anchor="center-center")
+        return {ln, lb}
+
+
+    def _update_pair_gap(self, key, point_a, point_b, gap):
+        """One finger-finger sphere pair: the segment between the two spheres'
+        facing surface points, and the signed gap.
+
+        Surface points rather than centres on purpose -- a centre-to-centre line
+        passes through both spheres and reads as penetration in every posture,
+        which is precisely the state this overlay has to be able to distinguish.
+
+        Hand-level path (``/self_collision/...``) because the measurement belongs
+        to neither finger: filing it under one of the two would leave it hidden
+        whenever that finger's overlays were the ones switched off.
+        """
+        p0 = np.asarray(point_a, float).reshape(3)
+        p1 = np.asarray(point_b, float).reshape(3)
+        rgb = _SELF_PAIR_RGB if gap >= 0.0 else _PENETRATING_RGB
+
+        ln = f"/self_collision/{key}/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=rgb, line_width=2.0)
+
+        lb = f"/self_collision/{key}/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb, f"{gap * 1000.0:+.1f} mm", position=tuple(0.5 * (p0 + p1)),
+            anchor="center-center")
+        return {ln, lb}
+
+
+    def _update_ellipsoid_metric(self, name, metric):
+        """One fingertip's exact and Taubin distances to an ellipsoid, together.
+
+        Draws the line the TAUBIN number would measure along -- the same segment
+        the exact witness found, since the approximation has no witness point of
+        its own -- and labels both numbers with the difference between them, so
+        the approximation error is a figure on screen rather than something to
+        infer from two overlays.
+
+        The metric the SOLVE was built with is marked. Without it the pair is
+        ambiguous in the worst possible way: the two agree near the surface, so
+        a converged contact looks identical under either setting, and the label
+        would silently stop describing the residual the moment the flag moved.
+
+        Deliberately its own scene path rather than extra text on the contact gap
+        label: that label is the constraint's number, and hanging a second metric
+        off it would make a debugging aid look like part of the readout the solve
+        is judged by.
+        """
+        p0 = np.asarray(metric.sphere_pt, float).reshape(3)
+        p1 = np.asarray(metric.surface_pt, float).reshape(3)
+        keep = set()
+
+        ln = f"/hand/{name}/ellipsoid_metric/line"
+        self._dynamic[ln] = self.scene.add_line_segments(
+            ln, np.stack([p0, p1])[None], colors=_TAUBIN_RGB, line_width=2.0)
+        keep.add(ln)
+
+        mark = {"exact": ("*", ""), "taubin": ("", "*")}[metric.in_use]
+        lb = f"/hand/{name}/ellipsoid_metric/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb,
+            f"exact {metric.exact * 1000.0:+.1f}{mark[0]} / "
+            f"taubin {metric.taubin * 1000.0:+.1f}{mark[1]} mm "
+            f"(d {abs(metric.exact - metric.taubin) * 1000.0:.1f})",
+            # Offset toward the sphere rather than the midpoint: the contact gap
+            # line runs along the same segment and labels its own middle, so two
+            # labels at one point would overprint.
+            position=tuple(p0 + 0.25 * (p1 - p0)), anchor="center-center")
+        keep.add(lb)
+        return keep
+
+
+    def _update_grasp_wrench(self, wrench, object_center, *, arrow=0.03):
+        """The ``h_grasp`` equality, drawn as the arrangement that produces it.
+
+        The residual is a 6-vector summed over the contacts, and a number alone
+        cannot say WHY it is nonzero -- a balanced grasp and a grasp nobody
+        measured both report zero. So what is drawn is the sum's terms:
+
+        * one arrow per contact, from the contact point ``p_i`` along the INWARD
+          normal ``-n_i`` -- the unit virtual force the constraint is written
+          over. All the same length, because they are unit vectors; the grasp is
+          balanced when they point at each other.
+        * a faint moment arm from the object origin ``t_obj`` out to each
+          ``p_i``. This is the half of the torque term that the force arrows do
+          not show: two contacts whose forces cancel perfectly still spin the
+          object when their arms are offset, and that offset is only visible as
+          a drawn arm.
+        * the NET force ``sum(-n_i)`` from the object origin, at ``arrow`` per
+          unit -- so its length against one contact arrow reads directly as
+          "this many contacts' worth of push is left over".
+        * the NET torque, scaled by the longest moment arm so that a unit force
+          acting tangentially at that radius draws one arrow length. Torque is in
+          force-metres and cannot share the force's scale honestly; tying it to
+          the object's own size is what makes the two arrows comparable at a
+          glance instead of one of them always being invisible.
+
+        The two residual arrows are green together when the whole 6-vector is
+        under ``GRASP_WRENCH_GREEN_MAX`` and red otherwise -- one verdict, since
+        the constraint is one equality over both halves.
+        """
+        keep = set()
+        t_obj = np.asarray(object_center, float).reshape(3)
+        points = [np.asarray(p, float).reshape(3) for p in wrench.points]
+        if not points:
+            return keep
+
+        # Per-contact virtual forces: p_i -> p_i - arrow * n_i (inward).
+        shafts = np.stack(
+            [np.stack([p, p - arrow * np.asarray(n, float).reshape(3)])
+             for p, n in zip(points, wrench.normals)])
+        cn = "/grasp_wrench/contacts"
+        self._dynamic[cn] = self.scene.add_arrows(
+            cn, shafts, colors=_WRENCH_FORCE_RGB,
+            shaft_radius=arrow * 0.035, head_radius=arrow * 0.10,
+            head_length=arrow * 0.25)
+        keep.add(cn)
+
+        arms = np.stack([np.stack([t_obj, p]) for p in points])
+        an = "/grasp_wrench/arms"
+        self._dynamic[an] = self.scene.add_line_segments(
+            an, arms, colors=_WRENCH_ARM_RGB, line_width=1.5)
+        keep.add(an)
+
+        on = "/grasp_wrench/origin"
+        self._dynamic[on] = self.scene.add_icosphere(
+            on, radius=arrow * 0.12, color=_WRENCH_ARM_RGB, opacity=0.9,
+            position=tuple(t_obj))
+        keep.add(on)
+
+        rgb = (_GAP_NEAR_RGB if wrench.norm <= GRASP_WRENCH_GREEN_MAX
+               else _GAP_FAR_RGB)
+        # The reference radius for the torque scale: the longest arm actually in
+        # the sum. Falls back to `arrow` for contacts sitting on the origin,
+        # where no radius can be read off the grasp.
+        radius = max((float(np.linalg.norm(p - t_obj)) for p in points),
+                     default=0.0) or arrow
+
+        # Either half can be exactly zero while the other is not -- a radially
+        # symmetric object has every contact normal through its centre, so its
+        # torque term vanishes identically -- so each is drawn and named on its
+        # own. An arrow of zero length renders as a stray cone at the origin,
+        # which reads as an unbalanced contact rather than as none.
+        residuals, tags = [], []
+        for tag, vector, scale in (("force", wrench.force, arrow),
+                                   ("torque", wrench.torque, arrow / radius)):
+            v = np.asarray(vector, float).reshape(3) * scale
+            if np.linalg.norm(v) > 1e-6:
+                residuals.append(np.stack([t_obj, t_obj + v]))
+                tags.append(tag)
+        if residuals:
+            rn = "/grasp_wrench/residual"
+            self._dynamic[rn] = self.scene.add_arrows(
+                rn, np.stack(residuals),
+                colors=np.array([rgb] * len(residuals), dtype=np.uint8),
+                shaft_radius=arrow * 0.06, head_radius=arrow * 0.16,
+                head_length=arrow * 0.30)
+            keep.add(rn)
+            # The two share a colour -- they are halves of one verdict -- and an
+            # origin, so the only thing telling them apart is the tip label.
+            for tag, segment in zip(tags, residuals):
+                tl = f"/grasp_wrench/{tag}_label"
+                self._dynamic[tl] = self.scene.add_label(
+                    tl, tag, position=tuple(segment[1]), anchor="center-center")
+                keep.add(tl)
+
+        lb = "/grasp_wrench/label"
+        self._dynamic[lb] = self.scene.add_label(
+            lb,
+            f"|h_grasp| {wrench.norm:.3f}  "
+            f"(f {np.linalg.norm(wrench.force):.3f}, "
+            f"t {np.linalg.norm(wrench.torque) * 1000.0:.1f} mm) "
+            f"over {len(points)}",
+            position=tuple(t_obj + np.array([0.0, 0.0, 1.4 * arrow])),
+            anchor="center-center")
+        keep.add(lb)
         return keep

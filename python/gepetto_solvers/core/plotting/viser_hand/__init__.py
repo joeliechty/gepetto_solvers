@@ -32,6 +32,7 @@ Layout, split out of what used to be one 1100-line module whose class alone was
 ``_support``     the support plane, its grid, the opposition half-space
 ``_frames``      coordinate-frame triads
 ``_overlays``    per-frame tendons, gaps, discs, constraint witnesses
+``toggles``      which constraint-distance overlays are switched on
 ===============  ======================================================
 
 The four underscore-prefixed modules are mixins of :class:`ViserHandScene`,
@@ -51,11 +52,15 @@ from .palette import (
 from .palette import (
     ANGLE_GREEN_MAX_DEG,
     GAP_GREEN_MAX_M,
+    GRASP_WRENCH_GREEN_MAX,
 )
 from .scene import ViserHandScene
+from .toggles import DistanceOverlays
 
 __all__ = [
     "ANGLE_GREEN_MAX_DEG",
     "GAP_GREEN_MAX_M",
+    "GRASP_WRENCH_GREEN_MAX",
+    "DistanceOverlays",
     "ViserHandScene",
 ]

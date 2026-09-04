@@ -100,17 +100,21 @@ from .scene_resolve import (
 )
 from .stepper import HandIKStepper, StepStatus
 from .witness import (
+    EllipsoidMetric,
     GraspWrench,
     PlanarGap,
+    ellipsoid_metric_witness,
     finger_plane_witness,
     free_sphere_plane_witness,
     grasp_wrench_witness,
     half_space_witness,
+    object_collision_witness,
     planar_gap_witness,
     plane_witness,
     pregrasp_axis_witness,
     pregrasp_center_witness,
     pregrasp_centroid_witness,
+    self_collision_witness,
     tip_gap_matrix,
 )
 
@@ -165,17 +169,21 @@ __all__ = [
     "resolve_scene",
     "resolve_table_origin",
     # witnesses
+    "EllipsoidMetric",
     "GraspWrench",
     "PlanarGap",
+    "ellipsoid_metric_witness",
     "finger_plane_witness",
     "free_sphere_plane_witness",
     "grasp_wrench_witness",
     "half_space_witness",
+    "object_collision_witness",
     "planar_gap_witness",
     "plane_witness",
     "pregrasp_axis_witness",
     "pregrasp_center_witness",
     "pregrasp_centroid_witness",
+    "self_collision_witness",
     "tip_gap_matrix",
     # motion
     "lift_wrist",

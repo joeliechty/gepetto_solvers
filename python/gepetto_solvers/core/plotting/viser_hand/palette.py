@@ -94,3 +94,47 @@ _MARGIN_VIOLATED_RGB = _GAP_FAR_RGB
 # Pre-grasp short-axis alignment overlay: green within ANGLE_GREEN_MAX_DEG of
 # the target axis (either direction), red beyond it.
 ANGLE_GREEN_MAX_DEG = 10.0
+
+
+# Collision-inequality gap overlay: green while the sphere is CLEAR of the
+# surface, red once it is through. A sign rule like the half-space's, not
+# GAP_GREEN_MAX_M's magnitude rule -- the constraint is `d - r >= 0`, so a
+# 1 mm clearance is satisfied and 1 mm of penetration is not, and colouring
+# those two the same because both are "near" would hide the only thing the
+# overlay is for.
+_CLEAR_RGB = (70, 170, 235)
+
+
+_PENETRATING_RGB = _GAP_FAR_RGB
+
+
+# Finger-finger pair gaps. Distinct from _CLEAR_RGB so a pair line reads apart
+# from the object/table lines crossing the same space -- it connects two moving
+# spheres rather than a sphere and a fixed surface.
+_SELF_PAIR_RGB = (200, 120, 235)
+
+
+# The Taubin ellipsoid distance drawn beside the exact one. Neutral on purpose:
+# it is not a pass/fail readout, it is the approximation being held against the
+# metric in use, so a green/red rule would assert a judgement the number does
+# not carry.
+_TAUBIN_RGB = (235, 190, 90)
+
+
+# h_grasp overlay. The per-contact virtual force arrows, the moment arms they
+# act on, and the two halves of the net residual.
+_WRENCH_FORCE_RGB = (60, 190, 220)
+
+
+_WRENCH_ARM_RGB = (150, 150, 160)
+
+
+_WRENCH_TORQUE_RGB = (230, 130, 200)
+
+
+# How small the net wrench has to be for the residual arrows to read as
+# BALANCED. |force| is a sum of unit vectors, so this is in units of "contacts
+# pushing the same way": 0.25 is a quarter of one contact left uncancelled,
+# which on a 3-5 finger grasp is the boundary between an arrangement that
+# surrounds the object and one that pushes it.
+GRASP_WRENCH_GREEN_MAX = 0.25

@@ -75,16 +75,22 @@ class ObjectPanelMixin:
         like changing the object itself. Re-solving with FK keeps the picture
         honest about that rather than leaving a stale IK pose next to a moved
         object.
+
+        IN EITHER MODE, deliberately. A stepped IK result describes the object
+        where it WAS -- its factors were built against that pose, and every
+        distance drawn off it is measured to it -- so re-rendering it beside a
+        moved object draws lines to a position nothing is at, which is exactly
+        the confusion this method exists to prevent. The stepper has just been
+        invalidated, so the IK loop is over regardless; re-solving FK is what
+        "start over" already means and leaves the picture describing the scene
+        that is actually on screen.
         """
         if self._restoring:
             return
         self._sync_params()
         self._refresh_object()
         self._invalidate_stepper()
-        if self.mode == "FK":
-            self._live_fk()
-        else:
-            self._render_frame()
+        self._fk_solve()
 
 
     def _refresh_object_mesh(self, spec, center, rotation):

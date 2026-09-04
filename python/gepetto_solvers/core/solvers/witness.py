@@ -12,6 +12,7 @@ from typing import NamedTuple
 import numpy as np
 
 from ..geometry.scene import (
+    primitive_surface_gap,
     primitive_surface_witness,
     subset_spec,
 )
@@ -27,12 +28,25 @@ from .scene_resolve import (
 
 
 def _sphere_nodes(fm):
-    """``[(node_index, is_tip)]`` for one finger's collision spheres, taken from
-    the marginals rather than the configs -- the same ``disc_pose_idx`` walk the
-    renderer draws, so an overlay can never mark a sphere the picture does not
-    show. The tip is the last rod state, matching ``contact_witness``."""
+    """``[(node_index, is_tip)]`` for one digit's collision spheres, taken from
+    the marginals rather than the configs -- ``collision_sites`` is the same list
+    the renderer walks, so an overlay can never mark a sphere the picture does
+    not show. The tip is the last site, matching ``contact_witness``.
+
+    Off ``DigitState.collision_sites``, which every mechanism fills, rather than
+    off the tendon extras: a rigid digit has no ``tendon_config``, and reaching
+    for one made every witness here tendon-only.
+    """
     tip = len(fm.sites) - 1
-    return [(int(i), int(i) == tip) for i in fm.extras.tendon_config.disc_pose_idx]
+    return [(int(i), int(i) == tip) for i in fm.collision_sites]
+
+
+def _sphere_radius(node_is_tip, tip_radius, collision_radius):
+    """The radius the solve gave one collision sphere: the digit's own tip radius
+    at the contact site, the shared ``collision_radius`` everywhere else. Same
+    rule the graph builds the inequalities with, so a drawn gap is the gap the
+    constraint sees."""
+    return float(tip_radius) if node_is_tip else float(collision_radius)
 
 
 def _plane_measure(center, radius, origin, n_hat):
@@ -103,7 +117,7 @@ def free_sphere_plane_witness(params, result, k=0, names=None):
             if is_tip and name in contact:
                 continue
             c = np.asarray(poses[node].pose.mean, float)[:3, 3]
-            r = float(tip_radius) if is_tip else float(params.collision_radius)
+            r = _sphere_radius(is_tip, tip_radius, params.collision_radius)
             out[f"{name}/{node}"] = _plane_measure(c, r, origin, n_hat)
     return out
 
@@ -542,6 +556,13 @@ class GraspWrench(NamedTuple):
     torque: np.ndarray      # sum of -(p_i - t_obj) x n_i (metres)
     norm: float
     digits: list
+    # The terms the two sums are OF, in ``digits`` order: the contact point p_i
+    # and the OUTWARD unit normal n_i there. Carried because the residual alone
+    # cannot be drawn -- a net wrench of zero looks identical to one nobody
+    # measured, and what makes the constraint readable is the arrangement of the
+    # individual -n_i arrows that cancelled to produce it.
+    points: tuple = ()
+    normals: tuple = ()
 
 
 def grasp_wrench_witness(result, k=0, names=None):
@@ -580,7 +601,7 @@ def grasp_wrench_witness(result, k=0, names=None):
 
     force = np.zeros(3)
     torque = np.zeros(3)
-    used = []
+    used, points, normals = [], [], []
     for name in names:
         if name not in witness:
             continue
@@ -597,7 +618,179 @@ def grasp_wrench_witness(result, k=0, names=None):
         force += -n_hat
         torque += -np.cross(p_i - t_obj, n_hat)
         used.append(name)
+        points.append(p_i)
+        normals.append(n_hat)
 
     return GraspWrench(force, torque,
                        float(np.linalg.norm(np.concatenate([force, torque]))),
-                       used)
+                       used, tuple(points), tuple(normals))
+
+
+def object_collision_witness(params, result, k=0, names=None):
+    """Per free sphere ``{"{finger}/{node}": (sphere_pt, surface_pt, signed_gap)}``
+    against the OBJECT at frame ``k`` -- the ``h_pen`` inequality's own distance.
+
+    The object counterpart of :func:`free_sphere_plane_witness`, and it reports
+    the same three things for the same reason: ``h_pen = (r + eps) - d <= 0`` is
+    satisfied exactly when ``signed_gap = d - r`` clears the margin, so a
+    renderer draws it as a line and a number without knowing which surface it is
+    measuring against.
+
+    Two deliberate choices about WHICH geometry:
+
+    * the FULL spec, never ``contact_subset``. Contact may be narrowed to an
+      object's grasp shells, but collision is not -- every shell is still there
+      to be avoided, and measuring against the narrowed set would report
+      clearance from a housing the sphere is inside of.
+    * the analytic proxy, not the baked SDF, matching what the collision
+      inequalities are built against even when contact has been pointed at the
+      exact form (``object_contact_exact``). That split is the whole point of
+      the two-surface formulation, so the overlay has to keep it.
+
+    ``names`` is the object-contact set whose TIPS are excluded (they carry the
+    equality and are reported by :meth:`HandResult.contact_witness`); defaults to
+    ``result.contact_names()``, and must be the same list the contact overlay
+    used or a fingertip is drawn twice or not at all.
+    """
+    frame = result.frames[k]
+    center = np.asarray(result.object_center, float)
+    R = np.asarray(result.object_rotation, float)
+    contact = set(result.contact_names() if names is None else names)
+
+    out = {}
+    for name, tip_radius in zip(result.finger_names, result.tip_radii):
+        if name not in frame:
+            continue
+        fm = frame[name].marginals
+        poses = fm.sites
+        for node, is_tip in _sphere_nodes(fm):
+            if is_tip and name in contact:
+                continue
+            c = np.asarray(poses[node].pose.mean, float)[:3, 3]
+            r = _sphere_radius(is_tip, tip_radius, params.collision_radius)
+            dist, foot_local, n_local = primitive_surface_witness(
+                R.T @ (c - center), result.spec)
+            surface_pt = center + R @ foot_local
+            out[f"{name}/{node}"] = (c - r * (R @ n_local), surface_pt,
+                                     float(dist) - r)
+    return out
+
+
+def self_collision_witness(params, result, k=0, max_gap=0.02):
+    """Cross-digit sphere pairs at frame ``k``, keyed
+    ``"{finger_a}/{node_a}/{finger_b}/{node_b}"`` and valued
+    ``(point_on_a, point_on_b, signed_gap)``.
+
+    ``signed_gap`` is ``||c_a - c_b|| - (r_a + r_b)`` -- zero when the two
+    spheres just touch, negative once they interpenetrate, which is the zero set
+    of the finger-finger inequality (``params.self_collision``). The two points
+    are on each sphere's SURFACE facing the other, so the drawn segment is the
+    gap itself rather than a centre-to-centre line that would read as
+    penetrating whenever the fingers are merely close.
+
+    SAME-DIGIT pairs are excluded, matching the constraint: consecutive spheres
+    on one finger overlap by construction, and an inequality between them would
+    be violated in every posture the hand can hold.
+
+    ``max_gap`` is a DISPLAY window, not a constraint: the pair count is
+    quadratic (five digits of four spheres is 160 pairs), and a line drawn
+    between two spheres a hand-width apart says nothing. Only pairs at or under
+    it are returned, so what comes back is the set actually near collision. Pass
+    ``None`` for every pair.
+    """
+    frame = result.frames[k]
+
+    spheres = []
+    for name, tip_radius in zip(result.finger_names, result.tip_radii):
+        if name not in frame:
+            continue
+        fm = frame[name].marginals
+        for node, is_tip in _sphere_nodes(fm):
+            spheres.append((
+                name, node,
+                np.asarray(fm.sites[node].pose.mean, float)[:3, 3],
+                _sphere_radius(is_tip, tip_radius, params.collision_radius)))
+
+    out = {}
+    for i, (name_a, node_a, c_a, r_a) in enumerate(spheres):
+        for name_b, node_b, c_b, r_b in spheres[i + 1:]:
+            if name_a == name_b:
+                continue
+            d = c_b - c_a
+            dist = float(np.linalg.norm(d))
+            gap = dist - (r_a + r_b)
+            if max_gap is not None and gap > max_gap:
+                continue
+            # Coincident centres have no direction to put the surface points on;
+            # report the centres themselves rather than dividing by zero.
+            u = d / dist if dist > 1e-12 else np.zeros(3)
+            out[f"{name_a}/{node_a}/{name_b}/{node_b}"] = (
+                c_a + r_a * u, c_b - r_b * u, gap)
+    return out
+
+
+class EllipsoidMetric(NamedTuple):
+    """One fingertip's distance to an ellipsoid object under BOTH metrics.
+
+    ``exact`` is the Eberly orthogonal distance the solver uses by default;
+    ``taubin`` is the first-order gradient-weighted algebraic approximation
+    (``EnvironmentConfig::ellipsoid_taubin``), which the paper reports as
+    ill-conditioned for eccentric shells. Both are surface gaps -- the sphere
+    radius already subtracted -- so each is zero at the contact equality's own
+    zero set and they are directly comparable.
+
+    ``in_use`` says which one the SOLVE was configured with
+    (``params.ellipsoid_taubin``), so the overlay can mark the number the
+    residual was actually built from rather than leaving a reader to guess.
+
+    Drawn side by side because the difference IS the diagnostic: the two agree
+    near the surface and diverge in the far field (a true 15 mm gap from the
+    flat ``coin`` reads ~8 mm under Taubin), and seeing the divergence grow with
+    eccentricity is what the exact metric was adopted for.
+    """
+    sphere_pt: np.ndarray
+    surface_pt: np.ndarray
+    exact: float
+    taubin: float
+    in_use: str
+
+
+def ellipsoid_metric_witness(params, result, k=0, names=None):
+    """Per contact finger ``{name: EllipsoidMetric}`` at frame ``k``, or None when
+    the object has no ellipsoid form.
+
+    None -- rather than a table of identical numbers -- for the sphere, cylinder,
+    capsule and cube primitives: their distances are exact SDFs under either
+    setting, so ``ellipsoid_taubin`` is inert there and a comparison overlay
+    would be two copies of one number claiming to be a measurement.
+
+    Both metrics come from :func:`primitive_surface_gap`, which mirrors
+    ``EllipsoidDistance`` including the ellipsoid SET's LogSumExp smooth min --
+    so the pair reported here is the pair the two builds of the factor would
+    report, not a re-derivation free to drift from either.
+    """
+    if result.spec.get("type") not in ("ellipsoid", "ellipsoid_set"):
+        return None
+
+    frame = result.frames[k]
+    center = np.asarray(result.object_center, float)
+    R = np.asarray(result.object_rotation, float)
+    # The CONTACT surface, narrowed exactly as contact_witness narrows it: this
+    # sits beside the contact gap line and has to be measuring the same shells.
+    spec = subset_spec(result.spec, result.contact_subset)
+    wanted = set(result.contact_names() if names is None else names)
+    in_use = "taubin" if getattr(params, "ellipsoid_taubin", False) else "exact"
+
+    out = {}
+    for name, radius in zip(result.finger_names, result.tip_radii):
+        if name not in wanted or name not in frame:
+            continue
+        tip = frame[name].tip_point()
+        local = R.T @ (tip - center)
+        dist, foot_local, n_local = primitive_surface_witness(local, spec)
+        out[name] = EllipsoidMetric(
+            tip - radius * (R @ n_local), center + R @ foot_local,
+            float(dist) - float(radius),
+            float(primitive_surface_gap(local, spec, taubin=True)) - float(radius),
+            in_use)
+    return out
