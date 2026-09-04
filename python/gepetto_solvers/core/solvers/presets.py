@@ -354,6 +354,12 @@ _ALLEGRO_PINCH = [True, True, False, True]
 
 #: Loose enough for phase 0's repositioning move, tight enough for everything
 #: after it. Same two values the tendon presets use, for the same reasons.
+#:
+#: HEADLESS ONLY, on this hand: the workbench does not write these onto its
+#: wrist sliders (PhaseMixin._standing_preset_fields), because there the phases
+#: are stepped on one scene and the wrist prior is a control the user holds
+#: across all five. A script running one phase from cold has no such control,
+#: so it still gets the per-phase value below.
 _FREE_WRIST = dict(sigma_wrist_pos=1.0, sigma_wrist_rot=1.0)
 _HELD_WRIST = dict(sigma_wrist_pos=0.01, sigma_wrist_rot=0.01)
 
@@ -426,9 +432,9 @@ ALLEGRO_PHASE_PRESETS: dict[str, PhasePreset] = {
         "formulation puts that posture in the priors, so it is the "
         "wrist sliders and the joint sliders that say where the hand is "
         "going, and this phase only guarantees the way there is clear. "
-        "The wrist prior is loose, because this is the one big "
-        "repositioning move in the pipeline. Check this, then press "
-        "Auto solve."),
+        "The wrist prior is yours on this hand: the workbench leaves the "
+        "two sigma sliders exactly where you set them, here and in every "
+        "phase after. Check this, then press Auto solve."),
         # Nothing is CONTACTED in phase 0. The pre-grasp posture is carried
         # entirely by the priors -- the wrist pose and the commanded joint
         # targets -- so all this phase enforces is that getting there does not
@@ -440,7 +446,8 @@ ALLEGRO_PHASE_PRESETS: dict[str, PhasePreset] = {
         contact_drop_normal_row=False,
         # Loose, because this is the one big repositioning move in the pipeline
         # and the wrist has to be free to make it. Every later phase holds the
-        # wrist near where the previous one left it.
+        # wrist near where the previous one left it. Read by headless callers
+        # only -- see _FREE_WRIST.
         **_FREE_WRIST,
     ),
     "phase1": _allegro_phase(
@@ -452,9 +459,9 @@ ALLEGRO_PHASE_PRESETS: dict[str, PhasePreset] = {
         "-- it does not fight the contact, because a sphere carrying "
         "the table contact is exempt from the table inequality, so what "
         "gets built is avoidance for every OTHER sphere, which is what "
-        "the formulation asks for. The wrist prior tightens here and "
-        "stays tight for the rest of the pipeline. Check this, then "
-        "press Auto solve."),
+        "the formulation asks for. The wrist prior is left where you set "
+        "it, as in every phase here. Check this, then press Auto "
+        "solve."),
         object_contact=False,
         object_contact_exact=False,
         # The change from phase 0: the grasp digits are driven down onto the

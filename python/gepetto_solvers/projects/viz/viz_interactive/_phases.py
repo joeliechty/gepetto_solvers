@@ -60,6 +60,27 @@ class PhaseMixin:
         }[field]
 
 
+    def _standing_preset_fields(self):
+        """Preset fields the PANEL refuses to write, beyond ``contact_fingers``.
+
+        The Allegro's phases retune the wrist prior (loose for phase 0's big
+        repositioning move, an order of magnitude tighter for the four contact
+        phases after it), and that is right for a headless run of one phase from
+        cold. It is wrong for the workbench, where the phases are STEPPED on a
+        single scene and the wrist prior is a control the user tunes and then
+        watches across the whole pipeline: having it jump under the cursor on
+        every phase toggle means a hand-picked value survives exactly one click.
+
+        So on this hand the wrist sigmas stay where the sliders were built (-1,
+        see GuiMixin) or dragged. The joint sigma needs no entry: no Allegro
+        preset names a joint or tension sigma, so that slider is already the
+        standing control this makes the wrist ones.
+        """
+        if self.hand.name == "allegro":
+            return ("sigma_wrist_pos", "sigma_wrist_rot")
+        return ()
+
+
     def _apply_phase_preset(self, name):
         """Write ``PHASE_PRESETS[name]``'s overrides directly onto the
         corresponding GUI widgets, so checking the preset box is a single
@@ -89,6 +110,13 @@ class PhaseMixin:
                     # pinch set is unaffected. Headless callers still get the
                     # mask -- solvers.apply_phase_preset writes the field, and
                     # a script has no standing selection to protect.
+                    continue
+                if field in self._standing_preset_fields():
+                    # Same treatment, for the same reason: a hand whose phases
+                    # are meant to be stepped on ONE wrist prior (see that
+                    # method) keeps whatever the sliders say, and the preset's
+                    # own value is ignored HERE only -- solvers.apply_phase_
+                    # preset still writes it for headless callers.
                     continue
                 if field in ("object_contact", "object_contact_in_plane") \
                         and self.g_obj_contact_plane is None:
