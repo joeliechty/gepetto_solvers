@@ -13,6 +13,7 @@ import numpy as np
 
 from ..geometry.scene import (
     primitive_surface_gap,
+    primitive_surface_normal,
     primitive_surface_witness,
     subset_spec,
 )
@@ -619,6 +620,86 @@ def grasp_wrench_witness(result, k=0, names=None):
         torque += -np.cross(p_i - t_obj, n_hat)
         used.append(name)
         points.append(p_i)
+        normals.append(n_hat)
+
+    return GraspWrench(force, torque,
+                       float(np.linalg.norm(np.concatenate([force, torque]))),
+                       used, tuple(points), tuple(normals))
+
+
+def ellipsoid_grasp_wrench_witness(params, result, k=0, names=None):
+    """The net virtual wrench of the contacts at frame ``k`` measured on the
+    sphere CENTERS against the analytic ellipsoid -- h_grasp,E, recomputed rather
+    than read off the solver.
+
+    Same :class:`GraspWrench` shape as :func:`grasp_wrench_witness`, so a
+    renderer draws either one the same way, and the same warning applies: the
+    violation the AL reports is WHITENED and falls as ``1 / sigma_grasp_ell_*``
+    without a fingertip moving. This function is the number to judge the
+    constraint by.
+
+    WHY IT IS NOT :func:`grasp_wrench_witness` WITH A DIFFERENT SURFACE. That one
+    takes its normal from the contact-witness segment -- the direction from the
+    sphere's surface to the object's -- which is a WITNESS-point quantity and
+    degenerates exactly when the two points coincide, i.e. at contact. The
+    constraint this measures has no witness point at all: it is evaluated at the
+    sphere center ``c_i``, where the normal field is perfectly well defined
+    whether the sphere is 10 cm away, touching, or interpenetrating. That is what
+    makes it readable during the approach, which is the phase it exists for.
+
+      force  += -n_i
+      torque += -(c_i - t_obj) x n_i
+
+    The RADIUS IS ABSENT, and not by omission: the virtual force acts at
+    ``p_i = c_i - r_i n_i`` but is collinear with the radius vector, so
+    ``r_i (n_i x n_i) = 0`` drops out of the torque exactly. The contact point
+    and the center give the identical wrench, which is what lets the constraint
+    key off the center. A drawn arrow can therefore be rooted at either; this
+    reports the centers, matching where the factor evaluates.
+
+    Two deliberate choices about WHICH geometry, both matching the C++ factor:
+
+    * the FULL ``result.spec``, never ``contact_subset``. The normal field is a
+      property of the object's shape, not of which shells a finger was cleared to
+      touch -- narrowing it would report a normal pointing into a housing the
+      object really has. Same choice :func:`object_collision_witness` makes.
+    * the analytic proxy, never the baked SDF. Running on the smooth proxy is the
+      whole point of this constraint, so measuring it against the grid would
+      score it on a surface it was never built against.
+
+    The normal here is the central-difference gradient of ``primitive_surface_gap``,
+    which for an ``ellipsoid_set`` is the SAME LogSumExp smooth min the factor
+    blends -- so this agrees with the constraint's own field, including its
+    ``ln(K)/beta`` seam standoff, while still being an independent computation
+    (NumPy differences of the fused distance; C++ softmin-weights the members'
+    analytic gradients). It reads the default EXACT metric, so a solve run under
+    ``ellipsoid_taubin`` will diverge from it in the far field.
+
+    ``names`` overrides which digits are summed; defaults to the object-contact
+    set. It must be the set the constraint was actually built over -- summing an
+    uncommanded finger's nearest-surface direction adds a whole unit vector to a
+    residual whose satisfied value is zero.
+    """
+    names = names if names is not None else result.contact_names()
+    frame = result.frames[k]
+    center = np.asarray(result.object_center, float)
+    R = np.asarray(result.object_rotation, float)
+    t_obj = center
+
+    force = np.zeros(3)
+    torque = np.zeros(3)
+    used, points, normals = [], [], []
+    for name in names:
+        if name not in frame:
+            continue
+        # The contact sphere's CENTER -- the same site the renderer draws the
+        # contact sphere on, and the one whose site pose the factor keys off.
+        c_i = np.asarray(frame[name].tip_point(), float)
+        n_hat = R @ primitive_surface_normal(R.T @ (c_i - center), result.spec)
+        force += -n_hat
+        torque += -np.cross(c_i - t_obj, n_hat)
+        used.append(name)
+        points.append(c_i)
         normals.append(n_hat)
 
     return GraspWrench(force, torque,

@@ -48,6 +48,11 @@ class DistanceOverlays:
     ellipsoid_metric: bool = False
     #: The net virtual wrench of the contacts (``h_grasp``).
     grasp_wrench: bool = False
+    #: The same wrench measured on the sphere CENTERS against the analytic
+    #: ellipsoid (``h_grasp,E``). Independent of the family above, and worth
+    #: having on while that one is off: this is the form defined during the
+    #: approximation, where there is no witness point for the other to read.
+    grasp_wrench_ellipsoid: bool = False
 
     def any_on(self):
         """Whether anything in the group is switched on.

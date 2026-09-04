@@ -60,7 +60,11 @@ from .polyhedra import (
     dodecahedron_vertices,
 )
 from .primitives import get_primitive_specs, ycb_primitive_specs
-from .surface import primitive_surface_gap, primitive_surface_witness
+from .surface import (
+    primitive_surface_gap,
+    primitive_surface_normal,
+    primitive_surface_witness,
+)
 from .table import (
     TABLE_ANCHOR,
     TABLE_NORMAL,
@@ -90,6 +94,7 @@ __all__ = [
     "ycb_primitive_specs",
     # surface
     "primitive_surface_gap",
+    "primitive_surface_normal",
     "primitive_surface_witness",
     # extents
     "INPLANE_DEGENERACY_RATIO",

@@ -408,6 +408,39 @@ struct EnvironmentConfig {
     double grasp_alignment_curvature_step = 0.0;
     double grasp_alignment_gradient_step  = 0.0;
 
+    // --- Approximate geometric grasp alignment (h_grasp,E) ---------------
+    // The APPROXIMATION-PHASE counterpart of the block above, and an independent
+    // constraint rather than a mode of it: same Vector6 virtual-wrench
+    // equilibrium, but keyed off the contact sphere CENTERS and reading the
+    // normal from the analytic ellipsoid set instead of the baked SDF.
+    //
+    //   h_grasp,E({c_i}) = sum_i [ -n_i ; -(c_i - t_obj) x n_i ] = 0
+    //   n_i = R_obj * normalize(grad d_E(T_obj^{-1} c_i))
+    //
+    // grasp_alignment_enabled REFUSES a digit on the center-direct contact form
+    // (it has no witness point to key off). This one IS that form, so it is what
+    // makes the wrench balance available before any exact contact exists -- i.e.
+    // while the hand is still being steered by the smooth ellipsoid proxy. The
+    // sphere radius cancels analytically out of the torque, so no radius and no
+    // witness variable appear anywhere in it. Both flags may be set at once.
+    //
+    // Reads the FULL ellipsoid_set (not contact_ellipsoid_subset): the normal
+    // field is a property of the object's geometry, not of which shells a finger
+    // has been cleared to touch, and blending only the grasp shells would report
+    // a normal that points into a housing the object actually has. Same choice
+    // EllipsoidSetCollisionGapFactor makes. Falls back to ellipsoid_semi_axes as
+    // a single identity-posed member; there is NO fall back to sdf_grid, and
+    // build_graph raises rather than silently substituting one.
+    //
+    // The two sigmas split the residual's halves for the reason the block above
+    // documents. The curvature step defaults (0.0) to 1e-5 m rather than to half
+    // a voxel: this field is a closed form, so the stencil has no interpolation
+    // floor to clear. See the factor's own header.
+    bool   ellipsoid_grasp_alignment_enabled        = false;
+    double ellipsoid_grasp_alignment_sigma_force    = 1.0;
+    double ellipsoid_grasp_alignment_sigma_torque   = 1.0;
+    double ellipsoid_grasp_alignment_curvature_step = 0.0;
+
     // Controller phase 3 (Eq 1.107-1.110): drop the normal-alignment row c_N from
     // the witness contact factor, leaving [c_R, c_O, c_T1, c_T2]. Justified in
     // §1.8: with collision geometry modeled exclusively as spheres, the tangential

@@ -138,3 +138,14 @@ _WRENCH_TORQUE_RGB = (230, 130, 200)
 # which on a 3-5 finger grasp is the boundary between an arrangement that
 # surrounds the object and one that pushes it.
 GRASP_WRENCH_GREEN_MAX = 0.25
+
+
+# h_grasp,E overlay -- the approximation-phase wrench, measured on the sphere
+# CENTERS against the analytic ellipsoid. A DIFFERENT force colour from
+# _WRENCH_FORCE_RGB above and not a shared one, because the two constraints are
+# independent and are routinely drawn at once: on the same posture they root
+# their arrows at different points (surface witness vs. sphere centre) and read
+# different normal fields (baked grid vs. smooth proxy), so a viewer comparing
+# them has to be able to tell which arrow belongs to which. Warm against the
+# sibling's cyan, at the same value so neither reads as the more important one.
+_WRENCH_ELL_FORCE_RGB = (240, 150, 70)

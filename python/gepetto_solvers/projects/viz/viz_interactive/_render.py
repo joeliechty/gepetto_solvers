@@ -11,6 +11,7 @@ import numpy as np
 from gepetto_solvers.core.geometry.scene import TABLE_SPAN, TABLE_THICKNESS
 from gepetto_solvers.core.solvers import (
     R_to_euler,
+    ellipsoid_grasp_wrench_witness,
     ellipsoid_metric_witness,
     finger_plane_witness,
     free_sphere_plane_witness,
@@ -231,6 +232,14 @@ class SceneRenderMixin:
             out["grasp_wrench"] = grasp_wrench_witness(res, 0)
             # The origin the moment arms and the residual are measured about --
             # the constraint's own t_obj.
+            out["object_center"] = res.object_center
+        if (shown.grasp_wrench_ellipsoid
+                and self.caps["grasp_alignment_ellipsoid"]):
+            out["grasp_wrench_ellipsoid"] = ellipsoid_grasp_wrench_witness(
+                self.params, res, 0)
+            # Shares t_obj with the family above -- both are measured about the
+            # object origin, and setting it twice is setting it to the same
+            # thing.
             out["object_center"] = res.object_center
         return out
 

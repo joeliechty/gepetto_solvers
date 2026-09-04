@@ -80,7 +80,7 @@ def main():
                         help="Headless self-check of the solver classes (no viser).")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
-        "--hand", default=None,
+        "--hand", default="allegro",
         help="Which hand to pose, by registry name (default: the registry's "
              "default). Every panel is sized and named off it.")
     args = parser.parse_args()

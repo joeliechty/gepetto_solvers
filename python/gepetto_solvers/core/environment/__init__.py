@@ -23,7 +23,7 @@ participate and which one opposes the rest, are passed in.
 
 from .collision import attach_collision
 from .contact import attach_contact
-from .grasp import attach_grasp_alignment
+from .grasp import attach_ellipsoid_grasp_alignment, attach_grasp_alignment
 from .pregrasp import (
     attach_pregrasp_axis_alignment,
     attach_pregrasp_center,
@@ -39,6 +39,7 @@ from .support import (
 __all__ = [
     "attach_collision",
     "attach_contact",
+    "attach_ellipsoid_grasp_alignment",
     "attach_grasp_alignment",
     "attach_half_space",
     "attach_pregrasp_axis_alignment",

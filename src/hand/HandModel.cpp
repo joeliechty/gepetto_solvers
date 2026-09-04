@@ -71,6 +71,13 @@ HandModel::HandModel(
             (e->half_space_node.has_value() ||
              e->table_contact_node.has_value()))
             has_collision_ = true;
+        // Approximate geometric grasp alignment (h_grasp,E): a ZeroCostConstraint
+        // => AL. Gated on the same pair build_graph() collects on, and it needs
+        // its own clause rather than riding on the SDF sibling's: this one runs
+        // in the approximation phase, where the object contact may be the
+        // center-direct form -- which grasp_alignment_enabled refuses outright.
+        if (e->ellipsoid_grasp_alignment_enabled && e->target_contact_node.has_value())
+            has_contact_ = true;
         // Support plane (Section 1.6). A configured plane (non-zero normal) with
         // a table_contact_node is a hard equality (sliding contact => AL); with
         // plane_avoidance it is a hard inequality (table collision => AL).

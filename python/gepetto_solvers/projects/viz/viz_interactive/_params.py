@@ -155,6 +155,11 @@ class ParamsSyncMixin:
         if self.g_grasp_sigma_force is not None:
             p.sigma_grasp_force = 10.0 ** self.g_grasp_sigma_force.value
             p.sigma_grasp_torque = 10.0 ** self.g_grasp_sigma_torque.value
+        p.grasp_alignment_ellipsoid = (self.g_grasp_align_ell is not None
+                                       and self.g_grasp_align_ell.value)
+        if self.g_grasp_ell_sigma_force is not None:
+            p.sigma_grasp_ell_force = 10.0 ** self.g_grasp_ell_sigma_force.value
+            p.sigma_grasp_ell_torque = 10.0 ** self.g_grasp_ell_sigma_torque.value
         p.table_contact = self.g_tbl_contact.value
         # The row layout of the WITNESS contact factor -- so it is written
         # against the form actually in play (_object_contact_form), never
