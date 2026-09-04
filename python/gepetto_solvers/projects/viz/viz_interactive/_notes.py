@@ -271,6 +271,104 @@ class NotesMixin:
             self._contact_guard = False
 
 
+    def _object_contact_form(self):
+        """``(form, why)`` -- which object-contact FORM the panel currently
+        describes, in the terms ``HandModel::uses_center_direct_contact`` decides
+        it, so the row-layout controls below can be gated on the same answer the
+        solver will reach.
+
+        ``"witness"``        a witness point is optimized against the surface
+                             (the exact baked SDF, or any object with no
+                             analytic ellipsoid form). The 5-row/4-row choice
+                             is exactly a choice of its row layout.
+        ``"ellipsoid"``      a single analytic ellipsoid: contacted center-direct
+                             BY DEFAULT, and the one form where asking for the
+                             row layout opts into the witness factor instead
+                             (``EllipsoidWitnessContactFactor``).
+        ``"center_direct"``  an ellipsoid SET (every ``ycb:`` object) or the
+                             in-plane metric (Eq 13). Neither has a witness form
+                             at all -- Section 1.2 defines only the center-direct
+                             equality Eq 1.13 -- and ``HandModel`` REFUSES
+                             ``contact_drop_normal_row`` alongside them rather
+                             than ignoring it, so a request that gets this far
+                             is a ValueError out of the solver constructor.
+        ``"none"``           no object contact: no form, and the flag is inert.
+        """
+        if self.g_obj_contact_exact is not None and self.g_obj_contact_exact.value:
+            return "witness", ("the exact form drives a witness point onto the "
+                               "baked SDF")
+        if self.g_obj_contact_plane is not None and self.g_obj_contact_plane.value:
+            return "center_direct", ("in-plane contact (Eq 13) constrains the "
+                                     "contact sphere's CENTRE against the "
+                                     "ellipsoid cross-section, so there is no "
+                                     "witness point to lay rows out on")
+        if not self.g_obj_contact.value:
+            return "none", "nothing is driven onto the object"
+        # Through resolve_scene, so the surface is read off the SAME spec the
+        # next solve builds from -- see _planar_contact_available.
+        spec = resolve_scene(self.params)[0]
+        if spec["type"] == "ellipsoid_set":
+            return "center_direct", (
+                f"`{self.params.primitive}` is contacted as an ellipsoid SET, "
+                f"which has only the center-direct equality (Section 1.2, "
+                f"Eq 1.13) and so no witness point to lay rows out on")
+        if spec["type"] == "ellipsoid":
+            return "ellipsoid", ("a single analytic ellipsoid is contacted "
+                                 "center-direct (Eq 1.13) unless the row choice "
+                                 "asks for the witness form")
+        return "witness", (f"a `{spec['type']}` object is contacted through a "
+                           f"witness point on its baked SDF")
+
+
+    def _normal_row_available(self):
+        """``(ok, reason)`` for whether ``contact_drop_normal_row`` can be BUILT
+        for the contact the panel currently describes.
+
+        The sibling of :meth:`_planar_contact_available`, mirroring the refusal
+        in ``HandModel::uses_center_direct_contact`` exactly: the flag selects a
+        row layout of the witness-point contact factor, and the two center-direct
+        forms have no such factor. Everything else can carry it -- on a single
+        ellipsoid it opts INTO the witness form, which is the whole point of
+        offering the box.
+        """
+        form, why = self._object_contact_form()
+        if form == "center_direct":
+            return False, why
+        return True, ""
+
+
+    def _refresh_normal_row_gate(self):
+        """Grey the drop-normal-row box -- and clear it if it was on -- whenever
+        the contact form now selected refuses it.
+
+        The rule :meth:`_refresh_planar_contact_gate` already follows: a ticked
+        box the next solve would REJECT is a lie about what is in the graph, and
+        here the rejection is a ValueError out of the ``HandSolver`` constructor
+        rather than a quiet no-op. A hand with no box has no lie to correct here
+        but the same impossible request to avoid -- ``_sync_params`` derives the
+        flag from the form for it, see there."""
+        if self.g_drop_normal_row is None:
+            return             # the box was never built; nothing to grey
+        ok, _reason = self._normal_row_available()
+        # The build-time gate stays in force: a binding with no
+        # contact_drop_normal_row field can never re-enable the box.
+        self.g_drop_normal_row.disabled = not (ok and self.caps["drop_normal_row"])
+        if not ok and self.g_drop_normal_row.value:
+            self.g_drop_normal_row.value = False
+
+
+    def _normal_row_note(self):
+        """Say why the contact normal row is not in play, when it is not.
+
+        Only for the form that REFUSES it. On a single ellipsoid the flag is a
+        live choice and needs no explanation, and with no object contact there is
+        no form to describe."""
+        form, why = self._object_contact_form()
+        if form != "center_direct":
+            return []
+        return [f"*contact normal row: not in play here -- {why}*"]
+
+
     def _grasp_subset_note(self):
         """The loaded object's shell counts as ``(n_subset, n_members)``, or None
         when there is no choice to describe.
@@ -503,6 +601,7 @@ class NotesMixin:
         lines.extend(self._pinch_note())
         lines.extend(self._finger_plane_note())
         lines.extend(self._planar_contact_note())
+        lines.extend(self._normal_row_note())
         lines.extend(self._planar_gap_note())
         lines.extend(self._object_size_note())
         self._set_status("  \n".join(lines))

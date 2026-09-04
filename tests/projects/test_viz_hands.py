@@ -244,11 +244,61 @@ def test_the_contact_form_is_fixed_without_the_choice(app):
     """No 'drop contact normal row' box means the 4-row [c_R, c_O, c_T1, c_T2]
     witness form is what the formulation DEFINES for sphere-only collision
     geometry -- the tangential rows already force the radius vector collinear
-    with the surface normal -- so the flag is True, not left at a default."""
+    with the surface normal -- so the flag is derived, not left at a default.
+
+    Derived from the FORM, though, never imposed on it: the flag is a row layout
+    of the witness-point contact factor, so it rides on whether a witness point
+    is what this scene builds. Hardcoding True instead made every `ycb:` object
+    unsolvable on a hand with no box to untick (see
+    test_a_ycb_object_solves_with_no_row_choice_to_untick)."""
     app._sync_params()
     if app.has("normal_row_choice"):
         pytest.skip("this hand offers the choice, so the box decides")
-    assert app.params.contact_drop_normal_row is True
+    witness = app._object_contact_form()[0] == "witness"
+    assert app.params.contact_drop_normal_row is witness
+
+
+def test_a_ycb_object_solves_with_no_row_choice_to_untick(app):
+    """THE BUG: object contact on a `ycb:` object -- an ellipsoid SET, which has
+    only the center-direct equality Eq 1.13 -- raised out of the HandSolver
+    constructor, because the panel asked for the witness form's row layout
+    alongside it and HandModel refuses the pair rather than ignoring it.
+
+    Unsolvable rather than merely wrong: the flag was hardcoded True for a hand
+    that offers no box, so nothing on screen could clear it, and every YCB object
+    failed the same way ('solve contact with the table and the banana')."""
+    from gepetto_solvers.core.solvers.stepper import HandIKStepper
+
+    # Through the panel, not around it: the flag is derived in _sync_params and
+    # cleared by the gate, so a test that set params by hand would prove nothing
+    # about either -- and _sync_params re-reads the object off the dropdown, so
+    # it would not even hold. This is the dropdown and the checkbox.
+    app.g_object.value = "ycb:011_banana"
+    app.g_obj_contact.value = True
+    app._sync_params()
+    assert app.params.primitive == "ycb:011_banana"
+    assert app.params.object_contact, "the contact under test has to be ON"
+    assert app.params.contact_drop_normal_row is False
+    HandIKStepper(app.params, app.hand)
+
+
+def test_the_row_choice_is_greyed_where_it_would_be_refused(app):
+    """The box follows _refresh_planar_contact_gate's rule: a ticked box the next
+    solve would REJECT is a lie about what is in the graph, so an object with no
+    witness form greys it and clears it."""
+    if not app.has("normal_row_choice") or not app.caps["drop_normal_row"]:
+        pytest.skip("this hand has no box to grey")
+    app.g_obj_contact.value = True
+    app.g_drop_normal_row.value = True
+    app._refresh_normal_row_gate()
+    assert app.g_drop_normal_row.value is True   # an ellipsoid honors it
+    assert not app.g_drop_normal_row.disabled
+
+    app.g_object.value = "ycb:011_banana"
+    assert app.g_drop_normal_row.disabled
+    assert app.g_drop_normal_row.value is False
+    app._sync_params()
+    assert app.params.contact_drop_normal_row is False
 
 
 def test_the_frame_overlay_matches_what_the_digit_is_made_of(app):
@@ -347,3 +397,93 @@ def test_the_commanded_state_is_reported(app):
         assert "wrist" in content
         for name in app.digit_names:
             assert name in content
+
+
+# ---------------------------------------------------------------------------
+# The trajectory panel, which is sized by the hand
+# ---------------------------------------------------------------------------
+
+def test_the_panel_has_one_row_per_driven_actuator_plus_the_wrist(app):
+    """5 + 6 = 11 rows on the tendon hand, 16 + 6 = 22 on the Allegro.
+
+    Sized off the HAND rather than off a constant, which is what the old
+    ``N_CHANNELS = 11`` could not be: a wider hand's rows would have silently
+    slid the wrist channels along and drawn them on a digit plot.
+    """
+    width = len(app.hand.actuation.drive_indices)
+    digits = len(app.digit_names)
+    assert app.traj.n_digit_channels == digits * width
+    assert app.traj.N_CHANNELS == digits * width + 6
+    assert len(app.traj.plots) == app.traj.N_CHANNELS
+
+
+def test_a_solved_row_fills_every_channel_in_the_panel_s_units(app):
+    """``_traj_row`` is what the panel is fed, so its width has to be the
+    panel's and its digit half has to be in the units the plan commands: tendon
+    LENGTHS in mm, or joint positions in rad."""
+    app._fk_solve()
+    row = app._traj_row(app.result)
+    assert len(row) == app.traj.N_CHANNELS
+    assert np.all(np.isfinite(row))
+
+    digits = app._digit_row(app.result)
+    assert len(digits) == app.traj.n_digit_channels
+    if app.has("displacement"):
+        # Millimetres of tendon length: this hand's are 100-170 mm, and a value
+        # in the 0.1 range would mean metres leaked through.
+        assert min(digits) > 1.0
+    else:
+        # Radians. The opening posture is a pre-grasp, so nothing is near a
+        # revolution; a degrees-vs-radians slip would show up here.
+        assert max(abs(v) for v in digits) < 3.2
+
+
+def test_the_measured_row_lines_up_with_the_solved_one(app):
+    """The overlay is only meaningful if the two are the same quantity in the
+    same order, so ``_robot_traj_row`` is checked against ``_traj_row``'s width
+    -- and a digit the robot did not report must come back NaN rather than zero,
+    which would draw as a fully open finger."""
+    from gepetto_solvers.core import robot_plan
+
+    app._fk_solve()
+    width = len(app.hand.actuation.drive_indices)
+
+    class _State:
+        wrist_pose = np.eye(4)
+        digit_cmd = {app.digit_names[0]: np.zeros(width)}
+        age = 0.0
+        source = "test"
+
+    row = app._robot_traj_row(_State())
+    assert len(row) == app.traj.N_CHANNELS
+    # The one reported digit is finite; the rest of the digit block is NaN.
+    per_digit = [row[i * width:(i + 1) * width] for i in range(len(app.digit_names))]
+    assert np.all(np.isfinite(per_digit[0]))
+    for block in per_digit[1:]:
+        assert np.all(np.isnan(block))
+    # The wrist block is always real.
+    assert np.all(np.isfinite(row[app.traj.n_digit_channels:]))
+    assert robot_plan.command_kind(app.hand)
+
+
+def test_a_plan_can_be_exported_for_this_hand(app):
+    """``_build_robot_plan``'s inputs, without ROS: the export must produce a
+    plan in this hand's own units, of this hand's own width, and survive the
+    flat encoding it crosses the wire in."""
+    from gepetto_solvers.core import robot_plan
+
+    app._fk_solve()
+    open_lengths = app._open_lengths() if app.has("displacement") else None
+    plan = robot_plan.build_plan(
+        app.result, app.fk_solver.configs, app._corner_viz(), open_lengths,
+        source="final", hand=app.hand)
+    assert plan.digit_names == list(app.hand.digit_names)
+    assert plan.dof_per_digit == len(app.hand.actuation.drive_indices)
+    assert plan.command_kind == robot_plan.command_kind(app.hand)
+
+    plan, _notes = robot_plan.clamp_to_travel(plan, hand=app.hand)
+    restored = robot_plan.unflatten_plan(robot_plan.flatten_plan(plan))
+    for before, after in zip(plan.waypoints, restored.waypoints, strict=True):
+        for name in plan.digit_names:
+            np.testing.assert_array_equal(after.digit_cmd[name],
+                                          before.digit_cmd[name])

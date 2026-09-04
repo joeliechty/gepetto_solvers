@@ -104,6 +104,35 @@ SITES_PER_DIGIT = len(_SITE_FRAMES["index"]) + 1
 NUM_PROXIMAL_SITES = 2
 
 
+#: The driver's own joint order: ``joint_0_0`` .. ``joint_15_0``, index then
+#: middle then ring then thumb.
+#:
+#: THIS IS THE ORDER THE HAND IS COMMANDED IN, and it is not ours. Wonik's
+#: ``allegro_node_grasp`` reads ``sensor_msgs/JointState`` POSITIONALLY --
+#: ``desired_position[i] = msg->position[i]``, with ``msg.name`` ignored entirely
+#: -- so a permutation here does not fail, it drives the wrong joints. It is
+#: derived from :data:`_JOINT_NUMBERS` rather than typed out again so that the
+#: solver's digit blocks and the driver's index order cannot come apart, and
+#: ``tests/core/test_plan_wire.py`` pins it against the mock node's own list.
+#:
+#: Note the DIGIT order below is Allegro's (thumb 12-15, i.e. last), which happens
+#: to coincide with :data:`DIGIT_NAMES`. The coincidence is asserted in the test
+#: rather than relied on here.
+DRIVER_JOINT_ORDER = [_joint(n)
+                      for numbers in _JOINT_NUMBERS.values()
+                      for n in sorted(numbers)]
+
+
+def driver_joint_names():
+    """``{digit: [joint name per DOF, base to tip]}`` in :data:`DIGIT_NAMES` order.
+
+    What a ROS driver needs to place a digit's four commanded angles into the
+    16-wide message, and to pick them back out of a ``joint_states`` readback.
+    """
+    return {name: [_joint(n) for n in numbers]
+            for name, numbers in _JOINT_NUMBERS.items()}
+
+
 def digit_specs():
     """One ``RigidDigitSpec`` per digit, in :data:`DIGIT_NAMES` order."""
     specs = []

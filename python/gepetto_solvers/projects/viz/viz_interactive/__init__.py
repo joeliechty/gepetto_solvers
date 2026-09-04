@@ -85,17 +85,21 @@ def main():
              "default). Every panel is sized and named off it.")
     args = parser.parse_args()
 
-    if args.smoke:
-        sys.exit(_smoke())
-
-    import viser
-
     from gepetto_solvers.core.hands import get_hand, registered_hands
 
     try:
         hand = get_hand(args.hand)
     except KeyError as exc:
         parser.error(f"{exc} Available: {', '.join(registered_hands())}.")
+
+    # Resolved BEFORE the --smoke branch, so `--smoke --hand allegro` checks the
+    # hand it names. It used to exit above this, which silently smoke-tested the
+    # default hand whatever --hand said.
+    if args.smoke:
+        sys.exit(_smoke(hand))
+
+    import viser
+
     server = viser.ViserServer(port=args.port)
     app = HandVizApp(server, hand=hand)
     # Which binding got loaded, and what it can do. Printed unconditionally: a

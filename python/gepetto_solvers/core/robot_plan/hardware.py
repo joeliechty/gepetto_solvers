@@ -1,13 +1,25 @@
-"""The hand-open reference pose, tendon travel limits, and clamping to them.
+"""The hand-open reference pose, travel limits, and clamping to them.
 
 This is the half of ``robot_plan`` that has to know about the solver and about
 the physical hand; the timing half deliberately does not.
 
 SIGN: positive tendon displacement = tendon pulled in = FLEXING, measured from
 the hand-open pose.
+
+TWO KINDS OF LIMIT, ONE CLAMP. A tendon hand's stop is its motor's calibrated
+flexion travel, from ``HandConfig``; a joint-space hand's is the URDF's joint
+limits, from ``hand.joint_limits()``. :func:`travel_limits` normalizes both to
+``{digit: (lo, hi)}`` with ``lo``/``hi`` as arrays the width of that hand's
+command, so :func:`clamp_to_travel` never has to know which it was handed.
+Everything above :func:`travel_limits` in this file is tendon-only and is simply
+not reached on the other path.
 """
 
 from dataclasses import replace
+
+import numpy as np
+
+from .types import COMMAND_UNITS, JOINT_POSITION_RAD, TENDON_DISPLACEMENT_M
 
 
 def _solvers():
@@ -252,47 +264,115 @@ def hardware_travel_limits(hand=None):
     return out
 
 
-# Below this much overreach (metres) a clamp is not worth a note. The hand-open
-# waypoint a phase-4 close starts from sits at a displacement of ~1e-16 m rather
-# than a clean zero -- FK arithmetic, not a real command -- and the lower stop
-# rounds it up, which reported as "asked for 0.0 mm beyond its 6.4 mm of travel"
-# on every digit that was not even moving. Well under the 0.1 mm the note prints
-# at, so nothing a reader could have acted on is being hidden.
-_CLAMP_REPORT_M = 5e-5
+def joint_travel_limits(hand=None):
+    """Per solver digit, ``(lo, hi)`` joint arrays from the URDF, or None.
+
+    The joint-space analogue of :func:`hardware_travel_limits`, and the ONLY
+    joint-limit guard on the wire: ``rigid_urdf`` reads the URDF's limits but does
+    not enforce them in the solve (see ``docs/adding_a_hand.md``), so a contact
+    solve can perfectly well converge with a joint past its stop. Whoever
+    publishes the plan clamps to this and says it did.
+
+    None -- rather than an empty dict -- for a hand that supplies no
+    ``joint_limits``, so a caller can tell "this hand has none" from "this hand's
+    limits are all zero-width".
+    """
+    hand = _hand(hand)
+    supplier = getattr(hand, "joint_limits", None)
+    if supplier is None:
+        return None
+    out = {}
+    for name, pairs in zip(hand.digit_names, supplier()):
+        lo = np.array([float(a) for a, _ in pairs], float)
+        hi = np.array([float(b) for _, b in pairs], float)
+        out[name] = (lo, hi)
+    return out or None
 
 
-def clamp_to_travel(plan, limits=None):
-    """Clamp every displacement to the hardware's flexion travel, in place-ish.
+def travel_limits(hand=None):
+    """``{digit: (lo, hi)}`` as arrays, whichever kind of stop this hand has.
+
+    The one entry point :func:`clamp_to_travel` uses, so the clamp itself is the
+    same code for both hands. Returns None when the limits could not be
+    determined at all, which the caller must report rather than pass over -- a
+    missing safety clamp is never allowed to be silent.
+    """
+    hand = _hand(hand)
+    if "displacement" in hand.features:
+        travel = hardware_travel_limits(hand)
+        if not travel:
+            return None
+        # Widened to the command's width so the clamp is shape-agnostic. A tendon
+        # hand drives one actuator per digit, so this is width 1 by construction.
+        width = len(hand.actuation.drive_indices)
+        return {name: (np.full(width, float(lo)), np.full(width, float(hi)))
+                for name, (lo, hi) in travel.items()}
+    return joint_travel_limits(hand)
+
+
+# Below this much overreach, IN THE DISPLAY UNITS of each command kind, a clamp
+# is not worth a note. The hand-open waypoint a phase-4 close starts from sits at
+# a displacement of ~1e-16 m rather than a clean zero -- FK arithmetic, not a real
+# command -- and the lower stop rounds it up, which reported as "asked for 0.0 mm
+# beyond its 6.4 mm of travel" on every digit that was not even moving. Well under
+# the 0.1 mm the note prints at, so nothing a reader could have acted on is hidden.
+#
+# Per kind rather than one number, because 0.05 of a millimetre and 0.05 of a
+# radian are not remotely the same claim: the latter is 2.9 degrees, which is a
+# real overreach that must not be swallowed.
+_CLAMP_REPORT = {
+    TENDON_DISPLACEMENT_M: 0.05,        # mm
+    JOINT_POSITION_RAD: 1e-3,           # rad, ~0.06 deg
+}
+
+
+def clamp_to_travel(plan, limits=None, hand=None):
+    """Clamp every digit command to the hand's travel, in place-ish.
 
     Returns ``(plan, notes)`` with a NEW plan (the caller's is untouched) and one
-    note per finger that had to be clamped, naming how far past the stop the
-    solve had asked for. A solve routinely asks for more travel than the motors
-    have -- ``fully_flexed_lengths`` is max flexion at the measured torque limit,
-    not the geometric limit -- and the servo node would saturate and warn once per
-    finger anyway; clamping here means the interpolation still lands on a
-    reachable target instead of spending its last seconds commanding a stop.
+    note per digit that had to be clamped, naming how far past the stop the solve
+    had asked for. A solve routinely asks for more than the robot has --
+    ``fully_flexed_lengths`` is max flexion at the measured torque limit rather
+    than the geometric limit, and ``rigid_urdf`` does not enforce joint limits at
+    all -- and the hand node would saturate and warn once per digit anyway;
+    clamping here means the interpolation still lands on a reachable target
+    instead of spending its last seconds commanding a stop.
+
+    ``limits`` is ``{digit: (lo, hi)}`` of arrays; omit it and this asks
+    :func:`travel_limits` for the plan's hand. A hand whose limits are unavailable
+    is NOT silently passed over: the plan comes back untouched with a note saying
+    so, because a clamp that quietly did nothing reads exactly like one that had
+    nothing to do.
     """
-    limits = hardware_travel_limits() if limits is None else limits
+    if limits is None:
+        limits = travel_limits(hand)
+    if limits is None:
+        return plan, ["**no travel limits available** -- the plan is NOT clamped "
+                      "here. Whatever the hand node enforces is the only stop "
+                      "left; fix the environment."]
     if not limits:
         return plan, []
 
+    suffix, scale = COMMAND_UNITS.get(plan.command_kind, ("", 1.0))
+    report_above = _CLAMP_REPORT.get(plan.command_kind, 0.0)
     worst: dict[str, float] = {}
     waypoints = []
     for waypoint in plan.waypoints:
         clamped = {}
-        for name, value in waypoint.tendon_disp.items():
-            lo, hi = limits.get(name, (None, None))
-            if lo is None:
+        for name, value in waypoint.digit_cmd.items():
+            bounds = limits.get(name)
+            if bounds is None:
                 clamped[name] = value
                 continue
-            bounded = min(max(value, lo), hi)
-            if bounded != value:
-                worst[name] = max(worst.get(name, 0.0), abs(value - bounded))
+            bounded = np.clip(value, *bounds)
+            excess = float(np.max(np.abs(value - bounded)))
+            if excess > 0.0:
+                worst[name] = max(worst.get(name, 0.0), excess)
             clamped[name] = bounded
-        waypoints.append(replace(waypoint, tendon_disp=clamped))
+        waypoints.append(replace(waypoint, digit_cmd=clamped))
 
-    notes = [f"**{name} clamped**: the solve asked for {excess * 1e3:.1f} mm "
-             f"beyond its {limits[name][1] * 1e3:.1f} mm of travel"
+    notes = [f"**{name} clamped**: the solve asked for {excess * scale:.1f} "
+             f"{suffix} beyond its travel"
              for name, excess in sorted(worst.items())
-             if excess > _CLAMP_REPORT_M]
+             if excess * scale > report_above]
     return replace(plan, waypoints=waypoints), notes

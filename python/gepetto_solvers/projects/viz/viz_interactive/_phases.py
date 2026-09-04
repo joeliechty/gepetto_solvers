@@ -150,6 +150,7 @@ class PhaseMixin:
         # hand against whichever object and digits are currently selected.
         self._refresh_planar_contact_gate()
         self._refresh_exact_contact_gate()
+        self._refresh_normal_row_gate()
         # ...and that gate may have just cleared an in-plane box the preset asked
         # for (SDF object, or a digit set with no measured pinch pose). Falling
         # back to the 3D metric is right HERE, unlike when the user ticks the box

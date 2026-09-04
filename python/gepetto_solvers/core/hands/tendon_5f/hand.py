@@ -26,6 +26,20 @@ TENDON_NAMES = ("Lateral+", "Lateral-", "Abduct+", "Abduct-", "Extensor", "Flexo
 #: cross-checked at runtime because nothing else could keep them in agreement.
 FLEXOR_INDEX = 5
 
+#: ``HandConfig.max_tendon_speed`` when the hardware package is installed, and the
+#: documented value otherwise -- this hand is posed on machines that have never
+#: seen the robot. ``finger_servo_node`` enforces its own copy regardless, so this
+#: only decides what the workbench's speed slider MEANS.
+_FALLBACK_MAX_TENDON_SPEED = 0.065      # m/s
+
+
+def _max_tendon_speed() -> float:
+    try:
+        from epfl_hand_core.config import HandConfig
+        return float(HandConfig().max_tendon_speed)
+    except Exception:
+        return _FALLBACK_MAX_TENDON_SPEED
+
 
 class TendonHand5F:
     """Four fingers and a thumb, each a Cosserat rod driven by six tendons.
@@ -93,6 +107,13 @@ class TendonHand5F:
             open_length_warn=0.005,
             flexion_probe=1.5,
         )
+
+        #: Ceiling on how fast ONE driven actuator may move, in the units this
+        #: hand's plans are commanded in -- metres of tendon per second here.
+        #: Read at construction rather than at class scope so a machine that
+        #: gains an ``epfl_hand_core`` install picks up its number without the
+        #: module having been imported first.
+        self.max_digit_speed = _max_tendon_speed()
 
     # -- digits ------------------------------------------------------------
 

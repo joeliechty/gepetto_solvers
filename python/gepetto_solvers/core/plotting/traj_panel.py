@@ -1,28 +1,37 @@
 """A docked viser panel that plots the CONTROL TRAJECTORY of a hand solve.
 
-Eleven stacked subplots -- the five actuated (flexor) TENDON LENGTHS and the
-solved wrist pose broken into x/y/z/roll/pitch/yaw -- against the iteration the
-solve is on. Sample 0 is where the run started (the FK pose on screen, i.e. the
-current kinematics), and every subsequent sample is one Augmented Lagrangian
+One stacked subplot per number the robot is commanded with, against the iteration
+the solve is on. Sample 0 is where the run started (the FK pose on screen, i.e.
+the current kinematics), and every subsequent sample is one Augmented Lagrangian
 outer iteration, so the panel fills in live as ``Auto solve`` runs and, when the
 solve ends, holds the whole path the hand took to get there.
 
-LENGTHS, NOT TENSIONS. The tension is what the solve is *asked* for; the length
-is what the hand actually took in, and it is the half of the state the hardware
-is commanded on -- ``robot_plan`` builds every waypoint out of
-``open_lengths[name] - length``. So this is the trajectory in the units the
-robot moves in, and it can be read straight against the *Tensions* folder's
-per-finger length readout, which prints the same number for the frame on screen.
+ONE ROW PER DRIVEN ACTUATOR, PLUS SIX FOR THE WRIST, so the panel is sized by the
+hand rather than by a constant: the five-digit tendon hand drives one actuator per
+digit and gets 5 + 6 = 11 rows, the Allegro drives four and gets 16 + 6 = 22. A
+row per actuator rather than a row per digit because these are the numbers that go
+on the wire, one line each, and four joints sharing an axis would hide exactly the
+per-joint detail the plot is being read for.
 
-WHY ELEVEN AND NOT SIX. The robot is commanded with six things -- five tendons
-and one wrist pose -- but a pose is not plottable as a scalar, so the pose is
-split into its xyzrpy components here. That split is a VIEWING choice
-and is not what the trajectory is interpolated in downstream: ``robot_plan``
-paces the wrist through ``se3_log``/``se3_exp``, so between two knots the real
-path is a screw motion and the straight line this panel draws between two
-roll samples is the projection of that, not the thing itself. It is the right
-picture for "did the wrist wander", the wrong one for "what exactly does the arm
-do between iterate 7 and 8".
+WHAT THE DIGIT ROWS HOLD depends on the hand, and it is whatever
+``robot_plan`` commands:
+
+* a tendon hand -- LENGTHS, NOT TENSIONS, in mm. The tension is what the solve is
+  *asked* for; the length is what the hand actually took in, and it is the half of
+  the state the hardware is commanded on (``open_lengths[name] - length``). It can
+  be read straight against the *Tensions* folder's per-finger length readout,
+  which prints the same number for the frame on screen.
+* a joint-space hand -- the solved JOINT POSITIONS in rad, which are the command
+  directly, and which read against the *Joint targets* sliders the same way.
+
+WHY THE WRIST IS SIX ROWS AND NOT ONE. A pose is not plottable as a scalar, so it
+is split into its xyzrpy components here. That split is a VIEWING choice and is
+not what the trajectory is interpolated in downstream: ``robot_plan`` paces the
+wrist through ``se3_log``/``se3_exp``, so between two knots the real path is a
+screw motion and the straight line this panel draws between two roll samples is
+the projection of that, not the thing itself. It is the right picture for "did the
+wrist wander", the wrong one for "what exactly does the arm do between iterate 7
+and 8".
 
 The lines ARE the linear interpolation between states: uPlot joins consecutive
 samples with a straight segment, and the knots are drawn as points on top, so
@@ -30,19 +39,22 @@ the two are distinguishable at a glance -- a long flat run with two dots at its
 ends is one AL iteration that moved nothing, not a dense stretch of samples.
 
 UNITS FOLLOW WHATEVER ALREADY PRINTS THE SAME QUANTITY. Tendon lengths in mm,
-matching the *Tensions* folder's length table (``_report_tendon_lengths``);
-wrist position in m and angles in rad, matching the *Wrist start pose* sliders,
-so a pose number picked off a plot can be typed straight into the slider that
-commands it. Neither is converted on the way in, so nothing here can disagree
-with the readout beside it.
+matching the *Tensions* folder's length table (``_report_tendon_lengths``); joint
+angles in rad, matching ``_report_joint_states``; wrist position in m and angles
+in rad, matching the *Wrist start pose* sliders, so a pose number picked off a
+plot can be typed straight into the slider that commands it. Nothing is converted
+on the way in, so nothing here can disagree with the readout beside it.
 
-Colours match the 3D scene where there is a match to make: the five tendon
-traces reuse ``viser_hand._FINGER_PLANE_RGB`` in ``finger_names`` order, and
-x/y/z reuse the red/green/blue of the triads the scene draws, with roll/pitch/
-yaw dashed in the same hue as the axis each turns about.
+Colours match the 3D scene where there is a match to make: a digit's rows take
+that digit's colour from ``viser_hand._FINGER_PLANE_RGB`` in ``digit_names``
+order, and x/y/z reuse the red/green/blue of the triads the scene draws, with
+roll/pitch/yaw dashed in the same hue as the axis each turns about. On a hand
+that drives several actuators per digit the four rows of one digit therefore
+SHARE a hue and are told apart by their titles and by the dash pattern -- which is
+the right grouping to read at a glance, since a digit's joints move together.
 
-The panel is a pure sink: it is handed an ``(N, 11)`` array of numbers and knows
-nothing about solvers, results or iterates. Extracting that array from a
+The panel is a pure sink: it is handed an ``(N, N_CHANNELS)`` array of numbers and
+knows nothing about solvers, results or iterates. Extracting that array from a
 ``HandResult`` is the caller's job -- see ``viz_interactive._traj_samples``.
 """
 
@@ -67,11 +79,22 @@ _AXIS_RGB = ((214, 62, 62), (60, 176, 92), (62, 118, 214))
 # machine did" are never confused for one another at a glance.
 _ACTUAL_STROKE = "rgb(24, 24, 24)"
 
-# One entry per subplot, in plot order: (title, dashed?). The five tension rows
-# are built per finger at construction, since their labels come from the caller.
+# The wrist half, in plot order: (title, triad axis, dashed?). It is the same six
+# rows for every hand -- a wrist pose is a wrist pose. The digit rows above them
+# are built at construction, since how many there are and what they are called
+# both come from the caller.
 _POSE_CHANNELS = (("wrist x (m)", 0, False), ("wrist y (m)", 1, False),
                   ("wrist z (m)", 2, False), ("wrist roll (rad)", 0, True),
                   ("wrist pitch (rad)", 1, True), ("wrist yaw (rad)", 2, True))
+
+#: How many of those there are. The digit rows come first, so this is also the
+#: offset of the wrist block in every row handed to :meth:`TrajectoryPanel.update`.
+N_POSE_CHANNELS = len(_POSE_CHANNELS)
+
+# Dash patterns cycled across the actuators OF ONE DIGIT, which share a hue. Solid
+# first, so a one-actuator-per-digit hand (the tendon hand) draws exactly the solid
+# lines it always did and this whole mechanism is invisible there.
+_ACTUATOR_DASHES = ((), (5.0, 3.0), (2.0, 2.0), (7.0, 2.0, 2.0, 2.0))
 
 # Height of one subplot in px. Eleven of them do not fit a laptop viewport, and
 # that is fine -- the panel scrolls. Shrinking them to fit would cost the
@@ -88,13 +111,32 @@ class TrajectoryPanel:
     because assigning to a uPlot handle's ``data`` only queues a message.
     """
 
-    #: Number of columns the ``values`` array handed to :meth:`update` must have:
-    #: five tendon lengths (mm) then x, y, z (m), roll, pitch, yaw (rad).
-    N_CHANNELS = 11
+    def __init__(self, server, digit_labels, actuator_labels=("tendon",),
+                 unit="mm", *, digit_format="7.2f", width=340, visible=True):
+        """``digit_labels`` names the digits, ``actuator_labels`` the DRIVEN
+        actuators of one digit, and ``unit`` what they are measured in.
 
-    def __init__(self, server, finger_labels, *, width=340, visible=True):
+        The product of the first two is the digit half of the panel, so a
+        five-digit hand driving one tendon each gets five rows and a four-digit
+        hand driving four joints each gets sixteen. The defaults are the tendon
+        hand's, so a caller that has not been taught about the other one still
+        builds the panel it always built.
+
+        ``digit_format`` is the format spec the header prints those values with;
+        it belongs to the unit (two decimals of a millimetre, three of a radian)
+        rather than to this class.
+        """
         self.server = server
-        self.finger_labels = list(finger_labels)
+        self.digit_labels = list(digit_labels)
+        self.actuator_labels = list(actuator_labels)
+        self.unit = unit
+        self._digit_format = digit_format
+        #: Number of columns the ``values`` array handed to :meth:`update` must
+        #: have: every driven actuator of every digit, in that nesting, then
+        #: x, y, z (m), roll, pitch, yaw (rad). An INSTANCE attribute, not a
+        #: class constant -- it is a property of the hand being plotted.
+        self.n_digit_channels = len(self.digit_labels) * len(self.actuator_labels)
+        self.N_CHANNELS = self.n_digit_channels + N_POSE_CHANNELS
         self._n = 0
         self._actual = None
         self.panel = server.gui.add_panel(visible=visible)
@@ -102,21 +144,27 @@ class TrajectoryPanel:
         # module, like ``viser_hand``, is handed a server and never imports
         # viser itself, and ``viser.Icon.CHART_LINE`` IS "chart-line".
         with self.panel.add_tab("Trajectory", "chart-line"):
-            # One readout above the stack rather than a live legend on each of
-            # eleven charts: the legends would cost more vertical space than the
-            # plots they annotate, and the numbers are wanted together anyway --
-            # a control vector is read across, not one component at a time.
+            # One readout above the stack rather than a live legend on each
+            # chart: the legends would cost more vertical space than the plots
+            # they annotate, and the numbers are wanted together anyway -- a
+            # control vector is read across, not one component at a time.
             # (Vertical space is the binding constraint here: eleven subplots
-            # already scroll, and the plot area is what carries the resolution
-            # that makes a sub-millimetre drift visible.)
+            # already scroll and twenty-two scroll twice as far, and the plot
+            # area is what carries the resolution that makes a sub-millimetre
+            # drift visible.)
             self.header = server.gui.add_markdown(self._IDLE)
             self.plots = []
-            for label, rgb in zip(self.finger_labels, _FINGER_PLANE_RGB):
-                self.plots.append(self._add_plot(f"{label} tendon (mm)",
-                                                 _css(rgb), dashed=False))
+            for label, rgb in zip(self.digit_labels, _FINGER_PLANE_RGB):
+                for j, actuator in enumerate(self.actuator_labels):
+                    self.plots.append(self._add_plot(
+                        f"{label} {actuator} ({unit})", _css(rgb),
+                        # Cycled within the digit, so its rows share a hue and
+                        # are still distinguishable where they overlap.
+                        dash=_ACTUATOR_DASHES[j % len(_ACTUATOR_DASHES)]))
             for title, axis, dashed in _POSE_CHANNELS:
-                self.plots.append(self._add_plot(title, _css(_AXIS_RGB[axis]),
-                                                 dashed=dashed))
+                self.plots.append(self._add_plot(
+                    title, _css(_AXIS_RGB[axis]),
+                    dash=(4.0, 3.0) if dashed else ()))
         # Left, as asked, and narrow: this is a companion to the 3D view, not a
         # replacement for it, so it must not eat the viewport the hand is in.
         self.panel.dock_left()
@@ -125,7 +173,7 @@ class TrajectoryPanel:
     _IDLE = ("*press **FK** for the current state, then **Step** / **Auto "
              "solve** to trace the trajectory*")
 
-    def _add_plot(self, title, stroke, dashed):
+    def _add_plot(self, title, stroke, dash=()):
         """One subplot: the trajectory series plus a marker series for the
         iterate the convergence scrubber is parked on.
 
@@ -136,7 +184,7 @@ class TrajectoryPanel:
         series = (
             {"label": "iterate"},
             {"label": title, "stroke": stroke, "width": 1.6,
-             "dash": (4.0, 3.0) if dashed else (),
+             "dash": tuple(dash),
              # spanGaps off so a NaN reads as a hole rather than being bridged:
              # a channel that could not be recovered from an iterate is a fact
              # worth seeing, not one to interpolate over.
@@ -241,8 +289,22 @@ class TrajectoryPanel:
                          blank if actual is None else actual[:, i])
         self.header.content = self._header(values, cursor, note)
 
+    def _channel_labels(self):
+        """One short label per column, in plot order.
+
+        ``index``/``thumb`` on a one-actuator hand, ``index j0`` on a wider one:
+        the digit name alone is ambiguous the moment a digit has four rows, and
+        appending the actuator to every hand's labels would widen the tendon
+        hand's table for no gain.
+        """
+        if len(self.actuator_labels) == 1:
+            return list(self.digit_labels)
+        return [f"{digit} {actuator}"
+                for digit in self.digit_labels
+                for actuator in self.actuator_labels]
+
     def _header(self, values, cursor, note):
-        """The value of all eleven channels at the marked sample, as one block.
+        """The value of every channel at the marked sample, as one block.
 
         Reads the SHOWN sample rather than the last one so it agrees with the 3D
         view: scrubbing back to iterate 3 must not leave a readout describing
@@ -264,9 +326,14 @@ class TrajectoryPanel:
             head += "  \n_solid = commanded, dashed black = measured on the robot_"
         lines = [head]
 
+        # Wide enough for the widest label, so the columns line up whether the
+        # labels are "thumb" or "middle j2".
+        pad = max((len(label) for label in self._channel_labels()), default=6)
+        pad = max(pad, 5)
+
         def pair(label, want, got, fmt, unit):
             """One row: what was asked for, what the robot did, and the gap."""
-            cell = f"`{label:<6} {want:{fmt}} {unit}`"
+            cell = f"`{label:<{pad}} {want:{fmt}} {unit}`"
             if np.isfinite(got):
                 # The delta is always signed; `fmt` may already carry a '+' for
                 # the channels that show one, and '++7.4f' is not a format spec.
@@ -276,11 +343,13 @@ class TrajectoryPanel:
 
         # Code spans so the columns survive markdown's whitespace collapsing --
         # the same trick _report_tendon_lengths uses for its length table.
-        for label, q, m in zip(self.finger_labels, row[:5], meas[:5]):
-            lines.append(pair(label, q, m, "7.2f", "mm"))
-        for label, q, m in zip(("x", "y", "z"), row[5:8], meas[5:8]):
+        d = self.n_digit_channels
+        for label, q, m in zip(self._channel_labels(), row[:d], meas[:d]):
+            lines.append(pair(label, q, m, self._digit_format, self.unit))
+        for label, q, m in zip(("x", "y", "z"), row[d:d + 3], meas[d:d + 3]):
             lines.append(pair(label, q, m, "+7.4f", "m"))
-        for label, q, m in zip(("roll", "pitch", "yaw"), row[8:11], meas[8:11]):
+        for label, q, m in zip(("roll", "pitch", "yaw"),
+                               row[d + 3:d + 6], meas[d + 3:d + 6]):
             lines.append(pair(label, q, m, "+7.4f", "rad"))
         return "  \n".join(lines)
 

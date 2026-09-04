@@ -15,87 +15,119 @@ from gepetto_solvers.core.solvers import R_to_euler
 class TrajectoryMixin:
     # -- control-trajectory panel (left-docked plot window) --
     #
-    # The six things this robot is commanded with -- five actuated tendons and
-    # one wrist pose -- plotted against the iteration the solve is on, in the
-    # window traj_panel.TrajectoryPanel owns. Everything below is
+    # Everything this robot is commanded with -- every driven actuator of every
+    # digit, and one wrist pose -- plotted against the iteration the solve is on,
+    # in the window traj_panel.TrajectoryPanel owns. Everything below is
     # EXTRACTION: the panel is handed plain numbers and knows nothing about
     # results or iterates, which is what keeps the solver vocabulary on this side
     # of the line and the plotting on that one.
+    #
+    # THE COLUMNS ARE THE PLAN'S, and that is the point of the split below: what
+    # `_traj_row` reads off a solve is exactly what `robot_plan.build_plan` would
+    # put in a waypoint, in the same order and the same units, so the commanded
+    # line and the measured overlay are the same quantity and the plot means what
+    # it looks like it means.
+
+    def _digit_row(self, res):
+        """This solve's per-digit command values, flattened in panel order.
+
+        The one branch, and it is the same branch ``robot_plan.build_plan``
+        makes -- a hand with the ``displacement`` feature is commanded on tendon
+        LENGTH, one number per digit; one without is commanded on its actuation
+        directly, which is the whole joint vector.
+        """
+        if self.has("displacement"):
+            # The LENGTH, not the tension that produced it. The tension is what
+            # the solve was asked for; the length is what the hand took in, it is
+            # the L half of the state a Section 1.8 control tick anchors on, and
+            # it is what the hardware is actually commanded on. Same array
+            # `_report_tendon_lengths` prints under the tension sliders, and in
+            # the same mm, so the plot and that readout cannot disagree.
+            drive = self._drive_index()
+            return [float(np.asarray(length, float)[drive]) * 1e3
+                    for length in res.displacements(0)]
+        # Radians, unscaled, matching `_report_joint_states` and the joint
+        # sliders -- so a number read off a plot goes back into the control that
+        # commands it, which is the same rule the wrist rows follow.
+        frames = res.frames[0]
+        return [float(v)
+                for name in res.finger_names
+                for v in np.asarray(frames[name].actuation(), float)]
 
     def _traj_row(self, res):
-        """The eleven control numbers of ONE solved state, in panel order:
-        five actuated tendon lengths in mm, then the wrist as xyz (m) + rpy (rad).
-
-        The LENGTH, not the tension that produced it. The tension is what the
-        solve was asked for; the length is what the hand took in, it is the L
-        half of the state a Section 1.8 control tick anchors on, and it is what
-        the hardware is actually commanded on -- `robot_plan.build_plan` turns
-        each waypoint into ``open_lengths[name] - length``. Same array
-        `_report_tendon_lengths` prints under the tension sliders, and in the
-        same mm, so the plot and that readout cannot disagree.
+        """The control numbers of ONE solved state, in panel order: every driven
+        actuator of every digit, then the wrist as xyz (m) + rpy (rad).
 
         Everything is re-read from the RESULT rather than from the sliders that
-        commanded it, for the reason `_report_tendon_lengths` gives: past the
-        first iterate neither the wrist nor the tendon is the slider's any more.
-        The wrist is a variable with a soft prior, so a contact solve ends a long
-        way from the commanded pose -- which is precisely the drift this panel
-        exists to make visible. Reading the sliders would draw flat lines.
+        commanded it, for the reason `_report_actuation` gives: past the first
+        iterate neither the wrist nor the actuation is the slider's any more. The
+        wrist is a variable with a soft prior, so a contact solve ends a long way
+        from the commanded pose -- which is precisely the drift this panel exists
+        to make visible. Reading the sliders would draw flat lines.
 
-        The wrist also has to be RECOVERED rather than read: nothing in a result
-        reports it directly, so the state bundle carries the solved wrist
-        offset out of its node-0 pose. Split into xyzrpy here because a 4x4 is
-        not plottable, using the same ZYX convention (and the same radians) the
-        Wrist start pose sliders use, so a number read off a plot goes straight
-        back into the slider it came from.
+        The wrist is split into xyzrpy here because a 4x4 is not plottable, using
+        the same ZYX convention (and the same radians) the Wrist start pose
+        sliders use, so a number read off a plot goes straight back into the
+        slider it came from.
         """
-        T = np.asarray(res.wrist_pose(0),
-                       float)
+        T = np.asarray(res.wrist_pose(0), float)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
-        lengths = [float(np.asarray(length, float)[self._drive_index()]) * 1e3
-                   for length in res.displacements(0)]
-        return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
+        return self._digit_row(res) + [T[0, 3], T[1, 3], T[2, 3],
+                                       roll, pitch, yaw]
 
 
     def _robot_traj_row(self, state):
-        """One MEASURED robot state as the panel's eleven channels.
+        """One MEASURED robot state as the panel's channels.
 
         The exact inverse of what `_traj_row` reads off a solve, in the same
         units and the same order, because the whole point is to draw the two on
-        one axis: five actuated tendon LENGTHS in mm, then the wrist as xyz (m)
-        and rpy (rad) in the viser world frame.
+        one axis.
 
-        The hardware reports DISPLACEMENT from the hand-open pose and
-        `robot_plan.build_plan` commands it as ``open_lengths[name] - length``,
-        so recovering a length is ``open_lengths[name] - displacement`` -- the
-        same identity read backwards. Doing it here rather than plotting the
-        displacement directly is what makes the measured line comparable to the
-        commanded one instead of being a differently-zeroed cousin of it.
+        A tendon hand reports DISPLACEMENT from the hand-open pose while the
+        panel plots LENGTH, so a length is recovered as
+        ``open_lengths[name] - displacement`` -- ``build_plan``'s identity read
+        backwards. Doing that here rather than plotting the displacement directly
+        is what makes the measured line comparable to the commanded one instead of
+        being a differently-zeroed cousin of it. A joint hand reports the angles
+        the panel already plots, so there is nothing to undo.
 
-        A finger the hardware could not report is left NaN rather than zeroed: a
-        motor whose position read failed is a hole in the measurement, and
+        A digit the robot could not report is left NaN rather than zeroed: an
+        actuator whose read failed is a hole in the measurement, and
         `spanGaps: False` on the series draws it as one. Zero would draw as a
-        fully open finger, which is a claim about the hand rather than an
-        admission that nothing was heard.
+        fully open finger (or a straight one), which is a claim about the hand
+        rather than an admission that nothing was heard.
         """
         T = np.asarray(state.wrist_pose, float)
         roll, pitch, yaw = R_to_euler(T[:3, :3])
-        open_lengths = self._open_lengths()
+        width = len(self.hand.actuation.drive_indices)
         # The ORDER has to be the result's own, because that is the order
-        # `_traj_row` reads `tendon_lengths(0)` in and therefore the order the
-        # panel's first five channels are in. Falling back to self.digit_names only
-        # covers the case where nothing is solved, where there is no plot to
-        # align with anyway.
+        # `_traj_row` reads the digits in and therefore the order the panel's
+        # first channels are in. Falling back to self.digit_names only covers the
+        # case where nothing is solved, where there is no plot to align with
+        # anyway.
         names = (list(self.result.finger_names)
                  if self.result is not None else list(self.digit_names))
-        lengths = []
+        open_lengths = self._open_lengths() if self.has("displacement") else None
+
+        row = []
         for name in names:
-            disp = state.tendon_disp.get(name)
-            lengths.append(np.nan if disp is None or name not in open_lengths
-                           else (open_lengths[name] - float(disp)) * 1e3)
-        # Fixed to five, so a result carrying a different number of digits can
-        # never slide the wrist channels along and draw them on a tendon plot.
-        lengths = (lengths + [np.nan] * 5)[:5]
-        return lengths + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
+            measured = state.digit_cmd.get(name)
+            if measured is None:
+                row.extend([np.nan] * width)
+            elif open_lengths is not None:
+                row.append(np.nan if name not in open_lengths
+                           else (open_lengths[name]
+                                 - float(np.ravel(measured)[0])) * 1e3)
+            else:
+                values = np.ravel(np.asarray(measured, float))
+                row.extend(float(v) for v in values[:width])
+                row.extend([np.nan] * max(0, width - values.size))
+        # Padded and truncated to the panel's OWN digit width, so a readback
+        # naming a different number of digits can never slide the wrist channels
+        # along and draw them on a digit plot.
+        n = self.traj.n_digit_channels
+        row = (row + [np.nan] * n)[:n]
+        return row + [T[0, 3], T[1, 3], T[2, 3], roll, pitch, yaw]
 
 
     def _sample_robot_trace(self, feedback):

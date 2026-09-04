@@ -1,6 +1,6 @@
 """Waypoints plus speed ceilings -> a fixed-rate sample stream.
 
-Positions lerp, rotations slerp, tendons lerp. A segment is walked along
+Positions lerp, rotations slerp, digit commands lerp. A segment is walked along
 ``T_k @ se3_exp(V * t)`` for a CONSTANT body twist V, which is what makes the
 feed-forward handed to the controller the exact derivative of the reference at
 every instant rather than only at the segment edges.
@@ -14,7 +14,7 @@ from .types import PathSchedule, Sample
 
 
 def plan_schedule(plan, hz=100.0, max_linear=0.2, max_angular=0.4,
-                  max_tendon=0.0163, min_duration=0.05):
+                  max_digit=0.0163, min_duration=0.05):
     """Time ``plan`` at the given speed ceilings, quantized to the ``hz`` grid.
 
     Speed arguments are CEILINGS, not setpoints -- see :func:`segment_durations`.
@@ -22,7 +22,7 @@ def plan_schedule(plan, hz=100.0, max_linear=0.2, max_angular=0.4,
     schedule of zero duration, which :func:`sample_at` handles as "go here".
     """
     period = 1.0 / float(hz)
-    raw = segment_durations(plan, max_linear, max_angular, max_tendon,
+    raw = segment_durations(plan, max_linear, max_angular, max_digit,
                             min_duration)
 
     durations, twists = [], []
@@ -42,6 +42,21 @@ def plan_schedule(plan, hz=100.0, max_linear=0.2, max_angular=0.4,
         else np.zeros(1)
     return PathSchedule(durations=durations, edges=edges,
                         total=float(edges[-1]), body_twist=twists)
+
+
+def _lerp(start, end, s):
+    """One digit's command a fraction ``s`` along a segment.
+
+    ``start`` is None for a digit the segment's first waypoint does not name --
+    a partial readback, or a plan whose digits changed mid-path. Zero is the
+    wrong answer there (it would ramp the finger in from fully open), so the
+    segment simply starts where it ends: that digit is held, not moved.
+    """
+    end = np.asarray(end, float)
+    if start is None:
+        return end.copy()
+    start = np.asarray(start, float)
+    return start + s * (end - start)
 
 
 def sample_at(plan, schedule, t):
@@ -65,7 +80,8 @@ def sample_at(plan, schedule, t):
 
     if not schedule.durations:
         w = plan.waypoints[0]
-        return Sample(0.0, np.asarray(w.wrist_pose, float), dict(w.tendon_disp),
+        return Sample(0.0, np.asarray(w.wrist_pose, float),
+                      {name: value.copy() for name, value in w.digit_cmd.items()},
                       np.zeros(6), 0)
 
     t = float(np.clip(t, 0.0, schedule.total))
@@ -87,24 +103,27 @@ def sample_at(plan, schedule, t):
     return Sample(
         t=t,
         wrist_pose=T,
-        # Tendons stay a plain linear ramp in their own coordinate -- they are a
-        # displacement in R^n, not a pose, so there is no manifold to respect and
-        # theta(t) = theta_k + theta_dot * t is already exact.
-        tendon_disp={name: (a.tendon_disp.get(name, 0.0)
-                            + s * (value - a.tendon_disp.get(name, 0.0)))
-                     for name, value in b.tendon_disp.items()},
+        # Digit commands stay a plain linear ramp in their own coordinate --
+        # they are a point in R^K, not a pose, so there is no manifold to respect
+        # and theta(t) = theta_k + theta_dot * t is already exact. That holds for
+        # a joint vector exactly as it did for a scalar tendon displacement,
+        # which is why this widened without changing.
+        digit_cmd={name: _lerp(a.digit_cmd.get(name), value, s)
+                   for name, value in b.digit_cmd.items()},
         body_twist=(np.zeros(6) if at_end else np.asarray(twist, float)),
         waypoint=k + 1)
 
 
-def interpolate(plan, hz=100.0, max_linear=0.2, max_angular=0.4, max_tendon=0.0163,
+def interpolate(plan, hz=100.0, max_linear=0.2, max_angular=0.4, max_digit=0.0163,
                 min_duration=0.05):
     """Time the plan and sample it at ``hz``, with feed-forward rates.
 
     Speed arguments are CEILINGS, not setpoints -- see :func:`segment_durations`.
-    Their defaults are the fractions the visualizer opens on: 50% of MoveIt
-    Servo's ``scale.linear``/``scale.rotational`` (0.4 m/s, 0.8 rad/s) and 25% of
-    ``HandConfig.max_tendon_speed`` (0.065 m/s).
+    Their defaults are the fractions the visualizer opens on for the TENDON hand:
+    50% of MoveIt Servo's ``scale.linear``/``scale.rotational`` (0.4 m/s,
+    0.8 rad/s) and 25% of ``HandConfig.max_tendon_speed`` (0.065 m/s). A
+    joint-space hand's ``max_digit`` is in rad/s and has nothing to do with that
+    default, so it passes its own.
 
     A single-waypoint plan yields one sample with zero velocity: "go here", which
     is what a resolved-rate controller needs to servo to a static target.
@@ -117,7 +136,7 @@ def interpolate(plan, hz=100.0, max_linear=0.2, max_angular=0.4, max_tendon=0.01
     if not plan.waypoints:
         return []
 
-    schedule = plan_schedule(plan, hz, max_linear, max_angular, max_tendon,
+    schedule = plan_schedule(plan, hz, max_linear, max_angular, max_digit,
                              min_duration)
     if not schedule.durations:
         return [sample_at(plan, schedule, 0.0)]

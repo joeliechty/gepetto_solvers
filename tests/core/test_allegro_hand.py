@@ -64,10 +64,18 @@ def test_every_joint_is_driven(hand):
 
 
 def test_it_declares_no_tendon_features(hand):
-    """Empty rather than partial: no tendons, no pinch table, no calibration
-    landmarks, no hardware bridge. Each gates a workbench panel off."""
-    assert hand.features == frozenset()
+    """No tendons, no pinch table, no calibration landmarks, no measured close
+    ramp -- each gates a workbench panel off.
+
+    ``robot_plan`` is the exception and IS declared: this hand has a robot
+    behind it. What it does NOT have is ``displacement``, and that absence is
+    load-bearing -- it is the single thing ``robot_plan.command_kind`` reads to
+    decide that a plan for this hand carries joint positions in radians rather
+    than tendon displacements in metres.
+    """
+    assert hand.features == frozenset({"robot_plan"})
     assert hand.features <= hands.FEATURES
+    assert "displacement" not in hand.features
 
 
 def test_asking_for_a_single_driven_value_is_refused(hand):

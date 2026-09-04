@@ -18,6 +18,40 @@ from .constants import (
 )
 
 
+def seed_params_for_hand(params, hand):
+    """Size and seed ``params``' per-digit fields for ``hand``, in place.
+
+    ``HandSolveParams``' defaults are sized off the REGISTRY DEFAULT hand, so a
+    bare one handed to a four-digit hand carries five-entry ``contact_fingers``
+    and ``flexor_tensions`` and a wrist pose aimed where the tendon hand's palm
+    faces. That fails loudly in the contact mask (good) and silently in the wrist
+    (bad: the hand is simply pointing away from the object).
+
+    A module function rather than a method, because the headless smoke checks
+    need exactly this and had no way to ask for it -- which is how ``--smoke
+    --hand allegro`` came to be impossible to run.
+    """
+    n = len(hand.digit_names)
+    params.hand = hand.name
+    # The hand's own start pose. HandSolveParams' wrist default is the TENDON
+    # hand's measured hover, which aims a hand whose fingers extend differently
+    # at nothing -- so it is the hand that says where it starts, not the params
+    # dataclass.
+    wrist, means = hand.default_pose()
+    params.wrist_pose = wrist
+    params.contact_fingers = [True] * n
+    if "single_drive" in hand.features:
+        params.flexor_tensions = [
+            float(hand.actuation.drive_value(m)) for m in means]
+    else:
+        params.joint_targets = [list(map(float, m)) for m in means]
+        # Sized but unused: a joint-space hand reads `joint_targets`, never this.
+        # Left at the right LENGTH anyway so anything that merely iterates the
+        # per-digit lists together cannot fall off the end of the shorter one.
+        params.flexor_tensions = [0.0] * n
+    return params
+
+
 class ParamsSyncMixin:
     def _fresh_params(self):
         """A cold ``HandSolveParams`` plus this app's OWN scene defaults.
@@ -47,18 +81,10 @@ class ParamsSyncMixin:
         # derives the height from the object's own along-normal extent, so this
         # is correct per object with nothing to re-tune per pick.
         params.table_burial = 0.0
-        # The hand's own start pose. HandSolveParams' wrist default is the
-        # TENDON hand's measured hover, which aims a hand whose fingers extend
-        # differently at nothing -- so it is the hand that says where it starts,
-        # not the params dataclass.
-        wrist, means = self.hand.default_pose()
-        params.wrist_pose = wrist
-        if self.has("single_drive"):
-            params.flexor_tensions = [
-                float(self.hand.actuation.drive_value(m)) for m in means]
-        else:
-            params.joint_targets = [list(map(float, m)) for m in means]
-        return params
+        # Everything sized or aimed by the HAND -- wrist pose, per-digit lists,
+        # the actuation seed. Shared with the headless smoke checks so the app
+        # and they cannot start from differently-sized params.
+        return seed_params_for_hand(params, self.hand)
 
 
     # -- solver plumbing --
@@ -130,13 +156,36 @@ class ParamsSyncMixin:
             p.sigma_grasp_force = 10.0 ** self.g_grasp_sigma_force.value
             p.sigma_grasp_torque = 10.0 ** self.g_grasp_sigma_torque.value
         p.table_contact = self.g_tbl_contact.value
-        # No box means no CHOICE, not a default: the 4-row [c_R, c_O, c_T1,
-        # c_T2] witness form is what the formulation defines for sphere-only
-        # collision geometry, since the tangential rows already force the
-        # radius vector collinear with the surface normal. See the note beside
-        # the checkbox in _build_gui.
-        p.contact_drop_normal_row = (True if self.g_drop_normal_row is None
-                                     else self.g_drop_normal_row.value)
+        # The row layout of the WITNESS contact factor -- so it is written
+        # against the form actually in play (_object_contact_form), never
+        # against the form it would like there to be. Two of the three forms on
+        # this panel have no witness point at all (the ellipsoid set every
+        # `ycb:` object is, and the in-plane metric), and HandModel refuses the
+        # flag alongside them rather than ignoring it: sending it anyway is a
+        # ValueError out of the HandSolver constructor, not a no-op.
+        if self.g_drop_normal_row is None:
+            # No box means no CHOICE, not a default: the 4-row [c_R, c_O, c_T1,
+            # c_T2] form is what the formulation defines for sphere-only
+            # collision geometry, since the tangential rows already force the
+            # radius vector collinear with the surface normal. See the note
+            # beside the checkbox in _build_gui.
+            #
+            # But a default may not SELECT a form. Riding it on the form that is
+            # in play anyway is also exactly what this hand's phase presets ask
+            # for -- off through the pre-grasp and the ellipsoid approach, on for
+            # the exact contact of phases 3-4 -- which a hardcoded True silently
+            # overrode, since _preset_widget has no handle to write for a hand
+            # that offers no box.
+            p.contact_drop_normal_row = self._object_contact_form()[0] == "witness"
+        else:
+            # An explicit choice, honored wherever the solver can build it --
+            # including on a single ellipsoid, where ticking it is how a caller
+            # opts into EllipsoidWitnessContactFactor. _refresh_normal_row_gate
+            # greys and clears the box for the forms that refuse it, so the
+            # guard here is belt and braces for the paths that write the handle
+            # without passing a gate (Reset, a restored session).
+            p.contact_drop_normal_row = (self.g_drop_normal_row.value
+                                         and self._normal_row_available()[0])
         # The pre-grasp family, all four of them off for a hand that declares
         # no pre-grasp -- the panel is absent, so there is nothing to read and
         # nothing to attach.
@@ -241,6 +290,7 @@ class ParamsSyncMixin:
         self._apply_default_phase()
         self._refresh_planar_contact_gate()
         self._refresh_exact_contact_gate()   # restored object may not support it
+        self._refresh_normal_row_gate()      # ...and the form it leaves selected
         self._sync_params()
         self._rebuild_fk()          # also drops the stepper
         self._refresh_object()

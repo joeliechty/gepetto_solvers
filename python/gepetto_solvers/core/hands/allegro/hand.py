@@ -59,12 +59,18 @@ class AllegroHand:
         drive_indices=tuple(range(allegro.DOF_PER_DIGIT)),
     )
 
-    #: What this hand has, from hands.base.FEATURES. Nothing: no tendons, no
-    #: single driven actuator, no displacement distinct from position, no rod to
-    #: bend, no measured pinch table, no disc landmarks, no hardware bridge and
-    #: no measured close ramp. Each of those gates a panel off rather than
-    #: leaving a control present and dead.
-    features: frozenset[str] = frozenset()
+    #: What this hand has, from hands.base.FEATURES. Almost nothing: no tendons,
+    #: no single driven actuator, no displacement distinct from position, no rod
+    #: to bend, no measured pinch table, no disc landmarks and no measured close
+    #: ramp. Each of those gates a panel off rather than leaving a control
+    #: present and dead.
+    #:
+    #: ``robot_plan`` IS declared: this hand has a robot behind it. A plan for it
+    #: carries the four joint positions of each digit in radians, where the tendon
+    #: hand's carries one displacement in metres -- see
+    #: ``robot_plan.building.command_kind``, which reads exactly the
+    #: ``"displacement"`` feature above to tell the two apart.
+    features: frozenset[str] = frozenset({"robot_plan"})
 
     #: The posture the workbench opens on: an OPEN pre-grasp -- the fingers
     #: barely flexed, the thumb swung across the palm to oppose them, and the
@@ -132,6 +138,29 @@ class AllegroHand:
     #: candidate-scoring machinery like the tendon hand's Onshape fit.
     MOUNT_FLANGE_XYZ = (0.0, 0.0, 0.130)
     MOUNT_FLANGE_RPY = (0.0, 0.0, 0.0)
+
+    #: Ceiling on how fast ONE driven actuator may move, in the units this hand's
+    #: plans are commanded in -- radians of joint per second here, the analogue of
+    #: the tendon hand's ``max_tendon_speed``.
+    #:
+    #: Deliberately conservative and NOT a hardware limit: Wonik's driver runs its
+    #: own ~333 Hz joint-PD loop and publishes no rate cap for us to read, so this
+    #: is a PATH limit -- how fast the reference a plan walks is allowed to move.
+    #: 1.0 rad/s takes the widest V5 joint (joint_12's 1.78 rad quadrant) end to
+    #: end in under two seconds, which is brisk for a grasp and slow enough to
+    #: watch. Raise it once a run has been watched on the real hand.
+    max_digit_speed = 1.0
+
+    def driver_joint_names(self):
+        """``{digit: [joint name per DOF]}`` for the ROS driver.
+
+        The one table the Allegro bridge needs, and it is NOT re-derivable by
+        arithmetic on the digit index: ``/allegroHand/joint_cmd`` is positional,
+        and Allegro's own numbering puts the thumb at 12-15 while several other
+        orderings would look equally plausible. See
+        :data:`.spec.DRIVER_JOINT_ORDER`.
+        """
+        return allegro.driver_joint_names()
 
     def __init__(self):
         self.digit_names = list(allegro.DIGIT_NAMES)

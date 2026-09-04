@@ -1171,6 +1171,14 @@ class GuiMixin:
         if self.g_obj_contact_plane is not None:
             for h in self.g_contacts:
                 h.on_update(lambda _: self._refresh_planar_contact_gate())
+        # The row-layout gate is keyed off the FORM, so it is re-checked
+        # wherever one of the form boxes is touched. Safe to hang off the same
+        # handles the exclusion rule uses: it runs after them (viser calls
+        # callbacks in registration order), so it reads the settled state, and
+        # the box it may clear only invalidates the stepper -- no second pass
+        # through here.
+        for h in _forms:
+            h.on_update(lambda _: self._refresh_normal_row_gate())
         # ...and the exact form's gate is keyed off the OBJECT, so it is
         # re-checked wherever the object changes (see _refresh_object).
         for h in (self.g_contacts + _forms

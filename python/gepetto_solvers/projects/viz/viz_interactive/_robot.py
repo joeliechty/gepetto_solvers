@@ -15,7 +15,6 @@ from gepetto_solvers.core import robot_plan
 from gepetto_solvers.core.solvers import R_to_euler
 
 from .constants import (
-    MAX_TENDON_SPEED,
     PLAY_FINAL,
     PLAY_HISTORY,
     SERVO_SCALE_LINEAR,
@@ -38,12 +37,21 @@ class RobotMixin:
     _TENSION_BISECT_STEPS = 14
     _TENSION_BISECT_TOL_M = 5e-4
 
+    def _digit_speed_unit(self):
+        """``(suffix, scale)`` for this hand's digit-speed ceiling, per second.
+
+        Read off the plan's own units so a readout can never label a joint rate
+        in millimetres: see ``robot_plan.COMMAND_UNITS``.
+        """
+        return robot_plan.COMMAND_UNITS[robot_plan.command_kind(self.hand)]
+
+
     def _robot_speeds(self):
         """The playback-speed slider resolved into real units, per channel.
 
         ONE fraction scaling all three ceilings together, which is exactly the
         time-scaling factor: a segment lasts
-        ``(1 / fraction) * max(t_linear, t_angular, t_tendon)``, so the slider is
+        ``(1 / fraction) * max(t_linear, t_angular, t_digit)``, so the slider is
         a pure duration multiplier and the geometric path is untouched by it.
         Scaling the channels independently could only change WHICH one is the
         slowest -- it can never make them arrive at different times, because they
@@ -51,20 +59,24 @@ class RobotMixin:
         one question.
 
         Fractions rather than absolute speeds so they keep meaning something if
-        MoveIt Servo's scales or HandConfig's tendon speed are ever retuned.
+        MoveIt Servo's scales or the hand's own actuator speed are ever retuned.
+        The third ceiling comes from the HAND (``max_digit_speed``): metres of
+        tendon per second on the tendon hand, radians of joint per second on a
+        joint-space one, which is why it is not a constant here any more.
         """
         fraction = float(self.g_speed.value)
         return dict(max_linear=fraction * SERVO_SCALE_LINEAR,
                     max_angular=fraction * SERVO_SCALE_ROTATIONAL,
-                    max_tendon=fraction * MAX_TENDON_SPEED)
+                    max_digit=fraction * self.hand.max_digit_speed)
 
 
     def _speed_note(self):
         speeds = self._robot_speeds()
+        suffix, scale = self._digit_speed_unit()
         return (f"speed {float(self.g_speed.value):.2f} &nbsp; "
                 f"(wrist {speeds['max_linear']:.2f} m/s / "
                 f"{speeds['max_angular']:.2f} rad/s, "
-                f"tendon {speeds['max_tendon'] * 1e3:.1f} mm/s)")
+                f"digit {speeds['max_digit'] * scale:.1f} {suffix}/s)")
 
 
     def _set_robot_status(self, text):
@@ -227,7 +239,14 @@ class RobotMixin:
 
 
     def _build_robot_plan(self):
-        """The plan for whatever is on screen, clamped to the hand's real travel."""
+        """The plan for whatever is on screen, clamped to the hand's real travel.
+
+        ``_open_lengths`` is asked for only on a hand that HAS one -- it costs two
+        FK solves and a sign check, and on a joint-space hand there is no
+        hand-open zero for a displacement to be measured from. ``build_plan``
+        refuses a tendon hand without it, so a missing one is an error rather
+        than an empty plan.
+        """
         source = "final" if self.g_play_source.value == PLAY_FINAL else "history"
         if self.result is None:
             raise RuntimeError("nothing solved yet -- press FK, Step or Auto solve")
@@ -235,10 +254,11 @@ class RobotMixin:
         # build_plan on why there is no "play from here": the scrubber opens on
         # the last iterate, so honouring it turned every playback into a single
         # hop to the final pose.
+        open_lengths = self._open_lengths() if self.has("displacement") else None
         plan = robot_plan.build_plan(
             self.result, self.fk_solver.configs, self._corner_viz(),
-            self._open_lengths(), source=source)
-        plan, notes = robot_plan.clamp_to_travel(plan)
+            open_lengths, source=source, hand=self.hand)
+        plan, notes = robot_plan.clamp_to_travel(plan, hand=self.hand)
         if notes:
             self._refresh_robot_status("  \n".join(notes))
         return plan
@@ -349,18 +369,87 @@ class RobotMixin:
         notes.append(f"wrist read at ({T[0, 3]:+.6f}, {T[1, 3]:+.6f}, "
                      f"{T[2, 3]:+.6f}) m in the scene frame")
 
-        if state.tendon_disp:
-            notes.extend(self._tensions_for_displacement(state.tendon_disp))
+        if not state.digit_cmd:
+            notes.append(f"_nothing on `{state.source}` -- the hand's controls "
+                         f"were left as they were._")
+        elif self.has("displacement"):
+            # A tendon hand has to be INVERTED: this app poses from tension and
+            # the robot reports length. See _tensions_for_displacement.
+            notes.extend(self._tensions_for_displacement(
+                {name: float(np.ravel(v)[0])
+                 for name, v in state.digit_cmd.items()}))
         else:
-            notes.append("_no tendon state on "
-                         "`/finger_servo_node/measured_state` -- tensions left "
-                         "as they were._")
+            # A joint hand needs no inversion at all: the measured angles ARE the
+            # app's kinematic input, so they are written straight onto the
+            # controls. That is the whole difference, and it is why the bisection
+            # above is gated rather than generalised.
+            notes.extend(self._adopt_joint_state(state.digit_cmd))
         if state.age is not None and state.age > 1.0:
-            notes.append(f"**tendon state is {state.age:.1f} s old** -- is "
-                         "finger_servo_node still running?")
+            notes.append(f"**hand state is {state.age:.1f} s old** -- is "
+                         f"whatever publishes `{state.source}` still running?")
         # Already admitted (the whole read holds the gate), so this must not try
         # to claim it again -- see _fk_solve_admitted.
         self._fk_solve_admitted()
+        return notes
+
+
+    def _adopt_joint_state(self, measured):
+        """Write MEASURED joint angles onto the joint sliders. Returns status lines.
+
+        The joint-space counterpart of :meth:`_tensions_for_displacement`, and
+        far simpler for a reason worth stating: this app poses a joint hand FROM
+        joint positions, so the robot reports the very quantity the sliders hold
+        and there is nothing to invert. The tendon hand's bisection exists only
+        because its input (tension) and its readback (length) are different
+        variables.
+
+        A joint outside its slider's URDF range is CLAMPED, not widened -- the
+        opposite of what the wrist sliders do in :meth:`_fit_wrist_range`, and
+        deliberately. A wrist outside its demo range is an ordinary measurement
+        of where the arm is; a joint outside the URDF's own limits is either a
+        bad readback or a hand in a configuration its description says is
+        impossible, and drawing it would misrepresent the model rather than the
+        robot. The note says when it happened.
+        """
+        notes, clipped, missing = [], [], []
+        targets = [list(map(float, q)) for q in self.params.joint_targets]
+        self._restoring = True   # our writes; no live-FK re-solve per slider
+        try:
+            for d, name in enumerate(self.digit_names):
+                values = measured.get(name)
+                if values is None:
+                    missing.append(name)
+                    continue
+                values = np.ravel(np.asarray(values, float))
+                for j, handle in enumerate(self.g_joints[d]):
+                    if j >= values.size:
+                        break
+                    value = float(values[j])
+                    bounded = float(min(max(value, handle.min), handle.max))
+                    if abs(bounded - value) > 1e-9:
+                        # The hand's own actuator name, not the widget's label:
+                        # the two are built from the same list, and reading it
+                        # here needs no assumption about viser's handle API.
+                        clipped.append(f"{name} {self.hand.actuation.names[j]}")
+                    handle.value = bounded
+                    targets[d][j] = bounded
+        finally:
+            self._restoring = False
+        self.params.joint_targets = targets
+
+        read = [n for n in self.digit_names if n in measured]
+        notes.append("joints read: " + ", ".join(
+            f"{n} [" + ", ".join(f"{v:+.3f}" for v in targets[i]) + "]"
+            for i, n in enumerate(self.digit_names) if n in measured) + " rad")
+        if missing:
+            notes.append(f"_no measurement for {', '.join(missing)} -- those "
+                         f"digits were left where they were._")
+        if clipped:
+            notes.append(f"**clamped to the URDF's limits: "
+                         f"{', '.join(clipped)}** -- the robot reported a joint "
+                         f"outside the range its description allows.")
+        if not read:
+            notes.append("_no measured digit matched the model's._")
         return notes
 
 
@@ -492,6 +581,10 @@ class RobotMixin:
         is a picture, and this is not, so moving the robot takes a deliberate
         gesture that does not survive the run that used it.
         """
+        # The digit channel's unit is the hand's, not a constant: metres of
+        # tendon per second on one hand, radians of joint per second on another,
+        # and a hint naming the wrong one is worse than no hint.
+        digit_unit = "m" if self.has("displacement") else "rad"
         with gui.add_folder("Robot"):
             gui.add_markdown(
                 "Commands the **real robot**. The scene's table square is "
@@ -506,8 +599,9 @@ class RobotMixin:
                      "and Reset cannot set it. Playback always drives the arm and "
                      "the hand together; they are one coordinated trajectory and "
                      "running half of it is not a thing this panel offers. For "
-                     "channel-at-a-time bring-up use `play_client.py --hand-only` "
-                     "(with `finger_servo_node dry_run:=true`).")
+                     "channel-at-a-time bring-up use "
+                     "`ros2 run gepetto_ros play_client --hand-only` against a "
+                     "hand node in mock or dry-run mode.")
             self.g_play_source = gui.add_dropdown(
                 "waypoints", [PLAY_HISTORY, PLAY_FINAL],
                 initial_value=PLAY_HISTORY,
@@ -524,7 +618,8 @@ class RobotMixin:
                 hint=f"How fast to play the trajectory, as a fraction of every "
                      f"channel's own maximum ({SERVO_SCALE_LINEAR} m/s linear, "
                      f"{SERVO_SCALE_ROTATIONAL} rad/s rotational, "
-                     f"{MAX_TENDON_SPEED} m/s tendon). ONE number because the "
+                     f"{self.hand.max_digit_speed:g} {digit_unit}/s per driven "
+                     f"actuator). ONE number because the "
                      f"wrist and the fingers are one trajectory: each segment "
                      f"takes as long as its slowest channel needs, so scaling "
                      f"them apart only changes which one waits. A ceiling rather "
@@ -540,10 +635,12 @@ class RobotMixin:
                      "run alongside one and the E-STOP refuses it outright.")
             self.g_get_state = gui.add_button(
                 "Get robot state", icon=self.viser.Icon.DOWNLOAD,
-                hint="Read the wrist pose (TF) and the measured tendon lengths "
-                     "(finger_servo_node) and make them the state on screen. The "
-                     "tendon lengths are inverted back into flexor tensions -- "
-                     "this app poses from tension -- so the sliders move too.")
+                hint="Read the wrist pose (TF) and the hand's measured state "
+                     "and make them the state on screen. On a tendon hand the "
+                     "measured lengths are inverted back into flexor tensions -- "
+                     "this app poses from tension -- so the sliders move too; on "
+                     "a joint hand the measured angles ARE what the sliders hold "
+                     "and are written straight onto them.")
             self.g_robot_status = gui.add_markdown("")
 
         self.g_play.on_click(self._play_on_robot)

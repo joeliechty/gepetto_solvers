@@ -2,6 +2,13 @@
 
 No viser, no browser, no hardware. These are the only coverage :class:`HandVizApp`
 has, so they are wired into the test suite as well as reachable via ``--smoke``.
+
+WHICH CHECKS RUN DEPENDS ON THE HAND. The close ramp, the calibration alignment
+and the tendon half of the plan export are all gated on features
+(``close_ramp``, ``calibration``, ``displacement``) that only the tendon hand
+declares, so ``--smoke --hand allegro`` runs the solver checks and the plan export
+and says which of the rest it skipped and why. A skip is printed rather than
+silent: a check that quietly did not run looks exactly like one that passed.
 """
 
 
@@ -28,6 +35,7 @@ from gepetto_solvers.core.solvers import (
     wrist_to_disc,
 )
 
+from ._params import seed_params_for_hand
 from .constants import (
     _CAL_ARTICULATED_MIN_MM,
     _CAL_RIGID_TOL_MM,
@@ -231,32 +239,48 @@ def _smoke_calibration():
     return ok
 
 
-def _smoke_robot_plan():
+def _smoke_robot_plan(hand=None):
     """Check the robot-plan export the way the Robot folder uses it, headlessly.
 
     This is the half of the ROS integration that can be tested with no ROS, no
-    hardware and no browser, and it is the half that decides which way the
-    fingers move -- so it is worth running every time the solver changes, not
-    only when someone opens the app.
+    hardware and no browser, and it is the half that decides which way the digits
+    move -- so it is worth running every time the solver changes, not only when
+    someone opens the app.
+
+    RUNS FOR EITHER HAND, because the plan is where the two diverge: the tendon
+    hand exports one displacement per digit measured from a hand-open zero (and
+    that zero, and the SIGN of the subtraction, are what the open-length block
+    below proves), while a joint-space hand exports its solved joint vector and
+    has no such zero to get wrong. The rest of the export -- pacing, timing,
+    landing on the final waypoint, the wire round trip -- is one path for both,
+    and running it twice is what keeps it that way.
     """
-    print("Smoke-testing the robot plan export...")
+    hand = hand or get_hand()
+    print(f"Smoke-testing the robot plan export ({hand.name})...")
     ok = True
 
-    params = HandSolveParams()
-    open_lengths = robot_plan.open_tendon_lengths(params)
-    notes, sign_ok = robot_plan.check_open_lengths(open_lengths, params)
-    ok = ok and sign_ok
-    print(f"  [    open] {', '.join(f'{k} {v * 1e3:.1f}' for k, v in open_lengths.items())} mm "
-          f"[{'ok' if sign_ok else 'BAD'}]")
-    for note in notes:
-        print(f"           - {note}")
+    params = seed_params_for_hand(HandSolveParams(), hand)
+    open_lengths = None
+    if "displacement" in hand.features:
+        open_lengths = robot_plan.open_tendon_lengths(params, hand=hand)
+        notes, sign_ok = robot_plan.check_open_lengths(open_lengths, params,
+                                                       hand=hand)
+        ok = ok and sign_ok
+        print(f"  [    open] "
+              f"{', '.join(f'{k} {v * 1e3:.1f}' for k, v in open_lengths.items())} mm "
+              f"[{'ok' if sign_ok else 'BAD'}]")
+        for note in notes:
+            print(f"           - {note}")
+    else:
+        print(f"  [    open] n/a -- {hand.name} is commanded on position, so "
+              f"there is no hand-open zero to measure displacement from")
 
     if not capabilities()["ik_stepping"]:
         print("  [    plan] skipped -- binding cannot step an IK solve")
         return ok
 
     # A short stepped solve, so the plan has real AL iterates to walk.
-    stepper = HandIKStepper(HandSolveParams())
+    stepper = HandIKStepper(seed_params_for_hand(HandSolveParams(), hand), hand)
     last = {}
     stepper.run(max_steps=3, on_step=lambda r, s: last.update(res=r))
     result = last.get("res")
@@ -265,7 +289,8 @@ def _smoke_robot_plan():
         resolve_table_origin(stepper.params, spec, center),
         np.asarray(stepper.params.plane_normal, float))
 
-    plan = robot_plan.build_plan(result, stepper.configs, corner, open_lengths)
+    plan = robot_plan.build_plan(result, stepper.configs, corner, open_lengths,
+                                 hand=hand)
 
     # THE WHOLE PATH, one waypoint per recorded iterate. Checked rather than
     # assumed because the failure is silent and was live for a while: build_plan
@@ -280,12 +305,15 @@ def _smoke_robot_plan():
               f"for {n_iterates} recorded iterates; the path is being truncated")
     ok = ok and whole
 
-    plan, clamp_notes = robot_plan.clamp_to_travel(plan)
+    plan, clamp_notes = robot_plan.clamp_to_travel(plan, hand=hand)
     # The approach segment the bridge prepends at play time: pretend the robot is
-    # at the hand-open pose, which is the worst case for the first segment.
+    # at the ZERO command, which is the worst case for the first segment -- the
+    # hand-open pose on a tendon hand, the neutral configuration on a joint one.
     plan = robot_plan.prepend_current(
-        plan, plan.waypoints[0].wrist_pose, {n: 0.0 for n in plan.finger_names})
-    samples = robot_plan.interpolate(plan, hz=100.0)
+        plan, plan.waypoints[0].wrist_pose,
+        {n: np.zeros(plan.dof_per_digit) for n in plan.digit_names})
+    samples = robot_plan.interpolate(plan, hz=100.0,
+                                     max_digit=hand.max_digit_speed)
 
     # Every sample must be finite and the last must land ON the final waypoint,
     # or the robot would be commanded somewhere the solve never asked for.
@@ -299,6 +327,21 @@ def _smoke_robot_plan():
           f"duration={samples[-1].t:.2f}s [{status}] | {robot_plan.summarize(plan)}")
     for note in clamp_notes:
         print(f"           - {note}")
+
+    # The wire round trip, here as well as in tests/core/test_plan_wire.py: this
+    # is the form the plan crosses to the executor in, and a plan that survives
+    # everything above but not this one is a plan that plays correctly in the
+    # smoke test and wrongly on the robot.
+    restored = robot_plan.unflatten_plan(robot_plan.flatten_plan(plan))
+    intact = (restored.digit_names == plan.digit_names
+              and restored.command_kind == plan.command_kind
+              and len(restored.waypoints) == len(plan.waypoints)
+              and all(np.allclose(a.digit_cmd[n], b.digit_cmd[n])
+                      for a, b in zip(restored.waypoints, plan.waypoints)
+                      for n in plan.digit_names))
+    ok = ok and intact
+    print(f"  [    wire] {plan.command_kind}, {len(plan.digit_names)} digits x "
+          f"{plan.dof_per_digit} [{'ok' if intact else 'BAD'}]")
     return ok
 
 
@@ -306,14 +349,16 @@ def _smoke_robot_plan():
 # Headless smoke test -- validates the solver classes independently of viser.
 # ---------------------------------------------------------------------------
 
-def _smoke():
+def _smoke(hand=None):
+    """Every check this hand supports, in order. Returns True if all passed."""
+    hand = hand or get_hand()
     print(f"Smoke-testing the hand solver classes "
-          f"({HandSolveParams().primitive}, defaults)...")
+          f"({hand.name}, {HandSolveParams().primitive}, defaults)...")
     ok = True
     caps = capabilities()
 
     # FK: one frame, no contact.
-    res = HandFKSolver(HandSolveParams()).solve()
+    res = HandFKSolver(seed_params_for_hand(HandSolveParams(), hand), hand).solve()
     status = "ok" if len(res.frames) == 1 else "BAD"
     ok = ok and status == "ok"
     print(f"  [{'FK':>8}] frames={len(res.frames)} (expect 1) [{status}] | "
@@ -331,7 +376,7 @@ def _smoke():
         else:
             print("  [IK-table] skipped -- binding has no support-plane env fields")
         for label, table, obj in cases:
-            params = HandSolveParams()
+            params = seed_params_for_hand(HandSolveParams(), hand)
             if table:
                 params.table = True
                 params.table_contact = True
@@ -339,7 +384,7 @@ def _smoke():
             # The last stepped result, captured the way the GUI does -- run()
             # returns only the status, and the gaps live on the result.
             last = {}
-            st = HandIKStepper(params).run(
+            st = HandIKStepper(params, hand).run(
                 # noqa: B023 -- `last` is rebound each iteration and this lambda
                 # is consumed synchronously by run() before the next one, so it
                 # never outlives the binding it captures.
@@ -360,9 +405,20 @@ def _smoke():
             print(f"  [{label:>8}] steps={st.steps} state={st.state} "
                   f"snapshots={n} [{status}] | violation={st.violation:.3e} "
                   f"cost={st.cost:.4g}{extra}")
-    ok = _smoke_close() and ok
-    ok = _smoke_lift() and ok
-    ok = _smoke_calibration() and ok
-    ok = _smoke_robot_plan() and ok
+    # Gated on what the HAND has, not on what the binding has -- see `caps`
+    # above for that. The close ramp needs measured ramp constants, the lift
+    # needs them too, and the calibration alignment addresses disc landmarks;
+    # none of the three is a thing a joint-space hand has, so they are SKIPPED
+    # with a reason rather than run against numbers that belong to another hand.
+    for label, feature, check in (("phase-4 close", "close_ramp", _smoke_close),
+                                  ("phase-5 lift", "close_ramp", _smoke_lift),
+                                  ("calibration", "calibration",
+                                   _smoke_calibration)):
+        if feature in hand.features:
+            ok = check() and ok
+        else:
+            print(f"Skipping the {label} check -- {hand.name} has no "
+                  f"'{feature}'.")
+    ok = _smoke_robot_plan(hand) and ok
     print("Smoke test:", "PASS" if ok else "FAIL")
     return 0 if ok else 1

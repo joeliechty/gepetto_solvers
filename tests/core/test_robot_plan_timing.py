@@ -11,6 +11,7 @@ means, and it is the thing that was silently not true of the old executor.
 """
 
 import numpy as np
+import pytest
 
 from _pkg import robot_plan
 
@@ -26,9 +27,16 @@ segment_durations = robot_plan.segment_durations
 
 HZ = 100.0
 PERIOD = 1.0 / HZ
-SPEEDS = dict(max_linear=0.2, max_angular=0.4, max_tendon=0.0163)
+SPEEDS = dict(max_linear=0.2, max_angular=0.4, max_digit=0.0163)
 
 FINGERS = ["index", "middle", "thumb"]
+
+#: The two command widths a plan is ever built at: one driven actuator per digit
+#: (the tendon hand's flexor) and four (the Allegro's joints). Every property
+#: below is a property of the TIMING, which knows a digit command only as a point
+#: in R^K -- so each one is asserted at both, and a width that only works because
+#: something downstream squeezed it back to a scalar fails here.
+WIDTHS = [1, 4]
 
 
 def _rotation(axis, angle):
@@ -47,10 +55,14 @@ def _pose(xyz, axis=(0.0, 0.0, 1.0), angle=0.0):
     return T
 
 
-def _plan(n=6):
+def _plan(n=6, width=1):
     """A plan whose segments differ in which channel is the slowest -- long
     travel, pure rotation, and a segment that barely moves at all (the case
-    `min_duration` exists for)."""
+    `min_duration` exists for).
+
+    ``width`` is the number of driven actuators per digit. The same seed and the
+    same poses at every width, so a difference between two widths is a difference
+    in the timing rather than in the plan."""
     rng = np.random.default_rng(7)
     waypoints = []
     for i in range(n):
@@ -59,18 +71,18 @@ def _plan(n=6):
             previous = waypoints[-1]
             waypoints.append(Waypoint(
                 wrist_pose=_pose(previous.wrist_pose[:3, 3] + 1e-6),
-                tendon_disp=dict(previous.tendon_disp),
+                digit_cmd={k: v.copy() for k, v in previous.digit_cmd.items()},
                 note=f"iterate {i}"))
             continue
         waypoints.append(Waypoint(
             wrist_pose=_pose(rng.uniform(-0.3, 0.3, 3),
                              axis=rng.uniform(-1.0, 1.0, 3),
                              angle=rng.uniform(-1.0, 1.0)),
-            tendon_disp={name: float(rng.uniform(0.0, 0.015))
-                         for name in FINGERS},
+            digit_cmd={name: rng.uniform(0.0, 0.015, width)
+                       for name in FINGERS},
             note=f"iterate {i}"))
     return SolvePlan(waypoints=waypoints, corner_viz=np.zeros(3),
-                     finger_names=list(FINGERS),
+                     digit_names=list(FINGERS),
                      open_lengths={name: 0.1 for name in FINGERS})
 
 
@@ -118,8 +130,9 @@ def test_every_waypoint_is_landed_on():
                            atol=1e-9), k
 
 
-def test_sample_at_is_continuous_and_clamped():
-    plan = _plan()
+@pytest.mark.parametrize("width", WIDTHS)
+def test_sample_at_is_continuous_and_clamped(width):
+    plan = _plan(width=width)
     schedule = plan_schedule(plan, hz=HZ, **SPEEDS)
 
     # Continuity across every interior segment boundary.
@@ -128,7 +141,8 @@ def test_sample_at_is_continuous_and_clamped():
         after = sample_at(plan, schedule, float(edge) + 1e-7)
         assert np.allclose(before.wrist_pose, after.wrist_pose, atol=1e-6)
         for name in FINGERS:
-            assert abs(before.tendon_disp[name] - after.tendon_disp[name]) < 1e-9
+            assert np.allclose(before.digit_cmd[name], after.digit_cmd[name],
+                               atol=1e-9)
 
     # Outside [0, total] is held, not extrapolated.
     assert np.allclose(sample_at(plan, schedule, -5.0).wrist_pose,
@@ -214,7 +228,7 @@ def test_screw_segment_rotates_and_translates_as_one():
     b[:3, 3] = np.array([1.0, 0.0, 0.0])
     plan = SolvePlan(waypoints=[Waypoint(a, {n: 0.0 for n in FINGERS}),
                                 Waypoint(b, {n: 0.0 for n in FINGERS})],
-                     corner_viz=np.zeros(3), finger_names=list(FINGERS),
+                     corner_viz=np.zeros(3), digit_names=list(FINGERS),
                      open_lengths={name: 0.1 for name in FINGERS})
     schedule = plan_schedule(plan, hz=HZ, **SPEEDS)
     mid = sample_at(plan, schedule, schedule.total / 2.0)
@@ -229,7 +243,7 @@ def test_screw_segment_rotates_and_translates_as_one():
 
 def test_single_waypoint_plan():
     plan = SolvePlan(waypoints=[_plan().waypoints[0]], corner_viz=np.zeros(3),
-                     finger_names=list(FINGERS),
+                     digit_names=list(FINGERS),
                      open_lengths={name: 0.1 for name in FINGERS})
     schedule = plan_schedule(plan, hz=HZ, **SPEEDS)
     assert schedule.durations == []
@@ -244,12 +258,13 @@ def test_single_waypoint_plan():
 
 
 def test_empty_plan():
-    plan = SolvePlan(waypoints=[], corner_viz=np.zeros(3), finger_names=[],
+    plan = SolvePlan(waypoints=[], corner_viz=np.zeros(3), digit_names=[],
                      open_lengths={})
     assert interpolate(plan, hz=HZ, **SPEEDS) == []
 
 
-def test_speed_stretches_time_and_leaves_the_path_alone():
+@pytest.mark.parametrize("width", WIDTHS)
+def test_speed_stretches_time_and_leaves_the_path_alone(width):
     """Halve every ceiling: the schedule doubles, the geometry is identical.
 
     This is the "fully interpolated at any speed" property. It is asserted PER
@@ -259,7 +274,7 @@ def test_speed_stretches_time_and_leaves_the_path_alone():
     given fraction of the total run falls. What must not change is the curve:
     the same fraction THROUGH A SEGMENT is the same pose at any speed.
     """
-    plan = _plan()
+    plan = _plan(width=width)
     fast = plan_schedule(plan, hz=HZ, **SPEEDS)
     slow = plan_schedule(plan, hz=HZ,
                          **{k: v / 2.0 for k, v in SPEEDS.items()})
@@ -282,5 +297,5 @@ def test_speed_stretches_time_and_leaves_the_path_alone():
             assert np.allclose(here.wrist_pose, there.wrist_pose,
                                atol=1e-9), (k, s)
             for name in FINGERS:
-                assert abs(here.tendon_disp[name]
-                           - there.tendon_disp[name]) < 1e-9, (k, s, name)
+                assert np.allclose(here.digit_cmd[name], there.digit_cmd[name],
+                                   atol=1e-9), (k, s, name)

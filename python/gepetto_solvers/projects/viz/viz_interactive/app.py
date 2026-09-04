@@ -145,7 +145,18 @@ class HandVizApp(
         # top-level entity, so it is not placed in any folder that happens to be
         # open. See _plotting/traj_panel.py.
         from gepetto_solvers.core.plotting.traj_panel import TrajectoryPanel
-        self.traj = TrajectoryPanel(server, self.digit_names)
+        # Sized by the HAND: one row per driven actuator per digit, in the units
+        # `robot_plan` commands that hand in. The tendon hand drives one tendon
+        # per digit and gets its five length rows in mm; the Allegro drives four
+        # joints and gets sixteen angle rows in rad.
+        if self.has("displacement"):
+            actuators, unit, fmt = ("tendon",), "mm", "7.2f"
+        else:
+            actuators = tuple(self.hand.actuation.names[i]
+                              for i in self.hand.actuation.drive_indices)
+            unit, fmt = "rad", "+7.3f"
+        self.traj = TrajectoryPanel(server, self.digit_names, actuators, unit,
+                                    digit_format=fmt)
         #: Measured robot states from the last playback, keyed by the waypoint
         #: (== iterate) index they were sampled at. None when nothing has been
         #: played, or when what was played cannot be lined up against the plotted

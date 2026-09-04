@@ -315,6 +315,9 @@ class ObjectPanelMixin:
         # rather than leaving a live checkbox the next solve would refuse.
         self._refresh_planar_contact_gate()
         self._refresh_exact_contact_gate()
+        # ...and so is whether the contact has a witness point to lay rows out
+        # on: a `ycb:` object is an ellipsoid SET, which has none.
+        self._refresh_normal_row_gate()
         # Whether there is a grasp subset to choose is likewise a property of the
         # object, so re-gate it here too -- and before _refresh_object, which
         # greys the excluded shells off the answer.
