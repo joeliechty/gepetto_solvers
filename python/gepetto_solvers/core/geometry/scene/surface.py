@@ -193,7 +193,7 @@ def _primitive_surface_gradient(p_local, spec, h):
     return grad
 
 
-def _primitive_surface_normal(p_local, spec, h=1e-6):
+def primitive_surface_normal(p_local, spec, h=1e-6):
     """Outward unit normal at ``p_local``: the central-difference gradient of
     ``primitive_surface_gap``, which is a unit SDF gradient for every primitive here.
 
@@ -265,5 +265,5 @@ def primitive_surface_witness(p_local, spec, *, h=1e-6):
         return best
 
     d = primitive_surface_gap(x, spec)
-    n = _primitive_surface_normal(x, spec, h)
+    n = primitive_surface_normal(x, spec, h)
     return float(d), x - d * n, n

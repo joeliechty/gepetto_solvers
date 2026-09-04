@@ -50,6 +50,7 @@
 #include "gepetto_solvers/environment/contact/SphereSphereContactFactor.h"
 #include "gepetto_solvers/environment/contact/SphereWitnessContactFactor.h"
 
+#include "gepetto_solvers/environment/grasp/EllipsoidGraspAlignmentFactor.h"
 #include "gepetto_solvers/environment/grasp/GraspAlignmentFactor.h"
 
 #include "gepetto_solvers/environment/pregrasp/PreGraspAxisAlignmentFactor.h"

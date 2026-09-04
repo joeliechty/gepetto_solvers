@@ -596,10 +596,11 @@ NonlinearFactorGraph HandModel::build_graph(
     // the piece the per-contact witness factors cannot express, because each of
     // those sees exactly one contact.
     //
-    // LAST in the emission order, and it must stay last: the AL indexes
-    // multipliers by graph position, so inserting this anywhere but the end would
-    // re-seat every carried multiplier of every solve that predates it. See the
-    // header note at the top of this file.
+    // Its POSITION in the emission order is load-bearing and must not move: the
+    // AL indexes multipliers by graph position, so shifting this block would
+    // re-seat every carried multiplier of every solve that predates it. Only the
+    // ellipsoid block below it may be appended after. See the header note at the
+    // top of this file.
     {
         std::vector<Key> point_keys;
         openvdb::FloatGrid::Ptr grid;
@@ -661,6 +662,86 @@ NonlinearFactorGraph HandModel::build_graph(
                 point_keys, object_key(), grid,
                 noiseModel::Diagonal::Sigmas(sigmas), curv_step, grad_step);
             tagger_.add_eq(graph, grasp, "grasp.align");
+        }
+    }
+
+    // --- Approximate geometric grasp alignment (h_grasp,E) ---------------
+    // The same Vector6 wrench equilibrium as the block above, but keyed off the
+    // contact sphere CENTERS and reading the normal from the analytic ellipsoid
+    // set rather than the baked SDF:
+    //
+    //   sum_i [ -n_i ; -(c_i - t_obj) x n_i ] = 0
+    //
+    // A separate constraint, not a mode of the one above, and the two may both
+    // be on. The block above REFUSES a digit on the center-direct contact form,
+    // because a witness point is the variable it keys off; this one is built for
+    // exactly that case, so the wrench balance is available during the
+    // approximation phase -- before any exact contact exists. The sphere radius
+    // cancels analytically out of the torque, which is what lets it key off the
+    // center with no witness variable at all.
+    //
+    // LAST in the emission order, and it must stay last: the AL indexes
+    // multipliers by graph position, so inserting this anywhere but the end would
+    // re-seat every carried multiplier of every solve that predates it -- which
+    // is also why it was appended HERE rather than beside its sibling. See the
+    // header note at the top of this file.
+    {
+        std::vector<Key> center_keys;
+        std::vector<gepetto_solvers::EllipsoidPrimitive> members;
+        double sigma_f = 1.0, sigma_t = 1.0, beta = 1000.0, curv_step = 0.0;
+        bool taubin = false;
+        for (int i = 0; i < n_digits; ++i) {
+            if (!env_[i]) continue;
+            const auto& env = *env_[i];
+            if (!env.ellipsoid_grasp_alignment_enabled) continue;
+            if (!env.target_contact_node.has_value()) continue;  // collision-only
+            // This constraint reads the object's ANALYTIC surface normal, so it
+            // needs an ellipsoid surface and cannot fall back to a baked grid the
+            // way the contact block can -- the whole point of it is to run on the
+            // smooth proxy. Silently substituting the SDF would build a different
+            // constraint than the caller asked for, so raise like the sibling.
+            if (env.ellipsoid_set.empty() && !(env.ellipsoid_semi_axes.norm() > 0.0))
+                throw std::invalid_argument(
+                    "HandModel: ellipsoid_grasp_alignment_enabled reads the "
+                    "object's ellipsoid surface normal at each sphere center, "
+                    "which needs ellipsoid_set or ellipsoid_semi_axes; digit " +
+                    std::to_string(i) + " has neither. Fit one "
+                    "(scripts/objects/setup_objects.py), or use the SDF form "
+                    "(grasp_alignment_enabled) instead.");
+            center_keys.push_back(kin_->site_pose_key({i, *env.target_contact_node}));
+            // The FULL set, never contact_ellipsoid_subset: the normal field is a
+            // property of the object's geometry, not of which shells this finger
+            // was cleared to touch. Same choice EllipsoidSetCollisionGapFactor
+            // makes, and for the same reason.
+            members = !env.ellipsoid_set.empty()
+                ? env.ellipsoid_set
+                : std::vector<gepetto_solvers::EllipsoidPrimitive>{
+                      gepetto_solvers::EllipsoidPrimitive{env.ellipsoid_semi_axes,
+                                                          Pose3()}};
+            beta      = env.ellipsoid_set_beta;
+            taubin    = env.ellipsoid_taubin;
+            sigma_f   = env.ellipsoid_grasp_alignment_sigma_force;
+            sigma_t   = env.ellipsoid_grasp_alignment_sigma_torque;
+            curv_step = env.ellipsoid_grasp_alignment_curvature_step;
+            // Reads the object pose, so it needs an anchor if no block above
+            // supplied one -- same reasoning as the hand-centering block.
+            if (!object_anchored) {
+                graph.add(PriorFactor<Pose3>(
+                    object_key(), Pose3(env.object_pose_mean),
+                    noiseModel::Gaussian::Covariance(env.object_pose_cov)));
+                object_anchored = true;
+            }
+        }
+        // Fewer than two contacts is skipped rather than thrown, for the reason
+        // spelled out on the sibling: a single unit force cannot sum to zero, and
+        // WHICH digits contact is the caller's standing selection.
+        if (center_keys.size() >= 2) {
+            Vector6 sigmas;
+            sigmas << sigma_f, sigma_f, sigma_f, sigma_t, sigma_t, sigma_t;
+            auto grasp = std::make_shared<gepetto_solvers::EllipsoidGraspAlignmentFactor>(
+                center_keys, object_key(), members, beta,
+                noiseModel::Diagonal::Sigmas(sigmas), taubin, curv_step);
+            tagger_.add_eq(graph, grasp, "grasp.align.ell");
         }
     }
 

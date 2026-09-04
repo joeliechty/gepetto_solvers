@@ -638,17 +638,28 @@ class OverlayMixin:
         return keep
 
 
-    def _update_grasp_wrench(self, wrench, object_center, *, arrow=0.03):
+    def _update_grasp_wrench(self, wrench, object_center, *, arrow=0.03,
+                             prefix="/grasp_wrench", label="h_grasp",
+                             force_rgb=_WRENCH_FORCE_RGB):
         """The ``h_grasp`` equality, drawn as the arrangement that produces it.
 
         The residual is a 6-vector summed over the contacts, and a number alone
         cannot say WHY it is nonzero -- a balanced grasp and a grasp nobody
         measured both report zero. So what is drawn is the sum's terms:
 
-        * one arrow per contact, from the contact point ``p_i`` along the INWARD
-          normal ``-n_i`` -- the unit virtual force the constraint is written
-          over. All the same length, because they are unit vectors; the grasp is
-          balanced when they point at each other.
+        * one arrow per contact along the INWARD normal ``-n_i`` -- the unit
+          virtual force the constraint is written over. All the same length,
+          because they are unit vectors; the grasp is balanced when they point
+          at each other. Drawn so the arrow ARRIVES at the contact point rather
+          than departing from it: the tail sits one arrow-length OUT along
+          ``+n_i`` and the head lands on ``p_i``. Same vector either way, but
+          the head is the only thing that carries the direction, and a contact
+          is by definition on the object's surface -- so an arrow drawn from
+          ``p_i`` inward buries its head inside the object, where the arrow
+          length is comparable to the object's own radius (a 3 cm arrow on a
+          4.4 cm sphere). All that stays visible then is a headless stub
+          between the surface and the fingertip, which reads as pointing the
+          wrong way.
         * a faint moment arm from the object origin ``t_obj`` out to each
           ``p_i``. This is the half of the torque term that the force arrows do
           not show: two contacts whose forces cancel perfectly still spin the
@@ -666,6 +677,15 @@ class OverlayMixin:
         The two residual arrows are green together when the whole 6-vector is
         under ``GRASP_WRENCH_GREEN_MAX`` and red otherwise -- one verdict, since
         the constraint is one equality over both halves.
+
+        ``prefix`` / ``label`` / ``force_rgb`` let the SAME drawing serve both
+        wrench constraints, which have identical structure and differ only in
+        where they are measured: ``h_grasp`` roots its arrows at the surface
+        witness points and reads the baked SDF, ``h_grasp,E`` roots them at the
+        sphere centres and reads the analytic ellipsoid. They are independent
+        constraints and are routinely on together, so each needs its own scene
+        subtree (or one would prune the other's handles) and its own force
+        colour (or a viewer could not tell the two sets of arrows apart).
         """
         keep = set()
         t_obj = np.asarray(object_center, float).reshape(3)
@@ -673,24 +693,25 @@ class OverlayMixin:
         if not points:
             return keep
 
-        # Per-contact virtual forces: p_i -> p_i - arrow * n_i (inward).
+        # Per-contact virtual forces, inward: tail at p_i + arrow * n_i, head
+        # ON p_i. See the note above on why the head goes at the contact.
         shafts = np.stack(
-            [np.stack([p, p - arrow * np.asarray(n, float).reshape(3)])
+            [np.stack([p + arrow * np.asarray(n, float).reshape(3), p])
              for p, n in zip(points, wrench.normals)])
-        cn = "/grasp_wrench/contacts"
+        cn = f"{prefix}/contacts"
         self._dynamic[cn] = self.scene.add_arrows(
-            cn, shafts, colors=_WRENCH_FORCE_RGB,
+            cn, shafts, colors=force_rgb,
             shaft_radius=arrow * 0.035, head_radius=arrow * 0.10,
             head_length=arrow * 0.25)
         keep.add(cn)
 
         arms = np.stack([np.stack([t_obj, p]) for p in points])
-        an = "/grasp_wrench/arms"
+        an = f"{prefix}/arms"
         self._dynamic[an] = self.scene.add_line_segments(
             an, arms, colors=_WRENCH_ARM_RGB, line_width=1.5)
         keep.add(an)
 
-        on = "/grasp_wrench/origin"
+        on = f"{prefix}/origin"
         self._dynamic[on] = self.scene.add_icosphere(
             on, radius=arrow * 0.12, color=_WRENCH_ARM_RGB, opacity=0.9,
             position=tuple(t_obj))
@@ -717,7 +738,7 @@ class OverlayMixin:
                 residuals.append(np.stack([t_obj, t_obj + v]))
                 tags.append(tag)
         if residuals:
-            rn = "/grasp_wrench/residual"
+            rn = f"{prefix}/residual"
             self._dynamic[rn] = self.scene.add_arrows(
                 rn, np.stack(residuals),
                 colors=np.array([rgb] * len(residuals), dtype=np.uint8),
@@ -727,15 +748,15 @@ class OverlayMixin:
             # The two share a colour -- they are halves of one verdict -- and an
             # origin, so the only thing telling them apart is the tip label.
             for tag, segment in zip(tags, residuals):
-                tl = f"/grasp_wrench/{tag}_label"
+                tl = f"{prefix}/{tag}_label"
                 self._dynamic[tl] = self.scene.add_label(
                     tl, tag, position=tuple(segment[1]), anchor="center-center")
                 keep.add(tl)
 
-        lb = "/grasp_wrench/label"
+        lb = f"{prefix}/label"
         self._dynamic[lb] = self.scene.add_label(
             lb,
-            f"|h_grasp| {wrench.norm:.3f}  "
+            f"|{label}| {wrench.norm:.3f}  "
             f"(f {np.linalg.norm(wrench.force):.3f}, "
             f"t {np.linalg.norm(wrench.torque) * 1000.0:.1f} mm) "
             f"over {len(points)}",

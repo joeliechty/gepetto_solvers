@@ -125,6 +125,15 @@ def capabilities():
         # is invisible in the resulting pose -- exactly the failure this whole
         # capability table exists to prevent.
         "grasp_alignment": hasattr(env, "grasp_alignment_enabled"),
+        # h_grasp,E, the same equilibrium measured on the sphere CENTERS against
+        # the analytic ellipsoid set. Gated apart from "grasp_alignment" for the
+        # same reason that one is gated apart from "contact_exact": separate
+        # fields, and a binding predating this one carries the SDF form alone.
+        # The failure it prevents is the same and just as invisible -- a ticked
+        # box claiming the contacts are being ARRANGED around the object when
+        # nothing in the graph says so.
+        "grasp_alignment_ellipsoid": hasattr(
+            env, "ellipsoid_grasp_alignment_enabled"),
         # Pre-grasp short-axis alignment (companion to Eq 2.16-2.17). Needs a
         # rebuilt binding with EnvironmentConfig.pregrasp_align_node.
         "pregrasp_axis_align": hasattr(env, "pregrasp_align_node"),

@@ -14,6 +14,7 @@ import gepetto_solvers
 from ..environment import (
     attach_collision,
     attach_contact,
+    attach_ellipsoid_grasp_alignment,
     attach_grasp_alignment,
     attach_half_space,
     attach_pregrasp_axis_alignment,
@@ -355,6 +356,25 @@ class HandSolverBase:
                                sigma_force=self.params.sigma_grasp_force,
                                sigma_torque=self.params.sigma_grasp_torque)
 
+    def _attach_ellipsoid_grasp_alignment(self):
+        """Attach the approximation-phase h_grasp,E over the CONTACT digits: the
+        same wrench equilibrium as above, measured on the sphere CENTERS against
+        the analytic ellipsoid set.
+
+        Masked by ``_object_contact_mask()`` for the same reason its sibling is,
+        with one part of the reasoning dropped: this constraint keys off the site
+        pose of the contact node, not off a witness point, so it does not need a
+        witness variable to exist -- which is exactly what lets it run during the
+        approximation. It still needs the contact NODE, which is what the object
+        contact mask decides, so an unmasked digit would name a node the graph
+        never designated."""
+        attach_ellipsoid_grasp_alignment(
+            self.configs,
+            contact_fingers=self._object_contact_mask(),
+            sigma_force=self.params.sigma_grasp_ell_force,
+            sigma_torque=self.params.sigma_grasp_ell_torque,
+            curvature_step=self.params.grasp_ell_curvature_step)
+
     def _attach_environment(self):
         """The whole constraint environment for one solve, per the independent
         toggles (object contact, table contact, object collision, table
@@ -389,6 +409,11 @@ class HandSolverBase:
         # re-seat the carried multipliers of every solve that predates it.
         if self.params.grasp_alignment:
             self._attach_grasp_alignment()
+        # And h_grasp,E after IT, matching build_graph, which appends the
+        # ellipsoid block after the SDF one for the same multiplier-indexing
+        # reason. The two are independent constraints and may both be on.
+        if self.params.grasp_alignment_ellipsoid:
+            self._attach_ellipsoid_grasp_alignment()
 
     # -- prior builders --
 

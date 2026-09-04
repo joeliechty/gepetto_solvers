@@ -16,6 +16,7 @@ from .palette import (
     _CONTACT_RGB,
     _FINGER_PLANE_RGB,
     _ROD_RGB,
+    _WRENCH_ELL_FORCE_RGB,
 )
 from .toggles import DistanceOverlays
 
@@ -111,7 +112,8 @@ class ViserHandScene(
                half_space_gaps=None, center_gap=None, axis_align=None,
                centroid_gap=None, finger_planes=None, planar_gaps=None,
                object_clearances=None, table_clearances=None, pair_gaps=None,
-               ellipsoid_metrics=None, grasp_wrench=None, object_center=None,
+               ellipsoid_metrics=None, grasp_wrench=None,
+               grasp_wrench_ellipsoid=None, object_center=None,
                link_meshes=None, wrist_pose=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``DigitState``).
@@ -183,6 +185,13 @@ class ViserHandScene(
         with ``object_center`` as the origin the moment arms and the net residual
         are measured about -- the same ``t_obj`` the constraint uses. Both are
         needed together; either alone draws nothing.
+
+        ``grasp_wrench_ellipsoid`` is the h_grasp,E readout, the same type from
+        ``solvers.ellipsoid_grasp_wrench_witness``, and it shares
+        ``object_center``. Drawn into its own scene subtree in its own force
+        colour: the two constraints are independent, are routinely on together,
+        and root their arrows at different points -- the surface witness for
+        h_grasp, the sphere centre for h_grasp,E.
 
         Every one of the above is gated on ``self.show_gap_lines`` (the master
         "distance overlays" toggle) AND on its own family flag in
@@ -339,6 +348,16 @@ class ViserHandScene(
         if (self._shown("grasp_wrench") and grasp_wrench is not None
                 and object_center is not None):
             keep |= self._update_grasp_wrench(grasp_wrench, object_center)
+
+        # h_grasp,E: the same drawing on its own subtree, so the two never prune
+        # each other's handles when both families are switched on.
+        if (self._shown("grasp_wrench_ellipsoid")
+                and grasp_wrench_ellipsoid is not None
+                and object_center is not None):
+            keep |= self._update_grasp_wrench(
+                grasp_wrench_ellipsoid, object_center,
+                prefix="/grasp_wrench_ell", label="h_grasp,E",
+                force_rgb=_WRENCH_ELL_FORCE_RGB)
 
         # The point the finger planes fan about -- one marker for all of them.
         if self.show_finger_planes and finger_planes:

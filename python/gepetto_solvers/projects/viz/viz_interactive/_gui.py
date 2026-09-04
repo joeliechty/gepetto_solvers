@@ -114,6 +114,8 @@ class GuiMixin:
                 + [self.g_obj_contact, self.g_obj_contact_plane,
                    self.g_obj_contact_exact, self.g_grasp_align,
                    self.g_grasp_sigma_force, self.g_grasp_sigma_torque,
+                   self.g_grasp_align_ell, self.g_grasp_ell_sigma_force,
+                   self.g_grasp_ell_sigma_torque,
                    self.g_tbl_contact, self.g_drop_normal_row,
                    self.g_half_space, self.g_half_sides, self.g_half_margin,
                    self.g_pregrasp_center, self.g_h_clear,
@@ -265,6 +267,23 @@ class GuiMixin:
                 if self.caps["grasp_alignment"]
                 else "requires a rebuilt _gepetto_solvers with "
                      "EnvironmentConfig.grasp_alignment_enabled")
+
+            box("grasp_wrench_ellipsoid", "grasp wrench (h_grasp,E)", False,
+                disabled=not self.caps["grasp_alignment_ellipsoid"],
+                hint="The same wrench arrangement measured on the sphere "
+                     "CENTRES against the analytic ellipsoid -- the form that "
+                     "is defined during the APPROXIMATION, where there is no "
+                     "witness point for the box above to read. Drawn in its "
+                     "own colour and its own subtree, so both can be on at "
+                     "once and compared: on one posture they root their arrows "
+                     "at different points and read different surfaces. This is "
+                     "the one to watch from phase 2, and it is worth reading "
+                     "with the constraint OFF -- it says what the approach is "
+                     "already achieving, and left unconstrained that number "
+                     "tends to get WORSE as the fingers close."
+                if self.caps["grasp_alignment_ellipsoid"]
+                else "requires a rebuilt _gepetto_solvers with "
+                     "EnvironmentConfig.ellipsoid_grasp_alignment_enabled")
 
             # Both remaining overlays are anchored on the measured PINCH
             # CENTROID (Eq 11), so a hand with no pinch table has nothing for
@@ -904,6 +923,59 @@ class GuiMixin:
                              "so this only starts to matter on an object that "
                              "is not round.")
 
+                # h_grasp,E -- the same equilibrium during the APPROXIMATION,
+                # measured on the sphere centres against the analytic ellipsoid.
+                # Separate box rather than a mode of the one above because the
+                # two are independent constraints and may both be on: this is
+                # the only one available while the contact is still the smooth
+                # center-direct form, which is exactly when the arrangement is
+                # still cheap to change.
+                self.g_grasp_align_ell = None
+                self.g_grasp_ell_sigma_force = None
+                self.g_grasp_ell_sigma_torque = None
+                if self.caps["grasp_alignment_ellipsoid"]:
+                    self.g_grasp_align_ell = gui.add_checkbox(
+                        "grasp wrench alignment (ellipsoid)", False,
+                        hint="The same 6-row wrench equilibrium as above, but "
+                             "measured on the contact sphere CENTRES against "
+                             "the analytic ellipsoid instead of on witness "
+                             "points against the baked SDF. The sphere radius "
+                             "cancels out of the torque exactly, so no witness "
+                             "variable appears in it -- which is the point: "
+                             "the SDF form REFUSES the center-direct contact, "
+                             "so it cannot run during the approach, and the "
+                             "contacts only get arranged at the last phase, "
+                             "once the posture has already committed. Use this "
+                             "one from phase 2. Needs an ellipsoid surface "
+                             "(there is no SDF fallback) and two checked "
+                             "digits. NOTE it constrains only the DIRECTIONS "
+                             "of the normals, never a distance -- tightened "
+                             "too far it satisfies itself by lifting off the "
+                             "object, so watch the contact gaps.")
+                    self.g_grasp_ell_sigma_force = gui.add_slider(
+                        "log10 grasp-E force sigma", -1.0, 4.0, 0.5, 2,
+                        hint="Whitening for the three FORCE rows. The default "
+                             "(1e1) is an order of magnitude TIGHTER than the "
+                             "SDF form's above, because this constraint has to "
+                             "steer the approach rather than polish a posture "
+                             "that already surrounds the object. Measured over "
+                             "25 steps on the Allegro: off, the residual "
+                             "drifts UP to ~2.9; at 1e2 it reaches ~0.7; at "
+                             "1e1 ~0.4 with contact still sub-millimetre. "
+                             "BELOW ~3 the solve starts buying the last of the "
+                             "residual by flying the fingers off the surface "
+                             "(35 mm at 1.0 on the big sphere) -- this "
+                             "constraint says nothing about distance, so that "
+                             "is a legal way to satisfy it.")
+                    self.g_grasp_ell_sigma_torque = gui.add_slider(
+                        "log10 grasp-E torque sigma", -1.0, 4.0, 0.5, 1,
+                        hint="Whitening for the three TORQUE rows, a sum of "
+                             "moment arms and so in metres -- kept an order of "
+                             "magnitude tighter than the force rows, as above. "
+                             "Identically zero on a SPHERE whatever it is set "
+                             "to, since the moment arm is parallel to the "
+                             "normal there.")
+
             # The pre-grasp family (Eq 2.16-2.19) all describe the same move:
             # open the hand around an object before closing on it, with the
             # thumb opposing the rest. Every one of them is written against a
@@ -1324,7 +1396,9 @@ class GuiMixin:
         # ...and the exact form's gate is keyed off the OBJECT, so it is
         # re-checked wherever the object changes (see _refresh_object).
         for h in (self.g_contacts + _forms
-                  + [self.g_grasp_align, self.g_tbl_contact]):
+                  + [self.g_grasp_align, self.g_grasp_align_ell,
+                     self.g_grasp_ell_sigma_force,
+                     self.g_grasp_ell_sigma_torque, self.g_tbl_contact]):
             if h is not None:
                 h.on_update(lambda _: (self._sync_params(),
                                        self._invalidate_stepper(),

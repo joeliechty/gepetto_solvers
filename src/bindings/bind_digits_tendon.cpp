@@ -202,6 +202,15 @@ void bind_digits_tendon(py::module& m) {
                        &gepetto_solvers::EnvironmentConfig::grasp_alignment_curvature_step)
         .def_readwrite("grasp_alignment_gradient_step",
                        &gepetto_solvers::EnvironmentConfig::grasp_alignment_gradient_step)
+        // --- Approximate geometric grasp alignment (h_grasp,E) ---
+        .def_readwrite("ellipsoid_grasp_alignment_enabled",
+                       &gepetto_solvers::EnvironmentConfig::ellipsoid_grasp_alignment_enabled)
+        .def_readwrite("ellipsoid_grasp_alignment_sigma_force",
+                       &gepetto_solvers::EnvironmentConfig::ellipsoid_grasp_alignment_sigma_force)
+        .def_readwrite("ellipsoid_grasp_alignment_sigma_torque",
+                       &gepetto_solvers::EnvironmentConfig::ellipsoid_grasp_alignment_sigma_torque)
+        .def_readwrite("ellipsoid_grasp_alignment_curvature_step",
+                       &gepetto_solvers::EnvironmentConfig::ellipsoid_grasp_alignment_curvature_step)
         .def("load_sdf", [](gepetto_solvers::EnvironmentConfig& self, const std::string& path) {
             openvdb::initialize();
             openvdb::io::File f(path);

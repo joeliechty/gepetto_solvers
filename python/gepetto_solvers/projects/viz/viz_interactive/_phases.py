@@ -53,6 +53,7 @@ class PhaseMixin:
             # two at once.
             "object_contact_exact": self.g_obj_contact_exact,
             "grasp_alignment": self.g_grasp_align,
+            "grasp_alignment_ellipsoid": self.g_grasp_align_ell,
             # Attaching BOTH object representations is not a control the panel
             # offers: it is implied by the contact form (see _sync_params), so a
             # preset naming it writes nothing and _sync_params derives it.

@@ -320,6 +320,85 @@ class HandSolveParams:
     # scaling argument above puts it. Judge this constraint with the witness.
     sigma_grasp_force: float = 100.0
     sigma_grasp_torque: float = 10.0
+    # h_grasp,E -- the APPROXIMATION-PHASE counterpart of ``grasp_alignment``,
+    # and an independent constraint rather than a mode of it. Same Vector6
+    # virtual-wrench equilibrium, but measured on the contact sphere CENTERS
+    # against the analytic ellipsoid set:
+    #
+    #   sum_i [ -n_i ; -(c_i - t_obj) x n_i ] = 0
+    #
+    # The sphere radius cancels out of the torque exactly -- the virtual force is
+    # collinear with the radius vector -- so there is no witness variable in it.
+    # That is the point: ``grasp_alignment`` needs a witness point and the C++
+    # layer RAISES on a center-direct contact, which makes it unavailable in the
+    # very phase the hand is still being steered by the smooth ellipsoid proxy.
+    # This one is that form, so the contacts can be arranged AROUND the object
+    # during approach instead of the arrangement only being checked at phase 4.
+    #
+    # Reads the FULL ellipsoid set (not the grasp subset), and needs an ellipsoid
+    # surface: there is no fall back to a baked SDF, and the C++ layer raises
+    # rather than substituting one. Needs two or more contact digits, same as its
+    # sibling. Both flags may be set at once.
+    grasp_alignment_ellipsoid: bool = False
+    # Split for the same units reason as ``sigma_grasp_force`` above
+    # (dimensionless force rows, metre torque rows), and judged the same way: the
+    # AL's own violation is WHITENED and falls as 1/sigma whether or not a
+    # fingertip moves, so read ``ellipsoid_grasp_wrench_witness`` instead.
+    #
+    # THESE ARE SET BY THE PENETRATION THEY COST, not by the residual they buy.
+    # This constraint cannot push a fingertip into the object: on a sphere the
+    # normal field is exactly radially invariant (the reported normal moves 5e-11
+    # over a 3x radial move), so the residual has NO radial dependence and the
+    # constraint can only SLIDE a contact tangentially. But the finger is a
+    # linkage, not a free point -- it cannot slide tangentially without also
+    # moving radially -- and the contact equality is the only thing resisting
+    # that, since the contact sphere is deliberately excluded from the object
+    # collision inequalities. So the two equalities trade, and these sigmas set
+    # the exchange rate.
+    #
+    # Measured on the Allegro hand (index/middle/thumb), phase 2, 25 stepper
+    # iterations. |w| is the raw wrench residual from the witness; pen. is the
+    # worst penetration of the ellipsoid proxy over the contact digits:
+    #
+    #                       off     300/30   100/10    30/3     10/1     3/0.3
+    #   megaminx      |w|   1.69     0.72     0.66     0.49     0.43     0.42
+    #                 pen.  0.00 mm  0.06     0.43     0.84     0.60     0.57
+    #   mid_sphere    |w|   1.62     0.84     0.76     0.55     0.50     0.49
+    #                 pen.  0.00 mm  0.11     0.64     0.94     0.70     0.68
+    #
+    # Left OFF the residual drifts UP (to ~2.9 by iteration 25 on the flat
+    # primitives): nothing is arranging the contacts, so they land wherever the
+    # approach puts them. That is the whole case for the constraint.
+    #
+    # 300/30 is the default because it takes more than half the available
+    # improvement in |w| (1.69 -> 0.72) for ~60 microns of penetration, which is
+    # two orders of magnitude inside the proxy's own fidelity. Everything tighter
+    # buys the remaining third of the residual at ten to fifteen times the
+    # penetration, and the trade is not even monotone -- 30/3 penetrates MORE
+    # than 10/1 for a worse residual, because by then the two equalities are
+    # fighting rather than converging. Tighten only while watching the gaps.
+    #
+    # A THIN object cannot satisfy this constraint while touching at all, however
+    # it is weighted: three fingers on one face of a plate (credit_card) have
+    # near-parallel normals that no arrangement cancels, so the solve trades
+    # contact away rather than converging. That is a real geometric conflict and
+    # not a tuning failure -- it wants a contact set with a finger on each face,
+    # or this constraint left off.
+    #
+    # SEPARATELY, mind what the proxy is: an ellipsoid fitted to a non-convex
+    # object is often the CIRCUMSCRIBED one (megaminx is a 44.0 mm sphere around
+    # a dodecahedron whose faces sit at 35 mm), so a contact holding the proxy
+    # exactly can still look wrong against the rendered mesh. That gap is the
+    # approximation's, not this constraint's, and it is there with the
+    # constraint off.
+    sigma_grasp_ell_force: float = 300.0
+    sigma_grasp_ell_torque: float = 30.0
+    # Central-difference stencil for dn/dc, in metres. None = the factor's own
+    # default of 1e-5 m, which is where truncation and round-off balance for a
+    # CLOSED-FORM field. Deliberately three orders tighter than the SDF sibling's
+    # half-a-voxel: that one differences a trilinear interpolant and so has a
+    # hard floor at the voxel size, this one has none.
+    grasp_ell_curvature_step: float | None = None
     # Eq 2.12-2.15: use the 4-row [c_R, c_O, c_T1, c_T2] SDF witness contact
     # form (c_N dropped) instead of the default 5-row form. Only affects a
     # non-ellipsoid (SDF) object's witness contact -- inert for the analytic
