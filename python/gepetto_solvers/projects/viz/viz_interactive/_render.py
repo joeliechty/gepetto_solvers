@@ -11,8 +11,12 @@ import numpy as np
 from gepetto_solvers.core.geometry.scene import TABLE_SPAN, TABLE_THICKNESS
 from gepetto_solvers.core.solvers import (
     R_to_euler,
+    ellipsoid_metric_witness,
     finger_plane_witness,
+    free_sphere_plane_witness,
+    grasp_wrench_witness,
     half_space_witness,
+    object_collision_witness,
     planar_gap_witness,
     plane_witness,
     pregrasp_axis_witness,
@@ -21,7 +25,10 @@ from gepetto_solvers.core.solvers import (
     resolve_constraint_plane_origin,
     resolve_scene,
     resolve_table_origin,
+    self_collision_witness,
 )
+
+from .constants import SELF_PAIR_WINDOW_M
 
 
 class SceneRenderMixin:
@@ -152,6 +159,82 @@ class SceneRenderMixin:
             f"{corner[2]:+.4f}) m")
 
 
+    def _distance_witnesses(self, res):
+        """Every constraint-distance overlay's data for one solved state, as the
+        ``scene.update`` keyword arguments that draw them.
+
+        NOT GATED ON THE CONSTRAINTS. Each family is computed when its own
+        display box is ticked and the hand supplies what it needs, and never
+        because the matching constraint happens to be in the graph. That is the
+        whole point of the folder these boxes live in: the distance a collision
+        inequality would see is most worth reading while collision is OFF, and
+        the arrangement h_grasp measures is worth watching before the equality
+        is ever attached.
+
+        Gated on the box rather than computed unconditionally because these are
+        not free: the self-collision witness walks every cross-digit sphere pair
+        in the hand, and the object clearances run an analytic surface solve per
+        sphere. An unticked family costs nothing.
+
+        The DESIGNATION masks still narrow what is reported -- a gap line on a
+        finger nothing was ever asked to touch is noise, not information -- but a
+        mask is a statement about the task, not about which constraints are
+        switched on, so it survives them all being off.
+        """
+        shown = self.scene.distances
+        # The master switch short-circuits the whole group: with it off nothing
+        # below would be drawn, so nothing below needs computing.
+        if not self.g_show_gaps.value:
+            return {}
+
+        out = {}
+
+        if shown.object_contact:
+            names = set(res.contact_names())
+            out["gaps"] = {name: v for name, v in res.contact_witness(0).items()
+                           if name in names}
+        if shown.table_contact:
+            # The table set when a solve designated one, the object set
+            # otherwise: a phase that targets both surfaces designates one list
+            # for both, and falling back keeps the plane distance readable while
+            # merely posing rather than only after a table solve.
+            out["table_gaps"] = plane_witness(
+                self.params, res, 0,
+                names=(res.table_contact_names() or res.contact_names()))
+        if shown.half_space and self.caps["opposition"]:
+            out["half_space_gaps"] = half_space_witness(self.params, res, 0)
+        if shown.pregrasp:
+            # Each returns None where the hand cannot supply what it needs (no
+            # opposing digit, no measured pinch pose), so a hand that has only
+            # some of the three draws only those.
+            out["center_gap"] = pregrasp_center_witness(self.params, res, 0)
+            out["axis_align"] = pregrasp_axis_witness(self.params, res, 0)
+            out["centroid_gap"] = pregrasp_centroid_witness(self.params, res, 0)
+        if shown.object_collision:
+            out["object_clearances"] = object_collision_witness(
+                self.params, res, 0)
+        if shown.table_collision:
+            # The same designated set the table gap lines used, so a fingertip
+            # is reported by exactly one of the two overlays.
+            out["table_clearances"] = free_sphere_plane_witness(
+                self.params, res, 0,
+                names=(res.table_contact_names() or res.contact_names()))
+        if shown.self_collision:
+            out["pair_gaps"] = self_collision_witness(
+                self.params, res, 0, max_gap=SELF_PAIR_WINDOW_M)
+        if shown.ellipsoid_metric:
+            # None on an object with no ellipsoid form, where ellipsoid_taubin
+            # is inert and the comparison would be one number printed twice.
+            out["ellipsoid_metrics"] = ellipsoid_metric_witness(
+                self.params, res, 0)
+        if shown.grasp_wrench and self.caps["grasp_alignment"]:
+            out["grasp_wrench"] = grasp_wrench_witness(res, 0)
+            # The origin the moment arms and the residual are measured about --
+            # the constraint's own t_obj.
+            out["object_center"] = res.object_center
+        return out
+
+
     def _render_frame(self, live=False):
         if self.result is None:
             # Nothing solved yet, so the commanded wrist pose is all there is.
@@ -166,24 +249,7 @@ class SceneRenderMixin:
         res = self._iter_view(live)
         self._render_mount(res)
         self._report_actuation(res)
-        # Only the fingers this solve drove onto a surface get a gap line for it;
-        # a distance readout on a finger nothing asked to touch is just noise.
-        # The two sets are independent, so a finger can carry both lines, one, or
-        # neither.
-        gaps = res.contact_witness(0)
-        names = set(res.contact_names() if self.params.object_contact else [])
-        gaps = {name: v for name, v in gaps.items() if name in names}
-        table_names = res.table_contact_names()
-        table_gaps = (plane_witness(self.params, res, 0, names=table_names)
-                      if table_names else None)
-        half_gaps = (half_space_witness(self.params, res, 0)
-                    if self.params.half_space else None)
-        center_gap = (pregrasp_center_witness(self.params, res, 0)
-                     if self.params.pregrasp_center else None)
-        axis_align = (pregrasp_axis_witness(self.params, res, 0)
-                     if self.params.pregrasp_axis_align else None)
-        centroid_gap = (pregrasp_centroid_witness(self.params, res, 0)
-                       if self.params.pregrasp_centroid else None)
+        overlays = self._distance_witnesses(res)
         # Purely a picture of the posture on screen, so unlike the overlays
         # above it is gated on its own display checkbox rather than on a
         # constraint being switched on -- the plane is worth looking at exactly
@@ -211,12 +277,7 @@ class SceneRenderMixin:
                                      or self.params.self_collision
                                      or (self.params.table
                                          and self.params.plane_avoidance)),
-                          gaps=gaps,
-                          table_gaps=table_gaps,
-                          half_space_gaps=half_gaps,
-                          center_gap=center_gap,
-                          axis_align=axis_align,
-                          centroid_gap=centroid_gap,
+                          **overlays,
                           # Visual only. Collision is the sphere set above; the
                           # graph never sees a mesh, so this cannot change a
                           # solve -- and a hand without meshes just draws as a

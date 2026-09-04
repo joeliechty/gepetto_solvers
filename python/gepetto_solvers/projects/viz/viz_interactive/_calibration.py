@@ -328,7 +328,7 @@ class CalibrationMixin:
             self.g_cal_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, 0.0)
             self.g_cal_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, 0.0)
             self.g_cal_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, 0.0)
-            self.g_cal_show = gui.add_checkbox("show calibration frame", True)
+            self.g_cal_show = gui.add_checkbox("show calibration frame", False)
             self.g_cal_capture = gui.add_button(
                 "Capture current", icon=self.viser.Icon.CROSSHAIR,
                 hint="Fill the six sliders from where the selected landmark is "

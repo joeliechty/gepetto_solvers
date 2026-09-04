@@ -17,6 +17,7 @@ from .palette import (
     _FINGER_PLANE_RGB,
     _ROD_RGB,
 )
+from .toggles import DistanceOverlays
 
 
 class ViserHandScene(
@@ -43,7 +44,8 @@ class ViserHandScene(
                  show_contact_spheres=True,
                  show_collision_spheres=True, show_gap_lines=True,
                  show_link_meshes=True,
-                 show_finger_planes=False, show_planar_gap=False):
+                 show_finger_planes=False, show_planar_gap=False,
+                 distances=None):
         self.server = server
         self.scene = server.scene
         self.finger_names = list(finger_names)
@@ -60,7 +62,14 @@ class ViserHandScene(
         # On by default: a hand that HAS meshes looks like itself with
         # them, and the overlays are drawn over the top.
         self.show_link_meshes = show_link_meshes
+        # The MASTER switch for every measurement overlay: one control that
+        # takes the whole category off the scene, so a picture can be cleared for
+        # a screenshot without losing which families were selected.
         self.show_gap_lines = show_gap_lines
+        # ...and which families those are. Independent of the constraints
+        # themselves -- see toggles.DistanceOverlays for why that separation is
+        # the point rather than a convenience.
+        self.distances = distances if distances is not None else DistanceOverlays()
         # Off by default: five translucent sheets through the middle of the
         # grasp hide the fingertips and the object surface behind them, so this
         # is something you switch on to answer a question, not scene furniture.
@@ -101,6 +110,8 @@ class ViserHandScene(
                collision=False, gaps=None, table_gaps=None,
                half_space_gaps=None, center_gap=None, axis_align=None,
                centroid_gap=None, finger_planes=None, planar_gaps=None,
+               object_clearances=None, table_clearances=None, pair_gaps=None,
+               ellipsoid_metrics=None, grasp_wrench=None, object_center=None,
                link_meshes=None, wrist_pose=None):
         """Refresh the hand geometry for one frame. ``frame`` maps finger name to
         an object exposing ``.marginals`` (a ``DigitState``).
@@ -149,9 +160,34 @@ class ViserHandScene(
         things -- distance to a target vs. angle off an axis -- so they are
         never merged into one draw call).
 
-        All the above are gated on ``self.show_gap_lines`` (the existing
-        "contact distance" display toggle) -- one category of overlay, one
-        switch.
+        ``object_clearances`` and ``table_clearances`` are the COLLISION
+        counterparts of the two gap maps: ``{"finger/node": (sphere_pt,
+        surface_pt, signed_gap)}`` over every sphere the contact equalities do
+        not own (``solvers.object_collision_witness`` /
+        ``solvers.free_sphere_plane_witness``). Same 3-tuple, drawn by sign
+        rather than by magnitude, because ``h_pen`` is an inequality and 1 mm of
+        clearance is a different verdict from 1 mm of penetration.
+
+        ``pair_gaps`` is the finger-finger counterpart:
+        ``{"a/i/b/j": (point_on_a, point_on_b, signed_gap)}`` from
+        ``solvers.self_collision_witness``, already narrowed to the pairs near
+        touching.
+
+        ``ellipsoid_metrics`` is ``{finger: solvers.EllipsoidMetric}`` -- the
+        exact and Taubin ellipsoid distances side by side, for reading the
+        approximation error the ``ellipsoid_taubin`` flag would put into the
+        residuals. None on an object with no ellipsoid form, where the flag is
+        inert and there is nothing to compare.
+
+        ``grasp_wrench`` is the h_grasp readout (``solvers.GraspWrench``), drawn
+        with ``object_center`` as the origin the moment arms and the net residual
+        are measured about -- the same ``t_obj`` the constraint uses. Both are
+        needed together; either alone draws nothing.
+
+        Every one of the above is gated on ``self.show_gap_lines`` (the master
+        "distance overlays" toggle) AND on its own family flag in
+        ``self.distances``. The family flags are deliberately NOT tied to whether
+        the matching constraint is in the graph: see ``toggles.DistanceOverlays``.
 
         ``finger_planes`` is the per-finger PINCH-PLANE overlay: a
         ``{finger: (base_pt, tip_pt, pinch_pt)}`` map (as returned by
@@ -220,13 +256,22 @@ class ViserHandScene(
             # Fingertip -> object-surface gap: a coloured line with the distance
             # in mm labelled at its midpoint. viser labels carry no colour, so the
             # near/far cue lives on the line.
-            if self.show_gap_lines and gaps and name in gaps:
+            if self._shown("object_contact") and gaps and name in gaps:
                 keep |= self._update_gap(name, *gaps[name])
-            if self.show_gap_lines and table_gaps and name in table_gaps:
+            if (self._shown("table_contact") and table_gaps
+                    and name in table_gaps):
                 keep |= self._update_gap(name, *table_gaps[name],
                                          kind="table_gap")
-            if self.show_gap_lines and half_space_gaps and name in half_space_gaps:
+            if (self._shown("half_space") and half_space_gaps
+                    and name in half_space_gaps):
                 keep |= self._update_half_space(name, *half_space_gaps[name])
+
+            # The exact-vs-Taubin comparison rides beside the object gap line it
+            # is measured along, so it is per finger like that one.
+            if (self._shown("ellipsoid_metric") and ellipsoid_metrics
+                    and name in ellipsoid_metrics):
+                keep |= self._update_ellipsoid_metric(
+                    name, ellipsoid_metrics[name])
 
             # Collision spheres on the disc nodes.
             if collision and self.show_collision_spheres:
@@ -265,16 +310,35 @@ class ViserHandScene(
 
         # Pre-grasp centering (Eq 2.18-2.19): a HAND-level overlay, drawn once
         # rather than per finger.
-        if self.show_gap_lines and center_gap is not None:
+        if self._shown("pregrasp") and center_gap is not None:
             keep |= self._update_center(*center_gap)
 
         # Pre-grasp short-axis alignment: also HAND-level, drawn once.
-        if self.show_gap_lines and axis_align is not None:
+        if self._shown("pregrasp") and axis_align is not None:
             keep |= self._update_axis_align(*axis_align)
 
         # Pre-grasp pinch-centroid centering: also HAND-level, drawn once.
-        if self.show_gap_lines and centroid_gap is not None:
+        if self._shown("pregrasp") and centroid_gap is not None:
             keep |= self._update_centroid(*centroid_gap)
+
+        # The collision inequalities' own distances. Keyed per SPHERE rather
+        # than per finger, so they are drawn from the flat witness maps here
+        # instead of inside the per-finger loop above.
+        if self._shown("object_collision") and object_clearances:
+            for key, measure in object_clearances.items():
+                keep |= self._update_clearance(key, *measure, kind="object")
+        if self._shown("table_collision") and table_clearances:
+            for key, measure in table_clearances.items():
+                keep |= self._update_clearance(key, *measure, kind="table")
+        if self._shown("self_collision") and pair_gaps:
+            for key, measure in pair_gaps.items():
+                keep |= self._update_pair_gap(key, *measure)
+
+        # h_grasp: hand-level, and measured ABOUT the object, so it needs the
+        # object's origin as well as the residual.
+        if (self._shown("grasp_wrench") and grasp_wrench is not None
+                and object_center is not None):
+            keep |= self._update_grasp_wrench(grasp_wrench, object_center)
 
         # The point the finger planes fan about -- one marker for all of them.
         if self.show_finger_planes and finger_planes:
@@ -288,6 +352,17 @@ class ViserHandScene(
             keep |= self._update_link_meshes(link_meshes, frame, wrist_pose)
 
         self._prune(keep)
+
+
+    def _shown(self, family):
+        """Whether one distance-overlay family should be drawn: the master
+        switch AND that family's own flag.
+
+        A method rather than the condition written out nine times, because the
+        two-level rule is the thing that has to stay consistent -- a family that
+        forgot the master would keep drawing after the category was switched
+        off, which is exactly the failure the master exists to prevent."""
+        return self.show_gap_lines and getattr(self.distances, family)
 
 
     def _prune(self, keep):

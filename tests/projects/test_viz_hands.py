@@ -159,11 +159,180 @@ def test_every_overlay_draws(app):
     for handle in (app.g_show_discs, app.g_show_disc_frames,
                    app.g_show_link_frames,
                    app.g_show_collision, app.g_show_contact,
-                   app.g_show_gaps, app.g_show_finger_planes):
+                   app.g_show_gaps, app.g_show_finger_planes,
+                   *app.g_distances.values()):
         if handle is not None:
             handle.value = True
     app._fk_solve()
     assert len(app.scene._dynamic) > 0
+
+
+# ---------------------------------------------------------------------------
+# The constraint-distance overlays. Each is a DISPLAY switch, and the property
+# worth pinning is the one they were separated out for: ticking one draws its
+# measurement whether or not the constraint it measures is in the graph.
+# ---------------------------------------------------------------------------
+
+def _paths(app, prefix):
+    """The scene handles drawn under one overlay's path this frame."""
+    return [n for n in app.scene._dynamic if n.startswith(prefix)]
+
+
+@pytest.mark.parametrize(
+    ("family", "prefix"),
+    [
+        ("object_collision", "/clearance/object/"),
+        ("table_collision", "/clearance/table/"),
+        ("self_collision", "/self_collision/"),
+    ],
+)
+def test_collision_distances_draw_with_the_constraints_off(app, family, prefix):
+    """The collision clearances are drawn from the POSE, not from the graph.
+
+    This is the whole reason the display switches were split from the constraint
+    switches: what a collision inequality would report is most worth reading
+    while collision is off, since that is the number that says what turning it on
+    would cost. Every collision family is unticked here, so a drawn line can only
+    have come from the display box.
+
+    Self-collision is windowed to the pairs near touching, so it legitimately
+    draws nothing on a hand posed wide open -- what is asserted for it is that it
+    does not raise, which is the failure mode that windowing introduced.
+    """
+    for box in (app.g_collision, app.g_self_collision, app.g_plane_avoid):
+        box.value = False
+    for handle in app.g_distances.values():
+        handle.value = False
+    app.g_distances[family].value = True
+    app._sync_params()
+    app._fk_solve()
+
+    assert app.params.collision is False
+    assert app.params.self_collision is False
+    if family != "self_collision":
+        assert _paths(app, prefix), f"{family} drew nothing with its box ticked"
+
+
+def test_contact_distance_survives_the_contact_equality_being_off(app):
+    """The contact gap lines describe the DESIGNATED fingers, not the attached
+    constraint -- so they still read while the equality that closes them is off,
+    which is when the number is most worth watching."""
+    app.g_obj_contact.value = False
+    for handle in app.g_distances.values():
+        handle.value = False
+    app.g_distances["object_contact"].value = True
+    app._sync_params()
+    app._fk_solve()
+
+    assert app.params.object_contact is False
+    assert any(n.endswith("/gap/line") for n in app.scene._dynamic)
+
+
+def test_unticking_a_family_takes_only_that_family_down(app):
+    """Each family prunes on its own. A shared switch would have taken the
+    contact gaps down with the clearances, which is exactly the coupling the
+    folder replaced."""
+    for handle in app.g_distances.values():
+        handle.value = False
+    app.g_distances["object_contact"].value = True
+    app.g_distances["object_collision"].value = True
+    app._sync_params()
+    app._fk_solve()
+    assert _paths(app, "/clearance/object/")
+
+    app.g_distances["object_collision"].value = False
+    app._sync_params()
+    app._fk_solve()
+    assert not _paths(app, "/clearance/object/")
+    assert any(n.endswith("/gap/line") for n in app.scene._dynamic)
+
+
+def test_the_master_switch_clears_the_whole_group(app):
+    """The master keeps the SELECTION and takes the drawing away, so a scene can
+    be cleared for a screenshot and put back with one tick."""
+    for handle in app.g_distances.values():
+        handle.value = True
+    app.g_show_gaps.value = False
+    app._sync_params()
+    app._fk_solve()
+
+    assert not _paths(app, "/clearance/")
+    assert not _paths(app, "/self_collision/")
+    assert not any(n.endswith("/gap/line") for n in app.scene._dynamic)
+    # ...and the selection underneath is untouched.
+    assert all(h.value for h in app.g_distances.values())
+
+
+def test_moving_the_object_moves_every_distance_with_it(app):
+    """THE TRAP, and it is silent. ``HandSolverBase`` resolves the scene once in
+    ``__init__``, and the workbench keeps ONE FK solver alive across object-pose
+    edits so a slider drag warm-starts. Every readout is measured against the
+    pose stamped on the result, so a cached solver kept reporting distances to
+    where the object used to be -- plausible numbers, drawn as tidy lines, all of
+    them wrong, with nothing on screen to say so.
+
+    Checked on the result rather than on the labels because that is where the
+    staleness lived: the overlays were faithfully drawing what they were given.
+    """
+    start = np.array(app.result.object_center, float)
+    before = app.result.contact_witness(0)
+
+    app.g_obj_dx.value = float(app.g_obj_dx.value) + 0.05
+    app._object_pose_changed()
+
+    np.testing.assert_allclose(app.result.object_center,
+                               app.params.object_center, atol=1e-9)
+    assert app.result.object_center[0] == pytest.approx(start[0] + 0.05)
+
+    # ...and the distances measured off it actually moved. A result carrying the
+    # new pose while the gaps stayed put would be the same bug one layer down.
+    after = app.result.contact_witness(0)
+    assert any(abs(after[n][2] - before[n][2]) > 1e-3 for n in before)
+
+
+def test_the_grasp_wrench_draws_its_arrangement_not_just_its_norm(app):
+    """h_grasp is drawn as the terms of its sum: a force arrow per contact, a
+    moment arm per contact, and the residual. A residual alone cannot be read --
+    a balanced grasp and a grasp nobody measured both report zero -- so the
+    arrows are the overlay, not decoration on it."""
+    if not app.caps["grasp_alignment"]:
+        pytest.skip("this binding cannot build the grasp alignment constraint")
+    for handle in app.g_distances.values():
+        handle.value = False
+    app.g_distances["grasp_wrench"].value = True
+    app._sync_params()
+    app._fk_solve()
+
+    assert app.params.grasp_alignment is False, "drawn with the constraint OFF"
+    assert "/grasp_wrench/contacts" in app.scene._dynamic
+    assert "/grasp_wrench/arms" in app.scene._dynamic
+    assert "/grasp_wrench/label" in app.scene._dynamic
+
+
+def test_the_metric_comparison_is_absent_where_taubin_is_inert(app):
+    """The exact-vs-Taubin overlay draws only on an ellipsoid form. On a sphere
+    or a box the flag changes nothing -- those distances are exact SDFs either
+    way -- so the comparison would be one number printed twice claiming to be a
+    measurement."""
+    from gepetto_solvers.core.solvers import ellipsoid_metric_witness
+
+    for handle in app.g_distances.values():
+        handle.value = False
+    app.g_distances["ellipsoid_metric"].value = True
+    app._sync_params()
+    app._fk_solve()
+
+    metrics = ellipsoid_metric_witness(app.params, app.result, 0)
+    drawn = _paths(app, "/hand/")
+    drawn = [n for n in drawn if "ellipsoid_metric" in n]
+    if app.result.spec["type"] in ("ellipsoid", "ellipsoid_set"):
+        assert metrics and drawn
+        # Both metrics are surface gaps, so they are directly comparable, and
+        # the one the SOLVE uses is named rather than left to be guessed.
+        for metric in metrics.values():
+            assert metric.in_use in ("exact", "taubin")
+    else:
+        assert metrics is None and not drawn
 
 
 # ---------------------------------------------------------------------------

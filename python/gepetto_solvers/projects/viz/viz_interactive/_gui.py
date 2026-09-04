@@ -15,6 +15,7 @@ from gepetto_solvers.core.geometry.scene import (
     GRASP_FLEXOR_TENSION,
     TABLE_SPAN,
 )
+from gepetto_solvers.core.plotting.viser_hand import GRASP_WRENCH_GREEN_MAX
 from gepetto_solvers.core.solvers import (
     HandSolveParams,
     R_to_euler,
@@ -28,6 +29,7 @@ from .constants import (
     DEFAULT_PHASE,
     OPPOSITION_SIDES,
     SDF_DROPDOWN_LABELS,
+    SELF_PAIR_WINDOW_M,
 )
 
 
@@ -135,11 +137,159 @@ class GuiMixin:
                    self.g_show_link_frames,
                    self.g_show_world, self.g_show_obj_frame,
                    self.g_show_table_frame, self.g_show_grid,
-                   self.g_show_gaps, self.g_show_mount,
-                   self.g_show_finger_planes, self.g_show_planar_gap,
+                   self.g_show_mount, self.g_show_gaps]
+                # The per-family distance boxes, in the order the folder built
+                # them -- so a family added there is restored by Reset without
+                # this list having to name it.
+                + list(self.g_distances.values())
+                + [self.g_show_planar_gap, self.g_show_finger_planes,
                    self.g_show_traj]
                 + [h for row in self.g_joints for h in row])
         return [h for h in handles if h is not None]
+
+
+    def _build_distance_folder(self, gui):
+        """The per-family switches for the constraint-distance overlays.
+
+        EVERY BOX HERE IS INDEPENDENT OF THE CONSTRAINT IT MEASURES. That is the
+        point of the folder, not an incidental property: the distance a
+        collision inequality would see is most worth reading while collision is
+        OFF -- it says what switching it on would cost -- and a contact gap is
+        worth watching long before the equality that closes it is attached.
+        Ticking a box here changes the picture and never the solve.
+
+        Each box re-renders the current frame rather than re-solving (see the
+        display-toggle wiring in ``_build_gui``), so a family can be switched on
+        mid-run to look at what the hand is doing and switched off again without
+        perturbing the iterate on screen.
+
+        Boxes are built into ``self.g_distances``, keyed by the
+        ``DistanceOverlays`` field they drive, so ``_sync_params`` copies the
+        group across in one loop and a family added there needs no new attribute
+        here.
+        """
+        self.g_distances = {}
+
+        def box(field, label, default, **kwargs):
+            self.g_distances[field] = gui.add_checkbox(label, default, **kwargs)
+            return self.g_distances[field]
+
+        with gui.add_folder("Constraint distances", expand_by_default=False):
+            box("object_contact", "object contact", True,
+                hint="h_contact: each DESIGNATED fingertip's surface gap to the "
+                     "object, measured on the analytic surface (green under "
+                     "15 mm, red over). Zero is the equality's zero set. Drawn "
+                     "for the fingers the contact MASK designates, whether or "
+                     "not the equality itself is switched on -- with it off "
+                     "this is what the constraint would be driving to zero.")
+            box("table_contact", "table contact", True,
+                hint="The same gap measured against the SUPPORT PLANE. Falls "
+                     "back to the object-contact finger set when no solve has "
+                     "designated a table set of its own, so the number is "
+                     "readable while posing rather than only after a table "
+                     "solve.")
+            box("object_collision", "object clearance", False,
+                hint="h_pen against the OBJECT, per sphere: every collision "
+                     "sphere the contact equalities do not own, with its signed "
+                     "clearance from the object surface. Blue while clear, red "
+                     "once through -- a sign rule, because the constraint is an "
+                     "inequality and 1 mm of clearance is the opposite verdict "
+                     "from 1 mm of penetration. Measured against the ellipsoid "
+                     "PROXY even when contact is pointed at the exact SDF, "
+                     "which is the surface the collision rows actually read. "
+                     "Off by default: this is one line and one label per "
+                     "sphere.")
+            box("table_collision", "table clearance", False,
+                hint="The same per-sphere inequality against the support "
+                     "plane's half-space. This is the family that silently "
+                     "stalls a phase -- a single sphere driven through the "
+                     "table dominates the merit function and every inner step "
+                     "is rejected -- so it is the one to switch on when a solve "
+                     "stops moving for no visible reason.")
+            box("self_collision", "finger-finger clearance", False,
+                hint="The cross-digit sphere pairs NEAR TOUCHING, each with the "
+                     "gap between the two sphere surfaces. Same-digit pairs are "
+                     "excluded, matching the constraint: consecutive spheres on "
+                     "one finger overlap by construction. Only pairs within "
+                     f"{SELF_PAIR_WINDOW_M * 1000:.0f} mm are drawn -- the pair "
+                     "count is quadratic, and a line between two fingers a "
+                     "hand-width apart says nothing.")
+            box("half_space", "opposition margin", False,
+                hint="Eq 2.16-2.17: each finger's signed margin from its own "
+                     "side of the opposition split, including the minimum "
+                     "standoff. Green on the correct side, red once across.",
+                disabled=not self.caps["opposition"])
+            box("pregrasp", "pre-grasp targets", False,
+                hint="The three hand-level pre-grasp readouts at once: the "
+                     "centering gap (achieved fingertip midpoint to target), "
+                     "the pinch-centroid gap (the measured hand-frame meeting "
+                     "point carried through the solved wrist), and the "
+                     "short-axis alignment angle. Each draws only where the "
+                     "hand supplies what it needs, so a hand with no pinch "
+                     "table simply shows fewer of them.")
+            # Only where the flag is not inert. Sphere/cylinder/capsule/cube
+            # distances are exact SDFs under either setting, so the comparison
+            # would be one number printed twice; the box is built anyway (the
+            # object changes at runtime) but the witness returns None and it
+            # draws nothing.
+            box("ellipsoid_metric", "exact vs Taubin", False,
+                hint="The ellipsoid distance under BOTH metrics on one label: "
+                     "the exact orthogonal distance (Eberly) the solver uses by "
+                     "default, the first-order Taubin approximation, and the "
+                     "difference. The metric the SOLVE is configured with is "
+                     "starred. They agree near the surface and diverge in the "
+                     "far field -- a true 15 mm gap from a flat shell reads "
+                     "~8 mm under Taubin -- so this is how the approximation "
+                     "error becomes a number rather than an inference. "
+                     "Ellipsoid and ycb: objects only; inert elsewhere, where "
+                     "the distance is an exact SDF either way.")
+            self.g_distances["grasp_wrench"] = gui.add_checkbox(
+                "grasp wrench (h_grasp)", False,
+                disabled=not self.caps["grasp_alignment"],
+                hint="The net virtual wrench of the contacts, drawn as the "
+                     "arrangement that produces it: a unit force arrow along "
+                     "each contact's INWARD normal, a faint moment arm from the "
+                     "object origin to each contact point, and the two halves "
+                     "of the residual -- net force and net torque -- as arrows "
+                     "from that origin, green together under "
+                     f"{GRASP_WRENCH_GREEN_MAX} and red over. The force arrow "
+                     "is one contact-arrow long per unit, so its length reads "
+                     "directly as how many contacts' worth of push is left "
+                     "uncancelled; the torque is scaled by the longest moment "
+                     "arm so the two are comparable. Recomputed from the solved "
+                     "poses, NOT read off the solver -- the AL number is "
+                     "whitened, so loosening the grasp sigmas divides it by "
+                     "orders of magnitude without moving a fingertip. Drawn "
+                     "whether or not the constraint is attached: with it off "
+                     "this is what the placement is already achieving."
+                if self.caps["grasp_alignment"]
+                else "requires a rebuilt _gepetto_solvers with "
+                     "EnvironmentConfig.grasp_alignment_enabled")
+
+            # Both remaining overlays are anchored on the measured PINCH
+            # CENTROID (Eq 11), so a hand with no pinch table has nothing for
+            # them to hang on: absent rather than ticked and permanently empty.
+            self.g_show_planar_gap = None
+            if self.has("pinch_table"):
+                self.g_show_planar_gap = gui.add_checkbox(
+                    # On by default, but only where the binding can actually
+                    # measure it: a hard True would tick a DISABLED box on an
+                    # older .so, and the readout would then permanently report
+                    # "in-plane distance: UNAVAILABLE" with no way to turn it off.
+                    "in-plane distance", self.caps["planar_gap"],
+                    disabled=not self.caps["planar_gap"],
+                    hint="Eq 11/13: the distance from each fingertip to the object "
+                         "measured INSIDE that finger's pulling plane, which is what "
+                         "a tendon can actually pull along. Draws the cross-section "
+                         "the plane cuts out of the object (exact) plus a line to the "
+                         "nearest point on it; the mm label is the C++ factor's own "
+                         "first-order value, so a visible mismatch between line and "
+                         "label IS the approximation error. '(3D)' means the plane "
+                         "missed the object entirely and the number has fallen back "
+                         "to the ordinary 3D distance. Spheres, ellipsoids and ycb: "
+                         "sets only -- cube/cylinder/capsule have no ellipsoid "
+                         "cross-section. On by default wherever the binding "
+                         "supports it. Measurement only: no solve uses this yet.")
 
 
     def _build_gui(self):
@@ -1009,18 +1159,18 @@ class GuiMixin:
                      "measurement by eye. Draws nothing for a hand that has no "
                      "measured mount.")
             self.g_show_gaps = gui.add_checkbox(
-                "contact distance", True,
-                hint="Fingertip-to-surface gap/margin overlays in mm: object "
-                     "and table contact (green under 15 mm, red over), "
-                     "opposition half-space (green = correct side, red = "
-                     "violating), and pre-grasp centering (green under 15 mm "
-                     "to target).")
-            # Both overlays are drawn about the measured PINCH CENTROID (Eq 11)
-            # -- the planes pass through it, and the in-plane distance is
-            # measured inside those planes -- so a hand with no pinch table has
-            # nothing for either to be anchored on. Absent rather than ticked
-            # and permanently empty.
-            self.g_show_finger_planes = self.g_show_planar_gap = None
+                "distance overlays", True,
+                hint="MASTER switch for every constraint-distance overlay in mm "
+                     "-- the sub-folder below picks which families are drawn. "
+                     "Untick to clear the whole category off the scene (for a "
+                     "screenshot, say) without losing the selection underneath.")
+            self._build_distance_folder(gui)
+            # Drawn about the measured PINCH CENTROID (Eq 11) -- the planes
+            # pass through it -- so a hand with no pinch table has nothing for
+            # it to be anchored on. Absent rather than ticked and permanently
+            # empty. Its in-plane DISTANCE companion lives in the Constraint
+            # distances folder above, with the other measurements.
+            self.g_show_finger_planes = None
             if self.has("pinch_table"):
                 self.g_show_finger_planes = gui.add_checkbox(
                     "finger pinch planes", False,
@@ -1033,25 +1183,6 @@ class GuiMixin:
                          "Nothing enforces these planes; they describe the posture "
                          "on screen. Needs a measured pinch pose, so only digit "
                          "sets INCLUDING THE THUMB draw anything.")
-                self.g_show_planar_gap = gui.add_checkbox(
-                    # On by default, but only where the binding can actually
-                    # measure it: a hard True would tick a DISABLED box on an
-                    # older .so, and the readout would then permanently report
-                    # "in-plane distance: UNAVAILABLE" with no way to turn it off.
-                    "in-plane distance", self.caps["planar_gap"],
-                    disabled=not self.caps["planar_gap"],
-                    hint="Eq 11/13: the distance from each fingertip to the object "
-                         "measured INSIDE that finger's pulling plane, which is what "
-                         "a tendon can actually pull along. Draws the cross-section "
-                         "the plane cuts out of the object (exact) plus a line to the "
-                         "nearest point on it; the mm label is the C++ factor's own "
-                         "first-order value, so a visible mismatch between line and "
-                         "label IS the approximation error. '(3D)' means the plane "
-                         "missed the object entirely and the number has fallen back "
-                         "to the ordinary 3D distance. Spheres, ellipsoids and ycb: "
-                         "sets only -- cube/cylinder/capsule have no ellipsoid "
-                         "cross-section. On by default wherever the binding "
-                         "supports it. Measurement only: no solve uses this yet.")
             self.g_show_traj = gui.add_checkbox(
                 "trajectory plots", True,
                 hint="The window docked to the LEFT of the 3D view: the six "
@@ -1140,7 +1271,10 @@ class GuiMixin:
                   self.g_show_disc_frames, self.g_show_link_frames,
                   self.g_show_meshes,
                   self.g_show_gaps, self.g_show_mount, self.g_show_finger_planes,
-                  self.g_show_planar_gap):
+                  self.g_show_planar_gap,
+                  # Every distance family: ticking one is a question about the
+                  # state already on screen, so it must never re-solve.
+                  *self.g_distances.values()):
             if h is not None:
                 h.on_update(lambda _: (self._sync_params(), self._render_frame()))
         # The contact checkboxes ride along only to keep self.params in sync;

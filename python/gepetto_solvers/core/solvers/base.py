@@ -67,6 +67,30 @@ class HandSolverBase:
         self.contact_subset = grasp_subset_indices(
             self.spec, self.params.use_grasp_subset)
 
+    def refresh_scene(self):
+        """Re-read the object's pose and form from ``params``.
+
+        ``__init__`` resolves the scene ONCE and every result is stamped with
+        what it found, which is right for a solver whose graph is built against
+        that object -- the answer has to describe the constraints that ran. It is
+        wrong for a solver that is kept alive across scene edits: the object
+        moves, the cached solver keeps stamping its results with where the object
+        USED to be, and every readout measured off a result (the workbench's
+        whole distance-overlay folder, ``worst_gap``, the plane witnesses) then
+        reports a distance to a position nothing is at any more. Nothing raises,
+        because the numbers stay perfectly plausible.
+
+        Safe only where the graph does not carry the object -- ``HandFKSolver``,
+        which is pure kinematics. A solver whose factors were built against the
+        old pose must be REBUILT, not refreshed, or its result would claim a
+        scene its constraints never saw; that is what ``_invalidate_stepper``
+        does on the workbench side.
+        """
+        self.spec, self.object_center, self.object_rotation, self.object_pose = \
+            resolve_scene(self.params)
+        self.contact_subset = grasp_subset_indices(
+            self.spec, self.params.use_grasp_subset)
+
     def _attach_planar_bending(self):
         """Rod physics, so it rides on the per-finger config rather than the
         environment. Attached from ``__init__`` rather than
