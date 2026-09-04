@@ -30,6 +30,7 @@ code *does*. This file only covers where it differs and why.
 | [9](#9-the-support-plane-uses-one-residual-not-five) | The support plane uses one residual, not five | representation |
 | [10](#10-plane-avoidance-is-off-during-the-contact-phases) | Plane avoidance is off during the contact phases | scheduling |
 | [11](#11-a-urdfs-visual-meshes-need-corrections-nothing-states) | A URDF's visual meshes need corrections nothing states | asset convention |
+| [12](#12-the-ellipsoid-distance-is-orthogonal-not-algebraic) | The ellipsoid distance is orthogonal, not algebraic | numerical |
 
 ---
 
@@ -316,3 +317,65 @@ The transform is carried **per mesh**, as the third element of
 `Hand.visual_meshes()`, rather than assumed by the renderer: it is a property of
 the asset and of what the URDF says about it, so a hand whose meshes are authored
 per link at metre scale returns the identity.
+
+---
+
+## 12. The ellipsoid distance is orthogonal, not algebraic
+
+**Written:** the object contact row is the algebraic value `x^T M x - 1`
+(Eq 1.89); the collision inequality replaces it with Taubin's first-order
+distance `(x^T M x - 1) / (2 ||M x||)` (Eq 1.91), citing
+[taubin1991estimation].
+
+**Code:** both rows measure with
+[`EllipsoidDistance`](../include/gepetto_solvers/environment/EllipsoidDistance.h),
+which by default returns the **exact orthogonal distance** to the surface
+[eberly2008distance] — the length `||u - y||` to the closest surface point `y`,
+found by one bracketed Newton solve on
+
+```
+F(t) = sum_j ( e_j u_j / (t + e_j^2) )^2 - 1 = 0,   y_j = e_j^2 u_j / (t + e_j^2)
+```
+
+after folding the query point into the first octant as `u = |x|`. Its gradient is
+the unit surface normal, mapped back out of the octant:
+`diag(sgn(x)) (u - y) / ||u - y||`. Setting `EnvironmentConfig::ellipsoid_taubin`
+(`HandSolveParams.ellipsoid_taubin` from Python) restores Eq 1.91 exactly.
+
+**Why not the algebraic form at all.** Its residual and gradient scale as
+`~1/min(semi_axis)^2` — 40x the Euclidean distance on a 5 cm sphere and ~1e6x
+along a coin's thin axis. Under a shared unit noise model that row swamps every
+other row in the graph and the AL inner solve stagnates. This part is not a
+departure: Eq 1.91 makes the same move for the same reason, and the code simply
+applies it to the contact row too, which the two forms' shared zero set permits.
+
+**Why not Taubin either.** It is only *first-order*, so its gradient norm drifts
+from 1 as the shape gets more eccentric — 0.98 on a ball, 0.82 on a 150:1 coin,
+0.56 at 200:1 — and it is that drift, not the residual's size, that is left after
+Eq 1.91's normalisation. A row whose gradient is short is a row the Gauss-Newton
+step silently down-weights against every other row beside it, which is why the
+worst case is exactly the flat object the formulation most wants to grasp. Inside
+the surface it is worse than drift: `||M x||` is the denominator and it goes to
+zero at the centre, so a 45 mm penetration on a 50 mm ball reports as 247 mm.
+The exact distance is 1 and 45 mm respectively, at every eccentricity, which is
+the whole point.
+
+**The two share a zero set exactly**, so the surface every constraint pins to is
+identical under either flag — the field off it is what moves. That is what makes
+the flag safe to flip mid-project, and it is asserted directly
+(`tests/core/test_ellipsoid_distance.py`).
+
+**What it costs.** A bracketed Newton solve per sphere per member per evaluation,
+~0.35 us — small next to the `Pose3` chain rule around it. And the exact distance
+is only `C^0` across the interior medial axis, where the closest surface point
+jumps, whereas Taubin is `C^inf` everywhere; that is the one property `taubin=true`
+still has, alongside reproducing every pre-flag result.
+
+**One place the flag does not reach.** `EllipsoidSetPlanarGapFactor` blends a 3D
+distance with an in-plane one (Eq 13). The 3D half goes through
+`EllipsoidDistance` like everything else — it must, since weight 0 there has to
+reduce exactly to `EllipsoidSetCollisionGapFactor` — but the in-plane half stays
+the projected Taubin ratio under both settings. The exact orthogonal distance to
+the plane's *cross-section* is a second root-find on a 2D conic whose axes depend
+on the plane normal, and this factor carries that normal's derivative live rather
+than frozen, so it is a separate derivation rather than a reuse of the 3D one.

@@ -136,8 +136,9 @@ struct EnvironmentConfig {
     // the generalization of ellipsoid_semi_axes to a shape one ellipsoid cannot
     // represent (a screwdriver's fat handle joined to its thin shaft is two
     // scales in one body, and the single MVEE over both is mostly air).
-    // EllipsoidSetCollisionGapFactor evaluates it, fusing the per-member Taubin
-    // distances with a LogSumExp smooth min so the surface stays C-infinity
+    // EllipsoidSetCollisionGapFactor evaluates it, fusing the per-member signed
+    // distances (see ellipsoid_taubin) with a LogSumExp smooth min so the
+    // surface stays C-infinity
     // across the seams where the members meet -- which is where a sliding finger
     // spends its time.
     //
@@ -160,6 +161,30 @@ struct EnvironmentConfig {
     // the formulation exists to buy. See EllipsoidSetCollisionGapFactor's
     // SMOOTH-MIN BIAS note for the full trade-off.
     double ellipsoid_set_beta = 1000.0;
+
+    // Measure ellipsoid distance with Taubin's first-order algebraic
+    // approximation instead of the exact orthogonal distance. Applies to every
+    // ellipsoid factor at once -- the single ellipsoid, the set, and the 3D half
+    // of the in-plane form -- because a graph that measured the same object two
+    // ways in the collision and contact rows would be optimizing a shape that
+    // exists nowhere.
+    //
+    // False (the default) = exact: the true distance to the closest surface
+    // point, whose gradient is the unit surface normal. Its Jacobian rows are
+    // conditioned identically at every eccentricity, which is what lets a flat or
+    // coin-like object be resolved at the same AL step size as a sphere -- the
+    // Taubin gradient's norm drifts from 1 as the shape gets more eccentric, and
+    // that drift IS the ill-conditioning.
+    //
+    // True = the approximation every result before this flag existed was produced
+    // with. Kept for reproducing those, and for the one property it has that the
+    // exact form does not: it is C-infinity everywhere, where the exact distance's
+    // gradient is only C^0 across the interior medial axis (the closest surface
+    // point jumps there). Both share the same zero set exactly, so the surface the
+    // constraints pin to is identical either way; only the field off it moves.
+    //
+    // See the TWO METRICS note on EllipsoidDistance.
+    bool ellipsoid_taubin = false;
 
     // Which members of ellipsoid_set the CONTACT equality (Eq 1.13 / Eq 13) may
     // target. Empty (the default) => all of them, so every existing env builds

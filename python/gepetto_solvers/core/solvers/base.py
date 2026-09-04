@@ -132,6 +132,7 @@ class HandSolverBase:
                        contact_fingers=mask,
                        drop_normal_row=self.params.contact_drop_normal_row,
                        ellipsoid_set_beta=self.params.ellipsoid_set_beta,
+                       ellipsoid_taubin=self.params.ellipsoid_taubin,
                        in_plane=in_plane,
                        pinch_centroid=(pinch.centroid if pinch is not None else None),
                        contact_subset=self.contact_subset,

@@ -23,14 +23,17 @@
 //     dropped -- the standard locally-constant-gradient contact convention. Same
 //     for the surface normal in the `c_N` row.
 //
-//  2. The ellipsoid `c_O` row uses Taubin's FIRST-ORDER distance, not the raw
-//     algebraic `x^T M x - 1`. Both have the identical zero set, but the raw
-//     form's residual and gradient scale as ~1/min(semi_axis)^2 -- ~40x the
-//     Euclidean distance on a 5 cm sphere and ~1e6x along a coin's thin axis.
-//     Under a shared unit noise model the raw row swamps every other row and the
-//     AL inner solve stagnates.
+//  2. Every ellipsoid row measures with a real signed DISTANCE (`EllipsoidDistance`
+//     -- exact orthogonal by default, Taubin's first-order approximation under
+//     `EnvironmentConfig::ellipsoid_taubin`), never the raw algebraic
+//     `x^T M x - 1`. All three have the identical zero set, but the raw form's
+//     residual and gradient scale as ~1/min(semi_axis)^2 -- ~40x the Euclidean
+//     distance on a 5 cm sphere and ~1e6x along a coin's thin axis. Under a
+//     shared unit noise model the raw row swamps every other row and the AL
+//     inner solve stagnates.
 
 #include "gepetto_solvers/environment/ConstraintWrappers.h"
+#include "gepetto_solvers/environment/EllipsoidDistance.h"
 #include "gepetto_solvers/environment/EnvironmentConfig.h"
 #include "gepetto_solvers/environment/TangentBasis.h"
 

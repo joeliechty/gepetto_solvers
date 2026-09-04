@@ -63,55 +63,70 @@ def test_cube_gap_outside_face_and_corner():
     assert scene.primitive_surface_gap([0, 0, 0], spec) == pytest.approx(-0.03)
 
 
-def test_ellipsoid_gap_vanishes_on_the_surface():
-    # Taubin distance shares its zero set with the algebraic form, so a point
-    # placed exactly on x^T M x = 1 must read 0 whatever the axis ratios.
+@pytest.mark.parametrize("taubin", [False, True])
+def test_ellipsoid_gap_vanishes_on_the_surface(taubin):
+    # BOTH metrics share the zero set of the algebraic form, so a point placed
+    # exactly on x^T M x = 1 reads 0 whatever the axis ratios and whichever
+    # metric is asked for. That shared zero set is the whole reason the flag is
+    # safe to flip: it moves the field, not the surface the constraints pin to.
     spec = {"type": "ellipsoid", "semi_axes": [0.05, 0.03, 0.01]}
     for axis, a in enumerate(spec["semi_axes"]):
         p = np.zeros(3)
         p[axis] = a
-        assert scene.primitive_surface_gap(p, spec) == pytest.approx(0.0, abs=1e-12)
+        assert scene.primitive_surface_gap(p, spec, taubin=taubin) == pytest.approx(
+            0.0, abs=1e-12
+        )
     # An off-axis surface point too.
     u = np.array([1.0, 1.0, 1.0])
     u /= np.linalg.norm(u / np.asarray(spec["semi_axes"]))
-    assert scene.primitive_surface_gap(u, spec) == pytest.approx(0.0, abs=1e-12)
+    assert scene.primitive_surface_gap(u, spec, taubin=taubin) == pytest.approx(
+        0.0, abs=1e-12
+    )
 
 
-def test_ellipsoid_gap_is_signed():
+@pytest.mark.parametrize("taubin", [False, True])
+def test_ellipsoid_gap_is_signed(taubin):
     spec = {"type": "ellipsoid", "semi_axes": [0.05, 0.03, 0.01]}
-    assert scene.primitive_surface_gap([0.0, 0.0, 0.0], spec) < 0.0
-    assert scene.primitive_surface_gap([0.2, 0.0, 0.0], spec) > 0.0
+    assert scene.primitive_surface_gap([0.0, 0.0, 0.0], spec, taubin=taubin) < 0.0
+    assert scene.primitive_surface_gap([0.2, 0.0, 0.0], spec, taubin=taubin) > 0.0
 
 
-def test_sphere_as_ellipsoid_agrees_with_the_sphere_branch_at_contact():
-    """Taubin is a *first-order* distance, so it equals the exact SDF only on the
-    surface -- and that is the only place the contact equality drives it to.
-
-    For a sphere of radius r the closed form is available, so assert it exactly
-    rather than asserting a tolerance and hoping: at a point r + d along an axis,
-    Taubin returns ``d(2r + d) / (2(r + d))``, which is d at d = 0 and falls
-    increasingly short of d further out (1.4% low at d = 1 mm on a 35 mm sphere).
-    This is the same first-order/exact split that
-    ``test_ellipsoid_witness_is_the_exact_closest_point_not_taubin`` covers from
-    the other side.
-    """
+def test_sphere_as_ellipsoid_agrees_with_the_sphere_branch_everywhere():
+    """A ball is the one shape whose exact distance is available in closed form,
+    so the default metric can be asserted against it rather than against a
+    tolerance: the ellipsoid branch must reproduce the sphere branch exactly, at
+    contact AND out in the far field."""
     r = 0.035
     sph = {"type": "sphere", "radius": r}
     ell = {"type": "ellipsoid", "semi_axes": [r, r, r]}
 
-    # On the surface the two agree exactly -- the shared zero set.
-    p0 = [r, 0.0, 0.0]
-    assert scene.primitive_surface_gap(p0, ell) == pytest.approx(
-        scene.primitive_surface_gap(p0, sph), abs=1e-12
-    )
+    for d in (0.0, 0.001, 0.002, 0.005, 0.05):
+        p = [r + d, 0.0, 0.0]
+        assert scene.primitive_surface_gap(p, ell) == pytest.approx(
+            scene.primitive_surface_gap(p, sph), abs=1e-12
+        )
+        assert scene.primitive_surface_gap(p, ell) == pytest.approx(d, abs=1e-12)
+
+
+def test_taubin_gap_on_a_sphere_is_the_first_order_one():
+    """Under ``taubin=True`` the same call returns the FIRST-ORDER distance,
+    which on a sphere is ``d(2r + d) / (2(r + d))`` -- exactly d at contact and
+    increasingly short of it further out (1.4% low at d = 1 mm on a 35 mm ball).
+
+    Asserted in closed form because this is the metric a pre-flag result was
+    produced with: reproducing one of those means reproducing this number."""
+    r = 0.035
+    ell = {"type": "ellipsoid", "semi_axes": [r, r, r]}
 
     for d in (0.001, 0.002, 0.005):
         p = [r + d, 0.0, 0.0]
         expected = d * (2 * r + d) / (2 * (r + d))
-        assert scene.primitive_surface_gap(p, ell) == pytest.approx(expected, rel=1e-12)
-        # Always an underestimate of the true distance, never an overestimate:
-        # the contact constraint must not think it has arrived early.
-        assert scene.primitive_surface_gap(p, ell) < d
+        assert scene.primitive_surface_gap(p, ell, taubin=True) == pytest.approx(
+            expected, rel=1e-12
+        )
+        # Always an underestimate of the true distance from outside, never an
+        # overestimate: the contact constraint must not think it arrived early.
+        assert scene.primitive_surface_gap(p, ell, taubin=True) < d
 
 
 def test_unknown_primitive_type_raises():
@@ -151,17 +166,22 @@ def test_witness_point_lies_on_the_surface_for_every_analytic_type():
         assert np.linalg.norm(normal) == pytest.approx(1.0, abs=1e-6), spec["type"]
 
 
-def test_ellipsoid_witness_is_the_exact_closest_point_not_taubin():
-    # Documented behavior: in the FAR field the witness solves for the true closest
-    # point while primitive_surface_gap stays first-order, so the two disagree --
-    # a true 15 mm gap from the coin reads ~8 mm through Taubin.
+def test_ellipsoid_witness_agrees_with_the_default_gap_and_beats_taubin():
+    # The witness always solves for the true closest point, so its LENGTH is the
+    # exact distance. At the default metric primitive_surface_gap now reports the
+    # same number -- that agreement is the contract, and it is what makes a gap
+    # printed in a table and a gap drawn on screen the same quantity.
+    #
+    # Under taubin=True they part company in the FAR field, which is the
+    # first-order error the exact metric was adopted to remove: a true 15 mm gap
+    # from the coin reads ~8 mm.
     spec = {"type": "ellipsoid", "semi_axes": [0.019, 0.019, 0.00125]}  # coin-like
     probe = [0.0, 0.0, 0.01625]  # 15 mm off the flat face
     gap, point, _normal = scene.primitive_surface_witness(probe, spec)
-    taubin = scene.primitive_surface_gap(probe, spec)
 
     assert gap == pytest.approx(0.015, abs=1e-4)
-    assert taubin < gap  # Taubin is the pessimistic one out here
+    assert scene.primitive_surface_gap(probe, spec) == pytest.approx(gap, abs=1e-9)
+    assert scene.primitive_surface_gap(probe, spec, taubin=True) < 0.6 * gap
     np.testing.assert_allclose(point, [0.0, 0.0, 0.00125], atol=1e-6)
 
 

@@ -75,7 +75,7 @@ NonlinearFactorGraph HandModel::build_graph(
             }
             // Center-direct object contact (Eq 1.101): constrain the tip sphere
             // CENTER to the ellipsoid, with no witness point at all.
-            // EllipsoidCollisionGapFactor's residual is r - Taubin(x); as an
+            // EllipsoidCollisionGapFactor's residual is r - d(x); as an
             // EQUALITY the sign is irrelevant, so its zero set is exactly
             // Eq 1.101. Dropping the witness removes three variables and four
             // residual rows per digit. This is the DEFAULT form for an analytic
@@ -115,7 +115,8 @@ NonlinearFactorGraph HandModel::build_graph(
                             gtsam::Point3(*env.contact_plane_centroid),
                             noiseModel::Isotropic::Sigma(1, 1.0),
                             env.contact_plane_rho_lo, env.contact_plane_rho_hi,
-                            env.contact_plane_gap_lo, env.contact_plane_gap_hi);
+                            env.contact_plane_gap_lo, env.contact_plane_gap_hi,
+                            env.ellipsoid_taubin);
                     // Its own tag, and that matters twice over:
                     // get_factor_error_summary() tells the two forms apart, and
                     // the AL dual transfer matches by tag -- so switching forms
@@ -140,14 +141,16 @@ NonlinearFactorGraph HandModel::build_graph(
                             tip_key, object_key(), env.contact_node_radius,
                             gepetto_solvers::contact_ellipsoid_members(env),
                             env.ellipsoid_set_beta,
-                            noiseModel::Isotropic::Sigma(1, 1.0));
+                            noiseModel::Isotropic::Sigma(1, 1.0),
+                            env.ellipsoid_taubin);
                     tag = "obj.set|f" + std::to_string(i);
                 } else {
                     center_contact =
                         std::make_shared<gepetto_solvers::EllipsoidCollisionGapFactor>(
                             tip_key, object_key(), env.contact_node_radius,
                             env.ellipsoid_semi_axes,
-                            noiseModel::Isotropic::Sigma(1, 1.0));
+                            noiseModel::Isotropic::Sigma(1, 1.0),
+                            env.ellipsoid_taubin);
                     tag = "obj.center|f" + std::to_string(i);
                 }
                 tagger_.add_eq(graph, center_contact, tag);
@@ -176,7 +179,8 @@ NonlinearFactorGraph HandModel::build_graph(
                 contact = std::make_shared<gepetto_solvers::EllipsoidWitnessContactFactor>(
                     tip_key, object_key(), witness_key(i),
                     env.contact_node_radius, env.ellipsoid_semi_axes,
-                    noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n);
+                    noiseModel::Isotropic::Sigma(n_rows, 1.0), drop_n,
+                    env.ellipsoid_taubin);
             } else {
                 contact = std::make_shared<gepetto_solvers::SdfWitnessContactFactor>(
                     tip_key, object_key(), witness_key(i),
@@ -305,10 +309,11 @@ NonlinearFactorGraph HandModel::build_graph(
                 // as an inequality c_pen = r - d_E <= 0.
                 gap = std::make_shared<gepetto_solvers::EllipsoidSetCollisionGapFactor>(
                     s.key, object_key(), s.radius, env.ellipsoid_set,
-                    env.ellipsoid_set_beta, col_noise);
+                    env.ellipsoid_set_beta, col_noise, env.ellipsoid_taubin);
             } else if (is_ellipsoid) {
                 gap = std::make_shared<gepetto_solvers::EllipsoidCollisionGapFactor>(
-                    s.key, object_key(), s.radius, env.ellipsoid_semi_axes, col_noise);
+                    s.key, object_key(), s.radius, env.ellipsoid_semi_axes, col_noise,
+                    env.ellipsoid_taubin);
             } else {
                 gap = std::make_shared<gepetto_solvers::SdfCollisionGapFactor>(
                     s.key, object_key(), s.radius, env.sdf_grid, col_noise);

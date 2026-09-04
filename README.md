@@ -146,7 +146,7 @@ fresh clone ships neither of the bulky ones:
 
 | representation | what it is | in git? |
 |---|---|---|
-| ellipsoid form `E_obj` | a smooth analytic bound, or a fitted ellipsoid **set** | yes — derived, or `objects/ycb/fits/*.json` |
+| ellipsoid form `E_obj` | a smooth analytic bound, or a fitted ellipsoid **set** — measured with the exact orthogonal distance (`ellipsoid_taubin=True` for the old first-order one) | yes — derived, or `objects/ycb/fits/*.json` |
 | exact form | a baked OpenVDB signed-distance grid, `.vdb` | **no** — ~50 MB of build output |
 | YCB source meshes | the scans the grids and fits come from | **no** — ~0.6 GB download |
 

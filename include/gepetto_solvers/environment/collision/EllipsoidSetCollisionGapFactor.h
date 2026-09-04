@@ -20,6 +20,7 @@
 #include <vector>
 #include "gepetto_solvers/environment/EnvironmentConfig.h"
 #include "gepetto_solvers/environment/ConstraintWrappers.h"
+#include "gepetto_solvers/environment/EllipsoidDistance.h"
 
 namespace gepetto_solvers {
 
@@ -29,7 +30,7 @@ namespace gepetto_solvers {
 // an EllipsoidPrimitive rigidly placed in the object frame.
 //
 //   x_k     = T_k^{-1} T_obj^{-1} p_i            (Eq 1.10, sphere center in E_k's frame)
-//   d_k     = (x_k^T M_k x_k - 1) / (2 ||M_k x_k||)     (Taubin, per member)
+//   d_k     = signed distance from x_k to E_k's surface  (per member)
 //   d_E     = -(1/beta) ln sum_k exp(-beta d_k)  (Eq 1.11, LogSumExp smooth min)
 //   c_pen   = r_i - d_E                          (> 0 <=> penetration)
 //
@@ -50,14 +51,16 @@ namespace gepetto_solvers {
 //     single-ellipsoid precedent is HandModel::build_graph, which already wraps
 //     EllipsoidCollisionGapFactor as the Eq 1.101 center-direct contact equality.
 //
-// Per-member distance is Taubin's first-order approximation rather than the raw
-// algebraic x^T M x - 1 for the reason spelled out on EllipsoidCollisionGapFactor and
+// Per-member distance is a real signed distance (EllipsoidDistance: exact orthogonal
+// by default, Taubin under taubin=true) rather than the raw algebraic x^T M x - 1, for
+// the reason spelled out on EllipsoidCollisionGapFactor and
 // EllipsoidWitnessContactFactor: the raw value scales as ~1/min(semi_axis)^2, so under
-// a shared noise model it swamps every other row and the AL inner solve stagnates.
-// Taubin restores an O(1) Euclidean-like distance with an exact analytic Jacobian --
-// and it is what makes the members COMMENSURATE here, which the smooth min needs: a
+// a shared noise model it swamps every other row and the AL inner solve stagnates. It
+// is also what makes the members COMMENSURATE here, which the smooth min needs: a
 // LogSumExp over differently-warped algebraic values would blend quantities that are
-// not the same thing.
+// not the same thing. The exact form makes that stronger still -- every member reports
+// the same metre, whatever its own eccentricity, so the smooth min is a min over one
+// quantity rather than over K differently-stretched ones.
 //
 // SMOOTH-MIN BIAS -- how to pick beta. LogSumExp-min understates:
 //   min_k d_k - ln(K)/beta  <=  d_E  <=  min_k d_k
@@ -76,7 +79,7 @@ class EllipsoidSetCollisionGapFactor
 private:
     double radius_;
     double beta_;
-    std::vector<gtsam::Vector3> m_diag_;   // per-k (1/a^2, 1/b^2, 1/c^2)
+    std::vector<EllipsoidDistance> metric_;   // per-k signed distance field
     std::vector<gtsam::Matrix3> Rk_T_;     // per-k R_k^T, precomputed
     std::vector<gtsam::Vector3> tk_;       // per-k t_k
 
@@ -85,7 +88,8 @@ public:
                                    double radius,
                                    const std::vector<EllipsoidPrimitive>& ellipsoids,
                                    double beta,
-                                   const gtsam::SharedNoiseModel& noise_model)
+                                   const gtsam::SharedNoiseModel& noise_model,
+                                   bool taubin = false)
         : NoiseModelFactorN(noise_model, node_pose_key, object_key),
           radius_(radius), beta_(beta)
     {
@@ -100,7 +104,7 @@ public:
                 "EllipsoidSetCollisionGapFactor: beta must be > 0 (got " +
                 std::to_string(beta) + ")");
 
-        m_diag_.reserve(ellipsoids.size());
+        metric_.reserve(ellipsoids.size());
         Rk_T_.reserve(ellipsoids.size());
         tk_.reserve(ellipsoids.size());
         for (size_t k = 0; k < ellipsoids.size(); ++k) {
@@ -109,9 +113,7 @@ public:
                 throw std::invalid_argument(
                     "EllipsoidSetCollisionGapFactor: ellipsoid " + std::to_string(k) +
                     " has a non-positive semi-axis");
-            m_diag_.emplace_back(1.0 / (a.x() * a.x()),
-                                 1.0 / (a.y() * a.y()),
-                                 1.0 / (a.z() * a.z()));
+            metric_.emplace_back(a, taubin);
             // x_k = T_k^{-1} p_obj = R_k^T (p_obj - t_k); T_k is constant, so cache
             // the two pieces and skip a Pose3 inverse per member per evaluation.
             Rk_T_.push_back(ellipsoids[k].local_pose.rotation().matrix().transpose());
@@ -133,31 +135,21 @@ public:
             H2 ? &D_pobj_obj    : nullptr,
             H1 ? &D_pobj_pworld : nullptr);
 
-        const size_t K = m_diag_.size();
+        const size_t K = metric_.size();
         const bool need_jac = (H1 || H2);
 
-        // --- Per-member Taubin distance d_k and (optionally) d d_k / d p_obj ------
+        // --- Per-member signed distance d_k and (optionally) d d_k / d p_obj ------
         std::vector<double> d(K);
         std::vector<gtsam::Matrix13> dd_dpobj(need_jac ? K : 0);
         double d_min = std::numeric_limits<double>::infinity();
         for (size_t k = 0; k < K; ++k) {
-            gtsam::Vector3 x  = Rk_T_[k] * (p_obj - tk_[k]);   // x_k = T_k^{-1} p_obj
-            gtsam::Vector3 Mx = m_diag_[k].cwiseProduct(x);    // M_k x_k
-            double f = x.dot(Mx) - 1.0;                        // x^T M x - 1
-            double g = Mx.norm();                              // ||M x||
-            if (g < 1e-9) g = 1e-9;
-            d[k] = f / (2.0 * g);                              // Taubin distance
+            gtsam::Vector3 x = Rk_T_[k] * (p_obj - tk_[k]);    // x_k = T_k^{-1} p_obj
+            gtsam::Matrix13 dd_dx;
+            d[k] = metric_[k].signed_distance(x, need_jac ? &dd_dx : nullptr);
             if (d[k] < d_min) d_min = d[k];
 
-            if (need_jac) {
-                // d d_k / d x = Mx^T/g - (f/(2 g^3)) (M (M x))^T, then into the
-                // OBJECT frame through the constant rotation: d x / d p_obj = R_k^T.
-                gtsam::Vector3 mMx = m_diag_[k].cwiseProduct(Mx);   // M (M x)
-                gtsam::Matrix13 dd_dx =
-                      (Mx.transpose() / g)
-                    - (f / (2.0 * g * g * g)) * mMx.transpose();
-                dd_dpobj[k] = dd_dx * Rk_T_[k];
-            }
+            // Into the OBJECT frame through the constant rotation: dx/dp_obj = R_k^T.
+            if (need_jac) dd_dpobj[k] = dd_dx * Rk_T_[k];
         }
 
         // --- LogSumExp smooth min (Eq 1.11) --------------------------------------

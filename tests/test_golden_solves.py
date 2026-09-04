@@ -12,11 +12,18 @@ so the numbers do not depend on whether ``epfl_hand_core`` is installed.
 
 **What the committed numbers mean.** They characterize what these solvers do *today*;
 they are not targets. In particular the single-shot IK scenario does NOT close its
-grasp -- it stalls with a ~10 mm worst gap -- which is the documented open problem in
+grasp -- it stalls with a ~9 mm worst gap -- which is the documented open problem in
 ``notes_5f_contact.md`` ("why small objects don't grasp"), not a regression. Asserting
 the stall is still a strong refactor check: the stall point is a precise, reproducible
 function of the inputs (measured bit-identical across repeat runs), so a split that
 perturbs the graph moves it.
+
+**These numbers are metric-dependent.** Every scenario here is an analytic ellipsoid,
+so all of them move with ``HandSolveParams.ellipsoid_taubin`` -- which distance the
+ellipsoid factors measure with. They were regenerated when the exact orthogonal
+distance became the default; the pre-flag values are reproduced exactly by setting
+``ellipsoid_taubin=True``, which is the check that the switch changed the metric and
+nothing else.
 
 Regenerate after an intentional behavior change with::
 
@@ -135,25 +142,31 @@ def test_ik_shapes(pinned_dims):
 def test_ik_golden_sums(pinned_dims):
     result = solvers.HandIKSolver(_ik_params()).solve()
 
-    assert _tips(result).sum() == pytest.approx(0.287816014344, rel=RTOL)
+    assert _tips(result).sum() == pytest.approx(0.265017759585, rel=RTOL)
     assert sum(result.surface_gaps().values()) == pytest.approx(
-        0.024360234813, rel=RTOL
+        0.024776275895, rel=RTOL
     )
     tendon_sum = float(np.sum([np.sum(x) for x in result.displacements(0)]))
-    assert tendon_sum == pytest.approx(3.866361765158, rel=RTOL)
+    assert tendon_sum == pytest.approx(3.902229660902, rel=RTOL)
 
 
 def test_ik_stalls_at_the_documented_gap(pinned_dims):
     """CHARACTERIZATION, not a target. This scenario does not close: it stalls with
-    the middle finger ~10.4 mm off the surface while the thumb slightly penetrates.
+    the middle finger ~8.8 mm off the surface while the thumb slightly penetrates.
+
+    It stalled at 10.4 mm under the Taubin metric, and closer under the exact one
+    is the direction the change predicted -- the c_O row is no longer
+    down-weighted against the rest of the graph by the gradient drift. It is a
+    better stall, not a fix: the open problem in ``notes_5f_contact.md`` is
+    untouched.
 
     If this starts passing at a much smaller gap, the grasp got BETTER and the
     number wants updating -- but deliberately, with the change understood."""
     result = solvers.HandIKSolver(_ik_params()).solve()
 
-    assert result.worst_gap() == pytest.approx(0.010433433595, rel=RTOL)
+    assert result.worst_gap() == pytest.approx(0.008838482154, rel=RTOL)
     gaps = result.surface_gaps()
-    assert gaps["middle"] == pytest.approx(0.010433433595, rel=RTOL)
+    assert gaps["middle"] == pytest.approx(0.008838482154, rel=RTOL)
     assert gaps["thumb"] < 0.0, "thumb is expected to be slightly inside the surface"
 
 
@@ -191,8 +204,13 @@ def test_planner_golden_terminal_state(pinned_dims):
     ).solve()
 
     last = len(result.frames) - 1
-    assert _tips(result, last).sum() == pytest.approx(0.331450866209, rel=RTOL)
-    assert result.worst_gap(last) == pytest.approx(0.057433628289, rel=RTOL)
+    assert _tips(result, last).sum() == pytest.approx(0.330067917476, rel=RTOL)
+    # Larger than the 57 mm this stalled at under Taubin, and worth knowing: the
+    # exact metric helped the single-shot IK above and hurt here. Neither number
+    # is near contact, so this K=3 scenario is characterizing a solve that does
+    # not converge either way rather than one the metric made worse at the
+    # margin. Do not read it as a target.
+    assert result.worst_gap(last) == pytest.approx(0.084462113097, rel=RTOL)
 
 
 def test_planner_trajectory_is_continuous(pinned_dims):

@@ -490,8 +490,12 @@ def planar_gap_witness(params, result, k=0):
         # solved node pose (node 0 has no key of its own under root reparameterization).
         base_local = np.asarray(cfg.hand_base_offset, dtype=float)[:3, 3]
 
+        # The metric goes across too: an overlay drawing a Taubin distance beside
+        # a solve that used the exact one is the same drift as drawing a plane the
+        # solve never used.
         rep = gepetto_solvers.ellipsoid_set_planar_gap(
-            T_tip, T_obj, T_wrist, float(radius), prims, beta, base_local, c_local)
+            T_tip, T_obj, T_wrist, float(radius), prims, beta, base_local, c_local,
+            taubin=bool(getattr(params, "ellipsoid_taubin", False)))
         gap = float(rep["distance"]) - float(radius)
         fallback = not any(w > 0.0 for w in rep["weight"])
 

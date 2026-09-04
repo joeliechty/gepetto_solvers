@@ -20,6 +20,7 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
                    tip_radii=None, radius=None, contact_fingers=None,
                    object_pose_cov=None, proxy_and_exact=False,
                    drop_normal_row=False, ellipsoid_set_beta=None,
+                   ellipsoid_taubin=False,
                    in_plane=False, pinch_centroid=None, contact_subset=None,
                    object_contact_exact=False):
     """Attach the shared object surface + a terminal tip contact to every finger
@@ -66,6 +67,14 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
     ``ellipsoid_set`` object (None = the spec's own value). Only the smooth-min
     STANDOFF changes with it, not the geometry: the constraint surface sits up to
     ln(K)/beta outside the true union. Inert for every other surface kind.
+
+    ``ellipsoid_taubin`` picks WHICH distance every ellipsoid factor measures --
+    False (the default) the exact orthogonal distance to the surface, True the
+    first-order algebraic approximation that predates the flag. It is written on
+    the env, which collision shares, so contact and collision cannot end up
+    measuring the same object two different ways. Inert for every non-ellipsoid
+    surface, and the zero set is identical either way, so it moves the field off
+    the surface and not the surface itself.
 
     ``contact_subset`` (``scene.grasp_subset_indices``) restricts which members
     of an ``ellipsoid_set`` the fingertips may be driven onto -- the authored
@@ -165,6 +174,8 @@ def attach_contact(configs, spec, objects_dir, primitive, object_pose, *,
                       contact_subset=contact_subset)
         if ellipsoid_set_beta is not None and hasattr(env, "ellipsoid_set_beta"):
             env.ellipsoid_set_beta = float(ellipsoid_set_beta)
+        if hasattr(env, "ellipsoid_taubin"):
+            env.ellipsoid_taubin = bool(ellipsoid_taubin)
         env.object_pose_mean = object_pose
         env.object_pose_cov = object_pose_cov
         env.object_pose_per_step = False
