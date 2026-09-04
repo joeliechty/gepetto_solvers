@@ -554,8 +554,14 @@ class GuiMixin:
             self.g_roll = gui.add_slider("roll (rad)", -np.pi, np.pi, 0.01, r0)
             self.g_pitch = gui.add_slider("pitch (rad)", -np.pi, np.pi, 0.01, p0)
             self.g_yaw = gui.add_slider("yaw (rad)", -np.pi, np.pi, 0.01, yw0)
-            self.g_sig_pos = gui.add_slider("log10 sigma_pos", -6, 2, 0.5, -2)
-            self.g_sig_rot = gui.add_slider("log10 sigma_rot", -6, 2, 0.5, -2)
+            # Per hand, because the wrist prior means different things on the
+            # two: the tendon hand opens at its measured hover and wants the
+            # wrist held near it (1e-2), while the Allegro's start pose is a
+            # rough aim at the object and needs the looser 1e-1 to reach it
+            # without the user slackening the prior by hand every session.
+            sig0 = -1 if self.hand.name == "allegro" else -2
+            self.g_sig_pos = gui.add_slider("log10 sigma_pos", -6, 2, 0.5, sig0)
+            self.g_sig_rot = gui.add_slider("log10 sigma_rot", -6, 2, 0.5, sig0)
             # The sliders above are a demo pose. This is the measured one: put
             # the wrist here and the viser world origin becomes the robot
             # flange, so the hand hangs exactly as it does on the arm.
